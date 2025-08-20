@@ -10,3 +10,4 @@ if st.button("Build/Load Index"):
     st.write("Pretending to build…")
     idx = get_or_build_index()
     st.success("Index ready (stub).")
+# ===== [02] END ==============================================================
