@@ -44,12 +44,78 @@ if st.button("Build/Load Index"):
                 st.error(f"Index load/build failed: {type(e).__name__}: {e}")
 # ===== [02] RAG: Restore from Drive BACKUP_ZIP ===============================
 # 백업 ZIP을 구글드라이브에서 내려받아 로컬(APP_DATA_DIR)에 풀고,
-# 바로 인덱스를 재로딩합니다. (실패해도 앱은 죽지 않음)
+# 바로 인덱스를 재로딩합니다. (키 이름이 달라도 시크릿에서 자동 탐색)
+
 import json, io, os, zipfile
 from pathlib import Path
 
+# --- (A) 시크릿에서 "서비스계정 JSON" 자동 탐색 -----------------------------
+def _find_service_account_in_secrets() -> dict:
+    """
+    1) 흔한 키 후보들을 우선 확인
+    2) 그래도 없으면 st.secrets 전체를 훑어서 service_account 형태를 자동 탐색
+    """
+    candidates = (
+        "GDRIVE_SERVICE_ACCOUNT_JSON",
+        "GOOGLE_SERVICE_ACCOUNT_JSON",
+        "SERVICE_ACCOUNT_JSON",
+        # 소문자/다른 팀이 쓰던 별칭도 지원
+        "gdrive_service_account_json",
+        "service_account_json",
+        "GCP_SERVICE_ACCOUNT",
+        "gcp_service_account",
+    )
+    # 1) 후보 키 직행
+    for k in candidates:
+        if k in st.secrets and str(st.secrets[k]).strip():
+            raw = st.secrets[k]
+            return json.loads(raw) if isinstance(raw, str) else dict(raw)
+
+    # 2) 최상위 모든 키를 스캔 (중첩 테이블/문자열 모두 탐색)
+    for k, v in st.secrets.items():
+        try:
+            if isinstance(v, (dict,)):
+                if v.get("type") == "service_account" and "client_email" in v and "private_key" in v:
+                    return dict(v)
+            elif isinstance(v, str):
+                if '"type": "service_account"' in v and '"client_email"' in v and '"private_key"' in v:
+                    return json.loads(v)
+        except Exception:
+            pass
+
+    raise KeyError(
+        "서비스계정 JSON을 시크릿에서 찾지 못했습니다. "
+        "권장: 최상위에 GDRIVE_SERVICE_ACCOUNT_JSON = '''{...}''' 로 추가하세요."
+    )
+
+# --- (B) 시크릿에서 "백업 폴더 ID" 자동 탐색 --------------------------------
+def _find_backup_folder_id() -> str:
+    candidates = (
+        "GDRIVE_BACKUP_FOLDER_ID",
+        "BACKUP_FOLDER_ID",
+        "GDRIVE_FOLDER_ID",   # 일반 폴더 키도 허용
+    )
+    for k in candidates:
+        if k in st.secrets and str(st.secrets[k]).strip():
+            return str(st.secrets[k]).strip()
+
+    # 혹시 섹션/중첩 안쪽에 들어 있다면 전체 스캔
+    for _, v in st.secrets.items():
+        try:
+            if isinstance(v, (dict,)):
+                for kk, vv in v.items():
+                    if "FOLDER_ID" in str(kk).upper() and str(vv).strip():
+                        return str(vv).strip()
+        except Exception:
+            pass
+
+    raise KeyError(
+        "백업 폴더 ID를 찾지 못했습니다. "
+        "권장: GDRIVE_BACKUP_FOLDER_ID = '폴더_ID' (또는 GDRIVE_FOLDER_ID) 를 최상위에 추가하세요."
+    )
+
+# --- (C) 복구 로직 -----------------------------------------------------------
 def _restore_from_drive_backup():
-    # 1) 서비스계정 로드 (secrets의 원문 JSON을 그대로 읽음)
     try:
         from google.oauth2.service_account import Credentials
         from googleapiclient.discovery import build
@@ -57,28 +123,17 @@ def _restore_from_drive_backup():
     except Exception as e:
         raise RuntimeError("google-api-python-client / google-auth 패키지가 필요합니다.") from e
 
-    raw = None
-    for k in ("GDRIVE_SERVICE_ACCOUNT_JSON", "GOOGLE_SERVICE_ACCOUNT_JSON", "SERVICE_ACCOUNT_JSON"):
-        if k in st.secrets and str(st.secrets[k]).strip():
-            raw = st.secrets[k]; break
-    if raw is None:
-        raise KeyError("st.secrets['GDRIVE_SERVICE_ACCOUNT_JSON']가 없습니다.")
-    info = json.loads(raw) if isinstance(raw, str) else dict(raw)
-    creds = Credentials.from_service_account_info(info, scopes=["https://www.googleapis.com/auth/drive.readonly"])
+    sa_info = _find_service_account_in_secrets()
+    creds = Credentials.from_service_account_info(sa_info, scopes=["https://www.googleapis.com/auth/drive.readonly"])
 
-    # 2) 백업 폴더 ID (우선순위: GDRIVE_BACKUP_FOLDER_ID > BACKUP_FOLDER_ID > GDRIVE_FOLDER_ID)
-    folder_id = None
-    for k in ("GDRIVE_BACKUP_FOLDER_ID", "BACKUP_FOLDER_ID", "GDRIVE_FOLDER_ID"):
-        if k in st.secrets and str(st.secrets[k]).strip():
-            folder_id = str(st.secrets[k]).strip(); break
-    if not folder_id:
-        raise KeyError("백업 폴더 ID가 없습니다. GDRIVE_BACKUP_FOLDER_ID(권장) 또는 GDRIVE_FOLDER_ID를 설정하세요.")
+    folder_id = _find_backup_folder_id()
 
-    # 3) 최신 ZIP 1개 찾기 → 다운로드
     svc = build("drive", "v3", credentials=creds, cache_discovery=False)
     q = f"'{folder_id}' in parents and trashed=false and mimeType='application/zip'"
-    resp = svc.files().list(q=q, orderBy="modifiedTime desc",
-                            fields="files(id,name,modifiedTime,size),nextPageToken", pageSize=1).execute()
+    resp = svc.files().list(
+        q=q, orderBy="modifiedTime desc",
+        fields="files(id,name,modifiedTime,size),nextPageToken", pageSize=1
+    ).execute()
     files = resp.get("files", [])
     if not files:
         raise FileNotFoundError("백업 폴더에 .zip 파일이 없습니다.")
@@ -92,7 +147,7 @@ def _restore_from_drive_backup():
         _, done = downloader.next_chunk()
     buf.seek(0)
 
-    # 4) 압축 해제 대상 경로(APP_DATA_DIR)
+    # APP_DATA_DIR 결정
     try:
         from src.config import APP_DATA_DIR
     except Exception:
@@ -100,14 +155,18 @@ def _restore_from_drive_backup():
     target = APP_DATA_DIR
     target.mkdir(parents=True, exist_ok=True)
 
-    # 5) ZIP 풀기 (루트 그대로 투하)
+    # ZIP 풀기
     with zipfile.ZipFile(buf) as zf:
         zf.extractall(target)
 
-    # 6) 추출 파일 수 집계
     count = sum(1 for p in target.rglob("*") if p.is_file())
-    return {"ok": True, "backup_name": f.get("name"), "modifiedTime": f.get("modifiedTime"),
-            "target": str(target), "files": count}
+    return {
+        "ok": True,
+        "backup_name": f.get("name"),
+        "modifiedTime": f.get("modifiedTime"),
+        "target": str(target),
+        "files": count,
+    }
 
 st.subheader("RAG: Restore from Drive BACKUP_ZIP")
 if st.button("⬇️ Restore backup zip from Drive"):
@@ -116,8 +175,7 @@ if st.button("⬇️ Restore backup zip from Drive"):
             res = _restore_from_drive_backup()
             st.success(f"Restored '{res['backup_name']}' → {res['target']}")
             st.caption(f"Modified: {res['modifiedTime']} | Total local files: {res['files']}")
-
-            # 복구 직후 인덱스 재시도(있으면 세션에 저장)
+            # 복구 직후 인덱스 재시도
             try:
                 idx = get_or_build_index() if get_or_build_index else None
                 if idx is not None:
