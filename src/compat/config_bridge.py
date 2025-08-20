@@ -4,7 +4,7 @@
 # ===== [02] IMPORTS ==========================================================
 from __future__ import annotations
 from importlib import import_module
-from typing import Optional, Any
+from typing import Optional
 
 # ===== [03] RESOLUTION =======================================================
 try:
