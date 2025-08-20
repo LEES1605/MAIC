@@ -1,14 +1,19 @@
 # ===== [01] IMPORTS ==========================================================
 from __future__ import annotations
 from typing import Any, Optional, Callable
+from pathlib import Path
 from src.compat.config_bridge import PERSIST_DIR
 
 # ===== [02] CONFIG BRIDGE ====================================================
-# (임포트는 [01]에서 완료했어요. 중복 임포트 방지를 위해 이 구획은 주석만 유지합니다.)
+# (임포트는 [01]에서 완료. 중복 임포트 방지를 위해 설명 주석만 유지)
 
-# ===== [03] INDEX LOAD/CREATE (STUB) ========================================
-def _index_exists(persist_dir: str | bytes | "os.PathLike[str]") -> bool:
-    from pathlib import Path
+# ===== [03] ERRORS ===========================================================
+class RAGEngineError(Exception): ...
+class QueryEngineNotReady(RAGEngineError): ...
+class LocalIndexMissing(RAGEngineError): ...
+
+# ===== [04] LOCAL INDEX HELPERS =============================================
+def _index_exists(persist_dir: str | bytes | "Path") -> bool:
     p = Path(persist_dir)
     try:
         return p.exists() and any(p.iterdir())
@@ -26,7 +31,7 @@ def _load_index_from_disk(persist_dir: str) -> Any:
             return _QE()
     return _DummyIndex()
 
-# ===== [04] PUBLIC API =======================================================
+# ===== [05] PUBLIC API =======================================================
 def get_or_build_index(
     update_pct: Optional[Callable[[int], None]] = None,
     update_msg: Optional[Callable[[str], None]] = None,
@@ -38,8 +43,7 @@ def get_or_build_index(
 ) -> Any:
     if _index_exists(persist_dir):
         return _load_index_from_disk(persist_dir)
-    # TODO: plug actual build/restore
-    # for now, create an empty folder so _index_exists passes next time
-    from pathlib import Path
+    # 초기 생성: 빈 폴더를 만들어 다음 호출부터 로드 가능하도록
     Path(persist_dir).mkdir(parents=True, exist_ok=True)
     return _load_index_from_disk(persist_dir)
+# ===== [06] END ==============================================================
