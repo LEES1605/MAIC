@@ -22,33 +22,26 @@ class LocalIndexMissing(RAGEngineError): ...
 
 
 # ===== [04] LOCAL INDEX HELPERS =============================================
-def _as_path(p: str | PathLike[str]) -> Path:
-    """Normalize to Path (avoid bytes/quoted types for mypy stability)."""
-    return Path(p)
-
-
-def _index_exists(persist_dir: str | PathLike[str]) -> bool:
-    p = _as_path(persist_dir)
+def _index_exists(persist_dir: str | bytes | "Path") -> bool:
+    p = Path(persist_dir)
     try:
         return p.exists() and any(p.iterdir())
     except Exception:
         return False
 
 
-def _load_index_from_disk(persist_dir: str | PathLike[str]) -> Any:
+def _load_index_from_disk(persist_dir: str) -> Any:
     if not _index_exists(persist_dir):
         raise LocalIndexMissing("No local index")
 
     class _DummyIndex:
-        def as_query_engine(self, **kw: Any):
+        def as_query_engine(self, **kw: Any) -> Any:
             class _QE:
                 def query(self, q: str) -> Any:
                     return type("R", (), {"response": f"[stub] {q}"})
-
             return _QE()
 
     return _DummyIndex()
-
 
 # ===== [05] PUBLIC API =======================================================
 def get_or_build_index(
