@@ -3,10 +3,8 @@ from __future__ import annotations
 from typing import Any, Optional, Callable
 from src.compat.config_bridge import settings, PERSIST_DIR
 
-# ===== [02] ERRORS ===========================================================
-class RAGEngineError(Exception): ...
-class QueryEngineNotReady(RAGEngineError): ...
-class LocalIndexMissing(RAGEngineError): ...
+# ===== [02] CONFIG BRIDGE ====================================================
+from src.compat.config_bridge import settings, PERSIST_DIR
 
 # ===== [03] INDEX LOAD/CREATE (STUB) ========================================
 def _index_exists(persist_dir: str | bytes | "os.PathLike[str]") -> bool:
