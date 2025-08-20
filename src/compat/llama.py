@@ -17,9 +17,14 @@ except Exception:
         from llama_index.core import Document as _LIDocument  # type: ignore[assignment]
     except Exception:
         class _LIDocument:  # 최소 스텁(타입/런타임 안전)
-            def __init__(self, text: str = "", metadata: Optional[Dict[str, object]] = None) -> None:
+            def __init__(
+                self,
+                text: str = "",
+                metadata: Optional[Dict[str, object]] = None,
+            ) -> None:
                 self.text = text
                 self.metadata = metadata or {}
+
 
 # ===== [04] SINGLE BINDING / EXPORT =========================================
 Document = _LIDocument
