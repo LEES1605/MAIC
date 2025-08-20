@@ -1,7 +1,9 @@
 # ===== [01] IMPORTS ==========================================================
 from __future__ import annotations
-from typing import Any, Optional, Callable
+
 from pathlib import Path
+from typing import Any, Callable, Optional
+
 from src.compat.config_bridge import PERSIST_DIR
 
 # ===== [02] CONFIG BRIDGE ====================================================
