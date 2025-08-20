@@ -137,6 +137,7 @@ def maybe_summarize_docs(
         return
     try:
         from llama_index.core import Settings
+
         for idx, d in enumerate(list(docs)):
             md = dict(getattr(d, "metadata", {}) or {})
             if "doc_summary" in md:
@@ -156,9 +157,11 @@ def maybe_summarize_docs(
                 docs[idx] = Document(text=getattr(d, "text", ""), metadata=md)
             except Exception as e:  # 요약 실패는 무시하고 기록만
                 import logging as _logging
+
                 _logging.getLogger(__name__).debug("summarize failed (ignored): %r", e)
     except Exception as e:
         import logging as _logging
+
         _logging.getLogger(__name__).debug("Settings import failed (ignored): %r", e)
 
 
