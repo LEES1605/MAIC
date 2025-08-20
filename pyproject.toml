@@ -1,0 +1,36 @@
+# ===== [01] PROJECT METADATA ================================================
+[project]
+name = "my-ai-teacher"
+version = "0.1.0"
+requires-python = ">=3.10"
+description = "Clean scaffold for AI Teacher (Streamlit + RAG)"
+readme = "README.md"
+authors = [{ name = "you" }]
+
+# ===== [02] RUNTIME DEPS =====================================================
+dependencies = [
+  "streamlit>=1.32",
+  "pydantic>=2,<3",
+  "pydantic-settings>=2,<3",
+  "llama-index-core>=0.10",
+  "google-api-python-client>=2.136.0",
+  "google-auth>=2.30.0",
+]
+
+# ===== [03] DEV DEPS (optional) =============================================
+[project.optional-dependencies]
+dev = [
+  "mypy>=1.7",
+  "ruff>=0.5",
+  "bandit>=1.7",
+  "pytest>=8",
+  "types-requests",
+  "types-PyYAML",
+]
+
+# ===== [04] TOOL CONFIG POINTERS ============================================
+[tool.ruff]
+extend = "ruff.toml"
+
+[tool.mypy]
+config_file = "mypy.ini"
