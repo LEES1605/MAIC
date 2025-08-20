@@ -10,14 +10,15 @@ from typing import Dict, Optional
 # ===== [03] DOCUMENT RESOLUTION =============================================
 try:
     # 0.12.x+
-    from llama_index.core.schema import Document as _LIDocument  # type: ignore[assignment]
+    from llama_index.core.schema import Document as _DocSchema
+    _DocumentImpl = _DocSchema
 except Exception:
     try:
         # older versions
-        from llama_index.core import Document as _LIDocument  # type: ignore[assignment]
+        from llama_index.core import Document as _DocCore
+        _DocumentImpl = _DocCore
     except Exception:
-
-        class _LIDocument:  # 최소 스텁(타입/런타임 안전)
+        class _DocumentImpl:  # 최소 스텁(타입/런타임 안전)
             def __init__(
                 self,
                 text: str = "",
@@ -26,8 +27,8 @@ except Exception:
                 self.text = text
                 self.metadata = metadata or {}
 
-
 # ===== [04] SINGLE BINDING / EXPORT =========================================
-Document = _LIDocument
+Document = _DocumentImpl
 __all__ = ["Document"]
+
 # ===== [05] END ==============================================================
