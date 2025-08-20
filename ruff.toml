@@ -1,0 +1,7 @@
+# ===== [01] RULES ============================================================
+line-length = 100
+target-version = "py311"
+
+[lint]
+select = ["E", "F", "B", "I"]
+ignore = ["E203"]  # black/ruff newline spacing difference
