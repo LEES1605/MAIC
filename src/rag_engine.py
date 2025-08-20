@@ -3,7 +3,9 @@ from __future__ import annotations
 
 from os import PathLike
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
+
+from src.compat.config_bridge import PERSIST_DIR
 
 
 # ===== [02] CONFIG BRIDGE ====================================================
@@ -21,15 +23,20 @@ class LocalIndexMissing(RAGEngineError): ...
 
 
 # ===== [04] LOCAL INDEX HELPERS =============================================
-def _index_exists(persist_dir: str | bytes | "Path") -> bool:
-    p = Path(persist_dir)
+def _as_path(p: str | PathLike[str]) -> Path:
+    """Normalize to Path (avoid bytes/quoted types for mypy stability)."""
+    return Path(p)
+
+
+def _index_exists(persist_dir: str | PathLike[str]) -> bool:
+    p = _as_path(persist_dir)
     try:
         return p.exists() and any(p.iterdir())
     except Exception:
         return False
 
 
-def _load_index_from_disk(persist_dir: str) -> Any:
+def _load_index_from_disk(persist_dir: str | PathLike[str]) -> Any:
     if not _index_exists(persist_dir):
         raise LocalIndexMissing("No local index")
 
@@ -50,15 +57,16 @@ def get_or_build_index(
     update_msg: Optional[Callable[[str], None]] = None,
     gdrive_folder_id: Optional[str] = None,
     raw_sa: Optional[str] = None,
-    persist_dir: str = str(PERSIST_DIR),
+    persist_dir: str | PathLike[str] = str(PERSIST_DIR),
     manifest_path: Optional[str] = None,
     should_stop: Optional[Callable[[], bool]] = None,
 ) -> Any:
     if _index_exists(persist_dir):
         return _load_index_from_disk(persist_dir)
     # 초기 생성: 빈 폴더를 만들어 다음 호출부터 로드 가능하도록
-    Path(persist_dir).mkdir(parents=True, exist_ok=True)
-    return _load_index_from_disk(persist_dir)
+    p = _as_path(persist_dir)
+    p.mkdir(parents=True, exist_ok=True)
+    return _load_index_from_disk(p)
 
 
 # ===== [06] END ==============================================================
