@@ -9,11 +9,10 @@ import re
 from typing import Any, Dict, List, Set, Tuple
 
 from src.compat.config_bridge import QUALITY_REPORT_PATH
-from src.compat.llama import Document
+from src.compat.llama import Document, DocumentType
 
 log = logging.getLogger(__name__)
 _WS_RE = re.compile(r"[ \t\f\v]+")
-
 
 # ===== [02] TEXT CLEANERS ====================================================
 def _clean_text(s: str) -> str:
@@ -36,7 +35,7 @@ def _sha256_hex(s: str) -> str:
 
 
 # ===== [04] DOCUMENT UTIL ====================================================
-def _clone_with_text_and_meta(d: Any, new_text: str, new_meta: Dict[str, Any]) -> Document:
+def _clone_with_text_and_meta(d: Any, new_text: str, new_meta: Dict[str, Any]) -> DocumentType:
     """
     원본 객체의 메타데이터를 보존/병합하여 새 Document 인스턴스를 생성합니다.
     """
@@ -47,21 +46,20 @@ def _clone_with_text_and_meta(d: Any, new_text: str, new_meta: Dict[str, Any]) -
         md = dict(new_meta)
     return Document(text=new_text, metadata=md)
 
-
 # ===== [05] PREPROCESS / DEDUP ==============================================
 def preprocess_docs(
     docs: List[Any],
     seen_hashes: Set[str],
     min_chars: int,
     dedup: bool,
-) -> Tuple[List[Document], Dict[str, Any]]:
+) -> Tuple[List[DocumentType], Dict[str, Any]]:
     """
     - 텍스트 정리(_clean_text)
     - 최소 글자수 필터(min_chars)
     - 중복 제거(dedup=True이면 동일 해시 건너뜀)
     - 결과와 간단 통계를 반환
     """
-    kept: List[Document] = []
+    kept: List[DocumentType] = []
     stats: Dict[str, Any] = {
         "input_docs": len(docs),
         "kept": 0,
@@ -86,13 +84,13 @@ def preprocess_docs(
         md: Dict[str, Any] = dict(getattr(d, "metadata", {}) or {})
         md["text_hash"] = h
 
-        kept.append(_clone_with_text_and_meta(d, t, md))
+        nd: DocumentType = _clone_with_text_and_meta(d, t, md)
+        kept.append(nd)
         seen_hashes.add(h)
         stats["kept"] += 1
         stats["total_chars"] += len(t)
 
     return kept, stats
-
 
 # ===== [06] QUALITY REPORT I/O ==============================================
 def load_quality_report(path: str | None = None) -> Dict[str, Any]:
@@ -125,7 +123,7 @@ def save_quality_report(data: Dict[str, Any], path: str | None = None) -> None:
 
 # ===== [07] OPTIONAL: DOC SUMMARIZER (SAFE NO-OP) ============================
 def maybe_summarize_docs(
-    docs: list[Document],
+    docs: list[DocumentType],
     enabled: bool = False,
     max_chars: int = 4000,
 ) -> None:
@@ -157,11 +155,9 @@ def maybe_summarize_docs(
                 docs[idx] = Document(text=getattr(d, "text", ""), metadata=md)
             except Exception as e:  # 요약 실패는 무시하고 기록만
                 import logging as _logging
-
                 _logging.getLogger(__name__).debug("summarize failed (ignored): %r", e)
     except Exception as e:
         import logging as _logging
-
         _logging.getLogger(__name__).debug("Settings import failed (ignored): %r", e)
 
 
