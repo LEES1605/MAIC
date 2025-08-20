@@ -1,10 +1,10 @@
 # ===== [01] IMPORTS ==========================================================
 from __future__ import annotations
 
+from os import PathLike
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
-from src.compat.config_bridge import PERSIST_DIR
 
 # ===== [02] CONFIG BRIDGE ====================================================
 # (임포트는 [01]에서 완료. 중복 임포트 방지를 위해 설명 주석만 유지)
