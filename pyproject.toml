@@ -1,3 +1,8 @@
+# ===== [00] BUILD SYSTEM =====================================================
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
 # ===== [01] PROJECT METADATA ================================================
 [project]
 name = "my-ai-teacher"
@@ -34,3 +39,11 @@ extend = "ruff.toml"
 
 [tool.mypy]
 config_file = "mypy.ini"
+
+# ===== [05] SETUPTOOLS (package discovery) ==================================
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["*"]
