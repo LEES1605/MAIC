@@ -14,9 +14,8 @@ def build_index_with_checkpoint(
     persist_dir: str,
     remote_manifest: Dict[str, Dict[str, object]],
     should_stop: Callable[[], bool] | None = None,
-):
+) -> object:
     st.info("This is a stub for index build.")
     return object()
-
 
 # ===== [02] END ==============================================================
