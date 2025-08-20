@@ -16,6 +16,7 @@ except Exception:
         # older versions
         from llama_index.core import Document as _LIDocument  # type: ignore[assignment]
     except Exception:
+
         class _LIDocument:  # 최소 스텁(타입/런타임 안전)
             def __init__(
                 self,

@@ -15,8 +15,9 @@ REPORT_DIR = (APP_DATA_DIR / "reports").resolve()
 REPORT_DIR.mkdir(parents=True, exist_ok=True)
 
 QUALITY_REPORT_PATH = str((REPORT_DIR / "quality_report.json").resolve())
-MANIFEST_PATH       = str((APP_DATA_DIR / "drive_manifest.json").resolve())
-CHECKPOINT_PATH     = str((APP_DATA_DIR / "checkpoint.json").resolve())
+MANIFEST_PATH = str((APP_DATA_DIR / "drive_manifest.json").resolve())
+CHECKPOINT_PATH = str((APP_DATA_DIR / "checkpoint.json").resolve())
+
 
 # ===== [03] SETTINGS MODEL ===================================================
 class Settings(BaseSettings):
@@ -37,5 +38,6 @@ class Settings(BaseSettings):
     GDRIVE_FOLDER_ID: str = "prepared"
     GDRIVE_SERVICE_ACCOUNT_JSON: str = ""
     BACKUP_FOLDER_ID: Optional[str] = None
+
 
 settings = Settings()

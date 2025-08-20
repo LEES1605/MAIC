@@ -1,4 +1,3 @@
-
 # ===== [01] IMPORTS & CONSTS =================================================
 from __future__ import annotations
 
@@ -15,6 +14,7 @@ from src.compat.llama import Document
 log = logging.getLogger(__name__)
 _WS_RE = re.compile(r"[ \t\f\v]+")
 
+
 # ===== [02] TEXT CLEANERS ====================================================
 def _clean_text(s: str) -> str:
     """
@@ -25,6 +25,7 @@ def _clean_text(s: str) -> str:
     s = _WS_RE.sub(" ", s)
     return s.strip()
 
+
 # ===== [03] HASH HELPERS (Bandit-safe) ======================================
 def _sha256_hex(s: str) -> str:
     """
@@ -32,6 +33,7 @@ def _sha256_hex(s: str) -> str:
     (B303: insecure hash 경고를 피하기 위해 sha256 사용)
     """
     return hashlib.sha256(s.encode("utf-8", errors="ignore")).hexdigest()
+
 
 # ===== [04] DOCUMENT UTIL ====================================================
 def _clone_with_text_and_meta(d: Any, new_text: str, new_meta: Dict[str, Any]) -> Document:
@@ -44,6 +46,7 @@ def _clone_with_text_and_meta(d: Any, new_text: str, new_meta: Dict[str, Any]) -
     except Exception:
         md = dict(new_meta)
     return Document(text=new_text, metadata=md)
+
 
 # ===== [05] PREPROCESS / DEDUP ==============================================
 def preprocess_docs(
@@ -90,6 +93,7 @@ def preprocess_docs(
 
     return kept, stats
 
+
 # ===== [06] QUALITY REPORT I/O ==============================================
 def load_quality_report(path: str | None = None) -> Dict[str, Any]:
     """
@@ -104,6 +108,7 @@ def load_quality_report(path: str | None = None) -> Dict[str, Any]:
         log.debug("quality report load failed: %r", e)
         return {"summary": {}, "files": {}}
 
+
 def save_quality_report(data: Dict[str, Any], path: str | None = None) -> None:
     """
     품질 리포트를 JSON으로 저장합니다.
@@ -116,6 +121,7 @@ def save_quality_report(data: Dict[str, Any], path: str | None = None) -> None:
             json.dump(data, f, ensure_ascii=False, indent=2, sort_keys=True)
     except Exception as e:
         log.debug("quality report save failed: %r", e)
+
 
 # ===== [07] OPTIONAL: DOC SUMMARIZER (SAFE NO-OP) ============================
 def maybe_summarize_docs(
@@ -131,6 +137,7 @@ def maybe_summarize_docs(
         return
     try:
         from llama_index.core import Settings  # type: ignore[import]
+
         for idx, d in enumerate(list(docs)):
             md = dict(getattr(d, "metadata", {}) or {})
             if "doc_summary" in md:
@@ -150,10 +157,13 @@ def maybe_summarize_docs(
                 docs[idx] = Document(text=getattr(d, "text", ""), metadata=md)
             except Exception as e:  # 요약 실패는 무시하고 기록만
                 import logging as _logging
+
                 _logging.getLogger(__name__).debug("summarize failed (ignored): %r", e)
     except Exception as e:
         import logging as _logging
+
         _logging.getLogger(__name__).debug("Settings import failed (ignored): %r", e)
+
 
 # ===== [08] EXPORTS ==========================================================
 __all__ = [

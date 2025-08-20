@@ -18,4 +18,5 @@ def build_index_with_checkpoint(
     st.info("This is a stub for index build.")
     return object()
 
+
 # ===== [02] END ==============================================================
