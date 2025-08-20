@@ -118,7 +118,11 @@ def save_quality_report(data: Dict[str, Any], path: str | None = None) -> None:
         log.debug("quality report save failed: %r", e)
 
 # ===== [07] OPTIONAL: DOC SUMMARIZER (SAFE NO-OP) ============================
-def maybe_summarize_docs(docs: List[Document], enabled: bool = False, max_chars: int = 4000) -> None:
+def maybe_summarize_docs(
+    docs: list[Document],
+    enabled: bool = False,
+    max_chars: int = 4000,
+) -> None:
     """
     옵션이 켜진 경우에만 문서를 간단 요약하여 metadata['doc_summary']에 저장합니다.
     실패는 무시하되 로그만 남깁니다(전체 파이프라인을 멈추지 않음).
@@ -126,9 +130,7 @@ def maybe_summarize_docs(docs: List[Document], enabled: bool = False, max_chars:
     if not enabled or not docs:
         return
     try:
-        # LlamaIndex Settings가 있을 때만 사용 (mypy: ignore는 설정에서 무시)
         from llama_index.core import Settings  # type: ignore[import]
-
         for idx, d in enumerate(list(docs)):
             md = dict(getattr(d, "metadata", {}) or {})
             if "doc_summary" in md:
@@ -136,7 +138,6 @@ def maybe_summarize_docs(docs: List[Document], enabled: bool = False, max_chars:
             text = (getattr(d, "text", "") or "")[:max_chars]
             if not text:
                 continue
-
             prompt = (
                 "다음 문서를 교사 시각에서 5줄 이내 핵심 bullet로 요약하라.\n"
                 "교재 단원/개념/예문/핵심 규칙을 간단히 표시하라.\n\n"
@@ -147,10 +148,12 @@ def maybe_summarize_docs(docs: List[Document], enabled: bool = False, max_chars:
                 summary = getattr(resp, "text", None) or str(resp)
                 md["doc_summary"] = summary.strip()
                 docs[idx] = Document(text=getattr(d, "text", ""), metadata=md)
-            except Exception as e:  # 요약 실패는 무시하고 기록만 남김
-                log.debug("summarize failed (ignored): %r", e)
+            except Exception as e:  # 요약 실패는 무시하고 기록만
+                import logging as _logging
+                _logging.getLogger(__name__).debug("summarize failed (ignored): %r", e)
     except Exception as e:
-        log.debug("Settings import failed (ignored): %r", e)
+        import logging as _logging
+        _logging.getLogger(__name__).debug("Settings import failed (ignored): %r", e)
 
 # ===== [08] EXPORTS ==========================================================
 __all__ = [
