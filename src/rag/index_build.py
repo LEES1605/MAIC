@@ -1,6 +1,8 @@
 # ===== [01] STUB =============================================================
 from __future__ import annotations
-from typing import Dict, Callable, Mapping
+
+from typing import Callable, Dict, Mapping
+
 import streamlit as st
 
 def build_index_with_checkpoint(
@@ -14,3 +16,4 @@ def build_index_with_checkpoint(
 ):
     st.info("This is a stub for index build.")
     return object()
+# ===== [02] END ==============================================================
