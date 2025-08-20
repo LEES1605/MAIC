@@ -40,8 +40,8 @@ jobs:
           echo "Ruff version:" && ruff --version
 
       # ===== [02-04] RUFF (LINT & FORMAT CHECK) ==============================
-      - name: Ruff - organize imports (auto-fix I001 only)
-        run: ruff check . --fix --select I001
+      - name: Ruff - format (apply before check)
+        run: ruff format .
 
       - name: Ruff - lint
         run: ruff check .
