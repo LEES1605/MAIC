@@ -7,18 +7,19 @@ from typing import Any, Dict, Optional
 
 # ===== [03] DOCUMENT RESOLUTION =============================================
 try:
-    from llama_index.core.schema import Document as _LIDocument  # 0.12.x+
+    # 0.12.x+
+    from llama_index.core.schema import Document as _LIDocument  # type: ignore[assignment]
 except Exception:
     try:
-        from llama_index.core import Document as _LIDocument     # older versions
+        # older versions
+        from llama_index.core import Document as _LIDocument  # type: ignore[assignment]
     except Exception:
         class _LIDocument:
             def __init__(self, text: str = "", metadata: Optional[Dict[str, Any]] = None) -> None:
                 self.text = text
                 self.metadata = metadata or {}
 
-# ===== [04] SINGLE BINDING ===================================================
+# ===== [04] SINGLE BINDING / EXPORT =========================================
 Document = _LIDocument
-
-# ===== [05] EXPORTS ==========================================================
 __all__ = ["Document"]
+# ===== [05] END ==============================================================
