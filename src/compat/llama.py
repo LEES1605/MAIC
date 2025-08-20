@@ -3,9 +3,9 @@
 
 # ===== [02] IMPORTS ==========================================================
 from __future__ import annotations
-from typing import Any, Dict, Optional
 
-# ===== [03] DOCUMENT RESOLUTION =============================================
+from typing import Dict, Optional
+=============
 try:
     # 0.12.x+
     from llama_index.core.schema import Document as _LIDocument  # type: ignore[assignment]
