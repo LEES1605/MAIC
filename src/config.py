@@ -7,16 +7,24 @@ from typing import Optional
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# ===== [02] PATHS & CONSTS ===================================================
-ROOT_DIR = Path(__file__).resolve().parent.parent
-APP_DATA_DIR = Path(os.environ.get("APP_DATA_DIR", "/tmp/my_ai_teacher")).resolve()
-PERSIST_DIR = (APP_DATA_DIR / "storage_gdrive").resolve()
-REPORT_DIR = (APP_DATA_DIR / "reports").resolve()
-REPORT_DIR.mkdir(parents=True, exist_ok=True)
+# ===== [02] PATHS ============================================================
+# 하드코딩된 /tmp 대신, OS에 맞는 사용자 데이터 디렉터리를 기본값으로 사용.
+# - Windows: %LOCALAPPDATA%\my_ai_teacher
+# - POSIX (Linux/mac): $XDG_DATA_HOME 또는 ~/.local/share/my_ai_teacher
+from pathlib import Path
+import os
 
-QUALITY_REPORT_PATH = str((REPORT_DIR / "quality_report.json").resolve())
-MANIFEST_PATH = str((APP_DATA_DIR / "drive_manifest.json").resolve())
-CHECKPOINT_PATH = str((APP_DATA_DIR / "checkpoint.json").resolve())
+def _default_app_data_dir(app_name: str = "my_ai_teacher") -> Path:
+    if os.name == "nt":
+        base = os.environ.get("LOCALAPPDATA") or os.path.expanduser(r"~\AppData\Local")
+    else:
+        base = os.environ.get("XDG_DATA_HOME") or os.path.join(os.path.expanduser("~"), ".local", "share")
+    return Path(base) / app_name
+
+ROOT_DIR = Path(__file__).resolve().parent.parent
+APP_DATA_DIR = Path(os.environ.get("APP_DATA_DIR") or _default_app_data_dir()).resolve()
+PERSIST_DIR = (APP_DATA_DIR / "storage_gdrive").resolve()
+QUALITY_REPORT_PATH = (APP_DATA_DIR / "quality_report.json").resolve()
 
 
 # ===== [03] SETTINGS MODEL ===================================================
