@@ -1,5 +1,6 @@
 # ===== [01] PURPOSE ==========================================================
-# settings / PERSIST_DIR 등의 공통 심볼 단일 바인딩
+# settings / PERSIST_DIR 등 공통 심볼을 단일 바인딩하여
+# no-redef / 경로 폴백 문제를 영구 제거합니다.
 
 # ===== [02] IMPORTS ==========================================================
 from __future__ import annotations
@@ -19,4 +20,6 @@ QUALITY_REPORT_PATH: Optional[str] = getattr(_cfg, "QUALITY_REPORT_PATH", None)
 MANIFEST_PATH: Optional[str] = getattr(_cfg, "MANIFEST_PATH", None)
 CHECKPOINT_PATH: Optional[str] = getattr(_cfg, "CHECKPOINT_PATH", None)
 
+# ===== [05] EXPORTS ==========================================================
 __all__ = ["settings", "PERSIST_DIR", "QUALITY_REPORT_PATH", "MANIFEST_PATH", "CHECKPOINT_PATH"]
+# ===== [06] END ==============================================================
