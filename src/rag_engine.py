@@ -4,7 +4,7 @@ from typing import Any, Optional, Callable
 from src.compat.config_bridge import PERSIST_DIR
 
 # ===== [02] CONFIG BRIDGE ====================================================
-from src.compat.config_bridge import settings, PERSIST_DIR
+# (임포트는 [01]에서 완료했어요. 중복 임포트 방지를 위해 이 구획은 주석만 유지합니다.)
 
 # ===== [03] INDEX LOAD/CREATE (STUB) ========================================
 def _index_exists(persist_dir: str | bytes | "os.PathLike[str]") -> bool:
