@@ -47,3 +47,7 @@ package-dir = {"" = "src"}
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["*"]
+
+# ===== [06] POETRY SETUP (disable package install of the app) ===============
+[tool.poetry]
+package-mode = false
