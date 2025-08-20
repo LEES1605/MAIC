@@ -1,26 +1,29 @@
+# ===== [00] WORKFLOW NAME ====================================================
 name: ci
 
+# ===== [01] TRIGGERS =========================================================
 on:
   push:
   pull_request:
 
+# ===== [02] JOBS =============================================================
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      # ===== [01] CHECKOUT ====================================================
+      # ===== [02-01] CHECKOUT ================================================
       - name: Checkout
         uses: actions/checkout@v4
 
-      # ===== [02] PYTHON SETUP ===============================================
+      # ===== [02-02] PYTHON SETUP ============================================
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: "pip"
 
-      # ===== [03] INSTALL RUNTIME & DEV TOOLS =================================
+      # ===== [02-03] INSTALL RUNTIME & DEV TOOLS =============================
       - name: Upgrade pip/setuptools/wheel
         run: |
           python -m pip install --upgrade pip setuptools wheel
@@ -29,27 +32,28 @@ jobs:
         run: |
           pip install -e .
 
-      - name: Install dev tools
+      - name: Install dev tools (pinned Ruff)
         run: |
-          pip install \
-            mypy ruff bandit pytest \
-            types-requests types-PyYAML
+          pip install mypy bandit pytest
+          pip install ruff==0.12.9
+          pip install types-requests types-PyYAML
+          echo "Ruff version:" && ruff --version
 
-      # ===== [04] RUFF (LINT & FORMAT CHECK) ==================================
+      # ===== [02-04] RUFF (LINT & FORMAT CHECK) ==============================
       - name: Ruff - lint
         run: ruff check .
 
       - name: Ruff - format check
         run: ruff format --check .
 
-      # ===== [05] MYPY ========================================================
+      # ===== [02-05] MYPY ====================================================
       - name: Mypy
         run: mypy .
 
-      # ===== [06] BANDIT (SECURITY) ==========================================
+      # ===== [02-06] BANDIT (SECURITY) ======================================
       - name: Bandit
         run: bandit -q -r .
 
-      # ===== [07] TESTS (옵션) ===============================================
+      # ===== [02-07] TESTS (OPTIONAL) =======================================
       - name: PyTest (optional)
         run: pytest -q || true
