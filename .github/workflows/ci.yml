@@ -39,16 +39,18 @@ jobs:
           pip install types-requests types-PyYAML
           echo "Ruff version:" && ruff --version
 
-      # ===== [02-04] RUFF (LINT & FORMAT CHECK) ==============================
-      - name: Ruff - format (apply before check)
+      # ===== [02-04] RUFF (AUTO-FIX & CHECK) ======================================
+      - name: Ruff - organize imports (auto-fix I001 only)
+        run: ruff check . --fix --select I001
+
+      - name: Ruff - format (apply)
         run: ruff format .
 
-      - name: Ruff - lint
+      - name: Ruff - lint (verify)
         run: ruff check .
 
-      - name: Ruff - format check
+      - name: Ruff - format check (verify)
         run: ruff format --check .
-
 
       # ===== [02-05] MYPY ====================================================
       - name: Mypy
