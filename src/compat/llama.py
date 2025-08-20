@@ -1,16 +1,25 @@
 # ===== [01] PURPOSE ==========================================================
 # LlamaIndex 호환 레이어: 프로젝트 전체는 여기서만 Document를 가져온다.
-# 사용: from src.compat.llama import Document
+# 사용: from src.compat.llama import Document, DocumentType
 
 # ===== [02] IMPORTS ==========================================================
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Protocol, TypeAlias
 
 
-# ===== [03] DOCUMENT RESOLUTION (SINGLE BINDING) =============================
-# mypy가 제어 흐름을 따지지 않아서, 같은 이름을 import/정의로 중복하면 no-redef가 납니다.
-# 따라서 'Document'를 변수로 선언하고(타입: 'type[Any]'), 런타임에 한 번만 바인딩합니다.
+# ===== [03] TYPING SURFACE (INSTANCE SHAPE) ==================================
+class _DocumentInstance(Protocol):
+    text: str
+    metadata: Dict[str, object]
+
+
+# 문서 "인스턴스" 타입(타입 힌트 전용)
+DocumentType: TypeAlias = _DocumentInstance
+
+
+# ===== [04] RUNTIME BINDING (SINGLE NAME) ====================================
+# 런타임에서 사용할 "클래스" 이름은 오직 하나: Document
 Document: type[Any]
 
 try:
@@ -35,7 +44,7 @@ except Exception:
         Document = _StubDocument
 
 
-# ===== [04] EXPORTS ==========================================================
-__all__ = ["Document"]
+# ===== [05] EXPORTS ==========================================================
+__all__ = ["Document", "DocumentType"]
 
-# ===== [05] END ==============================================================
+# ===== [06] END ==============================================================
