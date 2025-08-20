@@ -11,15 +11,13 @@ from typing import Dict, Optional
 # ===== [03] DOCUMENT RESOLUTION =============================================
 try:
     # 0.12.x+
-    from llama_index.core.schema import Document as _DocSchema
-    _DocumentImpl = _DocSchema
+    from llama_index.core.schema import Document as Document
 except Exception:
     try:
         # older versions
-        from llama_index.core import Document as _DocCore
-        _DocumentImpl = _DocCore
+        from llama_index.core import Document as Document
     except Exception:
-        class _DocumentImpl:  # 최소 스텁(타입/런타임 안전)
+        class Document:  # 최소 스텁(타입/런타임 안전)
             def __init__(
                 self,
                 text: str = "",
@@ -29,8 +27,7 @@ except Exception:
                 self.metadata = metadata or {}
 
 
-# ===== [04] SINGLE BINDING / EXPORT =========================================
-Document = _DocumentImpl
+# ===== [04] EXPORTS ==========================================================
 __all__ = ["Document"]
 
 # ===== [05] END ==============================================================
