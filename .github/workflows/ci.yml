@@ -5,6 +5,7 @@ name: ci
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 # ===== [02] JOBS =============================================================
 jobs:
