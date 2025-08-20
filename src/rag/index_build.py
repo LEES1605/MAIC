@@ -5,6 +5,7 @@ from typing import Callable, Dict, Mapping
 
 import streamlit as st
 
+
 def build_index_with_checkpoint(
     update_pct: Callable[[int, str | None], None],
     update_msg: Callable[[str], None],
@@ -16,4 +17,5 @@ def build_index_with_checkpoint(
 ):
     st.info("This is a stub for index build.")
     return object()
+
 # ===== [02] END ==============================================================
