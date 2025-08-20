@@ -44,78 +44,102 @@ if st.button("Build/Load Index"):
                 st.error(f"Index load/build failed: {type(e).__name__}: {e}")
 # ===== [02] RAG: Restore from Drive BACKUP_ZIP ===============================
 # 백업 ZIP을 구글드라이브에서 내려받아 로컬(APP_DATA_DIR)에 풀고,
-# 바로 인덱스를 재로딩합니다. (키 이름이 달라도 시크릿에서 자동 탐색)
+# 바로 인덱스를 재로딩합니다. (시크릿이 섹션/중첩 안에 있어도 자동 탐색)
 
 import json, io, os, zipfile
 from pathlib import Path
+from typing import Any, Mapping, Iterator, Tuple
 
-# --- (A) 시크릿에서 "서비스계정 JSON" 자동 탐색 -----------------------------
+# --- (A) 시크릿 전수조사 도우미 ---------------------------------------------
+def _iter_secrets(obj: Any, prefix: str = "") -> Iterator[Tuple[str, Any]]:
+    """
+    st.secrets 전체를 재귀적으로 훑어서 (경로키, 값) 튜플을 뽑습니다.
+    경로키 예: 'RAG.GDRIVE_FOLDER_ID'
+    """
+    try:
+        # Mapping(dict 유사)이면 항목 순회
+        if isinstance(obj, Mapping):
+            for k, v in obj.items():
+                path = f"{prefix}.{k}" if prefix else str(k)
+                yield from _iter_secrets(v, path)
+        else:
+            # 말단 값
+            yield (prefix, obj)
+    except Exception:
+        # st.secrets 내부 타입 차이 대비
+        yield (prefix, obj)
+
+def _flatten_secrets() -> list[Tuple[str, Any]]:
+    return list(_iter_secrets(st.secrets))
+
+# --- (B) 서비스계정 JSON 자동 탐색 -------------------------------------------
 def _find_service_account_in_secrets() -> dict:
-    """
-    1) 흔한 키 후보들을 우선 확인
-    2) 그래도 없으면 st.secrets 전체를 훑어서 service_account 형태를 자동 탐색
-    """
-    candidates = (
+    # 1) 흔한 키 우선
+    preferred = (
         "GDRIVE_SERVICE_ACCOUNT_JSON",
         "GOOGLE_SERVICE_ACCOUNT_JSON",
         "SERVICE_ACCOUNT_JSON",
-        # 소문자/다른 팀이 쓰던 별칭도 지원
         "gdrive_service_account_json",
         "service_account_json",
         "GCP_SERVICE_ACCOUNT",
         "gcp_service_account",
     )
-    # 1) 후보 키 직행
-    for k in candidates:
-        if k in st.secrets and str(st.secrets[k]).strip():
-            raw = st.secrets[k]
+    for key in preferred:
+        if key in st.secrets and str(st.secrets[key]).strip():
+            raw = st.secrets[key]
             return json.loads(raw) if isinstance(raw, str) else dict(raw)
 
-    # 2) 최상위 모든 키를 스캔 (중첩 테이블/문자열 모두 탐색)
-    for k, v in st.secrets.items():
+    # 2) 전수조사(중첩 포함)
+    candidates: list[tuple[str, dict]] = []
+    for path, val in _flatten_secrets():
         try:
-            if isinstance(v, (dict,)):
-                if v.get("type") == "service_account" and "client_email" in v and "private_key" in v:
-                    return dict(v)
-            elif isinstance(v, str):
-                if '"type": "service_account"' in v and '"client_email"' in v and '"private_key"' in v:
-                    return json.loads(v)
+            if isinstance(val, Mapping):
+                if val.get("type") == "service_account" and "client_email" in val and "private_key" in val:
+                    candidates.append((path, dict(val)))
+            elif isinstance(val, str):
+                if '"type": "service_account"' in val and '"client_email"' in val and '"private_key"' in val:
+                    candidates.append((path, json.loads(val)))
         except Exception:
-            pass
+            continue
+    if candidates:
+        # 경로에 'RAG' / 'GDRIVE' / 'SERVICE' 같은 힌트가 있으면 우선
+        candidates.sort(key=lambda kv: (
+            0 if any(tok in kv[0].upper() for tok in ("RAG", "GDRIVE", "SERVICE")) else 1,
+            len(kv[0]),
+        ))
+        return candidates[0][1]
 
     raise KeyError(
         "서비스계정 JSON을 시크릿에서 찾지 못했습니다. "
-        "권장: 최상위에 GDRIVE_SERVICE_ACCOUNT_JSON = '''{...}''' 로 추가하세요."
+        "예: 최상위에 GDRIVE_SERVICE_ACCOUNT_JSON = '''{...}'''"
     )
 
-# --- (B) 시크릿에서 "백업 폴더 ID" 자동 탐색 --------------------------------
+# --- (C) 백업 폴더 ID 자동 탐색 ----------------------------------------------
 def _find_backup_folder_id() -> str:
-    candidates = (
-        "GDRIVE_BACKUP_FOLDER_ID",
-        "BACKUP_FOLDER_ID",
-        "GDRIVE_FOLDER_ID",   # 일반 폴더 키도 허용
-    )
-    for k in candidates:
-        if k in st.secrets and str(st.secrets[k]).strip():
-            return str(st.secrets[k]).strip()
+    # 1) 흔한 키 우선
+    for key in ("GDRIVE_BACKUP_FOLDER_ID", "BACKUP_FOLDER_ID", "GDRIVE_FOLDER_ID"):
+        if key in st.secrets and str(st.secrets[key]).strip():
+            return str(st.secrets[key]).strip()
 
-    # 혹시 섹션/중첩 안쪽에 들어 있다면 전체 스캔
-    for _, v in st.secrets.items():
+    # 2) 전수조사(중첩 포함) — FOLDER_ID를 품은 키 수집
+    found: list[Tuple[str, str]] = []
+    for path, val in _flatten_secrets():
         try:
-            if isinstance(v, (dict,)):
-                for kk, vv in v.items():
-                    if "FOLDER_ID" in str(kk).upper() and str(vv).strip():
-                        return str(vv).strip()
+            if isinstance(val, (str, int)) and "FOLDER_ID" in path.upper() and str(val).strip():
+                found.append((path, str(val).strip()))
         except Exception:
-            pass
+            continue
+    if not found:
+        raise KeyError(
+            "백업 폴더 ID를 찾지 못했습니다. "
+            "권장: GDRIVE_BACKUP_FOLDER_ID = '폴더_ID' (또는 GDRIVE_FOLDER_ID) 를 시크릿에 추가"
+        )
+    # 'BACKUP'을 포함한 경로 우선, 그 다음 경로 길이 짧은 것
+    found.sort(key=lambda kv: (0 if "BACKUP" in kv[0].upper() else 1, len(kv[0])))
+    return found[0][1]
 
-    raise KeyError(
-        "백업 폴더 ID를 찾지 못했습니다. "
-        "권장: GDRIVE_BACKUP_FOLDER_ID = '폴더_ID' (또는 GDRIVE_FOLDER_ID) 를 최상위에 추가하세요."
-    )
-
-# --- (C) 복구 로직 -----------------------------------------------------------
-def _restore_from_drive_backup():
+# --- (D) 복구 로직 -----------------------------------------------------------
+def _restore_from_drive_backup(folder_id: str):
     try:
         from google.oauth2.service_account import Credentials
         from googleapiclient.discovery import build
@@ -125,8 +149,6 @@ def _restore_from_drive_backup():
 
     sa_info = _find_service_account_in_secrets()
     creds = Credentials.from_service_account_info(sa_info, scopes=["https://www.googleapis.com/auth/drive.readonly"])
-
-    folder_id = _find_backup_folder_id()
 
     svc = build("drive", "v3", credentials=creds, cache_discovery=False)
     q = f"'{folder_id}' in parents and trashed=false and mimeType='application/zip'"
@@ -168,11 +190,21 @@ def _restore_from_drive_backup():
         "files": count,
     }
 
+# --- (E) UI: 폴더 ID 자동제안 + 복구 버튼 -----------------------------------
+_suggest = _find_backup_folder_id if True else lambda: None  # 명시적 호출
+try:
+    _default_folder = _suggest()
+except Exception:
+    _default_folder = ""
+
 st.subheader("RAG: Restore from Drive BACKUP_ZIP")
+folder_input = st.text_input("Backup folder ID (자동 감지값이 있으면 미리 채워집니다)", value=_default_folder, help="예: 1AbCdeFg... (Drive 폴더 ID)")
+
 if st.button("⬇️ Restore backup zip from Drive"):
     with st.spinner("Restoring from Drive backup…"):
         try:
-            res = _restore_from_drive_backup()
+            fid = folder_input.strip() or _find_backup_folder_id()
+            res = _restore_from_drive_backup(fid)
             st.success(f"Restored '{res['backup_name']}' → {res['target']}")
             st.caption(f"Modified: {res['modifiedTime']} | Total local files: {res['files']}")
             # 복구 직후 인덱스 재시도
