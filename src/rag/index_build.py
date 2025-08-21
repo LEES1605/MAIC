@@ -344,6 +344,48 @@ def _need_update(prev: Dict[str, Any], now_meta: Dict[str, Any]) -> bool:
 
 
 # ===== [07] BUILD FROM PREPARED =============================================
+def _guess_section_hint(text: str) -> Optional[str]:
+    """간단한 섹션 힌트 추출(첫 문장/헤더 느낌). 실패 시 None."""
+    import re
+    if not text:
+        return None
+    # 줄 단위로 보고, 너무 짧거나 너무 긴 건 제외
+    lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
+    for ln in lines[:5]:
+        if 8 <= len(ln) <= 120:
+            # 전형적 섹션 프리픽스 패턴
+            if re.search(r"^(Chapter|Unit|Lesson|Section|Part)\s+[0-9IVX]+[:\-\.\s]", ln, re.I):
+                return ln
+            # 문장부호가 적고 알파가 많은 헤더류
+            if re.fullmatch(r"[A-Za-z0-9\s\-\(\)\.\,']{8,120}", ln) and sum(c.isalpha() for c in ln) > len(ln)*0.5:
+                return ln
+    # fallback: 첫 80자
+    head = text.strip().split("\n", 1)[0]
+    return (head[:80] + "…") if len(head) > 80 else (head or None)
+
+
+def _pdf_page_count_quick(service, file_id: str) -> Optional[int]:
+    """PDF 페이지 수를 빠르게 추정(다운로드 후 pypdf 사용). 실패 시 None."""
+    try:
+        import pypdf
+        data = _download_file_bytes(service, file_id)
+        return len(pypdf.PdfReader(io.BytesIO(data)).pages)
+    except Exception:
+        return None
+
+
+def _page_range_linear(total_len: int, pages: Optional[int], start: int, end: int) -> Optional[str]:
+    """문자 길이 비례로 페이지 범위를 근사. pages가 없으면 None."""
+    if not pages or total_len <= 0:
+        return None
+    # pos -> page(1-based)
+    def pos2pg(pos: int) -> int:
+        p = int((max(0, min(pos, total_len-1)) / max(1, total_len-1)) * (pages - 1)) + 1
+        return max(1, min(p, pages))
+    sp, ep = pos2pg(start), pos2pg(max(start, end-1))
+    return f"{sp}" if sp == ep else f"{sp}–{ep}"
+
+
 def _build_from_prepared(service, prepared_id: str) -> Tuple[int, int, Dict[str, Any], Dict[str, int]]:
     """
     prepared 폴더의 파일들을 읽어 chunks.jsonl/manifest.json을 갱신한다.
@@ -351,9 +393,13 @@ def _build_from_prepared(service, prepared_id: str) -> Tuple[int, int, Dict[str,
     """
     files = _list_files(service, prepared_id)
     manifest = _load_manifest(MANIFEST_PATH)
+    prev_ids = set(manifest.keys())
     out_path = PERSIST_DIR / "chunks.jsonl"
 
-    stats = {"gdocs": 0, "text_like": 0, "pdf_parsed": 0, "pdf_skipped": 0, "others_skipped": 0}
+    stats: Dict[str, int] = {
+        "gdocs": 0, "text_like": 0, "pdf_parsed": 0, "pdf_skipped": 0, "others_skipped": 0,
+        "new_docs": 0, "updated_docs": 0, "unchanged_docs": 0
+    }
     new_lines: List[str] = []
     processed, total_chunks = 0, 0
     changed_ids: set[str] = set()
@@ -374,19 +420,49 @@ def _build_from_prepared(service, prepared_id: str) -> Tuple[int, int, Dict[str,
         now_meta = {**meta_base, "content_sha1": _sha1(text)}
         prev_meta = manifest.get(f["id"], {})
 
-        if not _need_update(prev_meta, now_meta):
+        # 변경 분류(new/updated/unchanged)
+        need = _need_update(prev_meta, now_meta)
+        if not need:
+            stats["unchanged_docs"] += 1
             continue
+        if f["id"] not in prev_ids:
+            stats["new_docs"] += 1
+        else:
+            stats["updated_docs"] += 1
 
+        # 청크 생성(+ 오버랩 120 고정; 아래 page_approx 계산에 사용)
         chunks = _chunk_text(text, target_chars=1200, overlap=120)
+
+        # PDF면 페이지 수를 얻어 page_approx 계산에 사용
+        pages = _pdf_page_count_quick(service, f["id"]) if (f.get("mimeType") == "application/pdf") else None
+        total_len = len(text)
+
+        # 선형 오프셋 누적(오버랩 고려)
+        running_start = 0
         for i, ch in enumerate(chunks):
+            start = running_start
+            end = start + len(ch)
+            # 다음 청크 시작점 = 현재 청크 길이 - keep(= overlap clip)
+            keep = min(120, len(ch))
+            running_start = end - keep
+
             rec = {
                 "doc_id": f["id"],
                 "doc_name": f.get("name"),
                 "chunk_index": i,
                 "text": ch,
-                "meta": {"mime": f.get("mimeType"), "modified": f.get("modifiedTime")},
+                "meta": {
+                    "file_id": f["id"],
+                    "file_name": f.get("name"),
+                    "source_drive_url": f"https://drive.google.com/file/d/{f['id']}/view",
+                    "mime": f.get("mimeType"),
+                    "modified": f.get("modifiedTime"),
+                    "page_approx": _page_range_linear(total_len, pages, start, end),
+                    "section_hint": _guess_section_hint(ch),
+                },
             }
             new_lines.append(json.dumps(rec, ensure_ascii=False))
+
         now_meta["chunk_count"] = len(chunks)
         manifest[f["id"]] = now_meta
 
@@ -427,36 +503,54 @@ def _percentiles(values: List[int], ps: List[float]) -> Dict[str, Optional[int]]
         out[f"p{int(p*100)}"] = vals[k]
     return out
 
-def _quality_report(manifest: Dict[str, Any]) -> Dict[str, Any]:
+def _quality_report(manifest: Dict[str, Any], extra_counts: Optional[Dict[str, int]] = None) -> Dict[str, Any]:
     chunks_path = PERSIST_DIR / "chunks.jsonl"
     lengths: List[int] = []
+    by_mime: Dict[str, List[int]] = {}
+
     if chunks_path.exists():
         for ln in chunks_path.read_text(encoding="utf-8").splitlines():
             if not ln.strip():
                 continue
             try:
                 obj = json.loads(ln)
-                lengths.append(len(obj.get("text", "")))
+                txt = obj.get("text", "")
+                lnth = len(txt)
+                lengths.append(lnth)
+                mime = (obj.get("meta", {}) or {}).get("mime", "unknown")
+                by_mime.setdefault(mime, []).append(lnth)
             except Exception:
                 pass
 
     avg = round(sum(lengths) / len(lengths), 1) if lengths else None
     pct = _percentiles(lengths, [0.5, 0.9, 0.99])
+    longest = max(lengths) if lengths else None
+    shortest = min(lengths) if lengths else None
 
-    # MIME 분포
-    mime_dist: Dict[str, int] = {}
-    for m in manifest.values():
-        mime = m.get("mimeType", "unknown")
-        mime_dist[mime] = mime_dist.get(mime, 0) + 1
+    # MIME 분포 + 평균 길이
+    mime_distribution: Dict[str, Any] = {}
+    for m, vs in by_mime.items():
+        mime_distribution[m] = {
+            "docs": sum(1 for _ in vs),  # chunk count as 'docs' proxy
+            "avg_chunk_len": round(sum(vs)/len(vs), 1) if vs else None,
+        }
 
     report = {
         "docs_total": len(manifest),
         "chunks_total": sum(m.get("chunk_count", 0) for m in manifest.values()),
         "avg_chunk_length_chars": avg,
         **pct,  # p50/p90/p99
-        "mime_distribution": mime_dist,
+        "longest_chunk_chars": longest,
+        "shortest_chunk_chars": shortest,
+        "mime_distribution": mime_distribution,
         "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
+
+    if extra_counts:
+        for k in ("new_docs", "updated_docs", "unchanged_docs"):
+            if k in extra_counts:
+                report[k] = int(extra_counts[k])
+
     QUALITY_REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
     QUALITY_REPORT_PATH.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     return report
@@ -495,6 +589,7 @@ def _make_and_upload_backup_zip(service, backup_id: Optional[str]) -> Optional[s
 
 
 
+
 # ===== [09] PUBLIC ENTRY (APP에서 호출) ======================================
 def build_index_with_checkpoint(
     update_pct: Callable[[int, str | None], None],
@@ -504,7 +599,7 @@ def build_index_with_checkpoint(
     persist_dir: str,                      # (호환, 현재 내부 PERSIST_DIR 사용)
     remote_manifest: Dict[str, Dict[str, object]],
     should_stop: Callable[[], bool] | None = None,
-) -> Dict[str, Any]:
+) -> Dict[str, Any]]:
     """
     목표:
       - 앱 첫 실행 시: prepared 폴더 내용을 최적화하여 로컬 인덱스 생성
@@ -543,7 +638,7 @@ def build_index_with_checkpoint(
         return {"ok": False, "stopped": True}
 
     _msg("🧮 Writing quality report…")
-    report = _quality_report(manifest)
+    report = _quality_report(manifest, extra_counts=stats)
     _pct(85, "report-ready")
 
     _msg("⬆️ Uploading backup zip…")
