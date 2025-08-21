@@ -106,14 +106,35 @@ def render_brain_prep_main():
     st.markdown("### 🧠 강의 준비")
     c1, c2 = st.columns([0.4, 0.6])
 
+    # -------------------- 좌측: 두뇌 연결/초기화 -----------------------------
     with c1:
+        # [NEW] 두뇌 연결 버튼: 진행 바 + 상태상자
         if st.button("🧠 AI 두뇌 준비(복구/연결)", type="primary", key="btn_attach_restore"):
-            ok = _auto_attach_or_restore_silently()
-            if ok:
-                st.success("두뇌 연결이 완료되었습니다.")
-                st.rerun()
-            else:
-                st.error("두뇌 연결에 실패했습니다. 먼저 ‘사전점검→재최적화’를 실행해 인덱스를 만들어 주세요.")
+            # 답변 박스와 헷갈리지 않도록, 여기서는 상단 상태상자 + 진척도 바를 사용
+            try:
+                with st.status("두뇌 연결을 시도 중…", state="running") as s:  # Streamlit >= 1.25
+                    bar = st.progress(0)
+                    bar.progress(15)
+                    ok = _auto_attach_or_restore_silently()
+                    bar.progress(60)
+                    # (여기서 추가 로직이 있으면 중간 퍼센트 업데이트)
+                    bar.progress(100)
+                    if ok:
+                        s.update(label="두뇌 연결 완료 ✅", state="complete")
+                        st.success("두뇌 연결이 완료되었습니다.")
+                        st.rerun()
+                    else:
+                        s.update(label="두뇌 연결 실패 ❌", state="error")
+                        st.error("두뇌 연결에 실패했습니다. 먼저 ‘사전점검→재최적화’를 실행해 인덱스를 만들어 주세요.")
+            except Exception:
+                # 구버전 Streamlit 호환: 기본 스피너만
+                with st.spinner("두뇌 연결을 시도 중…"):
+                    ok = _auto_attach_or_restore_silently()
+                if ok:
+                    st.success("두뇌 연결이 완료되었습니다.")
+                    st.rerun()
+                else:
+                    st.error("두뇌 연결에 실패했습니다. 먼저 ‘사전점검→재최적화’를 실행해 인덱스를 만들어 주세요.")
 
         if st.button("📥 강의 자료 다시 불러오기 (두뇌 초기화)", key="btn_reset_local"):
             try:
@@ -129,9 +150,10 @@ def render_brain_prep_main():
                 st.error(f"초기화 중 오류: {type(e).__name__}")
                 st.exception(e)
 
+    # -------------------- 우측: 사전점검 → 재최적화 --------------------------
     with c2:
         st.markdown("#### ⚙️ 인덱스 최적화 — **사전점검 후 실행**")
-        st.caption("변경이 없으면 재최적화는 생략하고, 필요 시 2차 확인 버튼으로만 강제 실행합니다.")
+        st.caption("변경이 없으면 재최적화는 생략, 필요 시 2차 확인 버튼으로만 강제 실행")
 
         if st.button("🔎 사전점검 (변경 여부 확인)", key="btn_precheck"):
             if precheck_build_needed is None:
@@ -169,6 +191,7 @@ def render_brain_prep_main():
                 run_label = "🛠 재최적화 실행 (변경 반영)"
                 run_help  = "변경/신규 파일만 델타로 반영하여 인덱스를 갱신합니다."
 
+            # [기존 유지] 빌드에는 이미 % 프로그레스 바가 있음
             if st.button(run_label, help=run_help, key="btn_build_confirm"):
                 if build_index_with_checkpoint is None:
                     st.error("인덱스 빌더 모듈을 찾지 못했습니다. (src.rag.index_build)")
@@ -203,7 +226,7 @@ def render_brain_prep_main():
                     except Exception as e:
                         st.error(f"최적화 실패: {type(e).__name__}: {e}")
 
-# ===== [06] SIMPLE QA DEMO (mode-aware, ENTER SUBMIT, SPINNER) ===============
+# ===== [06] SIMPLE QA DEMO (mode-aware, ENTER SUBMIT, CHAT-AREA SPINNER) =====
 def _sentence_quick_fix(user_q: str) -> List[Tuple[str, str]]:
     tips: List[Tuple[str, str]] = []
     if re.search(r"\bI\s+seen\b", user_q, flags=re.I):
@@ -236,7 +259,6 @@ def _render_clean_answer(mode: str, answer_text: str, refs: List[Dict[str, str]]
 # Enter 제출용 on_change 콜백
 def _on_q_enter():
     st.session_state["qa_submitted"] = True
-    # 즉시 토스트로 피드백(선택적 시각 신호)
     try:
         st.toast("✳️ 답변 준비 중…")
     except Exception:
@@ -258,47 +280,75 @@ def render_simple_qa():
     else:
         placeholder = "예: 이 지문 핵심 요약과 제목 3개, 주제 1개 제안해줘"
 
-    # --- Enter 제출: on_change 콜백으로 플래그 설정 ---
+    # --- 입력부 ---------------------------------------------------------------
     q = st.text_input("질문 입력", placeholder=placeholder, key="qa_q", on_change=_on_q_enter)
     k = st.slider("검색 결과 개수(top_k)", 1, 10, 5, key="qa_k")
 
-    # 버튼 클릭도 동일하게 동작
     clicked = st.button("검색", key="qa_go")
     submitted = clicked or st.session_state.get("qa_submitted", False)
 
+    # [NEW] 답변 표시 영역(채팅 위치)에 스피너/상태상자 표시
+    answer_box = st.container()
+
     if submitted and (q or "").strip():
+        # 플래그 즉시 리셋(연타시 중복 처리 방지)
+        st.session_state["qa_submitted"] = False
+
+        # 채팅 영역에 상태 상자 우선 시도, 실패 시 스피너로 폴백
         try:
-            # 스피너: Enter/버튼 제출 즉시 ‘로딩 아이콘’ 표시
-            with st.spinner("✳️ 답변 준비 중…"):
-                qe = st.session_state["rag_index"].as_query_engine(top_k=k)
-                r = qe.query(q)
-                raw_text = getattr(r, "response", "") or str(r)
+            with answer_box:
+                with st.status("✳️ 답변 준비 중…", state="running") as s:
+                    # (여기에서 실제 검색 수행)
+                    qe = st.session_state["rag_index"].as_query_engine(top_k=k)
+                    r = qe.query(q)
+                    raw_text = getattr(r, "response", "") or str(r)
 
-                refs: List[Dict[str, str]] = []
-                hits = getattr(r, "source_nodes", None) or getattr(r, "hits", None)
-                if hits:
-                    for h in hits[:2]:
-                        meta = getattr(h, "metadata", None) or getattr(h, "node", {}).get("metadata", {})
-                        refs.append({
-                            "doc_id": (meta or {}).get("doc_id") or (meta or {}).get("file_name", ""),
-                            "url": (meta or {}).get("source") or (meta or {}).get("url", ""),
-                        })
+                    refs: List[Dict[str, str]] = []
+                    hits = getattr(r, "source_nodes", None) or getattr(r, "hits", None)
+                    if hits:
+                        for h in hits[:2]:
+                            meta = getattr(h, "metadata", None) or getattr(h, "node", {}).get("metadata", {})
+                            refs.append({
+                                "doc_id": (meta or {}).get("doc_id") or (meta or {}).get("file_name", ""),
+                                "url": (meta or {}).get("source") or (meta or {}).get("url", ""),
+                            })
 
-                # Sentence 모드: 빠른 교정(한국어 안내)
-                if mode == "Sentence":
-                    fixes = _sentence_quick_fix(q)
-                    if fixes:
-                        st.markdown("#### ✍️ 빠른 교정 제안 (한국어)")
-                        for bad, good in fixes:
-                            st.markdown(f"- **{bad}** → {good}")
+                    # Sentence 모드: 빠른 교정
+                    if mode == "Sentence":
+                        fixes = _sentence_quick_fix(q)
+                        if fixes:
+                            st.markdown("#### ✍️ 빠른 교정 제안 (한국어)")
+                            for bad, good in fixes:
+                                st.markdown(f"- **{bad}** → {good}")
 
-                _render_clean_answer(mode, raw_text, refs, lang)
-
-        except Exception as e:
-            st.error(f"검색 실패: {type(e).__name__}: {e}")
-        finally:
-            # Enter 재입력을 위한 플래그 리셋
-            st.session_state["qa_submitted"] = False
+                    _render_clean_answer(mode, raw_text, refs, lang)
+                    s.update(label="완료 ✅", state="complete")
+        except Exception:
+            # 상태 상자를 지원하지 않는 버전에서는 기본 스피너 사용
+            with answer_box:
+                with st.spinner("✳️ 답변 준비 중…"):
+                    try:
+                        qe = st.session_state["rag_index"].as_query_engine(top_k=k)
+                        r = qe.query(q)
+                        raw_text = getattr(r, "response", "") or str(r)
+                        refs: List[Dict[str, str]] = []
+                        hits = getattr(r, "source_nodes", None) or getattr(r, "hits", None)
+                        if hits:
+                            for h in hits[:2]:
+                                meta = getattr(h, "metadata", None) or getattr(h, "node", {}).get("metadata", {})
+                                refs.append({
+                                    "doc_id": (meta or {}).get("doc_id") or (meta or {}).get("file_name", ""),
+                                    "url": (meta or {}).get("source") or (meta or {}).get("url", ""),
+                                })
+                        if mode == "Sentence":
+                            fixes = _sentence_quick_fix(q)
+                            if fixes:
+                                st.markdown("#### ✍️ 빠른 교정 제안 (한국어)")
+                                for bad, good in fixes:
+                                    st.markdown(f"- **{bad}** → {good}")
+                        _render_clean_answer(mode, raw_text, refs, lang)
+                    except Exception as e:
+                        st.error(f"검색 실패: {type(e).__name__}: {e}")
 
 # ===== [07] MAIN =============================================================
 def main():
