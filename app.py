@@ -29,35 +29,50 @@ precheck_build_needed = None  # type: ignore
 build_index_with_checkpoint = None  # type: ignore
 _import_errors: List[str] = []
 
+def _bind_precheck(mod) -> Optional[Callable[..., Any]]:
+    """
+    index_build가 어떤 이름으로 내보내든(precheck_build_needed | quick_precheck)
+    여기서 하나로 바인딩한다.
+    """
+    fn = getattr(mod, "precheck_build_needed", None) or getattr(mod, "quick_precheck", None)
+    if fn is None:
+        return None
+
+    # 시그니처가 다를 수 있어, 인자 미스매치면 무인자 호출로 재시도
+    def _call(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except TypeError:
+            return fn()
+    return _call
+
 # 1차 경로: src.rag.index_build
 try:
-    mod = importlib.import_module("src.rag.index_build")
-    precheck_build_needed = getattr(mod, "precheck_build_needed", None)
-    build_index_with_checkpoint = getattr(mod, "build_index_with_checkpoint", None)
+    _mod = importlib.import_module("src.rag.index_build")
+    precheck_build_needed = _bind_precheck(_mod)
+    build_index_with_checkpoint = getattr(_mod, "build_index_with_checkpoint", None)
 except Exception as e:
     _import_errors.append(f"[src.rag.index_build] {type(e).__name__}: {e}")
 
 # 2차 경로: rag.index_build (프로젝트 루트가 src일 때)
 if precheck_build_needed is None or build_index_with_checkpoint is None:
     try:
-        mod = importlib.import_module("rag.index_build")
-        precheck_build_needed = getattr(mod, "precheck_build_needed", None)
-        build_index_with_checkpoint = getattr(mod, "build_index_with_checkpoint", None)
+        _mod2 = importlib.import_module("rag.index_build")
+        precheck_build_needed = precheck_build_needed or _bind_precheck(_mod2)
+        build_index_with_checkpoint = build_index_with_checkpoint or getattr(_mod2, "build_index_with_checkpoint", None)
     except Exception as e:
         _import_errors.append(f"[rag.index_build] {type(e).__name__}: {e}")
 
-# 3차 경로: 직접 파일 옆 경로(아주 예외적)
-# 필요시 여기에 더 추가 가능
-
-# 임포트 실패 시, 원인 로그를 그대로 표시
+# 임포트 실패 시 원인 안내
 if precheck_build_needed is None or build_index_with_checkpoint is None:
     st.warning(
-        "사전점검 모듈 임포트에 실패했습니다.\n\n"
+        "사전점검/빌더 임포트에 실패했습니다.\n\n"
         + "\n".join(f"• {msg}" for msg in _import_errors)
         + "\n\n확인하세요:\n"
         + "1) 파일 존재: src/rag/index_build.py\n"
         + "2) 패키지 마커: src/__init__.py, src/rag/__init__.py\n"
-        + "3) import 경로 철자: index_build (언더스코어), index.build(점) 아님\n"
+        + "3) 함수 이름: precheck_build_needed **또는** quick_precheck 중 하나가 있어야 합니다.\n"
+        + "4) import 철자: index_build(언더스코어), index.build(점) 아님"
     )
 
 # ===== [03] SESSION & HELPERS ================================================
