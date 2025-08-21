@@ -453,13 +453,45 @@ def _quality_report(manifest: Dict[str, Any]) -> Dict[str, Any]:
         "docs_total": len(manifest),
         "chunks_total": sum(m.get("chunk_count", 0) for m in manifest.values()),
         "avg_chunk_length_chars": avg,
-        **pct,
+        **pct,  # p50/p90/p99
         "mime_distribution": mime_dist,
         "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
     QUALITY_REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
     QUALITY_REPORT_PATH.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     return report
+
+def _make_and_upload_backup_zip(service, backup_id: Optional[str]) -> Optional[str]:
+    """
+    REQ_FILES를 zip으로 묶어 backup 폴더에 업로드.
+    - backup_id가 없으면 None 반환(조용히 스킵)
+    - ZIP에는 chunks.jsonl / manifest.json / quality_report.json을 포함
+    """
+    if not backup_id:
+        return None
+
+    ts = time.strftime("%Y%m%d-%H%M%S")
+    zip_path = APP_DATA_DIR / f"index_backup_{ts}.zip"
+
+    # ZIP 작성 (존재하는 파일만 포함)
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        cj = PERSIST_DIR / "chunks.jsonl"
+        if cj.exists():
+            zf.write(cj, arcname="chunks.jsonl")
+        if MANIFEST_PATH.exists():
+            zf.write(MANIFEST_PATH, arcname="manifest.json")
+        if QUALITY_REPORT_PATH.exists():
+            zf.write(QUALITY_REPORT_PATH, arcname="quality_report.json")
+
+    # 업로드 → 임시 ZIP 삭제
+    try:
+        _id = _upload_zip(service, backup_id, zip_path, zip_path.name)
+        return _id
+    finally:
+        try:
+            zip_path.unlink(missing_ok=True)
+        except Exception:
+            pass
 
 
 
