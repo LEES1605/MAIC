@@ -35,6 +35,10 @@ st.set_page_config(page_title="AI Teacher (Clean)", layout="wide")
 if "rag_index" not in st.session_state:
     st.session_state["rag_index"] = None  # _Index 객체 또는 None
 
+# 모드 상태 기본값
+if "mode" not in st.session_state:
+    st.session_state["mode"] = "Grammar"  # Grammar | Sentence | Passage
+
 def _index_ready() -> bool:
     return st.session_state.get("rag_index") is not None
 
@@ -69,6 +73,27 @@ def _auto_attach_or_restore_silently() -> bool:
 # ===== [04] HEADER ===========================================================
 st.title("🧑‍🏫 AI Teacher — Clean Scaffold")
 _index_status_badge()
+
+# ===== [04A] MODE SWITCH (NEW) ===============================================
+with st.container():
+    c_mode, c_info = st.columns([0.35, 0.65])
+    with c_mode:
+        mode = st.segmented_control(
+            "모드 선택",
+            options=["Grammar", "Sentence", "Passage"],
+            default=st.session_state.get("mode", "Grammar"),
+            key="ui_mode_segmented",
+        )
+        # 세션 상태 반영
+        st.session_state["mode"] = mode
+    with c_info:
+        if mode == "Grammar":
+            st.caption("모드: **Grammar** — 문법 Q&A (태깅/부스팅 중심)")
+        elif mode == "Sentence":
+            st.caption("모드: **Sentence** — 문장 분석 (품사/구문/교정 프롬프트 중심)")
+        else:
+            st.caption("모드: **Passage** — 지문 설명 (요약→비유→제목/주제 프롬프트 중심)")
+
 st.divider()
 
 # ===== [05] RAG: Build/Restore Panels =======================================
@@ -198,20 +223,39 @@ def render_brain_prep_main():
             "- ‘재최적화 실행’은 변경이 있을 때만 권장합니다(변경 없음이면 2차 확인 버튼으로 표시)."
         )
 
-# ===== [06] SIMPLE QA DEMO ===================================================
+# ===== [06] SIMPLE QA DEMO (mode-aware) =====================================
 def render_simple_qa():
     st.markdown("### 💬 질문해 보세요 (간단 데모)")
     if not _index_ready():
         st.info("아직 두뇌가 준비되지 않았어요. 상단의 **AI 두뇌 준비** 또는 **사전점검→재최적화**를 먼저 실행해 주세요.")
         return
-    q = st.text_input("질문 입력", placeholder="예: 현재완료 시제 설명해 줘", key="qa_q")
+
+    # 모드에 따라 플레이스홀더/힌트 문구만 다르게 (로직은 후속 단계에서 연결)
+    mode = st.session_state.get("mode", "Grammar")
+    if mode == "Grammar":
+        placeholder = "예: 관계대명사 which 사용법을 알려줘"
+    elif mode == "Sentence":
+        placeholder = "예: I seen the movie yesterday 문장 문제점 분석해줘"
+    else:
+        placeholder = "예: 이 지문 핵심 요약과 제목 3개, 주제 1개 제안해줘"
+
+    q = st.text_input("질문 입력", placeholder=placeholder, key="qa_q")
     k = st.slider("검색 결과 개수(top_k)", 1, 10, 5, key="qa_k")
+
     if st.button("검색", key="qa_go") and q.strip():
         try:
+            # 현재는 공통 엔진으로만 실행 — 다음 단계에서 모드별 검색/프롬프트 분기 예정
             qe = st.session_state["rag_index"].as_query_engine(top_k=k)  # _LocalQueryEngine
             r = qe.query(q)
+
+            # 모드 배지 + 응답
+            st.markdown(f"**선택 모드:** `{mode}`")
             st.text(r.response)
-            # 필요하면 카드/표 형태로 r.hits 를 그려도 됨
+
+            # TODO(후속 스텝): mode == Grammar → 태그 부스팅된 검색 사용
+            #                 mode == Sentence → 품사/구문/교정 템플릿 적용
+            #                 mode == Passage → 요약·비유·제목/주제 템플릿 적용
+
         except Exception as e:
             st.error(f"검색 실패: {type(e).__name__}: {e}")
 
