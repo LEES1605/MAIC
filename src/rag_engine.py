@@ -448,12 +448,12 @@ def get_or_build_index(
         if _index_exists(persist_dir):
             return _Index(_load_index_from_disk(persist_dir))
     except Exception:
-        # 로컬이 망가져도 원격 시도
-        pass
+        pass  # 로컬이 망가져도 원격 시도
 
     # 2) 원격(in-memory)
     data = _load_index_in_memory_from_drive()
     return _Index(data)
+
 
 
 # ===== [10] END ==============================================================
