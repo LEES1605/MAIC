@@ -9,8 +9,9 @@ os.environ["STREAMLIT_SERVER_ENABLE_WEBSOCKET_COMPRESSION"] = "false"
 
 # ===== [02] IMPORTS ==========================================================
 from pathlib import Path
-from typing import Any, Optional, Callable
+from typing import Any, Optional, Callable, List, Dict, Tuple
 
+import re
 import streamlit as st
 
 # RAG 엔진이 없어도 앱이 죽지 않게 try/except로 감쌈
@@ -223,7 +224,33 @@ def render_brain_prep_main():
             "- ‘재최적화 실행’은 변경이 있을 때만 권장합니다(변경 없음이면 2차 확인 버튼으로 표시)."
         )
 
-# ===== [06] SIMPLE QA DEMO (mode-aware) =====================================
+# ===== [06] SIMPLE QA DEMO (mode-aware, CLEAN OUTPUT) ========================
+def _sentence_quick_fix(user_q: str) -> List[Tuple[str, str]]:
+    """
+    Sentence 모드용 소형 규칙: 자주 틀리는 과거 시제/3인칭 단수 등.
+    반환: [(문제패턴, 제안), ...]
+    """
+    tips: List[Tuple[str, str]] = []
+    if re.search(r"\bI\s+seen\b", user_q, flags=re.I):
+        tips.append(("I seen", "I **saw** the movie / I **have seen** the movie"))
+    if re.search(r"\b(he|she|it)\s+don\'?t\b", user_q, flags=re.I):
+        tips.append(("he/she/it don't", "**doesn't**"))
+    if re.search(r"\ba\s+[aeiouAEIOU]", user_q):
+        tips.append(("a + 모음 시작 명사", "가능하면 **an** + 모음 시작 명사"))
+    return tips
+
+def _render_clean_answer(mode: str, answer_text: str, refs: List[Dict[str, str]]):
+    st.markdown(f"**선택 모드:** `{mode}`")
+    st.markdown("#### ✅ 답변")
+    st.write(answer_text.strip() or "—")
+
+    if refs:
+        with st.expander("근거 자료(상위 2개)"):
+            for i, r in enumerate(refs[:2], start=1):
+                name = r.get("doc_id") or r.get("source") or f"ref{i}"
+                url = r.get("url") or r.get("source_url") or ""
+                st.markdown(f"- {name}  " + (f"(<{url}>)" if url else ""))
+
 def render_simple_qa():
     st.markdown("### 💬 질문해 보세요 (간단 데모)")
     if not _index_ready():
@@ -244,17 +271,33 @@ def render_simple_qa():
 
     if st.button("검색", key="qa_go") and q.strip():
         try:
-            # 현재는 공통 엔진으로만 실행 — 다음 단계에서 모드별 검색/프롬프트 분기 예정
             qe = st.session_state["rag_index"].as_query_engine(top_k=k)  # _LocalQueryEngine
             r = qe.query(q)
 
-            # 모드 배지 + 응답
-            st.markdown(f"**선택 모드:** `{mode}`")
-            st.text(r.response)
+            # 1) 원시 응답 텍스트만 추려 보여주기 (Top matches 덤핑 제거)
+            raw_text = getattr(r, "response", "") or str(r)
 
-            # TODO(후속 스텝): mode == Grammar → 태그 부스팅된 검색 사용
-            #                 mode == Sentence → 품사/구문/교정 템플릿 적용
-            #                 mode == Passage → 요약·비유·제목/주제 템플릿 적용
+            # 2) 레퍼런스 요약(가능할 때만)
+            refs: List[Dict[str, str]] = []
+            hits = getattr(r, "source_nodes", None) or getattr(r, "hits", None)
+            if hits:
+                for h in hits[:2]:
+                    meta = getattr(h, "metadata", None) or getattr(h, "node", {}).get("metadata", {})
+                    refs.append({
+                        "doc_id": (meta or {}).get("doc_id") or (meta or {}).get("file_name", ""),
+                        "url": (meta or {}).get("source") or (meta or {}).get("url", ""),
+                    })
+
+            # 3) Sentence 모드일 경우: 빠른 규칙 교정 제안 추가
+            if mode == "Sentence":
+                fixes = _sentence_quick_fix(q)
+                if fixes:
+                    st.markdown("#### ✍️ 빠른 교정 제안")
+                    for bad, good in fixes:
+                        st.markdown(f"- **{bad}** → {good}")
+
+            # 4) 깔끔한 답변 + 간단 레퍼런스만 노출
+            _render_clean_answer(mode, raw_text, refs)
 
         except Exception as e:
             st.error(f"검색 실패: {type(e).__name__}: {e}")
