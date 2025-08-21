@@ -599,7 +599,7 @@ def build_index_with_checkpoint(
     persist_dir: str,                      # (호환, 현재 내부 PERSIST_DIR 사용)
     remote_manifest: Dict[str, Dict[str, object]],
     should_stop: Callable[[], bool] | None = None,
-) -> Dict[str, Any]]:
+) -> Dict[str, Any]:
     """
     목표:
       - 앱 첫 실행 시: prepared 폴더 내용을 최적화하여 로컬 인덱스 생성
