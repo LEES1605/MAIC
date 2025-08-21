@@ -20,6 +20,7 @@ dependencies = [
   "llama-index-core>=0.10",
   "google-api-python-client>=2.136.0",
   "google-auth>=2.30.0",
+  "pypdf>=4.2,<5",            # ← PDF 텍스트 추출용 (신규 추가)
 ]
 
 # ===== [03] DEV DEPS (optional) =============================================
