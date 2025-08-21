@@ -258,37 +258,55 @@ def _extract_text(service, file: Dict[str, Any], stats: Dict[str, int]) -> Optio
 
 
 
-# ===== [05] CHUNKING (paragraph-first, soft overlap) ========================
+# ===== [05] CHUNKING (paragraph-first, supports both overlap modes) ==========
+from typing import Optional, List
+
 def _norm_ws(s: str) -> str:
     return " ".join(s.split())
 
 def _split_paragraphs(text: str) -> List[str]:
-    """빈 줄 기준 문단 분할(지나친 쪼개짐 방지)."""
+    """빈 줄/개행 기반 문단 분할(지나친 쪼개짐 방지)."""
     paras = [p.strip() for p in text.split("\n") if p.strip()]
     return paras
 
 def _chunk_text(
     text: str,
-    target_chars: int = 1000,     # 권장 800~1200
-    overlap_ratio: float = 0.12,  # 약 10~15% 소프트 오버랩
+    target_chars: int = 1000,        # 권장 800~1200
+    *,                                 # 아래 인자는 키워드 전용(호환성 보장)
+    overlap: Optional[int] = None,     # 글자 수 기준 오버랩(예: 120). 기존 코드 호환용.
+    overlap_ratio: float = 0.12,       # 비율 기준 오버랩(예: 0.12 = 12%)
 ) -> List[str]:
+    """
+    문단 우선 청크 분할.
+    - overlap 이 주어지면 '글자 수'로 적용 (기존 호출과 호환: overlap=120)
+    - overlap 이 None이면 overlap_ratio(비율)로 적용
+    """
     if not text.strip():
         return []
+
     paras = _split_paragraphs(text)
     chunks: List[str] = []
     cur: List[str] = []
     cur_len = 0
-    max_chars = max(400, int(target_chars))  # 하한선
+    max_chars = max(400, int(target_chars))  # 최소 하한선
 
     for p in paras:
         seg = p
-        if cur_len + len(seg) + 1 > max_chars and cur:
+        # 현재 청크에 더 붙이면 타겟 길이를 초과하는 경우 잘라서 내보냄
+        if cur and cur_len + len(seg) + 1 > max_chars:
             joined = _norm_ws("\n".join(cur))
             chunks.append(joined)
-            # 소프트 오버랩: 뒤쪽 일부만 가져와 다음 청크에 프리롤
-            keep = int(len(joined) * overlap_ratio)
+
+            # --- 소프트 오버랩 계산 -----------------------------------------
+            if overlap is not None:
+                keep = int(max(0, min(overlap, len(joined))))
+            else:
+                keep = int(max(0, min(int(len(joined) * overlap_ratio), len(joined))))
             tail = joined[-keep:] if keep > 0 else ""
+            # 다음 청크 시작 버퍼
             cur, cur_len = ([tail] if tail else []), len(tail)
+            # ----------------------------------------------------------------
+
         cur.append(seg)
         cur_len += len(seg) + 1
 
