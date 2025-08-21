@@ -42,12 +42,10 @@ if st.button("Build/Load Index"):
                 st.info("아직 로컬 인덱스가 없습니다. 백업 복구 또는 인덱스 빌드를 먼저 실행해 주세요.")
             except Exception as e:
                 st.error(f"Index load/build failed: {type(e).__name__}: {e}")
-# ===== [02] RAG: Restore / Make Backup (zip → loose → prepared → manual) =====
+# ===== [02] RAG: Build from PREPARED + Restore/Make Backup ===================
 # 목적:
-# 1) BACKUP 폴더에 ZIP이 있으면: 내려받아 APP_DATA_DIR에 풀고 인덱스 로드
-# 2) ZIP이 없으면: BACKUP 폴더 안의 느슨한 파일(chunks.jsonl, manifest.json, quality_report.json) 내려받아 복구
-# 3) 그래도 없으면: PREPARED 폴더에서 위 3개를 찾아 내려받고 → ZIP으로 묶어 BACKUP 폴더에 업로드(백업 자동생성)
-# 4) 전부 없으면: 관리자가 파일 업로드 → ZIP으로 묶어 BACKUP에 올린 뒤 복구
+# (A) PREPARED 폴더 ID를 자동 탐지/입력받아 → 최적화(인덱스) 빌드 → 백업 ZIP 업로드
+# (B) 기존 Restore/Make Backup 파이프라인 유지(Zip → Loose → Prepared → Manual)
 
 import json, io, os, zipfile
 from pathlib import Path
@@ -58,7 +56,7 @@ import streamlit as st
 # --- 공통 상수 ----------------------------------------------------------------
 REQ_FILES = ["chunks.jsonl", "manifest.json", "quality_report.json"]
 
-# --- (A) 시크릿 전수조사 -----------------------------------------------------
+# --- (A0) 시크릿 전수조사 ----------------------------------------------------
 def _iter_secrets(obj: Any, prefix: str = "") -> Iterator[Tuple[str, Any]]:
     try:
         from collections.abc import Mapping as _Mapping
@@ -74,7 +72,7 @@ def _iter_secrets(obj: Any, prefix: str = "") -> Iterator[Tuple[str, Any]]:
 def _flatten_secrets() -> list[Tuple[str, Any]]:
     return list(_iter_secrets(st.secrets))
 
-# --- (B) 서비스계정 JSON 자동 탐색 -------------------------------------------
+# --- (A1) 서비스계정 JSON 자동 탐색 -------------------------------------------
 def _find_service_account_in_secrets() -> dict:
     preferred = (
         "GDRIVE_SERVICE_ACCOUNT_JSON",
@@ -110,7 +108,7 @@ def _find_service_account_in_secrets() -> dict:
         return candidates[0][1]
     raise KeyError("서비스계정 JSON을 시크릿에서 찾지 못했습니다.")
 
-# --- (C) 폴더 ID 자동 탐색 ---------------------------------------------------
+# --- (A2) 폴더 ID 자동 탐색 ---------------------------------------------------
 def _find_folder_id(kind: str) -> Optional[str]:
     """
     kind: 'BACKUP' | 'PREPARED' | 'DEFAULT'
@@ -130,7 +128,7 @@ def _find_folder_id(kind: str) -> Optional[str]:
                 up = path.upper()
                 if kind == "BACKUP" and "BACKUP" in up:
                     return str(val).strip()
-                if kind == "PREPARED" and "PREPARED" in up:
+                if kind == "PREPARED" and ("PREPARED" in up or "PREAPRED" in up or "PREP" in up):
                     return str(val).strip()
                 if kind == "DEFAULT" and "GDRIVE_FOLDER_ID" in up:
                     return str(val).strip()
@@ -138,7 +136,7 @@ def _find_folder_id(kind: str) -> Optional[str]:
             continue
     return None
 
-# --- (D) Drive 유틸 ----------------------------------------------------------
+# --- (A3) Drive 유틸 ----------------------------------------------------------
 def _drive_client():
     try:
         from google.oauth2.service_account import Credentials
@@ -179,14 +177,13 @@ def _find_named_files(service, folder_id: str, names: List[str]) -> dict:
     return found
 
 def _upload_zip(service, folder_id: str, path: Path, name: str) -> str:
-    media = None
     from googleapiclient.http import MediaFileUpload
     media = MediaFileUpload(str(path), mimetype="application/zip", resumable=False)
     file_metadata = {"name": name, "parents": [folder_id], "mimeType": "application/zip"}
     created = service.files().create(body=file_metadata, media_body=media, fields="id").execute()
     return created.get("id")
 
-# --- (E) 로컬 경로 -----------------------------------------------------------
+# --- (A4) 로컬 경로 -----------------------------------------------------------
 def _app_data_dir() -> Path:
     try:
         from src.config import APP_DATA_DIR
@@ -207,7 +204,84 @@ def _zip_local_index(zip_path: Path) -> None:
             if fp.exists():
                 zf.write(fp, arcname=fn)
 
-# --- (F) 핵심: 복구/생성 파이프라인 -----------------------------------------
+# ================= (A) Build from PREPARED 패널 ===============================
+st.subheader("RAG: Build from PREPARED (최적화 → 백업 업로드)")
+try:
+    _prepared_default = _find_folder_id("PREPARED") or ""
+except Exception:
+    _prepared_default = ""
+try:
+    _backup_default = _find_folder_id("BACKUP") or _find_folder_id("DEFAULT") or ""
+except Exception:
+    _backup_default = ""
+
+cols0 = st.columns(2)
+with cols0[0]:
+    _prepared_input = st.text_input(
+        "Prepared folder ID (필수)",
+        value=_prepared_default,
+        placeholder="예: 1AbCdeFg... (my-ai-teacher-data/prepared)",
+        help="시크릿에서 자동 감지된 값이 있으면 채워집니다. 필요하면 직접 입력하세요."
+    )
+with cols0[1]:
+    _backup_disp = st.text_input(
+        "Backup folder ID (참고용)",
+        value=_backup_default,
+        disabled=True,
+        help="인덱스 빌더가 완료 후 ZIP을 업로드할 대상(있으면)입니다."
+    )
+
+# 인덱스 빌더 호출
+try:
+    from src.rag.index_build import build_index_with_checkpoint
+except Exception:
+    build_index_with_checkpoint = None
+
+if st.button("🛠 Build index from PREPARED now"):
+    if not _prepared_input.strip():
+        st.error("Prepared folder ID가 비었습니다.")
+    elif build_index_with_checkpoint is None:
+        st.error("인덱스 빌더 모듈을 찾지 못했습니다. (src.rag.index_build)")
+    else:
+        prog = st.progress(0)
+        status = st.empty()
+        def _pct(v: int, msg: str | None = None):
+            prog.progress(max(0, min(int(v), 100)))
+            if msg:
+                status.info(str(msg))
+        def _msg(s: str):
+            status.write(f"• {s}")
+
+        with st.spinner("Building index from PREPARED…"):
+            try:
+                res = build_index_with_checkpoint(
+                    update_pct=_pct,
+                    update_msg=_msg,
+                    gdrive_folder_id=_prepared_input.strip(),   # PREPARED ID 전달
+                    gcp_creds={},                              # 시크릿에서 자동 사용
+                    persist_dir="",                            # 내부 기본 사용
+                    remote_manifest={},                        # 원격 미사용
+                )
+                prog.progress(100)
+                st.success("Build complete.")
+                st.json(res)
+
+                # 빌드 성공 후 인덱스 재로드 시도
+                try:
+                    from src.rag_engine import get_or_build_index as _gobi
+                except Exception:
+                    _gobi = None
+                if _gobi:
+                    try:
+                        idx = _gobi()
+                        st.session_state["rag_index"] = idx
+                        st.success("Index loaded.")
+                    except Exception as e:
+                        st.warning(f"Index reload skipped: {type(e).__name__}: {e}")
+            except Exception as e:
+                st.error(f"{type(e).__name__}: {e}")
+
+# ================= (B) Restore / Make Backup 패널 (기존 기능 유지) ============
 def _restore_or_make_backup():
     svc = _drive_client()
     # 폴더 탐색 우선순위
@@ -256,7 +330,6 @@ def _restore_or_make_backup():
     # 4) 전부 없으면: 수동 업로드 UI로 처리하도록 신호
     return {"mode": "need_manual_upload"}
 
-# --- (G) UI ------------------------------------------------------------------
 st.subheader("RAG: Restore / Make Backup")
 col1, col2 = st.columns(2)
 with col1:
@@ -278,16 +351,20 @@ if st.button("🔁 Restore (zip → loose → prepared) / Make backup"):
                 st.caption(str({k: v for k, v in res.items() if k not in ('mode',)}))
                 # 복구 직후 인덱스 재시도
                 try:
-                    idx = get_or_build_index() if get_or_build_index else None
-                    if idx is not None:
+                    from src.rag_engine import get_or_build_index as _gobi2
+                except Exception:
+                    _gobi2 = None
+                if _gobi2:
+                    try:
+                        idx = _gobi2()
                         st.session_state["rag_index"] = idx
                         st.success("Index loaded.")
-                except Exception as e:
-                    st.warning(f"Index reload skipped: {type(e).__name__}: {e}")
+                    except Exception as e:
+                        st.warning(f"Index reload skipped: {type(e).__name__}: {e}")
         except Exception as e:
             st.error(f"{type(e).__name__}: {e}")
 
-# --- (H) 수동 업로드(최후의 보루) --------------------------------------------
+# --- (B-끝) 수동 업로드(최후의 보루) -----------------------------------------
 st.markdown("**Manual upload (최후의 보루)** — 아래 3개 중 보유한 파일만 올려도 됩니다.")
 u_cols = st.columns(3)
 up = {
@@ -309,7 +386,6 @@ if st.button("⬆️ Save locally & make BACKUP zip"):
         else:
             tmp_zip = base / "_uploaded_make.zip"
             _zip_local_index(tmp_zip)
-            # 업로드 대상 폴더
             bfolder = _find_folder_id("BACKUP") or _find_folder_id("DEFAULT")
             if not bfolder:
                 raise KeyError("백업 폴더 ID가 없습니다.")
@@ -317,17 +393,17 @@ if st.button("⬆️ Save locally & make BACKUP zip"):
             _upload_zip(svc, bfolder, tmp_zip, "index_backup.zip")
             tmp_zip.unlink(missing_ok=True)
             st.success(f"Saved locally: {saved} → backup zip uploaded.")
-            # 복구 직후 인덱스 재시도
             try:
-                idx = get_or_build_index() if get_or_build_index else None
-                if idx is not None:
+                from src.rag_engine import get_or_build_index as _gobi3
+            except Exception:
+                _gobi3 = None
+            if _gobi3:
+                try:
+                    idx = _gobi3()
                     st.session_state["rag_index"] = idx
                     st.success("Index loaded from uploaded files.")
-            except Exception as e:
-                st.warning(f"Index reload skipped: {type(e).__name__}: {e}")
+                except Exception as e:
+                    st.warning(f"Index reload skipped: {type(e).__name__}: {e}")
     except Exception as e:
         st.error(f"{type(e).__name__}: {e}")
-
-# ===== [03] END ==============================================================
-
 # ===== [03] END ==============================================================
