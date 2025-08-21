@@ -459,4 +459,96 @@ if st.button("⬆️ Save locally & make BACKUP zip"):
                     st.warning(f"Index reload skipped: {type(e).__name__}: {e}")
     except Exception as e:
         st.error(f"{type(e).__name__}: {e}")
+
+# ===== [02A] OAUTH: Refresh Token Helper ====================================
+# 목적: Google OAuth 리프레시 토큰을 가장 쉽게 발급/검증하도록 돕는 작은 도우미 패널
+# 사용 순서:
+#  1) 아래 안내에 따라 OAuth Playground 열기 → 'Use your own OAuth credentials' 체크
+#  2) Scope 승인 후 'Exchange code for tokens' 클릭 → Refresh token 복사
+#  3) 복사한 토큰을 입력창에 붙여넣고 'Validate' → 유효하면 secrets용 한 줄이 출력됨
+
+import urllib.parse
+import streamlit as st
+
+st.subheader("🔑 OAuth Refresh Token Helper (for Google Drive)")
+
+SCOPE = "https://www.googleapis.com/auth/drive"
+token_uri = st.secrets.get("GDRIVE_OAUTH_TOKEN_URI", "https://oauth2.googleapis.com/token")
+cid  = st.secrets.get("GDRIVE_OAUTH_CLIENT_ID")
+csec = st.secrets.get("GDRIVE_OAUTH_CLIENT_SECRET")
+
+# 0) 준비 상태 안내 ----------------------------------------------------------------
+ok_client = bool(cid and csec)
+if not ok_client:
+    st.error("먼저 secrets에 GDRIVE_OAUTH_CLIENT_ID / GDRIVE_OAUTH_CLIENT_SECRET 를 넣어주세요.")
+    st.stop()
+
+st.info(
+    "✅ GCP OAuth 클라이언트가 감지되었습니다.\n\n"
+    "다음 1~3단계로 Refresh Token을 발급받아 아래 입력창에 붙여넣으세요."
+)
+
+# 1) OAuth Playground 바로가기 링크 (스코프 프리필) ---------------------------------
+#    - GCP 콘솔에서 해당 OAuth 클라이언트의 'Authorized redirect URIs'에
+#      https://developers.google.com/oauthplayground 를 추가해 두면 가장 편합니다.
+playground_base = "https://developers.google.com/oauthplayground"
+pre_filled = f"{playground_base}/?scope={urllib.parse.quote(SCOPE)}#step1"
+st.markdown(
+    f"**1) OAuth Playground 열기** → "
+    f"[Open OAuth Playground (pre-filled scope)]({pre_filled})"
+)
+st.caption(
+    "Playground 왼쪽 하단의 **Use your own OAuth credentials**를 체크한 뒤, "
+    "Client ID/Secret에 지금 secrets의 값을 입력하세요. "
+    "그다음 Step 1에서 'Authorize APIs', Step 2에서 'Exchange authorization code for tokens'를 누르면 "
+    "Refresh token이 발급됩니다."
+)
+
+# 2) Refresh Token 입력 + 유효성 검사 --------------------------------------------
+rt = st.text_input("2) Refresh token 붙여넣기", value="", type="password", help="Playground의 Step 2에서 받은 값")
+colv1, colv2 = st.columns([1,1])
+
+with colv1:
+    validate = st.button("✅ Validate")
+with colv2:
+    clear = st.button("🧹 Clear")
+
+if clear:
+    rt = ""
+    st.experimental_rerun()
+
+if validate:
+    if not rt.strip():
+        st.error("Refresh token이 비었습니다.")
+    else:
+        try:
+            # google-auth를 사용해 실제로 refresh 요청을 보내 유효성 검증
+            from google.oauth2.credentials import Credentials
+            from google.auth.transport.requests import Request
+
+            creds = Credentials(
+                None,
+                refresh_token=rt.strip(),
+                client_id=str(cid),
+                client_secret=str(csec),
+                token_uri=str(token_uri),
+                scopes=[SCOPE],
+            )
+            # 실제 토큰 갱신 시도
+            req = Request()
+            creds.refresh(req)   # 실패 시 예외 발생
+
+            st.success("유효한 Refresh token 입니다. 아래 한 줄을 secrets에 추가하세요.")
+            st.code(f'GDRIVE_OAUTH_REFRESH_TOKEN = "{rt.strip()}"', language="toml")
+
+            # 디버그/안심 정보(민감정보 노출 없음)
+            st.caption(f"access_token 만료(초): {int(creds.expiry.timestamp()) if creds.expiry else 'N/A'}  •  scope: {SCOPE}")
+        except Exception as e:
+            st.error(f"검증 실패: {type(e).__name__}: {e}")
+            st.info("• Client ID/Secret이 Playground에서 입력한 값과 동일한지 확인하세요.\n"
+                    "• OAuth 클라이언트의 Redirect URI 목록에 'https://developers.google.com/oauthplayground'가 추가되어 있는지 확인하세요.\n"
+                    "• 다른 계정으로 승인했다면, 같은 계정으로 다시 승인해 보세요.")
+# =============================================================================
+
+
 # ===== [03] END ==============================================================
