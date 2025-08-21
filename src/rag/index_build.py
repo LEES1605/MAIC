@@ -29,7 +29,11 @@ PERSIST_DIR.mkdir(parents=True, exist_ok=True)
 APP_DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 
-# ===== [02] SECRETS SCAN (SERVICE ACCOUNT / FOLDER IDS) ======================
+# ===== [02] SECRETS & AUTH (USER OAUTH 우선, SA 폴백) ========================
+# - 개인용 드라이브: OAuth 사용자 토큰으로 접근
+#   필수 키: GDRIVE_OAUTH_CLIENT_ID, GDRIVE_OAUTH_CLIENT_SECRET, GDRIVE_OAUTH_REFRESH_TOKEN
+# - 없으면 서비스계정 JSON을 사용(공유로 권한 부여된 폴더만 접근 가능)
+
 def _flatten_secrets(obj: Any, prefix: str = "") -> List[Tuple[str, Any]]:
     out: List[Tuple[str, Any]] = []
     try:
@@ -44,12 +48,32 @@ def _flatten_secrets(obj: Any, prefix: str = "") -> List[Tuple[str, Any]]:
         out.append((prefix, obj))
     return out
 
-def _find_service_account_info(gcp_creds: Mapping[str, object] | None = None) -> dict:
-    # 1) 함수 인자가 오면 우선 적용
-    if gcp_creds:
-        return dict(gcp_creds)
-    # 2) 흔한 키 우선
-    for key in (
+def _get_drive_credentials():
+    """OAuth 사용자 자격을 먼저 시도, 실패 시 서비스계정으로 폴백."""
+    # 1) USER OAUTH (개인 드라이브)
+    cid   = st.secrets.get("GDRIVE_OAUTH_CLIENT_ID") or st.secrets.get("GOOGLE_OAUTH_CLIENT_ID")
+    csec  = st.secrets.get("GDRIVE_OAUTH_CLIENT_SECRET") or st.secrets.get("GOOGLE_OAUTH_CLIENT_SECRET")
+    r_tok = st.secrets.get("GDRIVE_OAUTH_REFRESH_TOKEN") or st.secrets.get("GOOGLE_OAUTH_REFRESH_TOKEN")
+    t_uri = st.secrets.get("GDRIVE_OAUTH_TOKEN_URI") or "https://oauth2.googleapis.com/token"
+    if cid and csec and r_tok:
+        try:
+            from google.oauth2.credentials import Credentials as UserCredentials
+            creds = UserCredentials(
+                None,
+                refresh_token=str(r_tok),
+                client_id=str(cid),
+                client_secret=str(csec),
+                token_uri=str(t_uri),
+                scopes=["https://www.googleapis.com/auth/drive"],
+            )
+            return creds
+        except Exception as e:
+            # OAuth 자격 생성 실패 시, 서비스계정으로 폴백 시도
+            pass
+
+    # 2) SERVICE ACCOUNT (공유 필요)
+    #    흔한 키들 먼저 본 뒤, 전체 시크릿을 훑어 service_account JSON 자동 탐색
+    candidates = (
         "GDRIVE_SERVICE_ACCOUNT_JSON",
         "GOOGLE_SERVICE_ACCOUNT_JSON",
         "SERVICE_ACCOUNT_JSON",
@@ -57,25 +81,38 @@ def _find_service_account_info(gcp_creds: Mapping[str, object] | None = None) ->
         "service_account_json",
         "GCP_SERVICE_ACCOUNT",
         "gcp_service_account",
-    ):
-        if key in st.secrets and str(st.secrets[key]).strip():
-            raw = st.secrets[key]
-            return json.loads(raw) if isinstance(raw, str) else dict(raw)
-    # 3) 전수조사(중첩 포함)
-    for path, val in _flatten_secrets(st.secrets):
-        try:
-            from collections.abc import Mapping as _Map
-            if isinstance(val, _Map) and val.get("type") == "service_account" and "client_email" in val and "private_key" in val:
-                return dict(val)
-            if isinstance(val, str) and '"type": "service_account"' in val and '"client_email"' in val and '"private_key"' in val:
-                return json.loads(val)
-        except Exception:
-            continue
-    raise KeyError("서비스계정 JSON을 시크릿에서 찾지 못했습니다.")
+    )
+    raw = None
+    for k in candidates:
+        if k in st.secrets and str(st.secrets[k]).strip():
+            raw = st.secrets[k]; break
+    if raw is None:
+        for _, v in _flatten_secrets(st.secrets):
+            try:
+                from collections.abc import Mapping as _Map
+                if isinstance(v, _Map) and v.get("type") == "service_account" and "client_email" in v and "private_key" in v:
+                    raw = v; break
+                if isinstance(v, str) and '"type": "service_account"' in v:
+                    raw = v; break
+            except Exception:
+                pass
+    if raw is None:
+        raise KeyError(
+            "Drive 자격정보를 찾지 못했습니다. "
+            "(OAuth: GDRIVE_OAUTH_CLIENT_ID/SECRET/REFRESH_TOKEN 또는 "
+            "Service Account JSON 중 하나가 필요)"
+        )
+
+    info = json.loads(raw) if isinstance(raw, str) else dict(raw)
+    from google.oauth2.service_account import Credentials as SACredentials
+    return SACredentials.from_service_account_info(info, scopes=["https://www.googleapis.com/auth/drive"])
 
 def _find_folder_id(kind: str, fallback: Optional[str] = None) -> Optional[str]:
     """
     kind: 'PREPARED' | 'BACKUP' | 'DEFAULT'
+    - PREPARED: 수업자료/문법서가 있는 폴더 (my-ai-teacher-data/prepared)
+    - BACKUP  : 최적화 후 업로드하는 ZIP 보관 폴더 (my-ai-teacher-data/backup_zip)
+    - DEFAULT : 일반 기본 폴더 ID
     """
     key_sets = {
         "PREPARED": ("GDRIVE_PREPARED_FOLDER_ID", "PREPARED_FOLDER_ID"),
@@ -85,7 +122,8 @@ def _find_folder_id(kind: str, fallback: Optional[str] = None) -> Optional[str]:
     for key in key_sets.get(kind, ()):
         if key in st.secrets and str(st.secrets[key]).strip():
             return str(st.secrets[key]).strip()
-    # 중첩까지 검색
+
+    # 중첩 섹션 안까지 전수조사
     for path, val in _flatten_secrets(st.secrets):
         if isinstance(val, (str, int)) and "FOLDER_ID" in path.upper() and str(val).strip():
             up = path.upper()
@@ -99,14 +137,13 @@ def _find_folder_id(kind: str, fallback: Optional[str] = None) -> Optional[str]:
 
 
 # ===== [03] DRIVE CLIENT & FILE LIST ========================================
-def _drive_client(sa_info: dict):
+def _drive_client():
+    """사용자 OAuth 또는 서비스계정으로 Drive 클라이언트를 생성."""
     try:
-        from google.oauth2.service_account import Credentials
         from googleapiclient.discovery import build
     except Exception as e:
-        raise RuntimeError("google-api-python-client / google-auth 패키지가 필요합니다.") from e
-    # 업로드도 하므로 scope는 'drive' (readonly 아님)
-    creds = Credentials.from_service_account_info(sa_info, scopes=["https://www.googleapis.com/auth/drive"])
+        raise RuntimeError("google-api-python-client 패키지가 필요합니다.") from e
+    creds = _get_drive_credentials()
     return build("drive", "v3", credentials=creds, cache_discovery=False)
 
 def _list_files(service, folder_id: str) -> List[Dict[str, Any]]:
@@ -390,14 +427,13 @@ def build_index_with_checkpoint(
         except Exception:
             pass
 
-    _msg("🔐 Loading service account…")
-    sa = _find_service_account_info(gcp_creds or None)
-    svc = _drive_client(sa)
+    _msg("🔐 Preparing Google Drive client (OAuth first)…")
+    svc = _drive_client()
     _pct(5, "drive-ready")
 
     # 폴더 ID 결정
     prepared_id = _find_folder_id("PREPARED", fallback=gdrive_folder_id)
-    backup_id = _find_folder_id("BACKUP") or _find_folder_id("DEFAULT")
+    backup_id   = _find_folder_id("BACKUP") or _find_folder_id("DEFAULT")
     if not prepared_id:
         raise KeyError("prepared 폴더 ID를 찾지 못했습니다. (GDRIVE_PREPARED_FOLDER_ID / PREPARED_FOLDER_ID / gdrive_folder_id 인자)")
 
@@ -426,6 +462,7 @@ def build_index_with_checkpoint(
         "backup_zip_id": uploaded_id,
         "prepared_folder_id": prepared_id,
         "backup_folder_id": backup_id,
+        "auth_mode": "oauth-first"  # 디버그용
     }
 
 
