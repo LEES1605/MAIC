@@ -203,7 +203,7 @@ def render_brain_prep_main():
                     except Exception as e:
                         st.error(f"최적화 실패: {type(e).__name__}: {e}")
 
-# ===== [06] SIMPLE QA DEMO (mode-aware, ENTER SUBMIT, CLEAN OUT) =============
+# ===== [06] SIMPLE QA DEMO (mode-aware, ENTER SUBMIT, SPINNER) ===============
 def _sentence_quick_fix(user_q: str) -> List[Tuple[str, str]]:
     tips: List[Tuple[str, str]] = []
     if re.search(r"\bI\s+seen\b", user_q, flags=re.I):
@@ -217,7 +217,6 @@ def _sentence_quick_fix(user_q: str) -> List[Tuple[str, str]]:
 def _render_clean_answer(mode: str, answer_text: str, refs: List[Dict[str, str]], lang: str):
     st.markdown(f"**선택 모드:** `{mode}` · **출력 언어:** `{lang}`")
 
-    # 한국어 기본 안내(LLM 연결 전: 원문은 영문일 수 있음)
     if lang == "한국어":
         st.markdown("#### ✅ 요약/안내 (한국어)")
         st.write("아래는 자료 기반 엔진의 원문 응답입니다. 현재 단계에서는 원문이 영어일 수 있어요.")
@@ -237,6 +236,11 @@ def _render_clean_answer(mode: str, answer_text: str, refs: List[Dict[str, str]]
 # Enter 제출용 on_change 콜백
 def _on_q_enter():
     st.session_state["qa_submitted"] = True
+    # 즉시 토스트로 피드백(선택적 시각 신호)
+    try:
+        st.toast("✳️ 답변 준비 중…")
+    except Exception:
+        pass
 
 def render_simple_qa():
     st.markdown("### 💬 질문해 보세요 (간단 데모)")
@@ -264,29 +268,31 @@ def render_simple_qa():
 
     if submitted and (q or "").strip():
         try:
-            qe = st.session_state["rag_index"].as_query_engine(top_k=k)
-            r = qe.query(q)
-            raw_text = getattr(r, "response", "") or str(r)
+            # 스피너: Enter/버튼 제출 즉시 ‘로딩 아이콘’ 표시
+            with st.spinner("✳️ 답변 준비 중…"):
+                qe = st.session_state["rag_index"].as_query_engine(top_k=k)
+                r = qe.query(q)
+                raw_text = getattr(r, "response", "") or str(r)
 
-            refs: List[Dict[str, str]] = []
-            hits = getattr(r, "source_nodes", None) or getattr(r, "hits", None)
-            if hits:
-                for h in hits[:2]:
-                    meta = getattr(h, "metadata", None) or getattr(h, "node", {}).get("metadata", {})
-                    refs.append({
-                        "doc_id": (meta or {}).get("doc_id") or (meta or {}).get("file_name", ""),
-                        "url": (meta or {}).get("source") or (meta or {}).get("url", ""),
-                    })
+                refs: List[Dict[str, str]] = []
+                hits = getattr(r, "source_nodes", None) or getattr(r, "hits", None)
+                if hits:
+                    for h in hits[:2]:
+                        meta = getattr(h, "metadata", None) or getattr(h, "node", {}).get("metadata", {})
+                        refs.append({
+                            "doc_id": (meta or {}).get("doc_id") or (meta or {}).get("file_name", ""),
+                            "url": (meta or {}).get("source") or (meta or {}).get("url", ""),
+                        })
 
-            # Sentence 모드: 빠른 교정(한국어 안내)
-            if mode == "Sentence":
-                fixes = _sentence_quick_fix(q)
-                if fixes:
-                    st.markdown("#### ✍️ 빠른 교정 제안 (한국어)")
-                    for bad, good in fixes:
-                        st.markdown(f"- **{bad}** → {good}")
+                # Sentence 모드: 빠른 교정(한국어 안내)
+                if mode == "Sentence":
+                    fixes = _sentence_quick_fix(q)
+                    if fixes:
+                        st.markdown("#### ✍️ 빠른 교정 제안 (한국어)")
+                        for bad, good in fixes:
+                            st.markdown(f"- **{bad}** → {good}")
 
-            _render_clean_answer(mode, raw_text, refs, lang)
+                _render_clean_answer(mode, raw_text, refs, lang)
 
         except Exception as e:
             st.error(f"검색 실패: {type(e).__name__}: {e}")
