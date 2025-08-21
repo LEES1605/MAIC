@@ -224,7 +224,7 @@ def render_brain_prep_main():
             "- ‘재최적화 실행’은 변경이 있을 때만 권장합니다(변경 없음이면 2차 확인 버튼으로 표시)."
         )
 
-# ===== [06] SIMPLE QA DEMO (mode-aware, CLEAN OUTPUT) ========================
+# ===== [06] SIMPLE QA DEMO (mode-aware, CLEAN OUTPUT + ENTER SUBMIT) =========
 def _sentence_quick_fix(user_q: str) -> List[Tuple[str, str]]:
     """
     Sentence 모드용 소형 규칙: 자주 틀리는 과거 시제/3인칭 단수 등.
@@ -257,7 +257,6 @@ def render_simple_qa():
         st.info("아직 두뇌가 준비되지 않았어요. 상단의 **AI 두뇌 준비** 또는 **사전점검→재최적화**를 먼저 실행해 주세요.")
         return
 
-    # 모드에 따라 플레이스홀더/힌트 문구만 다르게 (로직은 후속 단계에서 연결)
     mode = st.session_state.get("mode", "Grammar")
     if mode == "Grammar":
         placeholder = "예: 관계대명사 which 사용법을 알려줘"
@@ -266,18 +265,19 @@ def render_simple_qa():
     else:
         placeholder = "예: 이 지문 핵심 요약과 제목 3개, 주제 1개 제안해줘"
 
-    q = st.text_input("질문 입력", placeholder=placeholder, key="qa_q")
-    k = st.slider("검색 결과 개수(top_k)", 1, 10, 5, key="qa_k")
+    # ---- 여기를 'form'으로 감싸서 Enter 제출 지원 ----
+    with st.form("qa_form"):
+        q = st.text_input("질문 입력", placeholder=placeholder, key="qa_q")
+        k = st.slider("검색 결과 개수(top_k)", 1, 10, 5, key="qa_k")
+        submitted = st.form_submit_button("검색")  # Enter 키로도 제출됨
 
-    if st.button("검색", key="qa_go") and q.strip():
+    if submitted and q.strip():
         try:
-            qe = st.session_state["rag_index"].as_query_engine(top_k=k)  # _LocalQueryEngine
+            qe = st.session_state["rag_index"].as_query_engine(top_k=k)
             r = qe.query(q)
 
-            # 1) 원시 응답 텍스트만 추려 보여주기 (Top matches 덤핑 제거)
             raw_text = getattr(r, "response", "") or str(r)
 
-            # 2) 레퍼런스 요약(가능할 때만)
             refs: List[Dict[str, str]] = []
             hits = getattr(r, "source_nodes", None) or getattr(r, "hits", None)
             if hits:
@@ -288,7 +288,6 @@ def render_simple_qa():
                         "url": (meta or {}).get("source") or (meta or {}).get("url", ""),
                     })
 
-            # 3) Sentence 모드일 경우: 빠른 규칙 교정 제안 추가
             if mode == "Sentence":
                 fixes = _sentence_quick_fix(q)
                 if fixes:
@@ -296,7 +295,6 @@ def render_simple_qa():
                     for bad, good in fixes:
                         st.markdown(f"- **{bad}** → {good}")
 
-            # 4) 깔끔한 답변 + 간단 레퍼런스만 노출
             _render_clean_answer(mode, raw_text, refs)
 
         except Exception as e:
