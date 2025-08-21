@@ -264,6 +264,95 @@ def _chunk_text(
         chunks.append(_norm_ws("\n".join(cur)))
     return chunks
 
+# ===== [05A] GRAMMAR TAGGING (NEW) ==========================================
+# 목적: 청크 텍스트에서 문법 키워드를 감지하여 grammar_tags: [...]를 생성합니다.
+# 외부 YAML(선택)을 못 찾으면 내장 미니 사전을 사용합니다.
+
+try:
+    import yaml  # 선택 의존성: 없으면 자동 폴백
+except Exception:
+    yaml = None  # type: ignore
+
+from pathlib import Path as _Path
+import re as _re
+
+# 우선순위: 홈 데이터 디렉토리 → 소스 폴더
+_HOME_DATA_DIR = _Path.home() / ".maic"
+_GRAMMAR_TAXONOMY_PATHS = [
+    _HOME_DATA_DIR / "grammar_taxonomy.yaml",
+    _Path(__file__).resolve().parent / "grammar_taxonomy.yaml",
+]
+
+_DEFAULT_GRAMMAR_TAXONOMY = {
+    "관계대명사": ["which", "that", "relative pronoun"],
+    "시제(과거)": ["did", "was", "were"],
+    "가정법": ["if I were", "would have", "had + p.p."],
+    "to부정사": ["to + V", "to + "],
+    "동명사": [" V-ing ", "-ing"],
+    "조동사": ["can", "could", "should", "must", "may", "might", "will", "would"],
+}
+
+def _load_grammar_taxonomy() -> dict:
+    # YAML 혹은 JSON 딕셔너리 포맷 지원
+    import json as _json
+    for p in _GRAMMAR_TAXONOMY_PATHS:
+        try:
+            if p.exists() and p.is_file():
+                raw = p.read_text(encoding="utf-8", errors="ignore")
+                if yaml is not None:
+                    y = yaml.safe_load(raw) or {}
+                    if isinstance(y, dict):
+                        return y
+                # JSON 폴백
+                try:
+                    y = _json.loads(raw)
+                    if isinstance(y, dict):
+                        return y
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    return _DEFAULT_GRAMMAR_TAXONOMY
+
+def _compile_taxonomy(tax: dict):
+    rules = []
+    for cat, kws in (tax or {}).items():
+        if not isinstance(kws, (list, tuple)):
+            continue
+        pats = []
+        for kw in kws:
+            if not isinstance(kw, str) or not kw.strip():
+                continue
+            s = kw.strip()
+            # 느슨한 패턴들
+            if s.lower() in {"to + v", "to +", "to + v."}:
+                pats.append(r"\bto\s+\w+")
+                continue
+            esc = _re.escape(s)
+            pats.append(esc)
+        if pats:
+            rx = _re.compile("|".join(pats), _re.IGNORECASE)
+            rules.append((str(cat), rx))
+    return rules
+
+_GRAMMAR_RULES = _compile_taxonomy(_load_grammar_taxonomy())
+
+def _extract_grammar_tags(text: str):
+    """텍스트에서 카테고리 매칭하여 태그 리스트 반환(중복 제거, 순서 보존)."""
+    if not text or not _GRAMMAR_RULES:
+        return []
+    tags, seen, out = [], set(), []
+    for cat, rx in _GRAMMAR_RULES:
+        try:
+            if rx.search(text):
+                tags.append(cat)
+        except Exception:
+            continue
+    for t in tags:
+        if t not in seen:
+            out.append(t); seen.add(t)
+    return out
+
 
 # ===== [06] MANIFEST & DELTA =================================================
 def _sha1(s: str) -> str: return hashlib.sha1(s.encode("utf-8")).hexdigest()
@@ -360,6 +449,8 @@ def _build_from_prepared(service, prepared_id: str) -> Tuple[int, int, Dict[str,
             keep = min(120, len(ch))
             running_start = end - keep
 
+            tags = _extract_grammar_tags(ch)  # ← [ADD-1] 청크에서 문법 태그 추출
+            
             rec = {
                 "doc_id": f["id"],
                 "doc_name": f.get("name"),
