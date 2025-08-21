@@ -108,33 +108,86 @@ def _find_service_account_in_secrets() -> dict:
         return candidates[0][1]
     raise KeyError("서비스계정 JSON을 시크릿에서 찾지 못했습니다.")
 
-# --- (A2) 폴더 ID 자동 탐색 ---------------------------------------------------
+# --- (A2) 폴더 ID 자동 탐색 (APP_* 별칭 지원, URL도 허용) ----------------------
 def _find_folder_id(kind: str) -> Optional[str]:
     """
     kind: 'BACKUP' | 'PREPARED' | 'DEFAULT'
-    시크릿에서 대응 키를 찾는다. (중첩 포함)
+    우선순위:
+      1) 표준 키 + APP_* 별칭 키
+      2) URL 키(값이 URL이면 ID 추출)
+      3) 중첩 시크릿 전수조사
+      4) 환경변수
     """
-    key_sets = {
-        "BACKUP": ("GDRIVE_BACKUP_FOLDER_ID", "BACKUP_FOLDER_ID"),
-        "PREPARED": ("GDRIVE_PREPARED_FOLDER_ID", "PREPARED_FOLDER_ID"),
-        "DEFAULT": ("GDRIVE_FOLDER_ID",),
+    import re, os
+
+    def _parse(v: str) -> Optional[str]:
+        v = (v or "").strip()
+        for patt in (r"/folders/([A-Za-z0-9_-]{20,})",
+                     r"/file/d/([A-Za-z0-9_-]{20,})",
+                     r"^([A-Za-z0-9_-]{20,})$"):
+            m = re.search(patt, v)
+            if m:
+                return m.group(1)
+        return None
+
+    KEY_PREFS = {
+        # PREPARED: 표준 + 기존 프로젝트의 APP_* 키까지 인식
+        "PREPARED": (
+            "GDRIVE_PREPARED_FOLDER_ID",
+            "PREPARED_FOLDER_ID",
+            "GDRIVE_PREPARED_FOLDER_URL",
+            "PREPARED_FOLDER_URL",
+            # 별칭(현재 시크릿과 호환)
+            "APP_GDRIVE_FOLDER_ID",
+            "APP_PREPARED_FOLDER_ID",
+            "APP_GDRIVE_FOLDER_URL",
+        ),
+        "BACKUP": (
+            "GDRIVE_BACKUP_FOLDER_ID",
+            "BACKUP_FOLDER_ID",
+            "BACKUP_FOLDER_URL",
+            # 별칭(현재 시크릿과 호환)
+            "APP_BACKUP_FOLDER_ID",
+            "APP_BACKUP_FOLDER_URL",
+        ),
+        "DEFAULT": (
+            "GDRIVE_FOLDER_ID",
+            "GDRIVE_FOLDER_URL",
+        ),
     }
-    for key in key_sets.get(kind, ()):
-        if key in st.secrets and str(st.secrets[key]).strip():
-            return str(st.secrets[key]).strip()
+
+    # 1) 우선 키 직접 조회 (URL이면 ID 추출)
+    for k in KEY_PREFS.get(kind, ()):
+        if k in st.secrets and str(st.secrets[k]).strip():
+            v = str(st.secrets[k]).strip()
+            return _parse(v) or v
+
+    # 2) 중첩 시크릿 전수조사 (오타 허용 없음: PREPARED / BACKUP 만)
+    TOK = {"PREPARED": ("PREPARED",), "BACKUP": ("BACKUP",), "DEFAULT": ("GDRIVE_FOLDER_ID",)}[kind]
     for path, val in _flatten_secrets():
         try:
-            if isinstance(val, (str, int)) and "FOLDER_ID" in path.upper() and str(val).strip():
+            if isinstance(val, (str, int)) and str(val).strip():
                 up = path.upper()
-                if kind == "BACKUP" and "BACKUP" in up:
-                    return str(val).strip()
-                if kind == "PREPARED" and ("PREPARED" in up or "PREAPRED" in up or "PREP" in up):
-                    return str(val).strip()
-                if kind == "DEFAULT" and "GDRIVE_FOLDER_ID" in up:
-                    return str(val).strip()
+                # 키 경로에 목적 토큰 + (FOLDER_ID 또는 URL) 포함 시 후보로 인정
+                if any(t in up for t in TOK) and ("FOLDER_ID" in up or "URL" in up or up.endswith(".ID") or up.endswith("_ID")):
+                    v = str(val).strip()
+                    return _parse(v) or v
         except Exception:
             continue
+
+    # 3) 환경변수도 최후에 확인
+    ENV_MAP = {
+        "PREPARED": ("GDRIVE_PREPARED_FOLDER_ID", "PREPARED_FOLDER_ID", "APP_GDRIVE_FOLDER_ID", "PREPARED_FOLDER_URL"),
+        "BACKUP": ("GDRIVE_BACKUP_FOLDER_ID", "BACKUP_FOLDER_ID", "APP_BACKUP_FOLDER_ID", "BACKUP_FOLDER_URL"),
+        "DEFAULT": ("GDRIVE_FOLDER_ID", "GDRIVE_FOLDER_URL"),
+    }[kind]
+    for e in ENV_MAP:
+        v = os.getenv(e)
+        if v:
+            return _parse(v) or v
+
     return None
+
 
 # --- (A3) Drive 유틸 ----------------------------------------------------------
 def _drive_client():
