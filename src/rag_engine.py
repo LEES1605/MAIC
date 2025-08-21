@@ -274,25 +274,159 @@ def _load_index_from_disk(persist_dir: str | PathLike[str]) -> Dict[str, Any]:
     return data
 
 
-# ===== [08] SIMPLE QUERY ENGINE WRAPPER ======================================
-class _SimpleQE:
-    """아주 단순한 쿼리엔진(데모/디버그용)."""
+# ===== [08] LOCAL TF-IDF QUERY ENGINE =======================================
+class _LocalQueryEngine:
+    """
+    간단한 TF-IDF 코사인 유사도 기반 검색기.
+    - 외부 라이브러리 없이 표준 파이썬으로 구현
+    - 한글/영문 토큰을 단순 정규식으로 추출
+    - 쿼리 결과에 상위 매칭 청크와 메타데이터를 함께 반환
+    """
 
-    def __init__(self, idx: Dict[str, Any]) -> None:
+    def __init__(self, idx: Dict[str, Any], top_k_default: int = 5) -> None:
         self.idx = idx
+        self.top_k_default = int(top_k_default)
+        self._build_vectors()
 
-    def query(self, q: str) -> Any:
-        # 최소 동작: 질문을 에코하고, 청크 수 통계만 보여줌
-        total = len(self.idx.get("chunks", []))
-        return type("R", (), {"response": f"[RAG stub] chunks={total}, q={q}"})
+    # ------------------------ 내부 유틸 -------------------------------------
+    @staticmethod
+    def _tokenize(s: str) -> List[str]:
+        # 영문/숫자/한글 연속 문자열을 토큰으로 사용 (간단한 토크나이저)
+        import re
+        return re.findall(r"[A-Za-z0-9가-힣]+", (s or "").lower())
+
+    def _build_vectors(self) -> None:
+        """두 패스: DF 수집 → IDF 계산 → 각 청크 TF-IDF 벡터 & 노름 계산"""
+        import math
+        chunks = self.idx.get("chunks", [])
+        self._texts: List[str] = []
+        self._metas: List[Dict[str, Any]] = []
+        self._vectors: List[Dict[str, float]] = []
+        self._norms: List[float] = []
+        df: Dict[str, int] = {}
+        # 1) DF 수집
+        for rec in chunks:
+            txt = rec.get("text", "") or ""
+            toks = set(self._tokenize(txt))
+            for t in toks:
+                df[t] = df.get(t, 0) + 1
+        N = max(1, len(chunks))
+        # 2) IDF
+        self._idf: Dict[str, float] = {t: math.log((N + 1) / (c + 1)) + 1.0 for t, c in df.items()}
+        # 3) 각 청크 벡터
+        for rec in chunks:
+            txt = rec.get("text", "") or ""
+            meta = rec.get("meta", {}) or {}
+            toks = self._tokenize(txt)
+            # TF
+            tf: Dict[str, int] = {}
+            for t in toks:
+                tf[t] = tf.get(t, 0) + 1
+            # TF-IDF
+            vec: Dict[str, float] = {}
+            for t, f in tf.items():
+                idf = self._idf.get(t)
+                if idf is None:
+                    continue
+                vec[t] = (1.0 + math.log(f)) * idf
+            # 노름
+            norm = math.sqrt(sum(v * v for v in vec.values())) if vec else 0.0
+
+            self._texts.append(txt)
+            self._metas.append(meta)
+            self._vectors.append(vec)
+            self._norms.append(norm)
+
+    # ------------------------ 공개 API --------------------------------------
+    def query(self, q: str, top_k: Optional[int] = None) -> Any:
+        """쿼리 상위 top_k 결과 반환. 결과 객체는 .response 와 .hits(list)를 가짐."""
+        import math, heapq
+        k = int(top_k or self.top_k_default)
+        q_toks = self._tokenize(q or "")
+        if not q_toks:
+            return type("R", (), {"response": "빈 쿼리입니다.", "hits": []})
+
+        # 쿼리 벡터
+        q_tf: Dict[str, int] = {}
+        for t in q_toks:
+            q_tf[t] = q_tf.get(t, 0) + 1
+        q_vec: Dict[str, float] = {}
+        for t, f in q_tf.items():
+            idf = self._idf.get(t)
+            if idf is None:
+                continue
+            q_vec[t] = (1.0 + math.log(f)) * idf
+        q_norm = math.sqrt(sum(v * v for v in q_vec.values())) or 1e-12
+
+        # 코사인 유사도 계산 (상위 k 유지)
+        heap: List[Tuple[float, int]] = []  # (score, idx)
+        for i, (vec, norm) in enumerate(zip(self._vectors, self._norms)):
+            if not vec or norm == 0.0:
+                continue
+            # 점곱
+            dot = 0.0
+            # 작은 사전 기준으로 곱하면 빠름
+            (a, b) = (q_vec, vec) if len(q_vec) <= len(vec) else (vec, q_vec)
+            for t, w in a.items():
+                vw = b.get(t)
+                if vw is not None:
+                    dot += w * vw
+            score = dot / (q_norm * norm + 1e-12)
+            if score <= 0:
+                continue
+            if len(heap) < k:
+                heapq.heappush(heap, (score, i))
+            else:
+                if score > heap[0][0]:
+                    heapq.heapreplace(heap, (score, i))
+
+        if not heap:
+            return type("R", (), {"response": "관련 결과를 찾지 못했습니다.", "hits": []})
+
+        # 점수 내림차순 정렬
+        heap.sort(reverse=True)
+        hits = []
+        for score, i in heap:
+            meta = self._metas[i] or {}
+            txt = self._texts[i]
+            # 짧은 스니펫
+            snippet = (txt[:160] + "…") if len(txt) > 160 else txt
+            hits.append({
+                "score": round(float(score), 4),
+                "text": txt,
+                "snippet": snippet,
+                "meta": meta,
+            })
+
+        # 사람이 읽기 쉬운 응답 문자열
+        lines = []
+        for h in hits:
+            name = h["meta"].get("file_name") or h["meta"].get("doc_name") or "(unknown)"
+            page = h["meta"].get("page_approx")
+            hint = h["meta"].get("section_hint")
+            url  = h["meta"].get("source_drive_url")
+            tag = f"{name}"
+            if page:
+                tag += f" · p.{page}"
+            if hint:
+                tag += f" · {hint}"
+            line = f"• {tag}  (score={h['score']})"
+            if url:
+                line += f"\n  {url}"
+            line += f"\n  {h['snippet']}"
+            lines.append(line)
+
+        resp = "Top matches:\n" + "\n".join(lines)
+        return type("R", (), {"response": resp, "hits": hits})
 
 
 class _Index:
     def __init__(self, data: Dict[str, Any]) -> None:
         self.data = data
 
-    def as_query_engine(self, **kw: Any) -> _SimpleQE:
-        return _SimpleQE(self.data)
+    def as_query_engine(self, **kw: Any) -> _LocalQueryEngine:
+        top_k = int(kw.get("top_k", 5)) if kw else 5
+        return _LocalQueryEngine(self.data, top_k_default=top_k)
 
 
 # ===== [09] PUBLIC API =======================================================
