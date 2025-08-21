@@ -30,10 +30,6 @@ APP_DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 
 # ===== [02] SECRETS & AUTH (USER OAUTH 우선, SA 폴백) ========================
-# - 개인용 드라이브: OAuth 사용자 토큰으로 접근
-#   필수 키: GDRIVE_OAUTH_CLIENT_ID, GDRIVE_OAUTH_CLIENT_SECRET, GDRIVE_OAUTH_REFRESH_TOKEN
-# - 없으면 서비스계정 JSON을 사용(공유로 권한 부여된 폴더만 접근 가능)
-
 def _flatten_secrets(obj: Any, prefix: str = "") -> List[Tuple[str, Any]]:
     out: List[Tuple[str, Any]] = []
     try:
@@ -50,29 +46,21 @@ def _flatten_secrets(obj: Any, prefix: str = "") -> List[Tuple[str, Any]]:
 
 def _get_drive_credentials():
     """OAuth 사용자 자격을 먼저 시도, 실패 시 서비스계정으로 폴백."""
-    # 1) USER OAUTH (개인 드라이브)
     cid   = st.secrets.get("GDRIVE_OAUTH_CLIENT_ID") or st.secrets.get("GOOGLE_OAUTH_CLIENT_ID")
     csec  = st.secrets.get("GDRIVE_OAUTH_CLIENT_SECRET") or st.secrets.get("GOOGLE_OAUTH_CLIENT_SECRET")
     r_tok = st.secrets.get("GDRIVE_OAUTH_REFRESH_TOKEN") or st.secrets.get("GOOGLE_OAUTH_REFRESH_TOKEN")
     t_uri = st.secrets.get("GDRIVE_OAUTH_TOKEN_URI") or "https://oauth2.googleapis.com/token"
     if cid and csec and r_tok:
-        try:
-            from google.oauth2.credentials import Credentials as UserCredentials
-            creds = UserCredentials(
-                None,
-                refresh_token=str(r_tok),
-                client_id=str(cid),
-                client_secret=str(csec),
-                token_uri=str(t_uri),
-                scopes=["https://www.googleapis.com/auth/drive"],
-            )
-            return creds
-        except Exception as e:
-            # OAuth 자격 생성 실패 시, 서비스계정으로 폴백 시도
-            pass
+        from google.oauth2.credentials import Credentials as UserCredentials
+        return UserCredentials(
+            None,
+            refresh_token=str(r_tok),
+            client_id=str(cid),
+            client_secret=str(csec),
+            token_uri=str(t_uri),
+            scopes=["https://www.googleapis.com/auth/drive"],
+        )
 
-    # 2) SERVICE ACCOUNT (공유 필요)
-    #    흔한 키들 먼저 본 뒤, 전체 시크릿을 훑어 service_account JSON 자동 탐색
     candidates = (
         "GDRIVE_SERVICE_ACCOUNT_JSON",
         "GOOGLE_SERVICE_ACCOUNT_JSON",
@@ -108,28 +96,21 @@ def _get_drive_credentials():
     return SACredentials.from_service_account_info(info, scopes=["https://www.googleapis.com/auth/drive"])
 
 def _find_folder_id(kind: str, fallback: Optional[str] = None) -> Optional[str]:
-    """
-    kind: 'PREPARED' | 'BACKUP' | 'DEFAULT'
-    - PREPARED: 수업자료/문법서가 있는 폴더 (my-ai-teacher-data/prepared)
-    - BACKUP  : 최적화 후 업로드하는 ZIP 보관 폴더 (my-ai-teacher-data/backup_zip)
-    - DEFAULT : 일반 기본 폴더 ID
-    """
+    """kind: 'PREPARED' | 'BACKUP' | 'DEFAULT'"""
     key_sets = {
-        "PREPARED": ("GDRIVE_PREPARED_FOLDER_ID", "PREPARED_FOLDER_ID"),
-        "BACKUP": ("GDRIVE_BACKUP_FOLDER_ID", "BACKUP_FOLDER_ID"),
-        "DEFAULT": ("GDRIVE_FOLDER_ID",),
+        "PREPARED": ("GDRIVE_PREPARED_FOLDER_ID", "PREPARED_FOLDER_ID", "APP_GDRIVE_FOLDER_ID"),
+        "BACKUP":   ("GDRIVE_BACKUP_FOLDER_ID", "BACKUP_FOLDER_ID", "APP_BACKUP_FOLDER_ID"),
+        "DEFAULT":  ("GDRIVE_FOLDER_ID",),
     }
     for key in key_sets.get(kind, ()):
         if key in st.secrets and str(st.secrets[key]).strip():
             return str(st.secrets[key]).strip()
-
-    # 중첩 섹션 안까지 전수조사
     for path, val in _flatten_secrets(st.secrets):
-        if isinstance(val, (str, int)) and "FOLDER_ID" in path.upper() and str(val).strip():
+        if isinstance(val, (str, int)) and str(val).strip():
             up = path.upper()
-            if kind == "PREPARED" and "PREPARED" in up:
+            if kind == "PREPARED" and "PREPARED" in up and "FOLDER_ID" in up:
                 return str(val).strip()
-            if kind == "BACKUP" and "BACKUP" in up:
+            if kind == "BACKUP" and "BACKUP" in up and "FOLDER_ID" in up:
                 return str(val).strip()
             if kind == "DEFAULT" and "GDRIVE_FOLDER_ID" in up:
                 return str(val).strip()
@@ -138,11 +119,7 @@ def _find_folder_id(kind: str, fallback: Optional[str] = None) -> Optional[str]:
 
 # ===== [03] DRIVE CLIENT & FILE LIST ========================================
 def _drive_client():
-    """사용자 OAuth 또는 서비스계정으로 Drive 클라이언트를 생성."""
-    try:
-        from googleapiclient.discovery import build
-    except Exception as e:
-        raise RuntimeError("google-api-python-client 패키지가 필요합니다.") from e
+    from googleapiclient.discovery import build
     creds = _get_drive_credentials()
     return build("drive", "v3", credentials=creds, cache_discovery=False)
 
@@ -151,7 +128,10 @@ def _list_files(service, folder_id: str) -> List[Dict[str, Any]]:
     fields = "files(id,name,mimeType,modifiedTime,md5Checksum,size),nextPageToken"
     files, token = [], None
     while True:
-        resp = service.files().list(q=q, fields=fields, pageToken=token, pageSize=1000).execute()
+        resp = service.files().list(
+            q=q, fields=fields, pageToken=token, pageSize=1000,
+            includeItemsFromAllDrives=True, supportsAllDrives=True
+        ).execute()
         files.extend(resp.get("files", []))
         token = resp.get("nextPageToken")
         if not token:
@@ -160,15 +140,18 @@ def _list_files(service, folder_id: str) -> List[Dict[str, Any]]:
     return files
 
 def _find_latest_zip(service, folder_id: str):
-    q = f"'{folder_id}' in parents and trashed=false and mimeType='application/zip'"
-    resp = service.files().list(q=q, orderBy="modifiedTime desc",
-                                fields="files(id,name,modifiedTime,size)", pageSize=1).execute()
+    resp = service.files().list(
+        q=f"'{folder_id}' in parents and trashed=false and mimeType='application/zip'",
+        orderBy="modifiedTime desc",
+        fields="files(id,name,modifiedTime,size)", pageSize=1,
+        includeItemsFromAllDrives=True, supportsAllDrives=True
+    ).execute()
     f = resp.get("files", [])
     return f[0] if f else None
 
 def _download_file_bytes(service, file_id: str) -> bytes:
     from googleapiclient.http import MediaIoBaseDownload
-    req = service.files().get_media(fileId=file_id)
+    req = service.files().get_media(fileId=file_id, supportsAllDrives=True)
     buf = io.BytesIO()
     done = False
     downloader = MediaIoBaseDownload(buf, req)
@@ -185,7 +168,9 @@ def _upload_zip(service, folder_id: str, path: Path, name: str) -> str:
     from googleapiclient.http import MediaFileUpload
     media = MediaFileUpload(str(path), mimetype="application/zip", resumable=False)
     meta = {"name": name, "parents": [folder_id], "mimeType": "application/zip"}
-    created = service.files().create(body=meta, media_body=media, fields="id").execute()
+    created = service.files().create(
+        body=meta, media_body=media, fields="id", supportsAllDrives=True
+    ).execute()
     return created.get("id")
 
 
@@ -195,48 +180,37 @@ TEXT_LIKE = {"text/plain", "text/markdown", "application/json"}
 PDF_MIME  = "application/pdf"
 
 def _clean_text_common(s: str) -> str:
-    """문단/줄바꿈/공백 정리: 하이픈 줄바꿈, 중복 공백, 빈 줄 제거."""
     import re
     if not s:
         return ""
-    # 1) 줄말 하이픈 제거: "exam-\nple" → "example"
-    s = re.sub(r"(?<=\w)-\s*\n\s*(?=\w)", "", s)
-    # 2) 단어 중간 불필요 개행 제거: "ab\ncd" → "ab cd"
-    s = re.sub(r"(?<=\S)\n(?=\S)", " ", s)
-    # 3) 여러 연속 공백/탭 축소
-    s = re.sub(r"[ \t]+", " ", s)
-    # 4) 페이지 단위 빈 줄 정리
-    s = re.sub(r"\n{3,}", "\n\n", s)
+    s = re.sub(r"(?<=\w)-\s*\n\s*(?=\w)", "", s)         # exam-\nple → example
+    s = re.sub(r"(?<=\S)\n(?=\S)", " ", s)               # ab\ncd → ab cd
+    s = re.sub(r"[ \t]+", " ", s)                        # 다중 공백 축소
+    s = re.sub(r"\n{3,}", "\n\n", s)                     # 빈 줄 정리
     return s.strip()
 
 def _extract_text(service, file: Dict[str, Any], stats: Dict[str, int]) -> Optional[str]:
-    """
-    파일을 텍스트로 추출하고 클린업.
-    반환: 정제된 텍스트(str) 또는 None(미지원/실패)
-    """
-    mime = file.get("mimeType")
-    fid  = file["id"]
+    mime = file.get("mimeType"); fid  = file["id"]
 
-    # Google Docs → export(text/plain)
     if mime == GOOGLE_DOC:
         try:
-            data = service.files().export(fileId=fid, mimeType="text/plain").execute()
+            data = service.files().export(
+                fileId=fid, mimeType="text/plain", supportsAllDrives=True
+            ).execute()
             stats["gdocs"] = stats.get("gdocs", 0) + 1
             return _clean_text_common(data.decode("utf-8", errors="ignore"))
         except Exception:
             stats["gdocs"] = stats.get("gdocs", 0) + 1
             return None
 
-    # 텍스트 계열 → 바이너리 다운로드 후 decode
     if mime in TEXT_LIKE:
         b = _download_file_bytes(service, fid)
         stats["text_like"] = stats.get("text_like", 0) + 1
         return _clean_text_common(b.decode("utf-8", errors="ignore"))
 
-    # PDF → PyPDF 사용(없으면 스킵)
     if mime == PDF_MIME:
         try:
-            import pypdf  # 설치 필요: pyproject.toml에 pypdf 추가됨
+            import pypdf
             data = _download_file_bytes(service, fid)
             reader = pypdf.PdfReader(io.BytesIO(data))
             pages = []
@@ -252,35 +226,21 @@ def _extract_text(service, file: Dict[str, Any], stats: Dict[str, int]) -> Optio
             stats["pdf_skipped"] = stats.get("pdf_skipped", 0) + 1
             return None
 
-    # 그 외는 스킵 (docx 등은 다음 단계에서 확장)
     stats["others_skipped"] = stats.get("others_skipped", 0) + 1
     return None
 
 
-
-# ===== [05] CHUNKING (paragraph-first, supports both overlap modes) ==========
-from typing import Optional, List
-
-def _norm_ws(s: str) -> str:
-    return " ".join(s.split())
+# ===== [05] CHUNKING (paragraph-first) ======================================
+def _norm_ws(s: str) -> str: return " ".join(s.split())
 
 def _split_paragraphs(text: str) -> List[str]:
-    """빈 줄/개행 기반 문단 분할(지나친 쪼개짐 방지)."""
-    paras = [p.strip() for p in text.split("\n") if p.strip()]
-    return paras
+    return [p.strip() for p in text.split("\n") if p.strip()]
 
 def _chunk_text(
     text: str,
-    target_chars: int = 1000,        # 권장 800~1200
-    *,                                 # 아래 인자는 키워드 전용(호환성 보장)
-    overlap: Optional[int] = None,     # 글자 수 기준 오버랩(예: 120). 기존 코드 호환용.
-    overlap_ratio: float = 0.12,       # 비율 기준 오버랩(예: 0.12 = 12%)
+    target_chars: int = 1000,
+    *, overlap: Optional[int] = None, overlap_ratio: float = 0.12,
 ) -> List[str]:
-    """
-    문단 우선 청크 분할.
-    - overlap 이 주어지면 '글자 수'로 적용 (기존 호출과 호환: overlap=120)
-    - overlap 이 None이면 overlap_ratio(비율)로 적용
-    """
     if not text.strip():
         return []
 
@@ -288,27 +248,17 @@ def _chunk_text(
     chunks: List[str] = []
     cur: List[str] = []
     cur_len = 0
-    max_chars = max(400, int(target_chars))  # 최소 하한선
+    max_chars = max(400, int(target_chars))
 
     for p in paras:
-        seg = p
-        # 현재 청크에 더 붙이면 타겟 길이를 초과하는 경우 잘라서 내보냄
-        if cur and cur_len + len(seg) + 1 > max_chars:
+        if cur and cur_len + len(p) + 1 > max_chars:
             joined = _norm_ws("\n".join(cur))
             chunks.append(joined)
-
-            # --- 소프트 오버랩 계산 -----------------------------------------
-            if overlap is not None:
-                keep = int(max(0, min(overlap, len(joined))))
-            else:
-                keep = int(max(0, min(int(len(joined) * overlap_ratio), len(joined))))
+            keep = int(max(0, min(overlap if overlap is not None else int(len(joined)*overlap_ratio), len(joined))))
             tail = joined[-keep:] if keep > 0 else ""
-            # 다음 청크 시작 버퍼
             cur, cur_len = ([tail] if tail else []), len(tail)
-            # ----------------------------------------------------------------
-
-        cur.append(seg)
-        cur_len += len(seg) + 1
+        cur.append(p)
+        cur_len += len(p) + 1
 
     if cur:
         chunks.append(_norm_ws("\n".join(cur)))
@@ -316,15 +266,12 @@ def _chunk_text(
 
 
 # ===== [06] MANIFEST & DELTA =================================================
-def _sha1(s: str) -> str:
-    return hashlib.sha1(s.encode("utf-8")).hexdigest()
+def _sha1(s: str) -> str: return hashlib.sha1(s.encode("utf-8")).hexdigest()
 
 def _load_manifest(path: Path) -> Dict[str, Dict[str, Any]]:
     if path.exists():
-        try:
-            return json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            return {}
+        try: return json.loads(path.read_text(encoding="utf-8"))
+        except Exception: return {}
     return {}
 
 def _save_manifest(path: Path, data: Dict[str, Dict[str, Any]]) -> None:
@@ -332,10 +279,8 @@ def _save_manifest(path: Path, data: Dict[str, Dict[str, Any]]) -> None:
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 def _need_update(prev: Dict[str, Any], now_meta: Dict[str, Any]) -> bool:
-    if not prev:
-        return True
-    if prev.get("modifiedTime") != now_meta.get("modifiedTime"):
-        return True
+    if not prev: return True
+    if prev.get("modifiedTime") != now_meta.get("modifiedTime"): return True
     if prev.get("md5Checksum") and now_meta.get("md5Checksum"):
         return prev["md5Checksum"] != now_meta["md5Checksum"]
     if prev.get("content_sha1") and now_meta.get("content_sha1"):
@@ -345,27 +290,18 @@ def _need_update(prev: Dict[str, Any], now_meta: Dict[str, Any]) -> bool:
 
 # ===== [07] BUILD FROM PREPARED =============================================
 def _guess_section_hint(text: str) -> Optional[str]:
-    """간단한 섹션 힌트 추출(첫 문장/헤더 느낌). 실패 시 None."""
     import re
-    if not text:
-        return None
-    # 줄 단위로 보고, 너무 짧거나 너무 긴 건 제외
+    if not text: return None
     lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
     for ln in lines[:5]:
         if 8 <= len(ln) <= 120:
-            # 전형적 섹션 프리픽스 패턴
-            if re.search(r"^(Chapter|Unit|Lesson|Section|Part)\s+[0-9IVX]+[:\-\.\s]", ln, re.I):
-                return ln
-            # 문장부호가 적고 알파가 많은 헤더류
+            if re.search(r"^(Chapter|Unit|Lesson|Section|Part)\s+[0-9IVX]+[:\-\.\s]", ln, re.I): return ln
             if re.fullmatch(r"[A-Za-z0-9\s\-\(\)\.\,']{8,120}", ln) and sum(c.isalpha() for c in ln) > len(ln)*0.5:
                 return ln
-    # fallback: 첫 80자
     head = text.strip().split("\n", 1)[0]
     return (head[:80] + "…") if len(head) > 80 else (head or None)
 
-
 def _pdf_page_count_quick(service, file_id: str) -> Optional[int]:
-    """PDF 페이지 수를 빠르게 추정(다운로드 후 pypdf 사용). 실패 시 None."""
     try:
         import pypdf
         data = _download_file_bytes(service, file_id)
@@ -373,24 +309,7 @@ def _pdf_page_count_quick(service, file_id: str) -> Optional[int]:
     except Exception:
         return None
 
-
-def _page_range_linear(total_len: int, pages: Optional[int], start: int, end: int) -> Optional[str]:
-    """문자 길이 비례로 페이지 범위를 근사. pages가 없으면 None."""
-    if not pages or total_len <= 0:
-        return None
-    # pos -> page(1-based)
-    def pos2pg(pos: int) -> int:
-        p = int((max(0, min(pos, total_len-1)) / max(1, total_len-1)) * (pages - 1)) + 1
-        return max(1, min(p, pages))
-    sp, ep = pos2pg(start), pos2pg(max(start, end-1))
-    return f"{sp}" if sp == ep else f"{sp}–{ep}"
-
-
 def _build_from_prepared(service, prepared_id: str) -> Tuple[int, int, Dict[str, Any], Dict[str, int]]:
-    """
-    prepared 폴더의 파일들을 읽어 chunks.jsonl/manifest.json을 갱신한다.
-    반환: (processed_files, generated_chunks, manifest, stats)
-    """
     files = _list_files(service, prepared_id)
     manifest = _load_manifest(MANIFEST_PATH)
     prev_ids = set(manifest.keys())
@@ -414,13 +333,12 @@ def _build_from_prepared(service, prepared_id: str) -> Tuple[int, int, Dict[str,
             "size": f.get("size"),
         }
         text = _extract_text(service, f, stats)
-        if text is None or not text.strip():
+        if not text or not text.strip():
             continue
 
         now_meta = {**meta_base, "content_sha1": _sha1(text)}
         prev_meta = manifest.get(f["id"], {})
 
-        # 변경 분류(new/updated/unchanged)
         need = _need_update(prev_meta, now_meta)
         if not need:
             stats["unchanged_docs"] += 1
@@ -430,19 +348,15 @@ def _build_from_prepared(service, prepared_id: str) -> Tuple[int, int, Dict[str,
         else:
             stats["updated_docs"] += 1
 
-        # 청크 생성(+ 오버랩 120 고정; 아래 page_approx 계산에 사용)
         chunks = _chunk_text(text, target_chars=1200, overlap=120)
 
-        # PDF면 페이지 수를 얻어 page_approx 계산에 사용
         pages = _pdf_page_count_quick(service, f["id"]) if (f.get("mimeType") == "application/pdf") else None
         total_len = len(text)
-
-        # 선형 오프셋 누적(오버랩 고려)
         running_start = 0
+
         for i, ch in enumerate(chunks):
             start = running_start
             end = start + len(ch)
-            # 다음 청크 시작점 = 현재 청크 길이 - keep(= overlap clip)
             keep = min(120, len(ch))
             running_start = end - keep
 
@@ -470,7 +384,6 @@ def _build_from_prepared(service, prepared_id: str) -> Tuple[int, int, Dict[str,
         total_chunks += len(chunks)
         changed_ids.add(f["id"])
 
-    # 기존 라인 보존 + 변경된 doc_id의 라인은 제거
     existing: List[str] = []
     if out_path.exists():
         existing = [ln for ln in out_path.read_text(encoding="utf-8").splitlines() if ln.strip()]
@@ -491,6 +404,15 @@ def _build_from_prepared(service, prepared_id: str) -> Tuple[int, int, Dict[str,
 
     return processed, total_chunks, manifest, stats
 
+def _page_range_linear(total_len: int, pages: Optional[int], start: int, end: int) -> Optional[str]:
+    if not pages or total_len <= 0:
+        return None
+    def pos2pg(pos: int) -> int:
+        p = int((max(0, min(pos, total_len-1)) / max(1, total_len-1)) * (pages - 1)) + 1
+        return max(1, min(p, pages))
+    sp, ep = pos2pg(start), pos2pg(max(start, end-1))
+    return f"{sp}" if sp == ep else f"{sp}–{ep}"
+
 
 # ===== [08] QUALITY REPORT & BACKUP ZIP =====================================
 def _percentiles(values: List[int], ps: List[float]) -> Dict[str, Optional[int]]:
@@ -510,8 +432,7 @@ def _quality_report(manifest: Dict[str, Any], extra_counts: Optional[Dict[str, i
 
     if chunks_path.exists():
         for ln in chunks_path.read_text(encoding="utf-8").splitlines():
-            if not ln.strip():
-                continue
+            if not ln.strip(): continue
             try:
                 obj = json.loads(ln)
                 txt = obj.get("text", "")
@@ -527,11 +448,10 @@ def _quality_report(manifest: Dict[str, Any], extra_counts: Optional[Dict[str, i
     longest = max(lengths) if lengths else None
     shortest = min(lengths) if lengths else None
 
-    # MIME 분포 + 평균 길이
     mime_distribution: Dict[str, Any] = {}
     for m, vs in by_mime.items():
         mime_distribution[m] = {
-            "docs": sum(1 for _ in vs),  # chunk count as 'docs' proxy
+            "docs": sum(1 for _ in vs),
             "avg_chunk_len": round(sum(vs)/len(vs), 1) if vs else None,
         }
 
@@ -539,7 +459,7 @@ def _quality_report(manifest: Dict[str, Any], extra_counts: Optional[Dict[str, i
         "docs_total": len(manifest),
         "chunks_total": sum(m.get("chunk_count", 0) for m in manifest.values()),
         "avg_chunk_length_chars": avg,
-        **pct,  # p50/p90/p99
+        **pct,
         "longest_chunk_chars": longest,
         "shortest_chunk_chars": shortest,
         "mime_distribution": mime_distribution,
@@ -556,80 +476,99 @@ def _quality_report(manifest: Dict[str, Any], extra_counts: Optional[Dict[str, i
     return report
 
 def _make_and_upload_backup_zip(service, backup_id: Optional[str]) -> Optional[str]:
-    """
-    REQ_FILES를 zip으로 묶어 backup 폴더에 업로드.
-    - backup_id가 없으면 None 반환(조용히 스킵)
-    - ZIP에는 chunks.jsonl / manifest.json / quality_report.json을 포함
-    """
     if not backup_id:
         return None
-
     ts = time.strftime("%Y%m%d-%H%M%S")
     zip_path = APP_DATA_DIR / f"index_backup_{ts}.zip"
-
-    # ZIP 작성 (존재하는 파일만 포함)
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         cj = PERSIST_DIR / "chunks.jsonl"
-        if cj.exists():
-            zf.write(cj, arcname="chunks.jsonl")
-        if MANIFEST_PATH.exists():
-            zf.write(MANIFEST_PATH, arcname="manifest.json")
-        if QUALITY_REPORT_PATH.exists():
-            zf.write(QUALITY_REPORT_PATH, arcname="quality_report.json")
-
-    # 업로드 → 임시 ZIP 삭제
+        if cj.exists(): zf.write(cj, arcname="chunks.jsonl")
+        if MANIFEST_PATH.exists(): zf.write(MANIFEST_PATH, arcname="manifest.json")
+        if QUALITY_REPORT_PATH.exists(): zf.write(QUALITY_REPORT_PATH, arcname="quality_report.json")
     try:
-        _id = _upload_zip(service, backup_id, zip_path, zip_path.name)
-        return _id
+        return _upload_zip(service, backup_id, zip_path, zip_path.name)
     finally:
-        try:
-            zip_path.unlink(missing_ok=True)
-        except Exception:
-            pass
+        try: zip_path.unlink(missing_ok=True)
+        except Exception: pass
 
 
+# ===== [09] QUICK PRECHECK (변경 여부만 빠르게) ===============================
+def quick_precheck(gdrive_folder_id: Optional[str] = None) -> Dict[str, Any]:
+    """
+    prepared 폴더와 현재 manifest를 '메타데이터 수준'으로 빠르게 비교.
+    - 변경 없음이면 {"changed": False, ...}
+    - 변경 있으면 {"changed": True, reasons: [...], ...}
+    """
+    svc = _drive_client()
+    prepared_id = _find_folder_id("PREPARED", fallback=gdrive_folder_id)
+    if not prepared_id:
+        raise KeyError("prepared 폴더 ID를 찾지 못했습니다.")
+
+    files = _list_files(svc, prepared_id)
+    man = _load_manifest(MANIFEST_PATH)
+
+    def digest_from_files(fs: List[Dict[str, Any]]) -> str:
+        parts = []
+        for f in fs:
+            parts.append(f"{f.get('id')}|{f.get('modifiedTime')}|{f.get('md5Checksum') or f.get('size') or ''}")
+        return _sha1("|".join(parts))
+
+    def digest_from_manifest(m: Dict[str, Any]) -> str:
+        parts = []
+        for fid, v in sorted(m.items()):
+            parts.append(f"{fid}|{v.get('modifiedTime')}|{v.get('md5Checksum') or v.get('size') or ''}|{v.get('content_sha1','')}")
+        return _sha1("|".join(parts))
+
+    prep_digest = digest_from_files(files)
+    mani_digest = digest_from_manifest(man)
+
+    reasons: List[str] = []
+    if len(files) != len(man):
+        reasons.append(f"file_count_diff: prepared={len(files)} manifest={len(man)}")
+    if prep_digest[:12] != mani_digest[:12]:
+        reasons.append("digest_mismatch")
+
+    changed = bool(reasons)
+    sample = [{"name": f.get("name"), "mt": f.get("modifiedTime")} for f in files[:5]]
+
+    return {
+        "changed": changed,
+        "reasons": reasons,
+        "prepared_count": len(files),
+        "manifest_docs": len(man),
+        "prepared_digest": prep_digest,
+        "manifest_digest": mani_digest,
+        "prepared_sample": sample,
+        "checked_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
 
 
-# ===== [09] PUBLIC ENTRY (APP에서 호출) ======================================
+# ===== [10] PUBLIC ENTRY (빌드 실행) =========================================
 def build_index_with_checkpoint(
     update_pct: Callable[[int, str | None], None],
     update_msg: Callable[[str], None],
-    gdrive_folder_id: str,                 # (호환 위해 유지: prepared ID로 사용 가능)
+    gdrive_folder_id: str,
     gcp_creds: Mapping[str, object],
-    persist_dir: str,                      # (호환, 현재 내부 PERSIST_DIR 사용)
+    persist_dir: str,
     remote_manifest: Dict[str, Dict[str, object]],
     should_stop: Callable[[], bool] | None = None,
 ) -> Dict[str, Any]:
-    """
-    목표:
-      - 앱 첫 실행 시: prepared 폴더 내용을 최적화하여 로컬 인덱스 생성
-      - 이후 prepared에 새 파일이 추가되면: 델타만 누적 반영
-      - 항상 완료 후 backup_zip 폴더에 zip 업로드(있으면)
-    반환: 처리 요약(dict)
-    """
-    # 안전 콜백
     def _pct(v: int, msg: str | None = None):
-        try:
-            update_pct(int(v), msg)
-        except Exception:
-            pass
+        try: update_pct(int(v), msg)
+        except Exception: pass
     def _msg(s: str):
-        try:
-            update_msg(str(s))
-        except Exception:
-            pass
+        try: update_msg(str(s))
+        except Exception: pass
 
     _msg("🔐 Preparing Google Drive client (OAuth first)…")
     svc = _drive_client()
     _pct(5, "drive-ready")
 
-    # 폴더 ID 결정
     prepared_id = _find_folder_id("PREPARED", fallback=gdrive_folder_id)
     backup_id   = _find_folder_id("BACKUP") or _find_folder_id("DEFAULT")
     if not prepared_id:
-        raise KeyError("prepared 폴더 ID를 찾지 못했습니다. (GDRIVE_PREPARED_FOLDER_ID / PREPARED_FOLDER_ID / gdrive_folder_id 인자)")
+        raise KeyError("prepared 폴더 ID를 찾지 못했습니다.")
 
-    # 요구사항: 백업 ZIP이 있어도 항상 prepared 기준 델타 빌드로 누적 반영
     _msg("📦 Scanning prepared folder and building delta…")
     processed, chunks, manifest, stats = _build_from_prepared(svc, prepared_id)
     _pct(70, f"processed={processed}, chunks={chunks}")
@@ -654,11 +593,11 @@ def build_index_with_checkpoint(
         "backup_zip_id": uploaded_id,
         "prepared_folder_id": prepared_id,
         "backup_folder_id": backup_id,
-        "auth_mode": "oauth-first"  # 디버그용
+        "auth_mode": "oauth-first"
     }
 
 
-# ===== [10] (선택) CLI 테스트용 엔트리 =======================================
+# ===== [11] CLI (optional) ===================================================
 if __name__ == "__main__":
     def _noop_pct(v: int, msg: str | None = None): ...
     def _noop_msg(s: str): ...
