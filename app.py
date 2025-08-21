@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Optional, Callable, List, Dict, Tuple
 
 import re
+import time  # ← [NEW] 진행바 시각화를 위한 짧은 sleep
 import streamlit as st
 
 # RAG 엔진이 없어도 앱이 죽지 않게 try/except로 감쌈
@@ -108,33 +109,51 @@ def render_brain_prep_main():
 
     # -------------------- 좌측: 두뇌 연결/초기화 -----------------------------
     with c1:
-        # [NEW] 두뇌 연결 버튼: 진행 바 + 상태상자
+        # 진행바가 항상 같은 위치에 뜨도록 전용 컨테이너 확보
+        progress_slot = st.empty()  # ← [NEW] 진행바 표시 위치 고정
+
         if st.button("🧠 AI 두뇌 준비(복구/연결)", type="primary", key="btn_attach_restore"):
-            # 답변 박스와 헷갈리지 않도록, 여기서는 상단 상태상자 + 진척도 바를 사용
+            # 진행바 시작 (눈에 보이는 단계 업데이트)
+            bar = progress_slot.progress(0)
             try:
-                with st.status("두뇌 연결을 시도 중…", state="running") as s:  # Streamlit >= 1.25
-                    bar = st.progress(0)
-                    bar.progress(15)
+                # 상태 상자 + 단계별 퍼센트 업데이트
+                try:
+                    with st.status("두뇌 연결을 준비 중…", state="running") as s:
+                        bar.progress(5);   time.sleep(0.12)
+                        bar.progress(20);  time.sleep(0.12)
+
+                        # 실제 연결 시도
+                        ok = _auto_attach_or_restore_silently()
+
+                        bar.progress(55);  time.sleep(0.12)
+                        # (필요 시, 추가 점검/로깅 단계가 있다면 여기에서 70~85% 사용)
+                        bar.progress(85);  time.sleep(0.12)
+                        bar.progress(100)
+
+                        if ok:
+                            s.update(label="두뇌 연결 완료 ✅", state="complete")
+                            st.success("두뇌 연결이 완료되었습니다.")
+                            progress_slot.empty()  # 진행바 자리를 정리
+                            st.rerun()
+                        else:
+                            s.update(label="두뇌 연결 실패 ❌", state="error")
+                            st.error("두뇌 연결에 실패했습니다. 먼저 ‘사전점검→재최적화’를 실행해 인덱스를 만들어 주세요.")
+                            progress_slot.empty()
+                except Exception:
+                    # 구버전 Streamlit 호환: 상태 상자 없이 진행바만
+                    bar.progress(10); time.sleep(0.12)
                     ok = _auto_attach_or_restore_silently()
-                    bar.progress(60)
-                    # (여기서 추가 로직이 있으면 중간 퍼센트 업데이트)
-                    bar.progress(100)
+                    bar.progress(70); time.sleep(0.12)
+                    bar.progress(100); time.sleep(0.05)
+                    progress_slot.empty()
                     if ok:
-                        s.update(label="두뇌 연결 완료 ✅", state="complete")
                         st.success("두뇌 연결이 완료되었습니다.")
                         st.rerun()
                     else:
-                        s.update(label="두뇌 연결 실패 ❌", state="error")
                         st.error("두뇌 연결에 실패했습니다. 먼저 ‘사전점검→재최적화’를 실행해 인덱스를 만들어 주세요.")
-            except Exception:
-                # 구버전 Streamlit 호환: 기본 스피너만
-                with st.spinner("두뇌 연결을 시도 중…"):
-                    ok = _auto_attach_or_restore_silently()
-                if ok:
-                    st.success("두뇌 연결이 완료되었습니다.")
-                    st.rerun()
-                else:
-                    st.error("두뇌 연결에 실패했습니다. 먼저 ‘사전점검→재최적화’를 실행해 인덱스를 만들어 주세요.")
+            except Exception as e:
+                progress_slot.empty()
+                st.error(f"연결 중 오류: {type(e).__name__}: {e}")
 
         if st.button("📥 강의 자료 다시 불러오기 (두뇌 초기화)", key="btn_reset_local"):
             try:
@@ -191,7 +210,6 @@ def render_brain_prep_main():
                 run_label = "🛠 재최적화 실행 (변경 반영)"
                 run_help  = "변경/신규 파일만 델타로 반영하여 인덱스를 갱신합니다."
 
-            # [기존 유지] 빌드에는 이미 % 프로그레스 바가 있음
             if st.button(run_label, help=run_help, key="btn_build_confirm"):
                 if build_index_with_checkpoint is None:
                     st.error("인덱스 빌더 모듈을 찾지 못했습니다. (src.rag.index_build)")
@@ -287,18 +305,14 @@ def render_simple_qa():
     clicked = st.button("검색", key="qa_go")
     submitted = clicked or st.session_state.get("qa_submitted", False)
 
-    # [NEW] 답변 표시 영역(채팅 위치)에 스피너/상태상자 표시
+    # 답변 표시 영역(채팅 위치) 컨테이너
     answer_box = st.container()
 
     if submitted and (q or "").strip():
-        # 플래그 즉시 리셋(연타시 중복 처리 방지)
         st.session_state["qa_submitted"] = False
-
-        # 채팅 영역에 상태 상자 우선 시도, 실패 시 스피너로 폴백
         try:
             with answer_box:
                 with st.status("✳️ 답변 준비 중…", state="running") as s:
-                    # (여기에서 실제 검색 수행)
                     qe = st.session_state["rag_index"].as_query_engine(top_k=k)
                     r = qe.query(q)
                     raw_text = getattr(r, "response", "") or str(r)
@@ -313,7 +327,6 @@ def render_simple_qa():
                                 "url": (meta or {}).get("source") or (meta or {}).get("url", ""),
                             })
 
-                    # Sentence 모드: 빠른 교정
                     if mode == "Sentence":
                         fixes = _sentence_quick_fix(q)
                         if fixes:
@@ -324,7 +337,6 @@ def render_simple_qa():
                     _render_clean_answer(mode, raw_text, refs, lang)
                     s.update(label="완료 ✅", state="complete")
         except Exception:
-            # 상태 상자를 지원하지 않는 버전에서는 기본 스피너 사용
             with answer_box:
                 with st.spinner("✳️ 답변 준비 중…"):
                     try:
