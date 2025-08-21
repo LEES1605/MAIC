@@ -189,62 +189,109 @@ def _upload_zip(service, folder_id: str, path: Path, name: str) -> str:
     return created.get("id")
 
 
-# ===== [04] CONTENT EXTRACTORS (TXT/MD/GOOGLE DOCS/PDF) ======================
+# ===== [04] CONTENT EXTRACTORS (TXT/MD/GOOGLE DOCS/PDF; with cleaning) ======
 GOOGLE_DOC = "application/vnd.google-apps.document"
 TEXT_LIKE = {"text/plain", "text/markdown", "application/json"}
+PDF_MIME  = "application/pdf"
+
+def _clean_text_common(s: str) -> str:
+    """문단/줄바꿈/공백 정리: 하이픈 줄바꿈, 중복 공백, 빈 줄 제거."""
+    import re
+    if not s:
+        return ""
+    # 1) 줄말 하이픈 제거: "exam-\nple" → "example"
+    s = re.sub(r"(?<=\w)-\s*\n\s*(?=\w)", "", s)
+    # 2) 단어 중간 불필요 개행 제거: "ab\ncd" → "ab cd"
+    s = re.sub(r"(?<=\S)\n(?=\S)", " ", s)
+    # 3) 여러 연속 공백/탭 축소
+    s = re.sub(r"[ \t]+", " ", s)
+    # 4) 페이지 단위 빈 줄 정리
+    s = re.sub(r"\n{3,}", "\n\n", s)
+    return s.strip()
 
 def _extract_text(service, file: Dict[str, Any], stats: Dict[str, int]) -> Optional[str]:
+    """
+    파일을 텍스트로 추출하고 클린업.
+    반환: 정제된 텍스트(str) 또는 None(미지원/실패)
+    """
     mime = file.get("mimeType")
-    fid = file["id"]
+    fid  = file["id"]
 
     # Google Docs → export(text/plain)
     if mime == GOOGLE_DOC:
-        data = service.files().export(fileId=fid, mimeType="text/plain").execute()
-        stats["gdocs"] += 1
-        return data.decode("utf-8", errors="ignore")
+        try:
+            data = service.files().export(fileId=fid, mimeType="text/plain").execute()
+            stats["gdocs"] = stats.get("gdocs", 0) + 1
+            return _clean_text_common(data.decode("utf-8", errors="ignore"))
+        except Exception:
+            stats["gdocs"] = stats.get("gdocs", 0) + 1
+            return None
 
     # 텍스트 계열 → 바이너리 다운로드 후 decode
     if mime in TEXT_LIKE:
         b = _download_file_bytes(service, fid)
-        stats["text_like"] += 1
-        return b.decode("utf-8", errors="ignore")
+        stats["text_like"] = stats.get("text_like", 0) + 1
+        return _clean_text_common(b.decode("utf-8", errors="ignore"))
 
     # PDF → PyPDF 사용(없으면 스킵)
-    if mime == "application/pdf":
+    if mime == PDF_MIME:
         try:
-            import pypdf  # optional dep (없으면 스킵)
+            import pypdf  # 설치 필요: pyproject.toml에 pypdf 추가됨
             data = _download_file_bytes(service, fid)
             reader = pypdf.PdfReader(io.BytesIO(data))
-            pages = [p.extract_text() or "" for p in reader.pages]
-            txt = "\n".join(pages)
-            stats["pdf_parsed"] += 1
-            return txt
+            pages = []
+            for p in reader.pages:
+                try:
+                    pages.append(p.extract_text() or "")
+                except Exception:
+                    pages.append("")
+            txt = "\n\n".join(pages)
+            stats["pdf_parsed"] = stats.get("pdf_parsed", 0) + 1
+            return _clean_text_common(txt)
         except Exception:
-            stats["pdf_skipped"] += 1
+            stats["pdf_skipped"] = stats.get("pdf_skipped", 0) + 1
             return None
 
     # 그 외는 스킵 (docx 등은 다음 단계에서 확장)
-    stats["others_skipped"] += 1
+    stats["others_skipped"] = stats.get("others_skipped", 0) + 1
     return None
 
 
-# ===== [05] CHUNKING =========================================================
+
+# ===== [05] CHUNKING (paragraph-first, soft overlap) ========================
 def _norm_ws(s: str) -> str:
     return " ".join(s.split())
 
-def _chunk_text(text: str, target_chars: int = 1200, overlap: int = 120) -> List[str]:
+def _split_paragraphs(text: str) -> List[str]:
+    """빈 줄 기준 문단 분할(지나친 쪼개짐 방지)."""
     paras = [p.strip() for p in text.split("\n") if p.strip()]
+    return paras
+
+def _chunk_text(
+    text: str,
+    target_chars: int = 1000,     # 권장 800~1200
+    overlap_ratio: float = 0.12,  # 약 10~15% 소프트 오버랩
+) -> List[str]:
+    if not text.strip():
+        return []
+    paras = _split_paragraphs(text)
     chunks: List[str] = []
     cur: List[str] = []
     cur_len = 0
+    max_chars = max(400, int(target_chars))  # 하한선
+
     for p in paras:
-        if cur and cur_len + len(p) + 1 > target_chars:
+        seg = p
+        if cur_len + len(seg) + 1 > max_chars and cur:
             joined = _norm_ws("\n".join(cur))
             chunks.append(joined)
-            tail = joined[-overlap:]
-            cur, cur_len = [tail], len(tail)
-        cur.append(p)
-        cur_len += len(p) + 1
+            # 소프트 오버랩: 뒤쪽 일부만 가져와 다음 청크에 프리롤
+            keep = int(len(joined) * overlap_ratio)
+            tail = joined[-keep:] if keep > 0 else ""
+            cur, cur_len = ([tail] if tail else []), len(tail)
+        cur.append(seg)
+        cur_len += len(seg) + 1
+
     if cur:
         chunks.append(_norm_ws("\n".join(cur)))
     return chunks
@@ -352,6 +399,16 @@ def _build_from_prepared(service, prepared_id: str) -> Tuple[int, int, Dict[str,
 
 
 # ===== [08] QUALITY REPORT & BACKUP ZIP =====================================
+def _percentiles(values: List[int], ps: List[float]) -> Dict[str, Optional[int]]:
+    if not values:
+        return {f"p{int(p*100)}": None for p in ps}
+    vals = sorted(values)
+    out: Dict[str, Optional[int]] = {}
+    for p in ps:
+        k = int(round((len(vals) - 1) * p))
+        out[f"p{int(p*100)}"] = vals[k]
+    return out
+
 def _quality_report(manifest: Dict[str, Any]) -> Dict[str, Any]:
     chunks_path = PERSIST_DIR / "chunks.jsonl"
     lengths: List[int] = []
@@ -364,38 +421,28 @@ def _quality_report(manifest: Dict[str, Any]) -> Dict[str, Any]:
                 lengths.append(len(obj.get("text", "")))
             except Exception:
                 pass
+
     avg = round(sum(lengths) / len(lengths), 1) if lengths else None
+    pct = _percentiles(lengths, [0.5, 0.9, 0.99])
+
+    # MIME 분포
+    mime_dist: Dict[str, int] = {}
+    for m in manifest.values():
+        mime = m.get("mimeType", "unknown")
+        mime_dist[mime] = mime_dist.get(mime, 0) + 1
+
     report = {
         "docs_total": len(manifest),
         "chunks_total": sum(m.get("chunk_count", 0) for m in manifest.values()),
         "avg_chunk_length_chars": avg,
+        **pct,
+        "mime_distribution": mime_dist,
         "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
     QUALITY_REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
     QUALITY_REPORT_PATH.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     return report
 
-def _make_and_upload_backup_zip(service, backup_id: Optional[str]) -> Optional[str]:
-    """
-    REQ_FILES를 zip으로 묶어 backup 폴더에 업로드. backup_id가 없으면 None 반환.
-    """
-    if not backup_id:
-        return None
-    ts = time.strftime("%Y%m%d-%H%M%S")
-    zip_path = APP_DATA_DIR / f"index_backup_{ts}.zip"
-    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        # chunks.jsonl은 persist에, 나머지 두 개는 APP_DATA_DIR 루트 기준
-        zf.write(PERSIST_DIR / "chunks.jsonl", arcname="chunks.jsonl") if (PERSIST_DIR / "chunks.jsonl").exists() else None
-        zf.write(MANIFEST_PATH, arcname="manifest.json") if MANIFEST_PATH.exists() else None
-        zf.write(QUALITY_REPORT_PATH, arcname="quality_report.json") if QUALITY_REPORT_PATH.exists() else None
-    try:
-        _id = _upload_zip(service, backup_id, zip_path, zip_path.name)
-        return _id
-    finally:
-        try:
-            zip_path.unlink(missing_ok=True)
-        except Exception:
-            pass
 
 
 # ===== [09] PUBLIC ENTRY (APP에서 호출) ======================================
