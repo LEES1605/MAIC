@@ -764,32 +764,25 @@ def render_simple_qa():
 def main():
     # (A) 타이틀+상태 배지 렌더러 ------------------------------------------------
     def _is_attached_session() -> bool:
-        ss = st.session_state
-        return bool(
-            ss.get("brain_attached") or
-            ss.get("rag_index") or
-            ss.get("retriever") or
-            ss.get("vectorstore") or
-            ss.get("rag")
-        )
+        """
+        단일 기준 헬퍼(get_index_status)만 사용.
+        'ready'이면 세션 부착 완료로 간주.
+        """
+        try:
+            return get_index_status() == "ready"
+        except Exception:
+            # 헬퍼 미존재 등 비정상 케이스에서는 보수적으로 False
+            return False
 
     def _render_title_with_status():
-        import importlib
-        from pathlib import Path
-        try:
-            _mod = importlib.import_module("src.rag.index_build")
-            _PERSIST_DIR_OBJ = getattr(_mod, "PERSIST_DIR", Path.home() / ".maic" / "persist")
-        except Exception:
-            _PERSIST_DIR_OBJ = Path.home() / ".maic" / "persist"
-
-        chunks_ok = (_PERSIST_DIR_OBJ / "chunks.jsonl").exists()
-        ready_mark_ok = (_PERSIST_DIR_OBJ / ".ready").exists()
-        files_signal = bool(chunks_ok or ready_mark_ok)
-
-        is_attached = _is_attached_session()
-        if is_attached:
+        """
+        타이틀 우측 배지 또한 get_index_status()만 사용.
+        드리프트 방지를 위해 로컬 파일 조회/세션키 직접접근 금지.
+        """
+        status = get_index_status()  # 'ready' | 'pending' | 'missing'
+        if status == "ready":
             badge = '<span class="pill pill-green">🟢 두뇌 준비됨</span>'
-        elif files_signal:
+        elif status == "pending":
             badge = '<span class="pill pill-amber">🟡 연결 대기</span>'
         else:
             badge = '<span class="pill pill-gray">🔴 준비 안 됨</span>'
@@ -897,6 +890,10 @@ def main():
     _PERSIST_DIR_LOG = st.session_state.get("_persist_dir_str", str(_Path.home() / ".maic" / "persist"))
 
     def _attach_with_status(label="두뇌 자동 연결 중…") -> bool:
+        """
+        연결 성공 시 brain_attached=True를 확실히 기록하고,
+        최초 페인트 동기화를 위해 1회 rerun.
+        """
         try:
             with st.status(label, state="running") as s:
                 bar = st.progress(0)
@@ -993,6 +990,7 @@ def main():
             )
         )
 
+    # 단일 기준 기반으로만 분기
     if plan == "attach" and not _is_attached_session():
         _attach_with_status()
     elif plan == "restore" and not _is_attached_session():
