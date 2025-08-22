@@ -505,310 +505,236 @@ def _page_range_linear(total_len: int, pages: Optional[int], start: int, end: in
     sp, ep = pos2pg(start), pos2pg(max(start, end-1))
     return f"{sp}" if sp == ep else f"{sp}–{ep}"
 
+# ===== [08] BACKUP/RESTORE (Drive 최신 ZIP 복구 + 업로드, 폴더 ID 통일) ==========
+from pathlib import Path
+from typing import Any, Dict, Optional, List, Tuple
+import io, os, json, zipfile, shutil, datetime as dt
 
-# ===== [08] QUALITY REPORT & BACKUP ZIP =====================================
-# 로컬 백업 디렉토리(태그 진단 패널에서 표시하는 경로와 동일하게 사용)
-BACKUP_DIR = APP_DATA_DIR / "backup"
+try:
+    PERSIST_DIR = PERSIST_DIR  # type: ignore[name-defined]
+except Exception:
+    PERSIST_DIR = Path.home() / ".maic" / "persist"
 
-def _quality_report(manifest: Dict[str, Any], extra_counts: Optional[Dict[str, int]] = None) -> Dict[str, Any]:
-    """
-    chunks.jsonl을 스캔해 grammar_tags 분포를 집계하고,
-    manifest/빌드 통계와 함께 QUALITY_REPORT_PATH에 저장합니다.
-    반환값: 리포트 딕셔너리
-    """
-    report: Dict[str, Any] = {}
+try:
+    BACKUP_DIR = BACKUP_DIR  # type: ignore[name-defined]
+except Exception:
+    BACKUP_DIR = Path.home() / ".maic" / "backup"
 
-    # ✅ generated_at을 KST(Asia/Seoul) 기준으로 통일
+# ──────────────────────────────────────────────────────────────────────────────
+# 공통: Drive 서비스/폴더 ID 해석
+def _drive_service():
+    """Drive v3 read/write 서비스 생성 (OAuth 우선, SA 폴백). 실패 시 None."""
     try:
-        from datetime import datetime
-        try:
-            from zoneinfo import ZoneInfo  # Python 3.9+
-            dt = datetime.now(ZoneInfo("Asia/Seoul"))
-        except Exception:
-            dt = datetime.now()
-        report["generated_at"] = dt.strftime("%Y-%m-%d %H:%M:%S")
+        from googleapiclient.discovery import build  # type: ignore
+        from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload  # type: ignore
+        from google.oauth2.credentials import Credentials  # type: ignore
+        from google.oauth2.service_account import Credentials as SACreds  # type: ignore
+        import streamlit as st  # type: ignore
+
+        cid  = st.secrets.get("GDRIVE_OAUTH_CLIENT_ID")
+        csec = st.secrets.get("GDRIVE_OAUTH_CLIENT_SECRET")
+        rft  = st.secrets.get("GDRIVE_OAUTH_REFRESH_TOKEN")
+        if cid and csec and rft:
+            token_uri = st.secrets.get("GDRIVE_TOKEN_URI", "https://oauth2.googleapis.com/token")
+            data = {"client_id":cid, "client_secret":csec, "refresh_token":rft, "token_uri":token_uri}
+            scopes = ["https://www.googleapis.com/auth/drive"]
+            creds = Credentials.from_authorized_user_info(data, scopes=scopes)
+        else:
+            raw = st.secrets.get("GDRIVE_SERVICE_ACCOUNT_JSON")
+            if not raw:
+                return None
+            info = json.loads(raw) if isinstance(raw, str) else dict(raw)
+            scopes = ["https://www.googleapis.com/auth/drive"]
+            creds = SACreds.from_service_account_info(info, scopes=scopes)
+        svc = build("drive", "v3", credentials=creds, cache_discovery=False)
+        return svc
     except Exception:
-        report["generated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        return None
 
-    report["manifest_docs"] = len(manifest or {})
-    extra_counts = extra_counts or {}
-    report["counts"] = {
-        "gdocs":          int(extra_counts.get("gdocs", 0)),
-        "text_like":      int(extra_counts.get("text_like", 0)),
-        "pdf_parsed":     int(extra_counts.get("pdf_parsed", 0)),
-        "pdf_skipped":    int(extra_counts.get("pdf_skipped", 0)),
-        "others_skipped": int(extra_counts.get("others_skipped", 0)),
-        "new_docs":       int(extra_counts.get("new_docs", 0)),
-        "updated_docs":   int(extra_counts.get("updated_docs", 0)),
-        "unchanged_docs": int(extra_counts.get("unchanged_docs", 0)),
-    }
-
-    # grammar_tags 집계
-    tag_counts: Dict[str, int] = {}
-    chunks_path = PERSIST_DIR / "chunks.jsonl"
-    total_chunks = 0
-
-    if chunks_path.exists():
-        try:
-            for ln in chunks_path.read_text(encoding="utf-8", errors="ignore").splitlines():
-                if not ln.strip():
-                    continue
-                try:
-                    obj = json.loads(ln)
-                except Exception:
-                    continue
-                total_chunks += 1
-                tags = obj.get("grammar_tags") or []
-                if isinstance(tags, list):
-                    for t in tags:
-                        if not isinstance(t, str):
-                            continue
-                        tag_counts[t] = tag_counts.get(t, 0) + 1
-        except Exception as e:
-            st.warning(f"quality_report 스캔 중 경고: {type(e).__name__}: {e}")
-
-    report["total_chunks"] = total_chunks
-    report["grammar_tag_counts"] = dict(sorted(tag_counts.items(), key=lambda kv: (-kv[1], kv[0])))
-    top20 = sorted(tag_counts.items(), key=lambda kv: (-kv[1], kv[0]))[:20]
-    report["top_tags"] = [{"tag": k, "count": v} for k, v in top20]
-
+def _pick_backup_folder_id(svc) -> Optional[str]:
+    """시크릿에서 백업 폴더 ID를 찾고, 없으면 루트 아래의 'backup_zip' 폴더를 탐색."""
     try:
-        QUALITY_REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
-        QUALITY_REPORT_PATH.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    except Exception as e:
-        st.warning(f"quality_report 저장 경고: {type(e).__name__}: {e}")
-
-    return report
-
-
-def _make_and_upload_backup_zip(service, backup_folder_id: Optional[str]) -> Optional[str]:
-    """
-    REQ_FILES(chunks.jsonl, manifest.json, quality_report.json)을 ZIP으로 묶고,
-    backup_folder_id가 있으면 Google Drive에 업로드합니다.
-    파일명 타임스탬프는 **KST(Asia/Seoul) 기준 YYYYMMDD_HHMM**.
-    또한 동일 ZIP을 로컬 BACKUP_DIR에도 보관합니다.
-    반환값: 업로드된 파일 ID(없으면 None)
-    """
-    # ZIP 생성 경로
-    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-
-    # === 타임스탬프(KST, YYYYMMDD_HHMM) ===
-    try:
-        from datetime import datetime
-        try:
-            from zoneinfo import ZoneInfo
-            dt = datetime.now(ZoneInfo("Asia/Seoul"))
-        except Exception:
-            dt = datetime.now()
-        ts = dt.strftime("%Y%m%d_%H%M")
+        import streamlit as st  # type: ignore
+        # 1) 직접 지정 키
+        for k in ("GDRIVE_BACKUP_FOLDER_ID", "BACKUP_FOLDER_ID", "gdrive_backup_folder_id"):
+            v = st.secrets.get(k)
+            if v:
+                return str(v)
+        # 2) 루트 ID가 있으면 그 아래에서 backup_zip 탐색
+        root_id = None
+        for k in ("GDRIVE_DATA_ROOT_FOLDER_ID", "DATA_ROOT_FOLDER_ID", "gdrive_data_root_folder_id"):
+            v = st.secrets.get(k)
+            if v:
+                root_id = str(v); break
+        if not (svc and root_id):
+            return None
+        q = f"'{root_id}' in parents and trashed=false and mimeType='application/vnd.google-apps.folder' and name='backup_zip'"
+        resp = svc.files().list(q=q, fields="files(id,name)", includeItemsFromAllDrives=True,
+                                supportsAllDrives=True, corpora="allDrives", pageSize=10).execute()
+        files = resp.get("files", [])
+        if files:
+            return files[0]["id"]
     except Exception:
-        ts = time.strftime("%Y%m%d_%H%M")
-
-    zip_name = f"backup_{ts}.zip"
-    zip_path = BACKUP_DIR / zip_name
-
-    # ZIP 구성
-    try:
-        with zipfile.ZipFile(str(zip_path), "w", compression=zipfile.ZIP_DEFLATED) as zf:
-            for fname in REQ_FILES:
-                p = None
-                if fname == "chunks.jsonl":
-                    p = PERSIST_DIR / "chunks.jsonl"
-                elif fname == "manifest.json":
-                    p = MANIFEST_PATH
-                elif fname == "quality_report.json":
-                    p = QUALITY_REPORT_PATH
-                else:
-                    cand = PERSIST_DIR / fname
-                    if cand.exists():
-                        p = cand
-                if p and p.exists():
-                    zf.write(str(p), arcname=fname)
-    except Exception as e:
-        st.warning(f"백업 ZIP 생성 경고: {type(e).__name__}: {e}")
-
-    # 업로드(옵션)
-    try:
-        if backup_folder_id:
-            return _upload_zip(service, backup_folder_id, zip_path, zip_name)
-    except Exception as e:
-        st.warning(f"백업 ZIP 업로드 경고: {type(e).__name__}: {e}")
-
+        pass
     return None
 
-
-# -------- NEW: Drive↔Local 비교/복구 헬퍼들 ----------------------------------
-def sha1_file(path: Path) -> Optional[str]:
-    """로컬 파일의 SHA-1 해시(16진) 계산. 없으면 None."""
-    try:
-        if not path.exists() or not path.is_file():
-            return None
-        h = hashlib.sha1()
-        with open(path, "rb") as f:
-            for chunk in iter(lambda: f.read(1024 * 1024), b""):
-                h.update(chunk)
-        return h.hexdigest()
-    except Exception:
+# ──────────────────────────────────────────────────────────────────────────────
+# 복구(Drive 최신 ZIP 우선)
+def _latest_drive_backup_zip(svc, backup_fid: str) -> Optional[Dict[str, Any]]:
+    """backup_zip 폴더의 최신 ZIP 파일 메타를 반환."""
+    resp = svc.files().list(
+        q=f"'{backup_fid}' in parents and trashed=false and mimeType!='application/vnd.google-apps.folder'",
+        fields="files(id,name,modifiedTime,createdTime,size,mimeType)",
+        includeItemsFromAllDrives=True, supportsAllDrives=True, corpora="allDrives", pageSize=1000
+    ).execute()
+    zips = [f for f in resp.get("files", []) if (f.get("name","").lower().endswith(".zip"))]
+    if not zips:
         return None
+    zips.sort(key=lambda x: x.get("modifiedTime") or x.get("createdTime") or "", reverse=True)
+    return zips[0]
 
-
-def sha1_in_zip_bytes(zip_bytes: bytes, member_name: str) -> Optional[str]:
-    """ZIP 바이트 안 특정 멤버의 SHA-1 해시 계산. 없거나 오류면 None."""
-    try:
-        with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
-            try:
-                with zf.open(member_name, "r") as m:
-                    h = hashlib.sha1()
-                    for chunk in iter(lambda: m.read(1024 * 1024), b""):
-                        h.update(chunk)
-                    return h.hexdigest()
-            except KeyError:
-                return None
-    except Exception:
-        return None
-
-
-def latest_backup_summary(service=None, backup_folder_id: Optional[str] = None, *, compute_hash: bool = False) -> Optional[Dict[str, Any]]:
-    """
-    백업 폴더의 최신 backup_*.zip 메타를 반환.
-    compute_hash=True이면 ZIP 내부 chunks.jsonl의 SHA-1도 함께 계산.
-    """
-    try:
-        svc = service or _drive_client()
-        bfid = _find_folder_id("BACKUP") or _find_folder_id("DEFAULT") or backup_folder_id
-        if not bfid:
-            return None
-        latest = _find_latest_zip(svc, bfid)
-        if not latest:
-            return None
-        info = {
-            "id": latest["id"],
-            "name": latest.get("name"),
-            "modifiedTime": latest.get("modifiedTime"),
-            "size": int(latest.get("size") or 0),
-            "folder_id": bfid,
-        }
-        if compute_hash:
-            try:
-                zbytes = _download_file_bytes(svc, latest["id"])
-                info["chunks_sha1"] = sha1_in_zip_bytes(zbytes, "chunks.jsonl")
-            except Exception:
-                info["chunks_sha1"] = None
-        return info
-    except Exception:
-        return None
-
-
-def compare_local_vs_backup(service=None, backup_folder_id: Optional[str] = None) -> Dict[str, Any]:
-    """
-    로컬 chunks.jsonl 해시와 최신 백업 ZIP 내부 chunks.jsonl 해시를 비교.
-    반환: { 'local_sha1':..., 'backup_sha1':..., 'same': bool, 'has_local': bool, 'has_backup': bool, 'meta': {...} }
-    """
-    svc = service or _drive_client()
-    meta = latest_backup_summary(svc, backup_folder_id, compute_hash=True)
-    local_path = PERSIST_DIR / "chunks.jsonl"
-    lsha = sha1_file(local_path)
-    bsha = meta.get("chunks_sha1") if meta else None
-    return {
-        "local_sha1": lsha,
-        "backup_sha1": bsha,
-        "same": (lsha is not None and bsha is not None and lsha == bsha),
-        "has_local": lsha is not None,
-        "has_backup": bsha is not None,
-        "meta": meta or {},
-    }
-
-
-def _atomic_write_bytes(path: Path, data: bytes) -> None:
-    """tmp에 쓰고 fsync 후 교체하여 안전하게 저장."""
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(tmp, "wb") as f:
-        f.write(data)
+def _safe_clear_dir(d: Path):
+    d.mkdir(parents=True, exist_ok=True)
+    for p in d.iterdir():
         try:
-            f.flush(); os.fsync(f.fileno())
+            if p.is_dir():
+                shutil.rmtree(p)
+            else:
+                p.unlink()
         except Exception:
             pass
-    os.replace(tmp, path)
 
-
-def restore_latest_backup_to_local(service=None, backup_folder_id: Optional[str] = None) -> Dict[str, Any]:
+def restore_latest_backup_to_local() -> Dict[str, Any]:
     """
-    최신 backup_*.zip을 내려받아 REQ_FILES만 로컬에 원자 복구.
-    ✅ 동시에 내려받은 ZIP을 BACKUP_DIR에도 캐시(보관)합니다.
-    성공 시 .ready 마커를 생성.
+    Drive backup_zip의 최신 ZIP을 로컬 PERSIST_DIR로 복구.
+    실패 시, 로컬 BACKUP_DIR의 최근 ZIP으로 폴백.
     반환 예:
-      {
-        "ok": True,
-        "restored": ["chunks.jsonl", "manifest.json", ...],
-        "backup_meta": {...},
-        "after_hash": {"chunks.jsonl": "...", ...},
-        "local_cache": "/home/.../.maic/backup/restored_backup_YYYYMMDD_HHMM.zip"
-      }
+      {"ok": True, "source": "drive|local", "zip_name": "...", "persist_dir": "..."}
+      {"ok": False, "error": "no_remote_backup|download_failed|extract_failed|no_local_backup"}
     """
-    try:
-        svc = service or _drive_client()
-        meta = latest_backup_summary(svc, backup_folder_id, compute_hash=False)
-        if not meta:
-            return {"ok": False, "error": "no_backup_found"}
+    svc = _drive_service()
+    backup_fid = _pick_backup_folder_id(svc)
+    chosen = None
+    source = None
 
-        # ZIP 바이트 다운로드
-        zbytes = _download_file_bytes(svc, meta["id"])
+    # 0) Drive에서 최신 ZIP 선택
+    if svc and backup_fid:
+        try:
+            chosen = _latest_drive_backup_zip(svc, backup_fid)
+            if chosen:
+                source = "drive"
+        except Exception:
+            chosen = None
 
-        # ✅ 로컬에도 캐시(요청 ②): restored_{원본이름} 형태로 저장
+    # 1) Drive 실패 시: 로컬 BACKUP_DIR의 최신 ZIP 선택
+    local_zip_path: Optional[Path] = None
+    if chosen is None:
         try:
             BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-            cache_name = f"restored_{meta.get('name','backup.zip')}"
-            local_cache = BACKUP_DIR / cache_name
-            _atomic_write_bytes(local_cache, zbytes)
-        except Exception:
-            local_cache = None  # 캐시 실패는 치명적이지 않음
-
-        restored: List[str] = []
-        after_hash: Dict[str, Optional[str]] = {}
-
-        with zipfile.ZipFile(io.BytesIO(zbytes)) as zf:
-            for fname in REQ_FILES:
-                try:
-                    with zf.open(fname, "r") as m:
-                        data = m.read()
-                        # 대상 경로 결정
-                        if fname == "chunks.jsonl":
-                            dst = PERSIST_DIR / "chunks.jsonl"
-                        elif fname == "manifest.json":
-                            dst = MANIFEST_PATH
-                        elif fname == "quality_report.json":
-                            dst = QUALITY_REPORT_PATH
-                        else:
-                            dst = PERSIST_DIR / fname
-                        _atomic_write_bytes(dst, data)
-                        restored.append(fname)
-                except KeyError:
-                    # ZIP에 해당 파일이 없으면 건너뜀
-                    continue
-
-        # 사후 해시 계산(있을 경우)
-        for fname in REQ_FILES:
-            if fname == "chunks.jsonl":
-                after_hash[fname] = sha1_file(PERSIST_DIR / "chunks.jsonl")
-            elif fname == "manifest.json":
-                after_hash[fname] = sha1_file(MANIFEST_PATH)
-            elif fname == "quality_report.json":
-                after_hash[fname] = sha1_file(QUALITY_REPORT_PATH)
-
-        # .ready 마커 생성
-        try:
-            PERSIST_DIR.mkdir(parents=True, exist_ok=True)
-            (PERSIST_DIR / ".ready").write_text(time.strftime("%Y-%m-%d %H:%M:%S") + " restored\n", encoding="utf-8")
+            zips = sorted(BACKUP_DIR.glob("*.zip"), key=lambda p: p.stat().st_mtime, reverse=True)
+            if zips:
+                local_zip_path = zips[0]
+                source = "local"
         except Exception:
             pass
 
-        out = {"ok": True, "restored": restored, "backup_meta": meta, "after_hash": after_hash}
-        if local_cache is not None:
-            out["local_cache"] = str(local_cache)
-        return out
+    if chosen is None and local_zip_path is None:
+        return {"ok": False, "error": "no_remote_backup"}
+
+    # 2) ZIP 데이터 가져오기
+    zip_bytes = None
+    zip_name = ""
+    if source == "drive" and chosen:
+        try:
+            from googleapiclient.http import MediaIoBaseDownload  # type: ignore
+            req = svc.files().get_media(fileId=chosen["id"])
+            buf = io.BytesIO()
+            downloader = MediaIoBaseDownload(fd=buf, request=req)
+            done = False
+            while not done:
+                _, done = downloader.next_chunk()
+            zip_bytes = buf.getvalue()
+            zip_name = chosen.get("name", "backup.zip")
+        except Exception:
+            # Drive 다운로드 실패 → 로컬 폴백 시도
+            zip_bytes = None
+            chosen = None
+    if zip_bytes is None and local_zip_path:
+        try:
+            zip_bytes = local_zip_path.read_bytes()
+            zip_name = local_zip_path.name
+            source = "local"
+        except Exception:
+            return {"ok": False, "error": "no_local_backup"}
+
+    # 3) PERSIST_DIR 정리 후 압축 해제 + .ready 생성
+    try:
+        _safe_clear_dir(Path(PERSIST_DIR))
+        with zipfile.ZipFile(io.BytesIO(zip_bytes), "r") as zf:
+            zf.extractall(str(PERSIST_DIR))
+        # .ready 마커 생성(시간 포함)
+        (Path(PERSIST_DIR) / ".ready").write_text(
+            dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), encoding="utf-8"
+        )
     except Exception as e:
-        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        return {"ok": False, "error": f"extract_failed:{type(e).__name__}"}
+
+    # 4) 복구에 사용한 ZIP을 로컬에도 캐시 저장(드라이브 소스인 경우)
+    try:
+        if source == "drive":
+            BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+            ts = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+            (BACKUP_DIR / f"restored_{ts}.zip").write_bytes(zip_bytes or b"")
+    except Exception:
+        pass
+
+    return {"ok": True, "source": source, "zip_name": zip_name, "persist_dir": str(PERSIST_DIR)}
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 백업 ZIP 업로드(동일 폴더 ID 사용)
+def _make_and_upload_backup_zip(_: Any = None, __: Any = None) -> Dict[str, Any]:
+    """
+    PERSIST_DIR 내용을 ZIP으로 만들어 Drive backup_zip 폴더에 업로드.
+    업로드/복구가 동일 폴더 ID를 사용하도록 _pick_backup_folder_id를 공유.
+    """
+    svc = _drive_service()
+    backup_fid = _pick_backup_folder_id(svc)
+    if not (svc and backup_fid):
+        return {"ok": False, "error": "no_backup_folder_id"}
+
+    # ZIP 만들기 (메모리)
+    try:
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+            base = Path(PERSIST_DIR)
+            if not base.exists():
+                return {"ok": False, "error": "persist_dir_missing"}
+            for p in base.rglob("*"):
+                if p.is_dir():
+                    continue
+                arc = str(p.relative_to(base))
+                zf.write(str(p), arcname=arc)
+        buf.seek(0)
+    except Exception as e:
+        return {"ok": False, "error": f"zip_create_failed:{type(e).__name__}"}
+
+    # Drive 업로드
+    try:
+        from googleapiclient.http import MediaIoBaseUpload  # type: ignore
+        ts = dt.datetime.now().strftime("%Y%m%d_%H%M")
+        filename = f"backup_{ts}.zip"
+        media = MediaIoBaseUpload(buf, mimetype="application/zip", resumable=True)
+        meta = {"name": filename, "parents": [backup_fid]}
+        file = svc.files().create(body=meta, media_body=media, fields="id,name").execute()
+        # 로컬 캐시도 남김
+        BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+        (BACKUP_DIR / filename).write_bytes(buf.getvalue())
+        return {"ok": True, "file_id": file.get("id"), "name": file.get("name")}
+    except Exception as e:
+        return {"ok": False, "error": f"upload_failed:{type(e).__name__}"}
+# ===== [08] END ===============================================================
+
+
 
 # ===== [09] QUICK PRECHECK (내용 중심, 변경 여부만 빠르게) ======================
 from pathlib import Path
