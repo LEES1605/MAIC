@@ -371,38 +371,97 @@ def render_brain_prep_main():
 # ===== [05B] TAG DIAGNOSTICS (NEW) ==========================================
 def render_tag_diagnostics():
     """
-    서버의 ~/.maic/persist/chunks.jsonl을 직접 읽어서
-    grammar_tags 필드 존재 여부와 샘플을 보여주는 임시 진단 패널.
+    실제 인덱스 빌드 설정(src.rag.index_build의 PERSIST_DIR)을 사용하여
+    chunks.jsonl, quality_report.json 경로/존재 여부를 점검하고 샘플을 보여주는 패널.
     """
     import json as _json
+    import importlib
     from pathlib import Path as _P
 
+    # --- 실제 경로 바인딩: src.rag.index_build에서 가져오되, 실패 시 폴백 ---
+    _persist_dir = None
+    _quality_report_path = None
+    _backup_dir = None
+    _mod_err = None
+    try:
+        _mod = importlib.import_module("src.rag.index_build")
+        _persist_dir = getattr(_mod, "PERSIST_DIR", None)
+        _quality_report_path = getattr(_mod, "QUALITY_REPORT_PATH", None)
+        _app_data_dir = getattr(_mod, "APP_DATA_DIR", _P.home() / ".maic")
+        _backup_dir = _app_data_dir / "backup"
+    except Exception as e:
+        _mod_err = f"{type(e).__name__}: {e}"
+
+    if _persist_dir is None:
+        _persist_dir = _P.home() / ".maic" / "persist"
+    if _quality_report_path is None:
+        _quality_report_path = _P.home() / ".maic" / "quality_report.json"
+    if _backup_dir is None:
+        _backup_dir = _P.home() / ".maic" / "backup"
+
+    _chunks_path = _persist_dir / "chunks.jsonl"
+
     st.markdown("### 🧪 태그 확인(임시 진단)")
-    base = _P.home() / ".maic" / "persist"
-    path = base / "chunks.jsonl"
+    cols = st.columns([0.55, 0.45])
 
-    c1, c2 = st.columns([0.6, 0.4])
-    with c1:
-        st.caption(f"경로: `{path}`")
-    with c2:
-        if path.exists():
+    # 왼쪽: 경로/상태 요약 -----------------------------------------------------
+    with cols[0]:
+        st.caption("**실제 경로(설정값 기준)**")
+        st.code(
+            f"PERSIST_DIR         = {str(_persist_dir)}\n"
+            f"chunks.jsonl        = {str(_chunks_path)}\n"
+            f"QUALITY_REPORT_PATH = {str(_quality_report_path)}\n"
+            f"BACKUP_DIR          = {str(_backup_dir)}",
+            language="bash",
+        )
+        if _mod_err:
+            st.warning("경고: src.rag.index_build 모듈 임포트에 실패하여 폴백 경로를 사용했습니다.\n\n" + _mod_err)
+
+        # 존재 여부 뱃지
+        c1, c2, c3 = st.columns(3)
+        c1.metric("chunks.jsonl", "있음 ✅" if _chunks_path.exists() else "없음 ❌")
+        c2.metric("quality_report.json", "있음 ✅" if _quality_report_path.exists() else "없음 ❌")
+        c3.metric("backup 디렉토리", "있음 ✅" if _backup_dir.exists() else "없음 ❌")
+
+    # 오른쪽: 파일 크기/목록 ---------------------------------------------------
+    with cols[1]:
+        st.caption("**파일 크기(있을 경우)**")
+        try:
+            if _chunks_path.exists():
+                size_mb = _chunks_path.stat().st_size / (1024 * 1024)
+                st.write(f"- chunks.jsonl: 약 {size_mb:.2f} MB")
+            if _quality_report_path.exists():
+                size_kb = _quality_report_path.stat().st_size / 1024
+                st.write(f"- quality_report.json: 약 {size_kb:.1f} KB")
+        except Exception:
+            pass
+
+        with st.expander("📦 백업 ZIP 목록(최신 5개)"):
             try:
-                size_mb = path.stat().st_size / (1024 * 1024)
-                st.caption(f"파일 크기: 약 {size_mb:.2f} MB")
-            except Exception:
-                pass
+                zips = []
+                if _backup_dir.exists():
+                    for p in sorted(_backup_dir.glob("backup_*.zip"), key=lambda x: x.stat().st_mtime, reverse=True):
+                        zips.append({"file": p.name, "size_MB": round(p.stat().st_size / (1024 * 1024), 2)})
+                if zips:
+                    st.dataframe(zips, use_container_width=True, hide_index=True)
+                else:
+                    st.caption("백업 ZIP을 찾지 못했습니다.")
+            except Exception as e:
+                st.error(f"백업 목록 확인 실패: {type(e).__name__}: {e}")
 
-    if not path.exists():
-        st.info("아직 파일이 없어요. 먼저 **사전점검 → 재최적화 실행**으로 인덱스를 만든 뒤 다시 확인해 주세요.")
-        return
+    st.divider()
 
-    # 설정
+    # 읽기 옵션
     max_preview = st.slider("미리보기 라인 수", 1, 50, 5, key="diag_preview_lines")
     max_scan = st.slider("스캔 라인 수(존재 여부 집계)", 50, 5000, 1000, step=50, key="diag_scan_lines")
 
+    # 버튼: 열어서 확인 --------------------------------------------------------
     if st.button("열어서 확인", type="primary", key="btn_diag_open"):
+        if not _chunks_path.exists():
+            st.error("chunks.jsonl 파일을 찾지 못했습니다. 먼저 **사전점검 → 재최적화**를 실행해 주세요.")
+            return
         try:
-            lines = path.read_text(encoding="utf-8").splitlines()
+            lines = _chunks_path.read_text(encoding="utf-8", errors="ignore").splitlines()
         except Exception as e:
             st.error(f"파일 읽기 실패: {type(e).__name__}: {e}")
             return
@@ -421,6 +480,7 @@ def render_tag_diagnostics():
             if len(samples) < max_preview:
                 samples.append({
                     "doc_id": obj.get("doc_id"),
+                    "doc_name": obj.get("doc_name"),
                     "chunk_index": obj.get("chunk_index"),
                     "grammar_tags": obj.get("grammar_tags", None),
                 })
@@ -443,10 +503,17 @@ def render_tag_diagnostics():
             try:
                 st.download_button(
                     label="chunks.jsonl 다운로드",
-                    data=path.read_bytes(),
+                    data=_chunks_path.read_bytes(),
                     file_name="chunks.jsonl",
                     mime="application/json",
                 )
+                if _quality_report_path.exists():
+                    st.download_button(
+                        label="quality_report.json 다운로드",
+                        data=_quality_report_path.read_bytes(),
+                        file_name="quality_report.json",
+                        mime="application/json",
+                    )
             except Exception as e:
                 st.error(f"다운로드 준비 실패: {type(e).__name__}: {e}")
 
