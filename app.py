@@ -751,6 +751,7 @@ def main():
             _restore_latest_backup_to_local = getattr(_mod, "restore_latest_backup_to_local", None)
             _make_and_upload_backup_zip_fn = getattr(_mod, "_make_and_upload_backup_zip", None)
         except Exception:
+            # ⚠️ _mod가 없을 수 있으니 이후에 절대 참조하지 않도록 주의!
             _PERSIST_DIR = Path.home() / ".maic" / "persist"
             _MANIFEST_PATH = Path.home() / ".maic" / "manifest.json"
             _QUALITY_REPORT_PATH = Path.home() / ".maic" / "quality_report.json"
@@ -835,8 +836,8 @@ def main():
     def _restore_then_attach():
         import importlib
         try:
-            _mod = importlib.import_module("src.rag.index_build")
-            _restore = getattr(_mod, "restore_latest_backup_to_local", None)
+            _mod2 = importlib.import_module("src.rag.index_build")
+            _restore = getattr(_mod2, "restore_latest_backup_to_local", None)
         except Exception:
             _restore = None
         if _restore is None:
@@ -892,12 +893,12 @@ def main():
             st.error(f"재최적화 실패: {type(e).__name__}: {e}")
             return False
 
-    # 의사결정 로그 출력
+    # 의사결정 로그 출력  ← ✅ 여기서 _mod를 쓰지 말고 _PERSIST_DIR만 사용
     if plan:
         decision_log.info(
             "auto-boot: plan=`{}` | reasons={} | has_local={} has_backup={} same_hash={} | path={}".format(
                 plan, _ctx.get("reason"), bool(cmpres.get("has_local")), bool(cmpres.get("has_backup")),
-                bool(cmpres.get("same")), getattr(_mod, "PERSIST_DIR", _PERSIST_DIR)
+                bool(cmpres.get("same")), _PERSIST_DIR
             )
         )
 
@@ -936,6 +937,10 @@ def main():
 
     # (4) QA 데모
     render_simple_qa()
+
+if __name__ == "__main__":
+    main()
+
 
 if __name__ == "__main__":
     main()
