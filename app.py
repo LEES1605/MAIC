@@ -763,6 +763,7 @@ def render_simple_qa():
 # ===== [07] MAIN =============================================================
 def main():
     # (A) 호환성 shim -----------------------------------------------------------
+    # (기존 코드 호환: 일부 렌더 함수가 _index_ready()를 참조할 수 있으므로 유지)
     def _index_ready() -> bool:
         try:
             return get_index_status() == "ready"
@@ -799,28 +800,26 @@ def main():
 
     _render_title_with_status()
 
-    # (1) 관리자 모드: 사전점검 먼저 ------------------------------------------------
+    # (1) 관리자 모드: 사전점검(내용 중심) 먼저 → 변경 있으면 질문 ----------------------
     import importlib as _importlib
     from pathlib import Path as _Path
+
     _mod = None
     _quick_precheck = None
-    _compare_local_vs_backup = None
     _PERSIST_DIR = _Path.home() / ".maic" / "persist"
+
     try:
         _mod = _importlib.import_module("src.rag.index_build")
         _quick_precheck = getattr(_mod, "quick_precheck", None)
-        _compare_local_vs_backup = getattr(_mod, "compare_local_vs_backup", None)
         _PERSIST_DIR = getattr(_mod, "PERSIST_DIR", _PERSIST_DIR)
     except Exception:
         pass
 
-    def _has_local_index_files() -> bool:
-        return (_PERSIST_DIR / "chunks.jsonl").exists() or (_PERSIST_DIR / ".ready").exists()
-
-    # 1-1) 빠른 변경 감지(내용 중심)
+    # 변경 감지 (prepared vs 마지막 인덱싱 manifest)
     pre = {}
-    if _quick_precheck is not None:
+    if callable(_quick_precheck):
         try:
+            # 준비 폴더 ID를 비워두면 모듈 내부 기본값/환경설정으로 처리되도록 유지
             pre = _quick_precheck("")
         except Exception as e:
             st.warning(f"사전점검 실패: {type(e).__name__}: {e}")
@@ -828,20 +827,10 @@ def main():
     changed_flag = bool(pre.get("changed"))
     reasons_list = list(pre.get("reasons") or [])
 
-    # 1-2) 로컬/백업 상태
-    cmpres = {}
-    if _compare_local_vs_backup is not None:
-        try:
-            cmpres = _compare_local_vs_backup() or {}
-        except Exception:
-            cmpres = {}
-    has_local  = bool(cmpres.get("has_local")) or _has_local_index_files()
-    has_backup = bool(cmpres.get("has_backup"))
-    same_hash  = bool(cmpres.get("same"))
-
     # 유틸: 연결/복구/빌드 ---------------------------------------------------------
     import time
     def _attach_with_status(label="두뇌 자동 연결 중…") -> bool:
+        """로컬에 있는 인덱스로 세션 부착(복구 이후 호출 가정)."""
         try:
             with st.status(label, state="running") as s:
                 bar = st.progress(0)
@@ -853,6 +842,7 @@ def main():
                     s.update(label="두뇌 자동 연결 완료 ✅", state="complete")
                 else:
                     s.update(label="두뇌 자동 연결 실패 ❌", state="error")
+                # 최초 페인트 동기화
                 if ok and not st.session_state.get("_post_attach_rerun_done"):
                     st.session_state["_post_attach_rerun_done"] = True
                     st.rerun()
@@ -872,24 +862,42 @@ def main():
             return bool(ok)
 
     def _restore_then_attach():
+        """항상 최신 백업 ZIP을 정본으로 복구 → attach (관리자 모드 기본 전략)."""
+        import importlib
         try:
-            _restore = getattr(_mod, "restore_latest_backup_to_local", None) if _mod else None
-        except Exception:
-            _restore = None
-        if _restore is None:
-            st.error("복구 모듈을 찾지 못했습니다. (restore_latest_backup_to_local)")
+            _m = importlib.import_module("src.rag.index_build")
+        except Exception as e:
+            st.error(f"복구 모듈 임포트 실패: {type(e).__name__}: {e}")
             return False
+
+        _restore = getattr(_m, "restore_latest_backup_to_local", None)
+        if not callable(_restore):
+            st.error("복구 함수를 찾지 못했습니다. (restore_latest_backup_to_local)")
+            return False
+
         with st.status("백업에서 로컬로 복구 중…", state="running") as s:
-            r = _restore()
+            try:
+                r = _restore()
+            except Exception as e:
+                s.update(label="복구 실패 ❌", state="error")
+                st.error(f"복구 실패: {type(e).__name__}: {e}")
+                return False
+
             if not r or not r.get("ok"):
                 s.update(label="복구 실패 ❌", state="error")
                 st.error(f"복구 실패: {r.get('error') if r else 'unknown'}")
                 return False
+
             s.update(label="복구 완료 ✅", state="complete")
+
+        # 복구 성공 → 로컬로 부착
         return _attach_with_status("복구 후 두뇌 연결 중…")
 
     def _build_then_backup_then_attach():
-        """안전 임포트로 빌드 실행 → 백업 업로드 → 연결."""
+        """
+        업데이트(다시 최적화) 실행 → 새 백업 ZIP 업로드 → 그 ZIP으로 복구 → attach.
+        (항상 백업 ZIP을 정본으로 사용)
+        """
         import importlib
         from pathlib import Path as __Path
         try:
@@ -927,13 +935,16 @@ def main():
                     _ = _make_and_upload_backup_zip_fn(None, None)
             except Exception:
                 pass
-            return _attach_with_status("다시 최적화 후 두뇌 연결 중…")
+            # 새 백업을 정본으로 다시 복구하여 일관성 확보
+            if _restore_then_attach():
+                return True
+            # 복구가 실패하면 로컬에 바로 붙이는 폴백
+            return _attach_with_status("두뇌 연결 중…")
         except Exception as e:
             st.error(f"다시 최적화 실패: {type(e).__name__}: {e}")
             return False
 
-    # (2) 변경 여부에 따른 분기 ----------------------------------------------------
-    # 2-1) 변경 있음 → 먼저 질문
+    # (2) 변경 있음 → 먼저 질문, 없으면 곧장 복구 -----------------------------------
     if changed_flag and not st.session_state.get("_admin_update_prompt_done"):
         with st.container(border=True):
             if "no_local_manifest" in reasons_list:
@@ -955,53 +966,28 @@ def main():
 
         if later:
             st.session_state["_admin_update_prompt_done"] = True
-            # C안: 로컬≠백업이면 '백업 복구'가 기본
-            if has_local:
-                if same_hash:
-                    if _attach_with_status("로컬 인덱스에 연결 중…"):
-                        st.rerun()
-                    else:
-                        st.stop()
-                else:
-                    if _restore_then_attach():
-                        st.rerun()
-                    else:
-                        st.stop()
-            elif has_backup:
-                if _restore_then_attach():
-                    st.rerun()
-                else:
-                    st.stop()
+            # 합의: 항상 최신 백업 ZIP으로 복구 후 연결
+            if _restore_then_attach():
+                st.rerun()
             else:
-                st.error("로컬/백업 모두 없어 연결할 수 없습니다. 먼저 ‘업데이트(다시 최적화)’를 실행해 주세요.")
+                # 백업 없음/손상 → 상황 안내 + 업데이트 유도
+                st.info("백업을 찾지 못했거나 손상되었습니다. ‘업데이트(다시 최적화)’를 실행해 주세요.")
                 st.stop()
 
+        # 질문이 떠 있는 동안은 아래 로직 실행하지 않음
         st.stop()
 
-    # 2-2) 변경 없음 → 로컬/백업 검사로 진행
+    # (3) 변경 없음 → 항상 최신 백업 ZIP으로 복구 시도 ------------------------------
     decision_log = st.empty()
-    decision_log.info(
-        "auto-boot(admin): changed={} reasons={} | has_local={} has_backup={} same_hash={}".format(
-            changed_flag, reasons_list, has_local, has_backup, same_hash
-        )
-    )
+    decision_log.info("auto-boot(admin): changed={} reasons={}".format(changed_flag, reasons_list))
 
     if _index_ready():
         _render_title_with_status()
     else:
-        if has_local:
-            # C안: 동일하면 바로 연결, 다르면 '백업 복구'가 기본
-            if same_hash:
-                _attach_with_status()
-            elif has_backup:
-                _restore_then_attach()
-            else:
-                # 백업이 없으면 연결만 우선(학원 운영상 즉시 사용 보장)
-                _attach_with_status("로컬 인덱스에 연결 중…")
-        elif has_backup:
-            _restore_then_attach()
+        if _restore_then_attach():
+            st.rerun()
         else:
-            st.info("현재 인덱스가 없습니다. ‘업데이트(다시 최적화 실행)’을 눌러 최초 빌드를 진행해 주세요.")
+            st.info("백업을 찾지 못했거나 손상되었습니다. ‘업데이트(다시 최적화)’를 실행해 주세요.")
             btn = st.button("업데이트 (다시 최적화 실행)", type="primary", key="boot_build_first")
             if btn:
                 if _build_then_backup_then_attach():
@@ -1009,7 +995,7 @@ def main():
                 else:
                     st.stop()
 
-    # (3) 관리자 화면 섹션 ---------------------------------------------------------
+    # (4) 관리자 화면 섹션 ---------------------------------------------------------
     render_brain_prep_main()
     st.divider()
     render_tag_diagnostics()
