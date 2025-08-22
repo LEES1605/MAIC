@@ -512,7 +512,21 @@ def _quality_report(manifest: Dict[str, Any], extra_counts: Optional[Dict[str, i
     반환값: 리포트 딕셔너리
     """
     report: Dict[str, Any] = {}
-    report["generated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+
+    # ✅ generated_at을 KST(Asia/Seoul) 기준으로 통일
+    try:
+        from datetime import datetime
+        try:
+            from zoneinfo import ZoneInfo  # Python 3.9+
+            dt = datetime.now(ZoneInfo("Asia/Seoul"))
+        except Exception:
+            # zoneinfo 미지원 환경에서는 로컬시간으로 폴백
+            dt = datetime.now()
+        report["generated_at"] = dt.strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        # 최후 폴백
+        report["generated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+
     report["manifest_docs"] = len(manifest or {})
 
     # 기본 통계(빌드 단계에서 넘어온 카운터를 그대로 기록)
