@@ -201,6 +201,14 @@ def render_brain_prep_main():
                         if build_index_with_checkpoint is None:
                             st.error("인덱스 빌더 모듈을 찾지 못했습니다. (src.rag.index_build)")
                         else:
+                            # 🔗 실제 PERSIST_DIR 경로 바인딩
+                            import importlib
+                            try:
+                                _mod = importlib.import_module("src.rag.index_build")
+                                _persist_dir_arg = str(getattr(_mod, "PERSIST_DIR"))
+                            except Exception:
+                                _persist_dir_arg = ""  # 최후 폴백
+
                             prog = st.progress(0)
                             log = st.empty()
 
@@ -219,7 +227,7 @@ def render_brain_prep_main():
                                         update_msg=_msg,
                                         gdrive_folder_id="",
                                         gcp_creds={},
-                                        persist_dir="",
+                                        persist_dir=_persist_dir_arg,  # ✅ 경로 고정
                                         remote_manifest={},
                                     )
                                     prog.progress(100)
@@ -250,7 +258,7 @@ def render_brain_prep_main():
                             except Exception as e:
                                 st.error(f"최적화 실패: {type(e).__name__}: {e}")
 
-                # 2차 CTA: 지금은 연결만  ← 여기 상태상자/진행바 복원
+                # 2차 CTA: 지금은 연결만  ← 상태상자/진행바
                 with c2:
                     if st.button("지금은 연결만", key="cta_connect_anyway"):
                         try:
@@ -275,7 +283,7 @@ def render_brain_prep_main():
                                 st.error("두뇌 연결 실패. 먼저 재최적화를 실행해 인덱스를 만들어 주세요.")
 
             else:
-                # 변경 없음 → 1차 CTA: 바로 연결  ← 여기 상태상자/진행바 복원
+                # 변경 없음 → 1차 CTA: 바로 연결  ← 상태상자/진행바
                 with c1:
                     if st.button("🧠 두뇌 연결", type="primary", key="cta_connect"):
                         try:
