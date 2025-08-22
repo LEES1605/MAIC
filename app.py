@@ -288,6 +288,88 @@ def render_brain_prep_main():
                         st.session_state.pop("_precheck_res", None)
                     except Exception as e:
                         st.error(f"최적화 실패: {type(e).__name__}: {e}")
+# ===== [05B] TAG DIAGNOSTICS (NEW) ==========================================
+def render_tag_diagnostics():
+    """
+    서버의 ~/.maic/persist/chunks.jsonl을 직접 읽어서
+    grammar_tags 필드 존재 여부와 샘플을 보여주는 임시 진단 패널.
+    """
+    import json as _json
+    from pathlib import Path as _P
+
+    st.markdown("### 🧪 태그 확인(임시 진단)")
+    base = _P.home() / ".maic" / "persist"
+    path = base / "chunks.jsonl"
+
+    c1, c2 = st.columns([0.6, 0.4])
+    with c1:
+        st.caption(f"경로: `{path}`")
+    with c2:
+        if path.exists():
+            try:
+                size_mb = path.stat().st_size / (1024 * 1024)
+                st.caption(f"파일 크기: 약 {size_mb:.2f} MB")
+            except Exception:
+                pass
+
+    if not path.exists():
+        st.info("아직 파일이 없어요. 먼저 **사전점검 → 재최적화 실행**으로 인덱스를 만든 뒤 다시 확인해 주세요.")
+        return
+
+    # 설정
+    max_preview = st.slider("미리보기 라인 수", 1, 50, 5, key="diag_preview_lines")
+    max_scan = st.slider("스캔 라인 수(존재 여부 집계)", 50, 5000, 1000, step=50, key="diag_scan_lines")
+
+    if st.button("열어서 확인", type="primary", key="btn_diag_open"):
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except Exception as e:
+            st.error(f"파일 읽기 실패: {type(e).__name__}: {e}")
+            return
+
+        has_field = 0
+        samples = []
+        scan_n = min(max_scan, len(lines))
+
+        for i, ln in enumerate(lines[:scan_n]):
+            try:
+                obj = _json.loads(ln)
+            except Exception:
+                continue
+            if "grammar_tags" in obj:
+                has_field += 1
+            if len(samples) < max_preview:
+                samples.append({
+                    "doc_id": obj.get("doc_id"),
+                    "chunk_index": obj.get("chunk_index"),
+                    "grammar_tags": obj.get("grammar_tags", None),
+                })
+
+        st.success(f"스캔 완료: 총 {scan_n}줄 중 **grammar_tags** 필드가 보인 줄: **{has_field}**")
+        st.caption("※ 0이어도 ‘필드가 전혀 없다’는 뜻은 아닙니다. 스캔 구간에 해당 줄이 없을 수 있어요. 아래 미리보기를 확인하세요.")
+
+        # 표 미리보기
+        if samples:
+            st.dataframe(samples, use_container_width=True, hide_index=True)
+        else:
+            st.warning("미리보기 구간에서 파싱 가능한 샘플을 찾지 못했습니다.")
+
+        # 원시 JSONL 일부
+        with st.expander("원시 JSONL 일부 보기(상위 미리보기)"):
+            st.code("\n".join(lines[:max_preview]), language="json")
+
+        # 다운로드(옵션)
+        with st.expander("파일 내려받기"):
+            try:
+                st.download_button(
+                    label="chunks.jsonl 다운로드",
+                    data=path.read_bytes(),
+                    file_name="chunks.jsonl",
+                    mime="application/json",
+                )
+            except Exception as e:
+                st.error(f"다운로드 준비 실패: {type(e).__name__}: {e}")
+
 
 # ===== [06] SIMPLE QA DEMO (mode-aware, ENTER SUBMIT, CHAT-AREA SPINNER) =====
 def _sentence_quick_fix(user_q: str) -> List[Tuple[str, str]]:
@@ -411,6 +493,12 @@ def render_simple_qa():
 def main():
     render_brain_prep_main()
     st.divider()
+
+    # (NEW) 태그 진단 패널
+    render_tag_diagnostics()
+    st.divider()
+
+    # 기존 QA 데모
     render_simple_qa()
 
 if __name__ == "__main__":
