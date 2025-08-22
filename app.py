@@ -791,7 +791,7 @@ def main():
         """
         html = f"""
         <div class="topbar">
-          <div class="title">LEES AI Teacher — V1.0</div>
+          <div class="title">AI Teacher — MAIC</div>
           <div>{badge}</div>
         </div>
         """
@@ -799,7 +799,7 @@ def main():
 
     _render_title_with_status()
 
-    # (1) 관리자 모드: 사전점검 먼저 → 질문 ---------------------------------------
+    # (1) 관리자 모드: 사전점검 먼저 ------------------------------------------------
     import importlib as _importlib
     from pathlib import Path as _Path
     _mod = None
@@ -817,7 +817,7 @@ def main():
     def _has_local_index_files() -> bool:
         return (_PERSIST_DIR / "chunks.jsonl").exists() or (_PERSIST_DIR / ".ready").exists()
 
-    # 1-1) 빠른 변경 감지
+    # 1-1) 빠른 변경 감지(내용 중심)
     pre = {}
     if _quick_precheck is not None:
         try:
@@ -839,53 +839,7 @@ def main():
     has_backup = bool(cmpres.get("has_backup"))
     same_hash  = bool(cmpres.get("same"))
 
-    # 1-3) 변경이 있다고 나오면 '즉시 질문' (이유별 문구 분기)
-    if changed_flag and not st.session_state.get("_admin_update_prompt_done"):
-        with st.container(border=True):
-            if "no_local_manifest" in reasons_list:
-                st.info("📎 아직 인덱스가 없습니다. **최초 빌드가 필요**합니다.")
-            else:
-                st.info("📎 prepared 폴더에서 **새 자료(변경/신규)** 가 감지되었습니다.")
-            c1, c2 = st.columns(2)
-            with c1:
-                do_update = st.button("업데이트 (다시 최적화 실행)", type="primary", key="admin_update_now")
-            with c2:
-                later = st.button("다음에 업데이트", key="admin_update_later")
-
-        if do_update:
-            st.session_state["_admin_update_prompt_done"] = True
-            _run_res = _build_then_backup_then_attach()
-            if _run_res:
-                st.rerun()
-            else:
-                st.stop()
-
-        if later:
-            st.session_state["_admin_update_prompt_done"] = True
-            if has_local:
-                if has_backup and not same_hash:
-                    st.warning("로컬과 백업 내용이 다릅니다. (기존 로컬로 연결합니다)")
-                _ = _attach_with_status("로컬 인덱스에 연결 중…")
-                st.rerun()
-            elif has_backup:
-                if _restore_then_attach():
-                    st.rerun()
-                else:
-                    st.stop()
-            else:
-                st.error("로컬/백업 모두 없어 연결할 수 없습니다. 먼저 ‘업데이트(다시 최적화)’를 실행해 주세요.")
-                st.stop()
-
-        st.stop()
-
-    # (2) 변경이 없거나 질문 처리 후 → 일반 플로우 ---------------------------------
-    decision_log = st.empty()
-    decision_log.info(
-        "auto-boot(admin): changed={} reasons={} | has_local={} has_backup={} same_hash={}".format(
-            changed_flag, reasons_list, has_local, has_backup, same_hash
-        )
-    )
-
+    # 유틸: 연결/복구/빌드 ---------------------------------------------------------
     import time
     def _attach_with_status(label="두뇌 자동 연결 중…") -> bool:
         try:
@@ -935,10 +889,7 @@ def main():
         return _attach_with_status("복구 후 두뇌 연결 중…")
 
     def _build_then_backup_then_attach():
-        """
-        안전 임포트: 함수 스코프에서 모듈을 로드하고 build 함수를 가져온다.
-        전역 심볼 유무에 관계없이 동작하도록 처리.
-        """
+        """안전 임포트로 빌드 실행 → 백업 업로드 → 연결."""
         import importlib
         from pathlib import Path as __Path
         try:
@@ -981,17 +932,82 @@ def main():
             st.error(f"다시 최적화 실패: {type(e).__name__}: {e}")
             return False
 
-    # (2.2) 일반 플로우: 로컬 > 백업 > 빌드 --------------------------------------
+    # (2) 변경 여부에 따른 분기 ----------------------------------------------------
+    # 2-1) 변경 있음 → 먼저 질문
+    if changed_flag and not st.session_state.get("_admin_update_prompt_done"):
+        with st.container(border=True):
+            if "no_local_manifest" in reasons_list:
+                st.info("📎 아직 인덱스가 없습니다. **최초 빌드가 필요**합니다.")
+            else:
+                st.info("📎 prepared 폴더에서 **새 자료(변경/신규)** 가 감지되었습니다.")
+            c1, c2 = st.columns(2)
+            with c1:
+                do_update = st.button("업데이트 (다시 최적화 실행)", type="primary", key="admin_update_now")
+            with c2:
+                later = st.button("다음에 업데이트", key="admin_update_later")
+
+        if do_update:
+            st.session_state["_admin_update_prompt_done"] = True
+            if _build_then_backup_then_attach():
+                st.rerun()
+            else:
+                st.stop()
+
+        if later:
+            st.session_state["_admin_update_prompt_done"] = True
+            # C안: 로컬≠백업이면 '백업 복구'가 기본
+            if has_local:
+                if same_hash:
+                    if _attach_with_status("로컬 인덱스에 연결 중…"):
+                        st.rerun()
+                    else:
+                        st.stop()
+                else:
+                    if _restore_then_attach():
+                        st.rerun()
+                    else:
+                        st.stop()
+            elif has_backup:
+                if _restore_then_attach():
+                    st.rerun()
+                else:
+                    st.stop()
+            else:
+                st.error("로컬/백업 모두 없어 연결할 수 없습니다. 먼저 ‘업데이트(다시 최적화)’를 실행해 주세요.")
+                st.stop()
+
+        st.stop()
+
+    # 2-2) 변경 없음 → 로컬/백업 검사로 진행
+    decision_log = st.empty()
+    decision_log.info(
+        "auto-boot(admin): changed={} reasons={} | has_local={} has_backup={} same_hash={}".format(
+            changed_flag, reasons_list, has_local, has_backup, same_hash
+        )
+    )
+
     if _index_ready():
         _render_title_with_status()
     else:
         if has_local:
-            _attach_with_status()
+            # C안: 동일하면 바로 연결, 다르면 '백업 복구'가 기본
+            if same_hash:
+                _attach_with_status()
+            elif has_backup:
+                _restore_then_attach()
+            else:
+                # 백업이 없으면 연결만 우선(학원 운영상 즉시 사용 보장)
+                _attach_with_status("로컬 인덱스에 연결 중…")
         elif has_backup:
             _restore_then_attach()
         else:
-            # 최초 빌드 필요(로컬/백업 모두 없음)
             st.info("현재 인덱스가 없습니다. ‘업데이트(다시 최적화 실행)’을 눌러 최초 빌드를 진행해 주세요.")
+            btn = st.button("업데이트 (다시 최적화 실행)", type="primary", key="boot_build_first")
+            if btn:
+                if _build_then_backup_then_attach():
+                    st.rerun()
+                else:
+                    st.stop()
 
     # (3) 관리자 화면 섹션 ---------------------------------------------------------
     render_brain_prep_main()
