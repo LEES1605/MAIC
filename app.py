@@ -809,7 +809,7 @@ def main():
         # ② 새 자료 감지(사전점검) — 이미 (1)에서 계산됨
         _ctx["pre"] = st.session_state.get("_precheck_res")
 
-        # ③ 결정: attach / restore / ask / build
+        # ③ 결정: attach / restore / ask / build   ← ★ 의사결정 트리 단순화/수정
         plan = "attach"
         reason = []
 
@@ -817,20 +817,20 @@ def main():
         has_local = bool(cmpres.get("has_local"))
         has_backup = bool(cmpres.get("has_backup"))
         same_hash = bool(cmpres.get("same"))
+        would = bool((_ctx.get("pre") or {}).get("would_rebuild"))
 
-        if has_local and not has_backup:
-            plan = "attach"; reason.append("local_only")
-        elif has_local and has_backup and same_hash:
-            plan = "attach"; reason.append("hash_equal")
-        else:
-            would = bool((_ctx.get("pre") or {}).get("would_rebuild"))
-            if has_backup:
-                if would:
-                    plan = "ask"; reason.append("new_material_detected")
-                else:
-                    plan = "restore"; reason.append("use_backup_restore")
+        if has_local:
+            if has_backup and same_hash:
+                plan = "attach"; reason.append("hash_equal")
+            elif would:
+                plan = "ask"; reason.append("new_material_detected")
             else:
-                plan = "build"; reason.append("no_backup_available")
+                plan = "attach"; reason.append("local_ok_no_change")
+        else:
+            if has_backup:
+                plan = "restore"; reason.append("no_local_use_backup")   # ← 로컬 없음이면 무조건 복구
+            else:
+                plan = "build"; reason.append("no_local_no_backup")
 
         _ctx["plan"] = plan
         _ctx["reason"] = reason
