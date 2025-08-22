@@ -376,135 +376,6 @@ def _need_update(prev: Dict[str, Any], now_meta: Dict[str, Any]) -> bool:
         return prev["content_sha1"] != now_meta["content_sha1"]
     return True
 
-
-# ===== [07] BUILD FROM PREPARED =============================================
-def _guess_section_hint(text: str) -> Optional[str]:
-    import re
-    if not text: return None
-    lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
-    for ln in lines[:5]:
-        if 8 <= len(ln) <= 120:
-            if re.search(r"^(Chapter|Unit|Lesson|Section|Part)\s+[0-9IVX]+[:\-\.\s]", ln, re.I): return ln
-            if re.fullmatch(r"[A-Za-z0-9\s\-\(\)\.\,']{8,120}", ln) and sum(c.isalpha() for c in ln) > len(ln)*0.5:
-                return ln
-    head = text.strip().split("\n", 1)[0]
-    return (head[:80] + "…") if len(head) > 80 else (head or None)
-
-def _pdf_page_count_quick(service, file_id: str) -> Optional[int]:
-    try:
-        import pypdf
-        data = _download_file_bytes(service, file_id)
-        return len(pypdf.PdfReader(io.BytesIO(data)).pages)
-    except Exception:
-        return None
-
-def _build_from_prepared(service, prepared_id: str) -> Tuple[int, int, Dict[str, Any], Dict[str, int]]:
-    files = _list_files(service, prepared_id)
-    manifest = _load_manifest(MANIFEST_PATH)
-    prev_ids = set(manifest.keys())
-    out_path = PERSIST_DIR / "chunks.jsonl"
-
-    stats: Dict[str, int] = {
-        "gdocs": 0, "text_like": 0, "pdf_parsed": 0, "pdf_skipped": 0, "others_skipped": 0,
-        "new_docs": 0, "updated_docs": 0, "unchanged_docs": 0
-    }
-    new_lines: List[str] = []
-    processed, total_chunks = 0, 0
-    changed_ids: set[str] = set()
-
-    for f in files:
-        meta_base = {
-            "id": f["id"],
-            "name": f.get("name"),
-            "mimeType": f.get("mimeType"),
-            "modifiedTime": f.get("modifiedTime"),
-            "md5Checksum": f.get("md5Checksum"),
-            "size": f.get("size"),
-        }
-        text = _extract_text(service, f, stats)
-        if not text or not text.strip():
-            continue
-
-        now_meta = {**meta_base, "content_sha1": _sha1(text)}
-        prev_meta = manifest.get(f["id"], {})
-
-        need = _need_update(prev_meta, now_meta)
-        if not need:
-            stats["unchanged_docs"] += 1
-            continue
-        if f["id"] not in prev_ids:
-            stats["new_docs"] += 1
-        else:
-            stats["updated_docs"] += 1
-
-        chunks = _chunk_text(text, target_chars=1200, overlap=120)
-
-        pages = _pdf_page_count_quick(service, f["id"]) if (f.get("mimeType") == "application/pdf") else None
-        total_len = len(text)
-        running_start = 0
-
-        for i, ch in enumerate(chunks):
-            start = running_start
-            end = start + len(ch)
-            keep = min(120, len(ch))
-            running_start = end - keep
-
-            tags = _extract_grammar_tags(ch)  # ← [ADD-1] 청크에서 문법 태그 추출
-            
-            rec = {
-                "doc_id": f["id"],
-                "doc_name": f.get("name"),
-                "chunk_index": i,
-                "text": ch,
-                "meta": {
-                    "file_id": f["id"],
-                    "file_name": f.get("name"),
-                    "source_drive_url": f"https://drive.google.com/file/d/{f['id']}/view",
-                    "mime": f.get("mimeType"),
-                    "modified": f.get("modifiedTime"),
-                    "page_approx": _page_range_linear(total_len, pages, start, end),
-                    "section_hint": _guess_section_hint(ch),
-                },
-            }
-            new_lines.append(json.dumps(rec, ensure_ascii=False))
-
-        now_meta["chunk_count"] = len(chunks)
-        manifest[f["id"]] = now_meta
-
-        processed += 1
-        total_chunks += len(chunks)
-        changed_ids.add(f["id"])
-
-    existing: List[str] = []
-    if out_path.exists():
-        existing = [ln for ln in out_path.read_text(encoding="utf-8").splitlines() if ln.strip()]
-    filtered_existing = []
-    for ln in existing:
-        try:
-            obj = json.loads(ln)
-            if obj.get("doc_id") in changed_ids:
-                continue
-        except Exception:
-            pass
-        filtered_existing.append(ln)
-
-    merged = filtered_existing + new_lines
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text("\n".join(merged) + ("\n" if merged else ""), encoding="utf-8")
-    _save_manifest(MANIFEST_PATH, manifest)
-
-    return processed, total_chunks, manifest, stats
-
-def _page_range_linear(total_len: int, pages: Optional[int], start: int, end: int) -> Optional[str]:
-    if not pages or total_len <= 0:
-        return None
-    def pos2pg(pos: int) -> int:
-        p = int((max(0, min(pos, total_len-1)) / max(1, total_len-1)) * (pages - 1)) + 1
-        return max(1, min(p, pages))
-    sp, ep = pos2pg(start), pos2pg(max(start, end-1))
-    return f"{sp}" if sp == ep else f"{sp}–{ep}"
-
-
 # ===== [07] BUILD FROM PREPARED =============================================
 def _guess_section_hint(text: str) -> Optional[str]:
     import re
@@ -582,7 +453,7 @@ def _build_from_prepared(service, prepared_id: str) -> Tuple[int, int, Dict[str,
                 "doc_name": f.get("name"),
                 "chunk_index": i,
                 "text": ch,
-                "grammar_tags": _extract_grammar_tags(ch),  # ← ★ 추가: 태그를 레코드에 저장
+                "grammar_tags": _extract_grammar_tags(ch),  # ← 태그 저장 (중요)
                 "meta": {
                     "file_id": f["id"],
                     "file_name": f.get("name"),
@@ -605,7 +476,9 @@ def _build_from_prepared(service, prepared_id: str) -> Tuple[int, int, Dict[str,
     existing: List[str] = []
     if out_path.exists():
         existing = [ln for ln in out_path.read_text(encoding="utf-8").splitlines() if ln.strip()]
-    filtered_existing = []
+
+    # ✅ BUGFIX: append를 for 루프 ‘안쪽’에서 수행 (빈 리스트여도 안전)
+    filtered_existing: List[str] = []
     for ln in existing:
         try:
             obj = json.loads(ln)
@@ -613,7 +486,7 @@ def _build_from_prepared(service, prepared_id: str) -> Tuple[int, int, Dict[str,
                 continue
         except Exception:
             pass
-    filtered_existing.append(ln)
+        filtered_existing.append(ln)  # ← 루프 내부
 
     merged = filtered_existing + new_lines
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -630,7 +503,6 @@ def _page_range_linear(total_len: int, pages: Optional[int], start: int, end: in
         return max(1, min(p, pages))
     sp, ep = pos2pg(start), pos2pg(max(start, end-1))
     return f"{sp}" if sp == ep else f"{sp}–{ep}"
-
 
 
 # ===== [09] QUICK PRECHECK (변경 여부만 빠르게) ===============================
