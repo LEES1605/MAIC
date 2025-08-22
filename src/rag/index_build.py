@@ -810,9 +810,7 @@ def restore_latest_backup_to_local(service=None, backup_folder_id: Optional[str]
     except Exception as e:
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
-
 # ===== [09] QUICK PRECHECK (내용 중심, 변경 여부만 빠르게) ======================
-from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, List, Tuple, Optional
 import io, json, zipfile
@@ -840,7 +838,7 @@ _EXCLUDED_NAME_MATCH = {"backup", "backup_zip", "~", ".tmp", ".temp", ".bak"}
 def _is_excluded_item(name: str, mime: str) -> bool:
     if mime in _EXCLUDED_GOOGLE_APPS:
         return True
-    low = name.lower()
+    low = (name or "").lower()
     if any(low.endswith(sfx.lower()) for sfx in _EXCLUDED_NAME_SUFFIX):
         return True
     if any(tok in low for tok in _EXCLUDED_NAME_MATCH):
@@ -851,7 +849,7 @@ def _is_excluded_item(name: str, mime: str) -> bool:
 def _fingerprint_for_drive_item(item: Dict[str, Any]) -> Tuple[str, str]:
     """
     Returns (kind, fp)
-      - Google 네이티브: ('gdoc', id)  ← 제목/위치/modifiedTime 무시
+      - Google 네이티브: ('gdoc', id)  ← 제목/위치/modifiedTime 무시(오탐 방지)
       - 바이너리:       ('bin', md5 | size | id)
     """
     mime = item.get("mimeType", "") or ""
@@ -869,46 +867,38 @@ def _fingerprint_for_drive_item(item: Dict[str, Any]) -> Tuple[str, str]:
 
 def _list_prepared_from_drive(folder_id: Optional[str]) -> List[Dict[str, Any]]:
     """
-    Drive에서 prepared 폴더의 파일 메타데이터를 수집.
-    모듈에 이미 존재할 수 있는 Drive 서비스/도우미를 최대한 재사용하고, 없으면 best-effort로 동작.
+    Drive에서 prepared 폴더의 파일 메타데이터 수집.
     """
     try:
-        # 모듈 내부 헬퍼 재사용 시도
         from googleapiclient.discovery import build  # type: ignore
         from google.oauth2.credentials import Credentials  # type: ignore
         from google.oauth2.service_account import Credentials as SACreds  # type: ignore
         import streamlit as st  # type: ignore
 
-        # 자격증명 로딩 (OAuth 우선, SA 폴백) — 기존 코드에 있는 키를 폭넓게 수용
+        # 자격증명 로딩 (OAuth 우선, SA 폴백)
         candidates = [
             ("oauth", "GDRIVE_OAUTH_CLIENT_ID", "GDRIVE_OAUTH_CLIENT_SECRET", "GDRIVE_OAUTH_REFRESH_TOKEN"),
             ("sa",    "GDRIVE_SERVICE_ACCOUNT_JSON"),
         ]
         creds = None
-        data = None
-        for c in candidates:
-            if c[0] == "oauth":
-                cid = st.secrets.get(c[1]); csec = st.secrets.get(c[2]); rft = st.secrets.get(c[3])
+        for kind, *keys in candidates:
+            if kind == "oauth":
+                cid, csec, rft = (st.secrets.get(keys[0]), st.secrets.get(keys[1]), st.secrets.get(keys[2]))
                 if cid and csec and rft:
                     token_uri = st.secrets.get("GDRIVE_TOKEN_URI", "https://oauth2.googleapis.com/token")
                     data = {"client_id":cid, "client_secret":csec, "refresh_token":rft, "token_uri":token_uri}
                     creds = Credentials.from_authorized_user_info(data, scopes=["https://www.googleapis.com/auth/drive.readonly"])
                     break
             else:
-                raw = st.secrets.get(c[1])
+                raw = st.secrets.get(keys[0])
                 if raw:
                     info = json.loads(raw) if isinstance(raw, str) else dict(raw)
                     creds = SACreds.from_service_account_info(info, scopes=["https://www.googleapis.com/auth/drive.readonly"])
                     break
-        if creds is None:
+        if creds is None or not folder_id:
             return []
 
         svc = build("drive", "v3", credentials=creds, cache_discovery=False)
-        if not folder_id:
-            # 폴더 ID가 비어도 기존 코드에서 내부적으로 기본 폴더를 찾는 경우가 있으므로,
-            # 여기서는 안전하게 전체를 비움(오탐을 만들지 않기 위해).
-            return []
-
         q = f"'{folder_id}' in parents and trashed=false"
         fields = "files(id,name,mimeType,md5Checksum,size,modifiedTime)"
         items: List[Dict[str, Any]] = []
@@ -924,8 +914,7 @@ def _list_prepared_from_drive(folder_id: Optional[str]) -> List[Dict[str, Any]]:
                 pageSize=1000,
                 spaces="drive",
             ).execute()
-            files = resp.get("files", [])
-            for it in files:
+            for it in resp.get("files", []):
                 if _is_excluded_item(it.get("name",""), it.get("mimeType","")):
                     continue
                 items.append(it)
@@ -934,7 +923,7 @@ def _list_prepared_from_drive(folder_id: Optional[str]) -> List[Dict[str, Any]]:
                 break
         return items
     except Exception:
-        # Drive 접근이 안되면 빈 목록 반환(오탐 방지)
+        # Drive 접근 실패 시 빈 목록(오탐 방지)
         return []
 
 def _fingerprint_set_for_prepared(folder_id: Optional[str]) -> Tuple[set, List[Tuple[str,str]]]:
@@ -971,8 +960,8 @@ def _load_manifest_dict() -> Optional[Dict[str, Any]]:
 def _fingerprint_set_for_manifest(manifest: Dict[str, Any]) -> Tuple[set, List[Tuple[str,str]]]:
     """
     manifest 구조에 의존하지 않도록 보수적으로 해석:
-      - mimeType이 google-apps.* 이면 ('gdoc', id)
-      - 그 외는 ('bin', md5 | size | id | content_sha1) 중 우선순위로 사용
+      - google-apps.* → ('gdoc', id)
+      - 그 외 → ('bin', md5 | size | id | content_sha1)
     """
     entries = manifest.get("files") or manifest.get("docs") or manifest.get("entries") or []
     fps: List[Tuple[str,str]] = []
@@ -1003,24 +992,10 @@ def quick_precheck(gdrive_folder_id: Optional[str] = None) -> Dict[str, Any]:
     """
     prepared 폴더의 '내용 중심' fingerprint 집합을
     마지막 인덱싱 manifest의 fingerprint 집합과 비교한다.
-
-    반환:
-      {
-        "changed": bool,               # 내용 기준으로 실제 변화가 있는가
-        "reasons": List[str],          # 판정 이유
-        "prepared_count": int,         # 비교에 사용된 prepared 항목 수
-        "manifest_count": int,         # manifest 항목 수
-        "samples": {                   # 디버그 샘플(각 5개 이내)
-          "only_in_prepared": [...],
-          "only_in_manifest": [...]
-        }
-      }
     """
-    reasons: List[str] = []
-
     # prepared fingerprints
     try:
-        prepared_set, prepared_list = _fingerprint_set_for_prepared(gdrive_folder_id)
+        prepared_set, _prepared_list = _fingerprint_set_for_prepared(gdrive_folder_id)
     except Exception as e:
         return {
             "changed": False,
@@ -1033,7 +1008,7 @@ def quick_precheck(gdrive_folder_id: Optional[str] = None) -> Dict[str, Any]:
     # manifest fingerprints
     manifest = _load_manifest_dict()
     if manifest is None:
-        # manifest가 없으면 최초 빌드가 필요하므로 '변경'으로 간주
+        # manifest가 없으면 최초 빌드 필요로 간주(관리자 모드에서는 질문 유도)
         return {
             "changed": True,
             "reasons": ["no_local_manifest"],
@@ -1042,7 +1017,7 @@ def quick_precheck(gdrive_folder_id: Optional[str] = None) -> Dict[str, Any]:
             "samples": {"only_in_prepared": list(map(str, list(prepared_set)[:5])), "only_in_manifest": []},
         }
 
-    manifest_set, manifest_list = _fingerprint_set_for_manifest(manifest)
+    manifest_set, _manifest_list = _fingerprint_set_for_manifest(manifest)
 
     # 집합 비교(내용 중심)
     only_prepared = prepared_set - manifest_set
@@ -1057,13 +1032,10 @@ def quick_precheck(gdrive_folder_id: Optional[str] = None) -> Dict[str, Any]:
             "samples": {"only_in_prepared": [], "only_in_manifest": []},
         }
 
-    # down-grade 규칙은 이미 fingerprint 수준에서 이름/위치를 제거했으므로
-    # 여기서 남는 차이는 실제 추가/삭제/콘텐츠 변경으로 본다.
-    reasons.append("content_diff")
-
+    # 이름/위치 요인 제거 뒤 남는 차이는 실제 추가/삭제/콘텐츠 변경으로 간주
     return {
         "changed": True,
-        "reasons": reasons,
+        "reasons": ["content_diff"],
         "prepared_count": len(prepared_set),
         "manifest_count": len(manifest_set),
         "samples": {
@@ -1072,8 +1044,6 @@ def quick_precheck(gdrive_folder_id: Optional[str] = None) -> Dict[str, Any]:
         },
     }
 # ===== [09] END ===============================================================
-
-
 
 
 
