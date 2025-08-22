@@ -807,9 +807,9 @@ def main():
                 st.warning(f"백업/로컬 비교 실패: {type(e).__name__}: {e}")
 
         # ② 새 자료 감지(사전점검) — 이미 (1)에서 계산됨
-        _ctx["pre"] = st.session_state.get("_precheck_res")
+        _ctx["pre"] = st.session_state.get("_precheck_res") or {}
 
-        # ③ 결정: attach / restore / ask / build   ← ★ 의사결정 트리 단순화/수정
+        # ③ 결정: attach / restore / ask / build
         plan = "attach"
         reason = []
 
@@ -817,20 +817,30 @@ def main():
         has_local = bool(cmpres.get("has_local"))
         has_backup = bool(cmpres.get("has_backup"))
         same_hash = bool(cmpres.get("same"))
-        would = bool((_ctx.get("pre") or {}).get("would_rebuild"))
 
-        if has_local:
-            if has_backup and same_hash:
-                plan = "attach"; reason.append("hash_equal")
-            elif would:
-                plan = "ask"; reason.append("new_material_detected")
-            else:
-                plan = "attach"; reason.append("local_ok_no_change")
+        # 🔎 precheck에서 '진짜 자료 변화'만 추출
+        pre = _ctx.get("pre") or {}
+        changed_flag = bool(pre.get("changed"))
+        reasons_list = list(pre.get("reasons") or [])
+        # 'no_local_index'만 있는 경우는 '변경 없음'으로 취급
+        only_no_local = (reasons_list and set(reasons_list).issubset({"no_local_index"}))
+
+        # 분기 로직 보정
+        if has_local and not has_backup:
+            plan = "attach"; reason.append("local_only")
+        elif has_local and has_backup and same_hash:
+            plan = "attach"; reason.append("hash_equal")
         else:
             if has_backup:
-                plan = "restore"; reason.append("no_local_use_backup")   # ← 로컬 없음이면 무조건 복구
+                if changed_flag and not only_no_local:
+                    # 진짜 자료가 달라진 경우에만 묻기
+                    plan = "ask"; reason.append("new_material_detected")
+                else:
+                    # 로컬이 없기만 하거나, 변화가 없으면 → 백업으로 복구
+                    plan = "restore"; reason.append("use_backup_restore")
             else:
-                plan = "build"; reason.append("no_local_no_backup")
+                # 백업 자체가 없으면 빌드
+                plan = "build"; reason.append("no_backup_available")
 
         _ctx["plan"] = plan
         _ctx["reason"] = reason
@@ -840,6 +850,7 @@ def main():
     # (1.6) 부팅 플로우 실행/렌더링 (여기서는 항상 안전하게 재계산/재임포트)
     from pathlib import Path as _Path
     import importlib as _importlib
+    import time
 
     _ctx = st.session_state.get("_boot_ctx", {})
     plan = _ctx.get("plan")
@@ -852,7 +863,6 @@ def main():
 
     # 실행 헬퍼들 ---------------------------------------------------------------
     def _attach_with_status(label="두뇌 자동 연결 중…") -> bool:
-        import time
         try:
             with st.status(label, state="running") as s:
                 bar = st.progress(0)
@@ -876,7 +886,6 @@ def main():
             return bool(ok)
 
     def _restore_then_attach():
-        import time
         try:
             _mod2 = _importlib.import_module("src.rag.index_build")
             _restore = getattr(_mod2, "restore_latest_backup_to_local", None)
@@ -895,7 +904,6 @@ def main():
         return _attach_with_status("복구 후 두뇌 연결 중…")
 
     def _build_then_backup_then_attach():
-        import time
         # 매 호출 시 안전하게 import
         try:
             _mod3 = _importlib.import_module("src.rag.index_build")
@@ -947,9 +955,9 @@ def main():
     # 의사결정 로그 (재실행에도 안전)
     if plan:
         decision_log.info(
-            "auto-boot: plan=`{}` | reasons={} | has_local={} has_backup={} same_hash={} | path={}".format(
+            "auto-boot: plan=`{}` | reasons={} | has_local={} has_backup={} same_hash={} | changed={} | path={}".format(
                 plan, _ctx.get("reason"), bool(cmpres.get("has_local")), bool(cmpres.get("has_backup")),
-                bool(cmpres.get("same")), _PERSIST_DIR_LOG
+                bool(cmpres.get("same")), bool(pre.get("changed")), _PERSIST_DIR_LOG
             )
         )
 
