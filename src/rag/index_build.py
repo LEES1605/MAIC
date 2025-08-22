@@ -504,6 +504,114 @@ def _page_range_linear(total_len: int, pages: Optional[int], start: int, end: in
     sp, ep = pos2pg(start), pos2pg(max(start, end-1))
     return f"{sp}" if sp == ep else f"{sp}–{ep}"
 
+# ===== [08] QUALITY REPORT & BACKUP ZIP =====================================
+def _quality_report(manifest: Dict[str, Any], extra_counts: Optional[Dict[str, int]] = None) -> Dict[str, Any]:
+    """
+    chunks.jsonl을 스캔해 grammar_tags 분포를 집계하고,
+    manifest/빌드 통계와 함께 QUALITY_REPORT_PATH에 저장합니다.
+    반환값: 리포트 딕셔너리
+    """
+    report: Dict[str, Any] = {}
+    report["generated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    report["manifest_docs"] = len(manifest or {})
+
+    # 기본 통계(빌드 단계에서 넘어온 카운터를 그대로 기록)
+    extra_counts = extra_counts or {}
+    report["counts"] = {
+        "gdocs":          int(extra_counts.get("gdocs", 0)),
+        "text_like":      int(extra_counts.get("text_like", 0)),
+        "pdf_parsed":     int(extra_counts.get("pdf_parsed", 0)),
+        "pdf_skipped":    int(extra_counts.get("pdf_skipped", 0)),
+        "others_skipped": int(extra_counts.get("others_skipped", 0)),
+        "new_docs":       int(extra_counts.get("new_docs", 0)),
+        "updated_docs":   int(extra_counts.get("updated_docs", 0)),
+        "unchanged_docs": int(extra_counts.get("unchanged_docs", 0)),
+    }
+
+    # grammar_tags 집계
+    tag_counts: Dict[str, int] = {}
+    chunks_path = PERSIST_DIR / "chunks.jsonl"
+    total_chunks = 0
+
+    if chunks_path.exists():
+        try:
+            for ln in chunks_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+                if not ln.strip():
+                    continue
+                try:
+                    obj = json.loads(ln)
+                except Exception:
+                    continue
+                total_chunks += 1
+                tags = obj.get("grammar_tags") or []
+                if isinstance(tags, list):
+                    for t in tags:
+                        if not isinstance(t, str):
+                            continue
+                        tag_counts[t] = tag_counts.get(t, 0) + 1
+        except Exception as e:
+            # 리포트 생성은 앱 동작을 막지 않도록 방어적으로 처리
+            st.warning(f"quality_report 스캔 중 경고: {type(e).__name__}: {e}")
+
+    report["total_chunks"] = total_chunks
+    report["grammar_tag_counts"] = dict(sorted(tag_counts.items(), key=lambda kv: (-kv[1], kv[0])))
+
+    # 상위 20개 태그만 별도로 제공
+    top20 = sorted(tag_counts.items(), key=lambda kv: (-kv[1], kv[0]))[:20]
+    report["top_tags"] = [{"tag": k, "count": v} for k, v in top20]
+
+    # 파일 저장
+    try:
+        QUALITY_REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
+        QUALITY_REPORT_PATH.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as e:
+        st.warning(f"quality_report 저장 경고: {type(e).__name__}: {e}")
+
+    return report
+
+
+def _make_and_upload_backup_zip(service, backup_folder_id: Optional[str]) -> Optional[str]:
+    """
+    REQ_FILES(chunks.jsonl, manifest.json, quality_report.json)을 ZIP으로 묶고,
+    backup_folder_id가 있으면 Google Drive에 업로드합니다.
+    반환값: 업로드된 파일 ID(없으면 None)
+    """
+    # ZIP 생성 경로
+    backup_dir = APP_DATA_DIR / "backup"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    ts = time.strftime("%Y%m%d_%H%M%S")
+    zip_name = f"backup_{ts}.zip"
+    zip_path = backup_dir / zip_name
+
+    # ZIP 구성
+    try:
+        with zipfile.ZipFile(str(zip_path), "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            for fname in REQ_FILES:
+                p = None
+                if fname == "chunks.jsonl":
+                    p = PERSIST_DIR / "chunks.jsonl"
+                elif fname == "manifest.json":
+                    p = MANIFEST_PATH
+                elif fname == "quality_report.json":
+                    p = QUALITY_REPORT_PATH
+                else:
+                    # 혹시 모를 추가 항목에 대비 — persist 폴더에 있으면 포함
+                    cand = PERSIST_DIR / fname
+                    if cand.exists():
+                        p = cand
+                if p and p.exists():
+                    zf.write(str(p), arcname=fname)
+    except Exception as e:
+        st.warning(f"백업 ZIP 생성 경고: {type(e).__name__}: {e}")
+
+    # 업로드(옵션)
+    try:
+        if backup_folder_id:
+            return _upload_zip(service, backup_folder_id, zip_path, zip_name)
+    except Exception as e:
+        st.warning(f"백업 ZIP 업로드 경고: {type(e).__name__}: {e}")
+
+    return None
 
 # ===== [09] QUICK PRECHECK (변경 여부만 빠르게) ===============================
 def quick_precheck(gdrive_folder_id: Optional[str] = None) -> Dict[str, Any]:
