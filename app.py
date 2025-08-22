@@ -730,29 +730,59 @@ def main():
             try:
                 st.session_state["_precheck_res"] = precheck_build_needed("")  # 시크릿 기반 자동 처리
             except Exception:
-                # 조용한 실패 처리: 패널에서 안내
                 st.session_state["_precheck_res"] = None
         else:
             st.session_state["_precheck_res"] = None
 
-    # (1.5) 부팅시 자동 연결/자동 재최적화(세션당 1회만)
+    # (1.5) 부팅시 자동 연결/자동 최적화(세션당 1회만) + 의사결정 로그/마커
     if not st.session_state.get("_auto_boot_done", False):
         st.session_state["_auto_boot_done"] = True
 
-        # 실제 PERSIST_DIR과 로컬 인덱스 존재 여부 확인
-        import importlib
+        import importlib, os
         from pathlib import Path
         try:
             _mod = importlib.import_module("src.rag.index_build")
             _PERSIST_DIR = getattr(_mod, "PERSIST_DIR", Path.home() / ".maic" / "persist")
+            _MANIFEST_PATH = getattr(_mod, "MANIFEST_PATH", Path.home() / ".maic" / "manifest.json")
+            _QUALITY_REPORT_PATH = getattr(_mod, "QUALITY_REPORT_PATH", Path.home() / ".maic" / "quality_report.json")
         except Exception:
             _PERSIST_DIR = Path.home() / ".maic" / "persist"
+            _MANIFEST_PATH = Path.home() / ".maic" / "manifest.json"
+            _QUALITY_REPORT_PATH = Path.home() / ".maic" / "quality_report.json"
+
         _chunks_path = _PERSIST_DIR / "chunks.jsonl"
-        _has_local = _chunks_path.exists()
+        _manifest_path = Path(_MANIFEST_PATH)
+        _qrep_path = Path(_QUALITY_REPORT_PATH)
+        _ready_flag = _PERSIST_DIR / ".ready"
+
+        def _file_ok(p: Path, min_bytes: int = 32) -> bool:
+            try:
+                return p.exists() and p.stat().st_size >= min_bytes
+            except Exception:
+                return False
+
+        # ✅ 로컬 존재 판단을 강화
+        _has_local = (
+            _file_ok(_chunks_path, min_bytes=256) or
+            _file_ok(_manifest_path, min_bytes=32) or
+            _file_ok(_qrep_path, min_bytes=32) or
+            _ready_flag.exists()
+        )
+
+        # 의사결정 로그 컨테이너
+        _auto_log = st.empty()
+
+        def _write_ready_flag():
+            try:
+                _PERSIST_DIR.mkdir(parents=True, exist_ok=True)
+                _ready_flag.write_text(time.strftime("%Y-%m-%d %H:%M:%S") + " build_ok\n", encoding="utf-8")
+            except Exception:
+                pass
 
         def _auto_build_and_attach() -> bool:
             """필요 시 자동 재최적화 후 자동 연결."""
             if build_index_with_checkpoint is None:
+                _auto_log.warning("자동 최적화 불가: 빌더 모듈 미탑재 (src.rag.index_build).")
                 return False
 
             prog = st.progress(0)
@@ -778,6 +808,8 @@ def main():
                     )
                     prog.progress(100)
                     s.update(label="자동 최적화 완료 ✅", state="complete")
+                # 빌드 성공 마커 생성
+                _write_ready_flag()
                 # 최적화 직후 자동 연결
                 try:
                     with st.status("두뇌 자동 연결 중…", state="running") as s2:
@@ -787,23 +819,36 @@ def main():
                         bar.progress(100)
                         if ok:
                             s2.update(label="두뇌 자동 연결 완료 ✅", state="complete")
+                            _auto_log.info(f"auto-boot: build→attach OK | PERSIST_DIR={_PERSIST_DIR}")
                             return True
                         else:
                             s2.update(label="두뇌 자동 연결 실패 ❌", state="error")
+                            _auto_log.error("auto-boot: build OK but attach FAIL")
                             return False
                 except Exception:
                     ok = _auto_attach_or_restore_silently()
                     if ok:
                         st.success("두뇌 자동 연결 완료 ✅")
+                        _auto_log.info(f"auto-boot: build→attach OK (fallback) | PERSIST_DIR={_PERSIST_DIR}")
                         return True
                     st.error("자동 연결 실패 — 상단 패널에서 연결을 시도해 주세요.")
+                    _auto_log.error("auto-boot: build OK but attach FAIL (fallback)")
                     return False
             except Exception as e:
                 st.error(f"자동 최적화 실패: {type(e).__name__}: {e}")
+                _auto_log.error(f"auto-boot: build FAIL — {type(e).__name__}: {e}")
                 return False
 
-        # ① 로컬이 있으면 → 자동 연결 시도
+        # ① 로컬이 있으면 → 우선 자동 연결 시도(성공 시 빌드 생략)
         if _has_local and not st.session_state.get("rag_index"):
+            _auto_log.info(
+                f"auto-boot decision: try ATTACH (local detected) | "
+                f"chunks={'Y' if _chunks_path.exists() else 'N'}({(_chunks_path.stat().st_size if _chunks_path.exists() else 0)}B), "
+                f"manifest={'Y' if _manifest_path.exists() else 'N'}, "
+                f"qreport={'Y' if _qrep_path.exists() else 'N'}, "
+                f"ready={'Y' if _ready_flag.exists() else 'N'}, "
+                f"path={_PERSIST_DIR}"
+            )
             try:
                 with st.status("두뇌 자동 연결 중…", state="running") as s:
                     bar = st.progress(0)
@@ -812,28 +857,30 @@ def main():
                     bar.progress(100)
                     if ok:
                         s.update(label="두뇌 자동 연결 완료 ✅", state="complete")
+                        _auto_log.info("auto-boot result: attach OK")
                     else:
                         s.update(label="두뇌 자동 연결 실패 — 자동 최적화로 전환합니다.", state="error")
+                        _auto_log.warning("auto-boot result: attach FAIL → will BUILD")
                         _auto_build_and_attach()
-            except Exception:
-                # 연결 중 예외가 나면 자동 최적화로 폴백
+            except Exception as e:
+                _auto_log.warning(f"auto-boot exception on attach → will BUILD: {type(e).__name__}: {e}")
                 _auto_build_and_attach()
 
         # ② 로컬이 없으면 → 자동 최적화 후 자동 연결
         if not _has_local and not st.session_state.get("rag_index"):
+            _auto_log.info(f"auto-boot decision: no local index → will BUILD | path={_PERSIST_DIR}")
             _auto_build_and_attach()
 
-    # (2) 준비 패널 (자동 사전점검 결과에 따라 흐름형 CTA)
+    # (2) 준비 패널
     render_brain_prep_main()
     st.divider()
 
-    # (3) (NEW) 태그 진단 패널 — 그대로 유지
+    # (3) 태그 진단 패널
     render_tag_diagnostics()
     st.divider()
 
-    # (4) 기존 QA 데모
+    # (4) QA 데모
     render_simple_qa()
 
 if __name__ == "__main__":
     main()
-
