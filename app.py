@@ -800,35 +800,11 @@ def main():
 
     _render_title_with_status()
 
-    # (1) 관리자 모드: 사전점검(내용 중심) 먼저 → 변경 있으면 질문 ----------------------
+    # (C) 유틸: 연결/복구/빌드 ----------------------------------------------------
+    import time
     import importlib as _importlib
     from pathlib import Path as _Path
 
-    _mod = None
-    _quick_precheck = None
-    _PERSIST_DIR = _Path.home() / ".maic" / "persist"
-
-    try:
-        _mod = _importlib.import_module("src.rag.index_build")
-        _quick_precheck = getattr(_mod, "quick_precheck", None)
-        _PERSIST_DIR = getattr(_mod, "PERSIST_DIR", _PERSIST_DIR)
-    except Exception:
-        pass
-
-    # 변경 감지 (prepared vs 마지막 인덱싱 manifest)
-    pre = {}
-    if callable(_quick_precheck):
-        try:
-            # 준비 폴더 ID를 비워두면 모듈 내부 기본값/환경설정으로 처리되도록 유지
-            pre = _quick_precheck("")
-        except Exception as e:
-            st.warning(f"사전점검 실패: {type(e).__name__}: {e}")
-            pre = {}
-    changed_flag = bool(pre.get("changed"))
-    reasons_list = list(pre.get("reasons") or [])
-
-    # 유틸: 연결/복구/빌드 ---------------------------------------------------------
-    import time
     def _attach_with_status(label="두뇌 자동 연결 중…") -> bool:
         """로컬에 있는 인덱스로 세션 부착(복구 이후 호출 가정)."""
         try:
@@ -842,7 +818,6 @@ def main():
                     s.update(label="두뇌 자동 연결 완료 ✅", state="complete")
                 else:
                     s.update(label="두뇌 자동 연결 실패 ❌", state="error")
-                # 최초 페인트 동기화
                 if ok and not st.session_state.get("_post_attach_rerun_done"):
                     st.session_state["_post_attach_rerun_done"] = True
                     st.rerun()
@@ -862,10 +837,9 @@ def main():
             return bool(ok)
 
     def _restore_then_attach():
-        """항상 최신 백업 ZIP을 정본으로 복구 → attach (관리자 모드 기본 전략)."""
-        import importlib
+        """최신 백업 ZIP을 정본으로 복구 → attach."""
         try:
-            _m = importlib.import_module("src.rag.index_build")
+            _m = _importlib.import_module("src.rag.index_build")
         except Exception as e:
             st.error(f"복구 모듈 임포트 실패: {type(e).__name__}: {e}")
             return False
@@ -890,25 +864,19 @@ def main():
 
             s.update(label="복구 완료 ✅", state="complete")
 
-        # 복구 성공 → 로컬로 부착
         return _attach_with_status("복구 후 두뇌 연결 중…")
 
     def _build_then_backup_then_attach():
-        """
-        업데이트(다시 최적화) 실행 → 새 백업 ZIP 업로드 → 그 ZIP으로 복구 → attach.
-        (항상 백업 ZIP을 정본으로 사용)
-        """
-        import importlib
-        from pathlib import Path as __Path
+        """업데이트(다시 최적화) → 새 백업 업로드 → 그 ZIP으로 복구 → attach."""
         try:
-            _m = importlib.import_module("src.rag.index_build")
+            _m = _importlib.import_module("src.rag.index_build")
         except Exception as e:
             st.error(f"인덱스 빌더 모듈 임포트 실패: {type(e).__name__}: {e}")
             return False
 
         build_index_with_checkpoint = getattr(_m, "build_index_with_checkpoint", None)
         _make_and_upload_backup_zip_fn = getattr(_m, "_make_and_upload_backup_zip", None)
-        _PERSIST_DIR_OBJ = getattr(_m, "PERSIST_DIR", __Path.home() / ".maic" / "persist")
+        _PERSIST_DIR_OBJ = getattr(_m, "PERSIST_DIR", _Path.home() / ".maic" / "persist")
 
         if not callable(build_index_with_checkpoint):
             st.error("인덱스 빌더 함수를 찾지 못했습니다. (build_index_with_checkpoint)")
@@ -935,16 +903,52 @@ def main():
                     _ = _make_and_upload_backup_zip_fn(None, None)
             except Exception:
                 pass
-            # 새 백업을 정본으로 다시 복구하여 일관성 확보
             if _restore_then_attach():
                 return True
-            # 복구가 실패하면 로컬에 바로 붙이는 폴백
             return _attach_with_status("두뇌 연결 중…")
         except Exception as e:
             st.error(f"다시 최적화 실패: {type(e).__name__}: {e}")
             return False
 
-    # (2) 변경 있음 → 먼저 질문, 없으면 곧장 복구 -----------------------------------
+    # (D) 0단계: 로컬 인덱스가 없으면 **무조건 선(先)복구** ---------------------------
+    #  - 사전점검/질문보다 먼저 수행하여 '최초 빌드 필요' 오탐을 차단
+    local_ok = _has_local_index_files()
+    if not local_ok and not _index_ready():
+        log = st.empty()
+        log.info("boot: local_missing → try_restore_first")
+        if _restore_then_attach():
+            st.rerun()
+        else:
+            st.info("백업을 찾지 못했거나 손상되었습니다. ‘업데이트(다시 최적화)’를 실행해 주세요.")
+            btn = st.button("업데이트 (다시 최적화 실행)", type="primary", key="boot_build_when_local_missing")
+            if btn:
+                if _build_then_backup_then_attach():
+                    st.rerun()
+                else:
+                    st.stop()
+        st.stop()
+
+    # (E) 사전점검(내용 중심) → 변경 있으면 질문 -----------------------------------
+    _mod = None
+    _quick_precheck = None
+    _PERSIST_DIR = _Path.home() / ".maic" / "persist"
+    try:
+        _mod = _importlib.import_module("src.rag.index_build")
+        _quick_precheck = getattr(_mod, "quick_precheck", None)
+        _PERSIST_DIR = getattr(_mod, "PERSIST_DIR", _PERSIST_DIR)
+    except Exception:
+        pass
+
+    pre = {}
+    if callable(_quick_precheck):
+        try:
+            pre = _quick_precheck("")
+        except Exception as e:
+            st.warning(f"사전점검 실패: {type(e).__name__}: {e}")
+            pre = {}
+    changed_flag = bool(pre.get("changed"))
+    reasons_list = list(pre.get("reasons") or [])
+
     if changed_flag and not st.session_state.get("_admin_update_prompt_done"):
         with st.container(border=True):
             if "no_local_manifest" in reasons_list:
@@ -966,36 +970,28 @@ def main():
 
         if later:
             st.session_state["_admin_update_prompt_done"] = True
-            # 합의: 항상 최신 백업 ZIP으로 복구 후 연결
+            # 합의: 기본은 최신 백업 ZIP으로 복구 후 연결
             if _restore_then_attach():
                 st.rerun()
             else:
-                # 백업 없음/손상 → 상황 안내 + 업데이트 유도
                 st.info("백업을 찾지 못했거나 손상되었습니다. ‘업데이트(다시 최적화)’를 실행해 주세요.")
                 st.stop()
-
-        # 질문이 떠 있는 동안은 아래 로직 실행하지 않음
         st.stop()
 
-    # (3) 변경 없음 → 항상 최신 백업 ZIP으로 복구 시도 ------------------------------
+    # (F) 일반 플로우 ------------------------------------------------------------
     decision_log = st.empty()
-    decision_log.info("auto-boot(admin): changed={} reasons={}".format(changed_flag, reasons_list))
+    decision_log.info("auto-boot(admin): local_ok={} | changed={} reasons={}".format(local_ok, changed_flag, reasons_list))
 
     if _index_ready():
         _render_title_with_status()
     else:
-        if _restore_then_attach():
+        # 로컬은 있으니 바로 연결 시도(복구는 위에서 처리됨)
+        if _attach_with_status():
             st.rerun()
         else:
-            st.info("백업을 찾지 못했거나 손상되었습니다. ‘업데이트(다시 최적화)’를 실행해 주세요.")
-            btn = st.button("업데이트 (다시 최적화 실행)", type="primary", key="boot_build_first")
-            if btn:
-                if _build_then_backup_then_attach():
-                    st.rerun()
-                else:
-                    st.stop()
+            st.info("두뇌 연결 실패. 필요 시 ‘업데이트(다시 최적화)’를 실행해 주세요.")
 
-    # (4) 관리자 화면 섹션 ---------------------------------------------------------
+    # (G) 관리자 화면 섹션 --------------------------------------------------------
     render_brain_prep_main()
     st.divider()
     render_tag_diagnostics()
