@@ -826,25 +826,7 @@ def _now_kst_str() -> str:
         return time.strftime("%Y-%m-%d %H:%M:%S")
 
 
-def _digest_from_files(fs: List[Dict[str, Any]]) -> str:
-    parts = []
-    for f in fs:
-        parts.append(
-            f"{f.get('id')}|{f.get('modifiedTime')}|{f.get('md5Checksum') or f.get('size') or ''}"
-        )
-    return _sha1("|".join(parts))
-
-
-def _digest_from_manifest(m: Dict[str, Any]) -> str:
-    parts = []
-    for fid, v in sorted(m.items()):
-        parts.append(
-            f"{fid}|{v.get('modifiedTime')}|{v.get('md5Checksum') or v.get('size') or ''}|{v.get('content_sha1','')}"
-        )
-    return _sha1("|".join(parts))
-
-
-# ---------- NEW: Prepared 비교 대상 필터 ---------------------------------------
+# ---------- NEW: Prepared 비교 대상 필터(유지) ---------------------------------
 _ALLOWED_MIMES = {
     # Google Docs native
     "application/vnd.google-apps.document",
@@ -858,6 +840,9 @@ _ALLOWED_MIMES = {
     "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 }
+
+def _is_google_native_mime(mime: str) -> bool:
+    return (mime or "").startswith("application/vnd.google-apps.")
 
 def _is_relevant_prepared_item(meta: Dict[str, Any]) -> bool:
     """Prepared 폴더 내에서 '수업 원본'만 True. 백업/ZIP/폴더/무관 MIME은 False."""
@@ -902,6 +887,55 @@ def _filter_manifest_for_prepared(man: Dict[str, Any]) -> Tuple[Dict[str, Any], 
     return filtered, skipped
 
 
+# ---------- NEW: 빠른 비교를 위한 fingerprint 로직 ------------------------------
+def _fingerprint_file_meta(meta: Dict[str, Any]) -> str:
+    """
+    Prepared(Drive) 파일 메타에서 비교용 fingerprint 생성.
+    - Google native: modifiedTime 무시 → id|name
+    - Binary/업로드: md5Checksum 우선, 없으면 size → id|md5(size)
+    """
+    fid = meta.get("id") or ""
+    name = meta.get("name") or ""
+    mime = meta.get("mimeType") or ""
+    if _is_google_native_mime(mime):
+        return f"{fid}|{name}"
+    # binary-like
+    md5 = meta.get("md5Checksum")
+    if md5:
+        return f"{fid}|md5:{md5}"
+    size = meta.get("size")
+    return f"{fid}|size:{size or ''}"
+
+
+def _fingerprint_manifest_meta(fid: str, meta: Dict[str, Any]) -> str:
+    """
+    Manifest 항목에서 비교용 fingerprint 생성.
+    - Google native: modifiedTime/content_sha1 무시 → id|name
+    - Binary/업로드: md5Checksum 우선, 없으면 size → id|md5(size)
+    """
+    name = meta.get("name") or ""
+    mime = meta.get("mimeType") or ""
+    if _is_google_native_mime(mime):
+        return f"{fid}|{name}"
+    md5 = meta.get("md5Checksum")
+    if md5:
+        return f"{fid}|md5:{md5}"
+    size = meta.get("size")
+    return f"{fid}|size:{size or ''}"
+
+
+def _digest_from_files(fs: List[Dict[str, Any]]) -> Tuple[str, List[str]]:
+    fps = [_fingerprint_file_meta(f) for f in fs]
+    fps_sorted = sorted(fps)
+    return _sha1("|".join(fps_sorted)), fps_sorted[:5]  # digest, sample
+
+
+def _digest_from_manifest(m: Dict[str, Any]) -> Tuple[str, List[str]]:
+    fps = [_fingerprint_manifest_meta(fid, meta) for fid, meta in sorted(m.items())]
+    fps_sorted = sorted(fps)
+    return _sha1("|".join(fps_sorted)), fps_sorted[:5]  # digest, sample
+
+
 def precheck_build_needed(gdrive_folder_id: Optional[str] = None) -> Dict[str, Any]:
     """
     prepared(드라이브)와 로컬(manifest/chunks)을 빠르게 비교해,
@@ -923,19 +957,25 @@ def precheck_build_needed(gdrive_folder_id: Optional[str] = None) -> Dict[str, A
     # 로컬 인덱스 존재 여부
     has_local_index = (PERSIST_DIR / "chunks.jsonl").exists()
 
-    # 비교(메타데이터 기반)
-    prep_digest = _digest_from_files(files_rel)
-    mani_digest = _digest_from_manifest(man_rel)
+    # 비교(빠른 fingerprint 기반)
+    prep_digest, prep_fp_sample = _digest_from_files(files_rel)
+    mani_digest, mani_fp_sample = _digest_from_manifest(man_rel)
+
+    # 파일 ID 집합 비교(가장 중요한 1차 판단)
+    ids_drive = {f.get("id") for f in files_rel}
+    ids_mani = set(man_rel.keys())
+    id_set_diff = (ids_drive != ids_mani)
 
     reasons: List[str] = []
     if not has_local_index:
         reasons.append("no_local_index")
-    if len(files_rel) != len(man_rel):
-        reasons.append(f"file_count_diff: prepared={len(files_rel)} manifest={len(man_rel)}")
-    if prep_digest[:12] != mani_digest[:12]:
-        reasons.append("digest_mismatch")
+    if id_set_diff:
+        reasons.append(f"id_set_diff: prepared_only={len(ids_drive-ids_mani)} manifest_only={len(ids_mani-ids_drive)}")
+    if prep_digest != mani_digest:
+        reasons.append("fingerprint_mismatch")
 
-    would_rebuild = (not has_local_index) or ("digest_mismatch" in reasons) or ("file_count_diff" in reasons)
+    # 빌드 필요 여부: 로컬이 없거나, ID 집합이 다르거나, 바이너리 fingerprint가 달라진 경우
+    would_rebuild = (not has_local_index) or id_set_diff or ("fingerprint_mismatch" in reasons)
 
     sample = [{"name": f.get("name"), "mt": f.get("modifiedTime")} for f in files_rel[:5]]
 
@@ -948,8 +988,10 @@ def precheck_build_needed(gdrive_folder_id: Optional[str] = None) -> Dict[str, A
         "prepared_digest": prep_digest,
         "manifest_digest": mani_digest,
         "prepared_sample": sample,
+        "prepared_fp_sample": prep_fp_sample,   # ← 디버그용
+        "manifest_fp_sample": mani_fp_sample,   # ← 디버그용
         "skipped_non_prepared": skipped_prepared + skipped_manifest,
-        "changed": ("digest_mismatch" in reasons) or ("file_count_diff" in reasons),
+        "changed": id_set_diff or ("fingerprint_mismatch" in reasons),
         "checked_at": _now_kst_str(),
     }
 
@@ -957,6 +999,7 @@ def precheck_build_needed(gdrive_folder_id: Optional[str] = None) -> Dict[str, A
 def quick_precheck(gdrive_folder_id: Optional[str] = None) -> Dict[str, Any]:
     """이전 이름과 호환을 위한 래퍼."""
     return precheck_build_needed(gdrive_folder_id)
+
 
 
 
