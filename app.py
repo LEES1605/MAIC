@@ -723,7 +723,7 @@ def render_simple_qa():
 
 # ===== [07] MAIN =============================================================
 def main():
-    # (1) 세션당 1회 자동 사전점검
+    # (1) 세션당 1회 자동 사전점검(드라이브 변화 감지용)
     if not st.session_state.get("_precheck_auto_done", False):
         st.session_state["_precheck_auto_done"] = True
         if precheck_build_needed is not None:
@@ -734,144 +734,199 @@ def main():
         else:
             st.session_state["_precheck_res"] = None
 
-    # (1.5) 부팅시 자동 연결/자동 최적화(세션당 1회만) + 의사결정 로그/마커
-    if not st.session_state.get("_auto_boot_done", False):
-        st.session_state["_auto_boot_done"] = True
+    # (1.5) 부팅 시 1회: 백업↔로컬 비교 → 복구/질문/연결
+    if not st.session_state.get("_boot_flow_initialized", False):
+        st.session_state["_boot_flow_initialized"] = True
 
-        import importlib, os
+        import importlib
         from pathlib import Path
+
+        # index_build 모듈에서 필요한 항목 바인딩
         try:
             _mod = importlib.import_module("src.rag.index_build")
             _PERSIST_DIR = getattr(_mod, "PERSIST_DIR", Path.home() / ".maic" / "persist")
             _MANIFEST_PATH = getattr(_mod, "MANIFEST_PATH", Path.home() / ".maic" / "manifest.json")
             _QUALITY_REPORT_PATH = getattr(_mod, "QUALITY_REPORT_PATH", Path.home() / ".maic" / "quality_report.json")
+            _compare_local_vs_backup = getattr(_mod, "compare_local_vs_backup", None)
+            _restore_latest_backup_to_local = getattr(_mod, "restore_latest_backup_to_local", None)
+            _make_and_upload_backup_zip_fn = getattr(_mod, "_make_and_upload_backup_zip", None)
         except Exception:
             _PERSIST_DIR = Path.home() / ".maic" / "persist"
             _MANIFEST_PATH = Path.home() / ".maic" / "manifest.json"
             _QUALITY_REPORT_PATH = Path.home() / ".maic" / "quality_report.json"
+            _compare_local_vs_backup = None
+            _restore_latest_backup_to_local = None
+            _make_and_upload_backup_zip_fn = None
 
         _chunks_path = _PERSIST_DIR / "chunks.jsonl"
-        _manifest_path = Path(_MANIFEST_PATH)
-        _qrep_path = Path(_QUALITY_REPORT_PATH)
-        _ready_flag = _PERSIST_DIR / ".ready"
 
-        def _file_ok(p: Path, min_bytes: int = 32) -> bool:
+        # 비교 결과와 프리체크를 미리 저장(버튼 클릭 후에도 재활용)
+        st.session_state["_boot_ctx"] = st.session_state.get("_boot_ctx", {})
+        _ctx = st.session_state["_boot_ctx"]
+
+        # ① 드라이브 백업 ↔ 로컬 해시 비교
+        _ctx["compare"] = None
+        if _compare_local_vs_backup is not None:
             try:
-                return p.exists() and p.stat().st_size >= min_bytes
-            except Exception:
+                _ctx["compare"] = _compare_local_vs_backup()
+            except Exception as e:
+                st.warning(f"백업/로컬 비교 실패: {type(e).__name__}: {e}")
+
+        # ② 새 자료 감지(사전점검)
+        _ctx["pre"] = st.session_state.get("_precheck_res")
+
+        # 의사결정: attach / restore / ask / build
+        plan = "attach"  # 기본값
+        reason = []
+
+        cmpres = _ctx.get("compare") or {}
+        has_local = bool(cmpres.get("has_local"))
+        has_backup = bool(cmpres.get("has_backup"))
+        same_hash = bool(cmpres.get("same"))
+
+        # 로컬 파일 존재(백업X)만으로도 우선 연결 시도
+        if has_local and not has_backup:
+            plan = "attach"; reason.append("local_only")
+        elif has_local and has_backup and same_hash:
+            plan = "attach"; reason.append("hash_equal")
+        else:
+            # 해시 다름 or 로컬 없음 → 새 자료 감지 여부 확인
+            would = bool((_ctx.get("pre") or {}).get("would_rebuild"))
+            if has_backup:
+                if would:
+                    plan = "ask"; reason.append("new_material_detected")
+                else:
+                    plan = "restore"; reason.append("use_backup_restore")
+            else:
+                # 백업 자체가 없으면 빌드
+                plan = "build"; reason.append("no_backup_available")
+
+        _ctx["plan"] = plan
+        _ctx["reason"] = reason
+
+    # (1.6) 부팅 플로우 실행/렌더링
+    _ctx = st.session_state.get("_boot_ctx", {})
+    plan = _ctx.get("plan")
+    cmpres = _ctx.get("compare") or {}
+    pre = _ctx.get("pre") or {}
+    decision_log = st.empty()
+
+    # 실행 헬퍼들 ---------------------------------------------------------------
+    def _attach_with_status(label="두뇌 자동 연결 중…") -> bool:
+        try:
+            with st.status(label, state="running") as s:
+                bar = st.progress(0)
+                bar.progress(25); time.sleep(0.08)
+                ok = _auto_attach_or_restore_silently()
+                bar.progress(100)
+                if ok:
+                    s.update(label="두뇌 자동 연결 완료 ✅", state="complete")
+                else:
+                    s.update(label="두뇌 자동 연결 실패 ❌", state="error")
+                return bool(ok)
+        except Exception:
+            ok = _auto_attach_or_restore_silently()
+            if ok:
+                st.success("두뇌 자동 연결 완료 ✅")
+            else:
+                st.error("두뇌 자동 연결 실패")
+            return bool(ok)
+
+    def _restore_then_attach():
+        import importlib
+        try:
+            _mod = importlib.import_module("src.rag.index_build")
+            _restore = getattr(_mod, "restore_latest_backup_to_local", None)
+        except Exception:
+            _restore = None
+        if _restore is None:
+            st.error("복구 모듈을 찾지 못했습니다. (restore_latest_backup_to_local)")
+            return False
+        with st.status("백업에서 로컬로 복구 중…", state="running") as s:
+            r = _restore()
+            if not r or not r.get("ok"):
+                s.update(label="복구 실패 ❌", state="error")
+                st.error(f"복구 실패: {r.get('error') if r else 'unknown'}")
                 return False
+            s.update(label="복구 완료 ✅", state="complete")
+        return _attach_with_status("복구 후 두뇌 연결 중…")
 
-        # ✅ 로컬 존재 판단을 강화
-        _has_local = (
-            _file_ok(_chunks_path, min_bytes=256) or
-            _file_ok(_manifest_path, min_bytes=32) or
-            _file_ok(_qrep_path, min_bytes=32) or
-            _ready_flag.exists()
-        )
+    def _build_then_backup_then_attach():
+        # 이미 상단에서 import된 build_index_with_checkpoint 사용
+        if build_index_with_checkpoint is None:
+            st.error("인덱스 빌더 모듈을 찾지 못했습니다. (src.rag.index_build)")
+            return False
 
-        # 의사결정 로그 컨테이너
-        _auto_log = st.empty()
+        prog = st.progress(0); log = st.empty()
 
-        def _write_ready_flag():
+        def _pct(v: int, msg: str | None = None):
+            prog.progress(max(0, min(int(v), 100)))
+            if msg: log.info(str(msg))
+
+        def _msg(s: str):
+            log.write(f"• {s}")
+
+        try:
+            with st.status("변경 반영을 위한 재최적화 실행 중…", state="running") as s:
+                res = build_index_with_checkpoint(
+                    update_pct=_pct,
+                    update_msg=_msg,
+                    gdrive_folder_id="",
+                    gcp_creds={},
+                    persist_dir=str(_PERSIST_DIR),
+                    remote_manifest={},
+                )
+                prog.progress(100)
+                s.update(label="재최적화 완료 ✅", state="complete")
+            st.json(res)
+
+            # ZIP 백업 업로드(옵션)
             try:
-                _PERSIST_DIR.mkdir(parents=True, exist_ok=True)
-                _ready_flag.write_text(time.strftime("%Y-%m-%d %H:%M:%S") + " build_ok\n", encoding="utf-8")
+                if _make_and_upload_backup_zip_fn:
+                    _ = _make_and_upload_backup_zip_fn(None, None)  # 내부에서 설정된 값 사용
             except Exception:
                 pass
 
-        def _auto_build_and_attach() -> bool:
-            """필요 시 자동 재최적화 후 자동 연결."""
-            if build_index_with_checkpoint is None:
-                _auto_log.warning("자동 최적화 불가: 빌더 모듈 미탑재 (src.rag.index_build).")
-                return False
+            return _attach_with_status("재최적화 후 두뇌 연결 중…")
+        except Exception as e:
+            st.error(f"재최적화 실패: {type(e).__name__}: {e}")
+            return False
 
-            prog = st.progress(0)
-            log = st.empty()
-
-            def _pct(v: int, msg: str | None = None):
-                prog.progress(max(0, min(int(v), 100)))
-                if msg:
-                    log.info(str(msg))
-
-            def _msg(s: str):
-                log.write(f"• {s}")
-
-            try:
-                with st.status("변경 반영을 위한 자동 최적화 실행 중…", state="running") as s:
-                    res = build_index_with_checkpoint(
-                        update_pct=_pct,
-                        update_msg=_msg,
-                        gdrive_folder_id="",
-                        gcp_creds={},
-                        persist_dir=str(_PERSIST_DIR),  # ✅ 실제 경로로 고정
-                        remote_manifest={},
-                    )
-                    prog.progress(100)
-                    s.update(label="자동 최적화 완료 ✅", state="complete")
-                # 빌드 성공 마커 생성
-                _write_ready_flag()
-                # 최적화 직후 자동 연결
-                try:
-                    with st.status("두뇌 자동 연결 중…", state="running") as s2:
-                        bar = st.progress(0)
-                        bar.progress(30); time.sleep(0.12)
-                        ok = _auto_attach_or_restore_silently()
-                        bar.progress(100)
-                        if ok:
-                            s2.update(label="두뇌 자동 연결 완료 ✅", state="complete")
-                            _auto_log.info(f"auto-boot: build→attach OK | PERSIST_DIR={_PERSIST_DIR}")
-                            return True
-                        else:
-                            s2.update(label="두뇌 자동 연결 실패 ❌", state="error")
-                            _auto_log.error("auto-boot: build OK but attach FAIL")
-                            return False
-                except Exception:
-                    ok = _auto_attach_or_restore_silently()
-                    if ok:
-                        st.success("두뇌 자동 연결 완료 ✅")
-                        _auto_log.info(f"auto-boot: build→attach OK (fallback) | PERSIST_DIR={_PERSIST_DIR}")
-                        return True
-                    st.error("자동 연결 실패 — 상단 패널에서 연결을 시도해 주세요.")
-                    _auto_log.error("auto-boot: build OK but attach FAIL (fallback)")
-                    return False
-            except Exception as e:
-                st.error(f"자동 최적화 실패: {type(e).__name__}: {e}")
-                _auto_log.error(f"auto-boot: build FAIL — {type(e).__name__}: {e}")
-                return False
-
-        # ① 로컬이 있으면 → 우선 자동 연결 시도(성공 시 빌드 생략)
-        if _has_local and not st.session_state.get("rag_index"):
-            _auto_log.info(
-                f"auto-boot decision: try ATTACH (local detected) | "
-                f"chunks={'Y' if _chunks_path.exists() else 'N'}({(_chunks_path.stat().st_size if _chunks_path.exists() else 0)}B), "
-                f"manifest={'Y' if _manifest_path.exists() else 'N'}, "
-                f"qreport={'Y' if _qrep_path.exists() else 'N'}, "
-                f"ready={'Y' if _ready_flag.exists() else 'N'}, "
-                f"path={_PERSIST_DIR}"
+    # 의사결정 로그 출력
+    if plan:
+        decision_log.info(
+            "auto-boot: plan=`{}` | reasons={} | has_local={} has_backup={} same_hash={} | path={}".format(
+                plan, _ctx.get("reason"), bool(cmpres.get("has_local")), bool(cmpres.get("has_backup")),
+                bool(cmpres.get("same")), getattr(_mod, "PERSIST_DIR", _PERSIST_DIR)
             )
-            try:
-                with st.status("두뇌 자동 연결 중…", state="running") as s:
-                    bar = st.progress(0)
-                    bar.progress(25); time.sleep(0.12)
-                    ok = _auto_attach_or_restore_silently()
-                    bar.progress(100)
-                    if ok:
-                        s.update(label="두뇌 자동 연결 완료 ✅", state="complete")
-                        _auto_log.info("auto-boot result: attach OK")
-                    else:
-                        s.update(label="두뇌 자동 연결 실패 — 자동 최적화로 전환합니다.", state="error")
-                        _auto_log.warning("auto-boot result: attach FAIL → will BUILD")
-                        _auto_build_and_attach()
-            except Exception as e:
-                _auto_log.warning(f"auto-boot exception on attach → will BUILD: {type(e).__name__}: {e}")
-                _auto_build_and_attach()
+        )
 
-        # ② 로컬이 없으면 → 자동 최적화 후 자동 연결
-        if not _has_local and not st.session_state.get("rag_index"):
-            _auto_log.info(f"auto-boot decision: no local index → will BUILD | path={_PERSIST_DIR}")
-            _auto_build_and_attach()
+    # 플로우 실행
+    if plan == "attach" and not st.session_state.get("rag_index"):
+        _attach_with_status()
 
-    # (2) 준비 패널
+    elif plan == "restore" and not st.session_state.get("rag_index"):
+        _restore_then_attach()
+
+    elif plan == "build" and not st.session_state.get("rag_index"):
+        _build_then_backup_then_attach()
+
+    elif plan == "ask" and not st.session_state.get("rag_index"):
+        st.warning("📌 새 자료(변경/신규)가 감지되었습니다. 어떻게 진행할까요?")
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("예, 재최적화 실행", type="primary", key="boot_ask_build"):
+                if _build_then_backup_then_attach():
+                    # 결정을 한 번만 수행하도록 플래그
+                    st.session_state["_boot_ctx"]["plan"] = "done"
+                    st.rerun()
+        with c2:
+            if st.button("아니오, 백업으로 복구 후 연결", key="boot_ask_restore"):
+                if _restore_then_attach():
+                    st.session_state["_boot_ctx"]["plan"] = "done"
+                    st.rerun()
+
+    # (2) 준비 패널 (자동 사전점검 결과에 따라 흐름형 CTA)
     render_brain_prep_main()
     st.divider()
 
@@ -884,3 +939,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
