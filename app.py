@@ -735,6 +735,94 @@ def main():
         else:
             st.session_state["_precheck_res"] = None
 
+    # (1.5) 부팅시 자동 연결/자동 재최적화(세션당 1회만)
+    if not st.session_state.get("_auto_boot_done", False):
+        st.session_state["_auto_boot_done"] = True
+
+        # 실제 PERSIST_DIR과 로컬 인덱스 존재 여부 확인
+        import importlib
+        from pathlib import Path
+        try:
+            _mod = importlib.import_module("src.rag.index_build")
+            _PERSIST_DIR = getattr(_mod, "PERSIST_DIR", Path.home() / ".maic" / "persist")
+        except Exception:
+            _PERSIST_DIR = Path.home() / ".maic" / "persist"
+        _chunks_path = _PERSIST_DIR / "chunks.jsonl"
+        _has_local = _chunks_path.exists()
+
+        def _auto_build_and_attach() -> bool:
+            """필요 시 자동 재최적화 후 자동 연결."""
+            if build_index_with_checkpoint is None:
+                return False
+
+            prog = st.progress(0)
+            log = st.empty()
+
+            def _pct(v: int, msg: str | None = None):
+                prog.progress(max(0, min(int(v), 100)))
+                if msg:
+                    log.info(str(msg))
+
+            def _msg(s: str):
+                log.write(f"• {s}")
+
+            try:
+                with st.status("변경 반영을 위한 자동 최적화 실행 중…", state="running") as s:
+                    res = build_index_with_checkpoint(
+                        update_pct=_pct,
+                        update_msg=_msg,
+                        gdrive_folder_id="",
+                        gcp_creds={},
+                        persist_dir=str(_PERSIST_DIR),  # ✅ 실제 경로로 고정
+                        remote_manifest={},
+                    )
+                    prog.progress(100)
+                    s.update(label="자동 최적화 완료 ✅", state="complete")
+                # 최적화 직후 자동 연결
+                try:
+                    with st.status("두뇌 자동 연결 중…", state="running") as s2:
+                        bar = st.progress(0)
+                        bar.progress(30); time.sleep(0.12)
+                        ok = _auto_attach_or_restore_silently()
+                        bar.progress(100)
+                        if ok:
+                            s2.update(label="두뇌 자동 연결 완료 ✅", state="complete")
+                            return True
+                        else:
+                            s2.update(label="두뇌 자동 연결 실패 ❌", state="error")
+                            return False
+                except Exception:
+                    ok = _auto_attach_or_restore_silently()
+                    if ok:
+                        st.success("두뇌 자동 연결 완료 ✅")
+                        return True
+                    st.error("자동 연결 실패 — 상단 패널에서 연결을 시도해 주세요.")
+                    return False
+            except Exception as e:
+                st.error(f"자동 최적화 실패: {type(e).__name__}: {e}")
+                return False
+
+        # ① 로컬이 있으면 → 자동 연결 시도
+        if _has_local and not st.session_state.get("rag_index"):
+            try:
+                with st.status("두뇌 자동 연결 중…", state="running") as s:
+                    bar = st.progress(0)
+                    bar.progress(25); time.sleep(0.12)
+                    ok = _auto_attach_or_restore_silently()
+                    bar.progress(100)
+                    if ok:
+                        s.update(label="두뇌 자동 연결 완료 ✅", state="complete")
+                    else:
+                        s.update(label="두뇌 자동 연결 실패 — 자동 최적화로 전환합니다.", state="error")
+                        _auto_build_and_attach()
+            except Exception:
+                # 연결 중 예외가 나면 자동 최적화로 폴백
+                _auto_build_and_attach()
+
+        # ② 로컬이 없으면 → 자동 최적화 후 자동 연결
+        if not _has_local and not st.session_state.get("rag_index"):
+            _auto_build_and_attach()
+
     # (2) 준비 패널 (자동 사전점검 결과에 따라 흐름형 CTA)
     render_brain_prep_main()
     st.divider()
