@@ -724,6 +724,17 @@ def render_simple_qa():
 # ===== [07] MAIN =============================================================
 def main():
     # (A) 타이틀+상태 배지 렌더러 ------------------------------------------------
+    def _is_attached_session() -> bool:
+        """세션에 존재 가능한 다양한 키로 '두뇌 연결됨' 신호를 탐지."""
+        ss = st.session_state
+        return bool(
+            ss.get("brain_attached") or
+            ss.get("rag_index") or
+            ss.get("retriever") or
+            ss.get("vectorstore") or
+            ss.get("rag")
+        )
+
     def _render_title_with_status():
         import importlib
         from pathlib import Path
@@ -736,7 +747,8 @@ def main():
             _PERSIST_DIR_OBJ = Path.home() / ".maic" / "persist"
 
         chunks_ok = (_PERSIST_DIR_OBJ / "chunks.jsonl").exists()
-        is_attached = bool(st.session_state.get("rag_index"))
+        is_attached = _is_attached_session()
+
         if is_attached and chunks_ok:
             badge = '<span class="pill pill-green">🟢 두뇌 준비됨</span>'
         elif chunks_ok and not is_attached:
@@ -862,21 +874,25 @@ def main():
 
     # 실행 헬퍼들 ---------------------------------------------------------------
     def _attach_with_status(label="두뇌 자동 연결 중…") -> bool:
+        import time
         try:
             with st.status(label, state="running") as s:
                 bar = st.progress(0)
                 bar.progress(25); time.sleep(0.08)
                 ok = _auto_attach_or_restore_silently()
+                # ✅ 연결 상태를 명시 플래그로 저장
+                st.session_state["brain_attached"] = bool(ok)
                 bar.progress(100)
                 if ok:
                     s.update(label="두뇌 자동 연결 완료 ✅", state="complete")
                 else:
                     s.update(label="두뇌 자동 연결 실패 ❌", state="error")
-                # 연결 상태가 바뀌었으니 타이틀 배지도 즉시 갱신
+                # 배지 즉시 갱신
                 _render_title_with_status()
                 return bool(ok)
         except Exception:
             ok = _auto_attach_or_restore_silently()
+            st.session_state["brain_attached"] = bool(ok)
             if ok:
                 st.success("두뇌 자동 연결 완료 ✅")
                 _render_title_with_status()
@@ -997,4 +1013,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
