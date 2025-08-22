@@ -844,6 +844,64 @@ def _digest_from_manifest(m: Dict[str, Any]) -> str:
     return _sha1("|".join(parts))
 
 
+# ---------- NEW: Prepared 비교 대상 필터 ---------------------------------------
+_ALLOWED_MIMES = {
+    # Google Docs native
+    "application/vnd.google-apps.document",
+    "application/vnd.google-apps.presentation",
+    "application/vnd.google-apps.spreadsheet",
+    # Common exports / uploads
+    "application/pdf",
+    "text/plain", "text/markdown",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+}
+
+def _is_relevant_prepared_item(meta: Dict[str, Any]) -> bool:
+    """Prepared 폴더 내에서 '수업 원본'만 True. 백업/ZIP/폴더/무관 MIME은 False."""
+    name = (meta.get("name") or "").lower()
+    mime = meta.get("mimeType") or ""
+
+    # 폴더류는 제외
+    if mime == "application/vnd.google-apps.folder":
+        return False
+
+    # 백업/ZIP/캐시류 명명 제외
+    if name.endswith(".zip") or name.startswith("backup_") or name.startswith("restored_") or "backup" in name:
+        return False
+
+    # MIME 화이트리스트만 허용 (허용 목록에 없으면 제외)
+    if (mime in _ALLOWED_MIMES) or mime.startswith("text/"):
+        return True
+    return False
+
+
+def _filter_prepared_files(files: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], int]:
+    kept: List[Dict[str, Any]] = []
+    skipped = 0
+    for f in files:
+        if _is_relevant_prepared_item(f):
+            kept.append(f)
+        else:
+            skipped += 1
+    return kept, skipped
+
+
+def _filter_manifest_for_prepared(man: Dict[str, Any]) -> Tuple[Dict[str, Any], int]:
+    filtered: Dict[str, Any] = {}
+    skipped = 0
+    for fid, v in man.items():
+        name = (v.get("name") or "").lower()
+        mime = v.get("mimeType") or ""
+        if _is_relevant_prepared_item({"name": name, "mimeType": mime}):
+            filtered[fid] = v
+        else:
+            skipped += 1
+    return filtered, skipped
+
+
 def precheck_build_needed(gdrive_folder_id: Optional[str] = None) -> Dict[str, Any]:
     """
     prepared(드라이브)와 로컬(manifest/chunks)을 빠르게 비교해,
@@ -859,8 +917,9 @@ def precheck_build_needed(gdrive_folder_id: Optional[str] = None) -> Dict[str, A
       "prepared_digest": "...",
       "manifest_digest": "...",
       "prepared_sample": [{"name": "...", "mt": "..."}, ...],
+      "skipped_non_prepared": 3,
       "changed": true,                  # 드라이브-매니페스트 차이 여부(참고)
-      "checked_at": "YYYY-mm-dd HH:MM:SS(KST)"
+      "checked_at": "YYYY-mm-dd HH:MM:SS"
     }
     """
     svc = _drive_client()
@@ -868,49 +927,53 @@ def precheck_build_needed(gdrive_folder_id: Optional[str] = None) -> Dict[str, A
     if not prepared_id:
         raise KeyError("prepared 폴더 ID를 찾지 못했습니다.")
 
-    files = _list_files(svc, prepared_id)
-    man = _load_manifest(MANIFEST_PATH)
+    # 드라이브 목록 → 백업/ZIP/폴더/무관 MIME 제외
+    files_all = _list_files(svc, prepared_id)
+    files_rel, skipped_prepared = _filter_prepared_files(files_all)
+
+    # 로컬 manifest 로드 → 동일한 기준으로 필터
+    man_all = _load_manifest(MANIFEST_PATH)
+    man_rel, skipped_manifest = _filter_manifest_for_prepared(man_all)
 
     # 로컬 인덱스 존재 여부
     has_local_index = (PERSIST_DIR / "chunks.jsonl").exists()
 
-    # 드라이브-매니페스트 비교(메타데이터 기준)
-    prep_digest = _digest_from_files(files)
-    mani_digest = _digest_from_manifest(man)
+    # 비교(메타데이터 기반)
+    prep_digest = _digest_from_files(files_rel)
+    mani_digest = _digest_from_manifest(man_rel)
 
     reasons: List[str] = []
     if not has_local_index:
         reasons.append("no_local_index")
-    if len(files) != len(man):
-        reasons.append(f"file_count_diff: prepared={len(files)} manifest={len(man)}")
+    if len(files_rel) != len(man_rel):
+        reasons.append(f"file_count_diff: prepared={len(files_rel)} manifest={len(man_rel)}")
     if prep_digest[:12] != mani_digest[:12]:
         reasons.append("digest_mismatch")
 
     # 빌드 필요 여부: 로컬이 없거나, 드라이브와 매니페스트가 다르면 True
     would_rebuild = (not has_local_index) or ("digest_mismatch" in reasons) or ("file_count_diff" in reasons)
 
-    sample = [{"name": f.get("name"), "mt": f.get("modifiedTime")} for f in files[:5]]
+    sample = [{"name": f.get("name"), "mt": f.get("modifiedTime")} for f in files_rel[:5]]
 
     return {
-        "would_rebuild": bool(would_rebuild),   # ✅ UI 호환 키
+        "would_rebuild": bool(would_rebuild),
         "reasons": reasons,
         "has_local_index": bool(has_local_index),
-        "prepared_count": len(files),
-        "manifest_docs": len(man),
+        "prepared_count": len(files_rel),
+        "manifest_docs": len(man_rel),
         "prepared_digest": prep_digest,
         "manifest_digest": mani_digest,
         "prepared_sample": sample,
+        "skipped_non_prepared": skipped_prepared + skipped_manifest,
         "changed": ("digest_mismatch" in reasons) or ("file_count_diff" in reasons),
         "checked_at": _now_kst_str(),
     }
 
 
 def quick_precheck(gdrive_folder_id: Optional[str] = None) -> Dict[str, Any]:
-    """
-    이전 이름과의 호환을 위해 남겨둔 래퍼.
-    실제 계산은 precheck_build_needed()에서 수행합니다.
-    """
+    """이전 이름과 호환을 위한 래퍼."""
     return precheck_build_needed(gdrive_folder_id)
+
 
 
 # ===== [10] PUBLIC ENTRY (빌드 실행) =========================================
