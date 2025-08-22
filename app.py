@@ -90,12 +90,50 @@ if "lang" not in st.session_state:
 if "qa_submitted" not in st.session_state:
     st.session_state["qa_submitted"] = False
 
-def _index_ready() -> bool:
-    return st.session_state.get("rag_index") is not None
+def _is_attached_session() -> bool:
+    """세션에 실제로 두뇌가 붙었는지(여러 키 중 하나라도 있으면 True)."""
+    ss = st.session_state
+    return bool(
+        ss.get("brain_attached") or
+        ss.get("rag_index") or
+        ss.get("retriever") or
+        ss.get("vectorstore") or
+        ss.get("rag")
+    )
+
+def _has_local_index_files() -> bool:
+    """로컬 PERSIST_DIR 안에 .ready 또는 chunks.jsonl 이 있는지 신호만 확인."""
+    import importlib
+    from pathlib import Path as _P
+    try:
+        _mod = importlib.import_module("src.rag.index_build")
+        _PERSIST_DIR = getattr(_mod, "PERSIST_DIR", _P.home() / ".maic" / "persist")
+    except Exception:
+        _PERSIST_DIR = _P.home() / ".maic" / "persist"
+    chunks_ok = (_PERSIST_DIR / "chunks.jsonl").exists()
+    ready_ok  = (_PERSIST_DIR / ".ready").exists()
+    return bool(chunks_ok or ready_ok)
+
+def get_index_status() -> str:
+    """
+    단일 기준의 인덱스 상태:
+      - 'ready'   : 세션에 부착 완료
+      - 'pending' : 세션 미부착, 로컬 파일 신호(.ready/chunks.jsonl)만 존재
+      - 'missing' : 로컬 신호 없음
+    """
+    if _is_attached_session():
+        return "ready"
+    if _has_local_index_files():
+        return "pending"
+    return "missing"
 
 def _index_status_badge() -> None:
-    if _index_ready():
+    """헤더용 라벨(단일 기준 기반)."""
+    status = get_index_status()
+    if status == "ready":
         st.caption("Index status: ✅ ready")
+    elif status == "pending":
+        st.caption("Index status: 🟡 pending (연결 대기)")
     else:
         st.caption("Index status: ❌ missing (빌드 또는 복구 필요)")
 
@@ -114,8 +152,9 @@ def _attach_from_local() -> bool:
 def _auto_attach_or_restore_silently() -> bool:
     return _attach_from_local()
 
+
 # ===== [04] HEADER ===========================================================
-st.title("🧑‍🏫 AI Teacher — Clean Scaffold")
+st.title("🧑‍🏫 LEES AI Teacher — V1.0")
 _index_status_badge()
 
 # ===== [04A] MODE & LANG SWITCH =============================================
