@@ -811,194 +811,269 @@ def restore_latest_backup_to_local(service=None, backup_folder_id: Optional[str]
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
 
+# ===== [09] QUICK PRECHECK (내용 중심, 변경 여부만 빠르게) ======================
+from __future__ import annotations
+from pathlib import Path
+from typing import Any, Dict, List, Tuple, Optional
+import io, json, zipfile
 
-# ===== [09] QUICK PRECHECK (변경 여부만 빠르게) ===============================
-def _now_kst_str() -> str:
-    """로그 표시에 쓰는 KST 타임스탬프 문자열."""
-    try:
-        from datetime import datetime
-        try:
-            from zoneinfo import ZoneInfo  # Python 3.9+
-            return datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d %H:%M:%S")
-        except Exception:
-            return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    except Exception:
-        return time.strftime("%Y-%m-%d %H:%M:%S")
+try:
+    # 모듈 상단에서 이미 정의되어 있으면 그대로 사용
+    PERSIST_DIR = PERSIST_DIR  # type: ignore[name-defined]
+except Exception:
+    PERSIST_DIR = Path.home() / ".maic" / "persist"
 
+try:
+    BACKUP_DIR = BACKUP_DIR  # type: ignore[name-defined]
+except Exception:
+    BACKUP_DIR = Path.home() / ".maic" / "backup"
 
-# ---------- NEW: Prepared 비교 대상 필터(유지) ---------------------------------
-_ALLOWED_MIMES = {
-    # Google Docs native
-    "application/vnd.google-apps.document",
-    "application/vnd.google-apps.presentation",
-    "application/vnd.google-apps.spreadsheet",
-    # Common exports / uploads
-    "application/pdf",
-    "text/plain", "text/markdown",
-    "application/msword",
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+# ── 비교에서 제외할 항목 규칙 ────────────────────────────────────────────────────
+_EXCLUDED_GOOGLE_APPS = {
+    "application/vnd.google-apps.folder",
+    "application/vnd.google-apps.shortcut",
+    "application/vnd.google-apps.script",
 }
+_EXCLUDED_NAME_SUFFIX = {".zip", ".ZIP"}
+_EXCLUDED_NAME_MATCH = {"backup", "backup_zip", "~", ".tmp", ".temp", ".bak"}
 
-def _is_google_native_mime(mime: str) -> bool:
-    return (mime or "").startswith("application/vnd.google-apps.")
-
-def _is_relevant_prepared_item(meta: Dict[str, Any]) -> bool:
-    """Prepared 폴더 내에서 '수업 원본'만 True. 백업/ZIP/폴더/무관 MIME은 False."""
-    name = (meta.get("name") or "").lower()
-    mime = meta.get("mimeType") or ""
-
-    # 폴더류 제외
-    if mime == "application/vnd.google-apps.folder":
-        return False
-
-    # 백업/ZIP/캐시류 명명 제외
-    if name.endswith(".zip") or name.startswith("backup_") or name.startswith("restored_") or "backup" in name:
-        return False
-
-    # MIME 화이트리스트만 허용
-    if (mime in _ALLOWED_MIMES) or mime.startswith("text/"):
+def _is_excluded_item(name: str, mime: str) -> bool:
+    if mime in _EXCLUDED_GOOGLE_APPS:
+        return True
+    low = name.lower()
+    if any(low.endswith(sfx.lower()) for sfx in _EXCLUDED_NAME_SUFFIX):
+        return True
+    if any(tok in low for tok in _EXCLUDED_NAME_MATCH):
         return True
     return False
 
-
-def _filter_prepared_files(files: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], int]:
-    kept: List[Dict[str, Any]] = []
-    skipped = 0
-    for f in files:
-        if _is_relevant_prepared_item(f):
-            kept.append(f)
-        else:
-            skipped += 1
-    return kept, skipped
-
-
-def _filter_manifest_for_prepared(man: Dict[str, Any]) -> Tuple[Dict[str, Any], int]:
-    filtered: Dict[str, Any] = {}
-    skipped = 0
-    for fid, v in man.items():
-        name = (v.get("name") or "").lower()
-        mime = v.get("mimeType") or ""
-        if _is_relevant_prepared_item({"name": name, "mimeType": mime}):
-            filtered[fid] = v
-        else:
-            skipped += 1
-    return filtered, skipped
-
-
-# ---------- NEW: 빠른 비교를 위한 fingerprint 로직 ------------------------------
-def _fingerprint_file_meta(meta: Dict[str, Any]) -> str:
+# ── Drive 목록 → "내용 중심" 지문 만들기 ───────────────────────────────────────────
+def _fingerprint_for_drive_item(item: Dict[str, Any]) -> Tuple[str, str]:
     """
-    Prepared(Drive) 파일 메타에서 비교용 fingerprint 생성.
-    - Google native: modifiedTime 무시 → id|name
-    - Binary/업로드: md5Checksum 우선, 없으면 size → id|md5(size)
+    Returns (kind, fp)
+      - Google 네이티브: ('gdoc', id)  ← 제목/위치/modifiedTime 무시
+      - 바이너리:       ('bin', md5 | size | id)
     """
-    fid = meta.get("id") or ""
-    name = meta.get("name") or ""
-    mime = meta.get("mimeType") or ""
-    if _is_google_native_mime(mime):
-        return f"{fid}|{name}"
-    # binary-like
-    md5 = meta.get("md5Checksum")
+    mime = item.get("mimeType", "") or ""
+    fid  = item.get("id", "") or ""
+    if mime.startswith("application/vnd.google-apps"):
+        return ("gdoc", fid)
+    # 업로드/바이너리
+    md5  = (item.get("md5Checksum") or "").strip()
+    size = str(item.get("size") or "").strip()
     if md5:
-        return f"{fid}|md5:{md5}"
-    size = meta.get("size")
-    return f"{fid}|size:{size or ''}"
+        return ("bin", md5)
+    if size:
+        return ("bin", f"size:{size}")
+    return ("bin", f"id:{fid}")
 
-
-def _fingerprint_manifest_meta(fid: str, meta: Dict[str, Any]) -> str:
+def _list_prepared_from_drive(folder_id: Optional[str]) -> List[Dict[str, Any]]:
     """
-    Manifest 항목에서 비교용 fingerprint 생성.
-    - Google native: modifiedTime/content_sha1 무시 → id|name
-    - Binary/업로드: md5Checksum 우선, 없으면 size → id|md5(size)
+    Drive에서 prepared 폴더의 파일 메타데이터를 수집.
+    모듈에 이미 존재할 수 있는 Drive 서비스/도우미를 최대한 재사용하고, 없으면 best-effort로 동작.
     """
-    name = meta.get("name") or ""
-    mime = meta.get("mimeType") or ""
-    if _is_google_native_mime(mime):
-        return f"{fid}|{name}"
-    md5 = meta.get("md5Checksum")
-    if md5:
-        return f"{fid}|md5:{md5}"
-    size = meta.get("size")
-    return f"{fid}|size:{size or ''}"
+    try:
+        # 모듈 내부 헬퍼 재사용 시도
+        from googleapiclient.discovery import build  # type: ignore
+        from google.oauth2.credentials import Credentials  # type: ignore
+        from google.oauth2.service_account import Credentials as SACreds  # type: ignore
+        import streamlit as st  # type: ignore
 
+        # 자격증명 로딩 (OAuth 우선, SA 폴백) — 기존 코드에 있는 키를 폭넓게 수용
+        candidates = [
+            ("oauth", "GDRIVE_OAUTH_CLIENT_ID", "GDRIVE_OAUTH_CLIENT_SECRET", "GDRIVE_OAUTH_REFRESH_TOKEN"),
+            ("sa",    "GDRIVE_SERVICE_ACCOUNT_JSON"),
+        ]
+        creds = None
+        data = None
+        for c in candidates:
+            if c[0] == "oauth":
+                cid = st.secrets.get(c[1]); csec = st.secrets.get(c[2]); rft = st.secrets.get(c[3])
+                if cid and csec and rft:
+                    token_uri = st.secrets.get("GDRIVE_TOKEN_URI", "https://oauth2.googleapis.com/token")
+                    data = {"client_id":cid, "client_secret":csec, "refresh_token":rft, "token_uri":token_uri}
+                    creds = Credentials.from_authorized_user_info(data, scopes=["https://www.googleapis.com/auth/drive.readonly"])
+                    break
+            else:
+                raw = st.secrets.get(c[1])
+                if raw:
+                    info = json.loads(raw) if isinstance(raw, str) else dict(raw)
+                    creds = SACreds.from_service_account_info(info, scopes=["https://www.googleapis.com/auth/drive.readonly"])
+                    break
+        if creds is None:
+            return []
 
-def _digest_from_files(fs: List[Dict[str, Any]]) -> Tuple[str, List[str]]:
-    fps = [_fingerprint_file_meta(f) for f in fs]
-    fps_sorted = sorted(fps)
-    return _sha1("|".join(fps_sorted)), fps_sorted[:5]  # digest, sample
+        svc = build("drive", "v3", credentials=creds, cache_discovery=False)
+        if not folder_id:
+            # 폴더 ID가 비어도 기존 코드에서 내부적으로 기본 폴더를 찾는 경우가 있으므로,
+            # 여기서는 안전하게 전체를 비움(오탐을 만들지 않기 위해).
+            return []
 
+        q = f"'{folder_id}' in parents and trashed=false"
+        fields = "files(id,name,mimeType,md5Checksum,size,modifiedTime)"
+        items: List[Dict[str, Any]] = []
+        page_token = None
+        while True:
+            resp = svc.files().list(
+                q=q,
+                fields="nextPageToken," + fields,
+                pageToken=page_token,
+                includeItemsFromAllDrives=True,
+                supportsAllDrives=True,
+                corpora="allDrives",
+                pageSize=1000,
+                spaces="drive",
+            ).execute()
+            files = resp.get("files", [])
+            for it in files:
+                if _is_excluded_item(it.get("name",""), it.get("mimeType","")):
+                    continue
+                items.append(it)
+            page_token = resp.get("nextPageToken")
+            if not page_token:
+                break
+        return items
+    except Exception:
+        # Drive 접근이 안되면 빈 목록 반환(오탐 방지)
+        return []
 
-def _digest_from_manifest(m: Dict[str, Any]) -> Tuple[str, List[str]]:
-    fps = [_fingerprint_manifest_meta(fid, meta) for fid, meta in sorted(m.items())]
-    fps_sorted = sorted(fps)
-    return _sha1("|".join(fps_sorted)), fps_sorted[:5]  # digest, sample
+def _fingerprint_set_for_prepared(folder_id: Optional[str]) -> Tuple[set, List[Tuple[str,str]]]:
+    items = _list_prepared_from_drive(folder_id)
+    fps: List[Tuple[str,str]] = []
+    for it in items:
+        kind, fp = _fingerprint_for_drive_item(it)
+        fps.append((kind, fp))
+    return set(fps), fps
 
+# ── manifest 로딩(로컬 우선, 없으면 최신 ZIP에서 manifest.json 추출) ───────────────
+def _load_manifest_dict() -> Optional[Dict[str, Any]]:
+    # 1) 로컬
+    mf = Path(PERSIST_DIR) / "manifest.json"
+    if mf.exists():
+        try:
+            return json.loads(mf.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    # 2) 백업 ZIP(최신)
+    bdir = Path(BACKUP_DIR)
+    if bdir.exists():
+        zips = sorted(bdir.glob("*.zip"), key=lambda p: p.stat().st_mtime, reverse=True)
+        for z in zips:
+            try:
+                with zipfile.ZipFile(z, "r") as zf:
+                    with zf.open("manifest.json") as fh:
+                        data = fh.read()
+                        return json.loads(data.decode("utf-8"))
+            except Exception:
+                continue
+    return None
 
-def precheck_build_needed(gdrive_folder_id: Optional[str] = None) -> Dict[str, Any]:
+def _fingerprint_set_for_manifest(manifest: Dict[str, Any]) -> Tuple[set, List[Tuple[str,str]]]:
     """
-    prepared(드라이브)와 로컬(manifest/chunks)을 빠르게 비교해,
-    '빌드가 필요한지' 판단을 반환합니다.
+    manifest 구조에 의존하지 않도록 보수적으로 해석:
+      - mimeType이 google-apps.* 이면 ('gdoc', id)
+      - 그 외는 ('bin', md5 | size | id | content_sha1) 중 우선순위로 사용
     """
-    svc = _drive_client()
-    prepared_id = _find_folder_id("PREPARED", fallback=gdrive_folder_id)
-    if not prepared_id:
-        raise KeyError("prepared 폴더 ID를 찾지 못했습니다.")
+    entries = manifest.get("files") or manifest.get("docs") or manifest.get("entries") or []
+    fps: List[Tuple[str,str]] = []
+    for e in entries:
+        name = (e.get("name") or e.get("filename") or "")
+        mime = (e.get("mimeType") or e.get("mime") or "")
+        if _is_excluded_item(name, mime):
+            continue
+        fid  = (e.get("id") or e.get("file_id") or "")
+        if mime.startswith("application/vnd.google-apps"):
+            fps.append(("gdoc", fid))
+            continue
+        md5  = (e.get("md5") or e.get("md5Checksum") or "").strip()
+        size = str(e.get("size") or e.get("bytes") or "").strip()
+        csha = (e.get("content_sha1") or "").strip()
+        if md5:
+            fps.append(("bin", md5))
+        elif size:
+            fps.append(("bin", f"size:{size}"))
+        elif csha:
+            fps.append(("bin", f"sha1:{csha}"))
+        else:
+            fps.append(("bin", f"id:{fid}"))
+    return set(fps), fps
 
-    # 드라이브 목록 → 백업/ZIP/폴더/무관 MIME 제외
-    files_all = _list_files(svc, prepared_id)
-    files_rel, skipped_prepared = _filter_prepared_files(files_all)
+# ── 공개 API: 빠른 사전점검 ───────────────────────────────────────────────────────
+def quick_precheck(gdrive_folder_id: Optional[str] = None) -> Dict[str, Any]:
+    """
+    prepared 폴더의 '내용 중심' fingerprint 집합을
+    마지막 인덱싱 manifest의 fingerprint 집합과 비교한다.
 
-    # 로컬 manifest 로드 → 동일 기준으로 필터
-    man_all = _load_manifest(MANIFEST_PATH)
-    man_rel, skipped_manifest = _filter_manifest_for_prepared(man_all)
-
-    # 로컬 인덱스 존재 여부
-    has_local_index = (PERSIST_DIR / "chunks.jsonl").exists()
-
-    # 비교(빠른 fingerprint 기반)
-    prep_digest, prep_fp_sample = _digest_from_files(files_rel)
-    mani_digest, mani_fp_sample = _digest_from_manifest(man_rel)
-
-    # 파일 ID 집합 비교(가장 중요한 1차 판단)
-    ids_drive = {f.get("id") for f in files_rel}
-    ids_mani = set(man_rel.keys())
-    id_set_diff = (ids_drive != ids_mani)
-
+    반환:
+      {
+        "changed": bool,               # 내용 기준으로 실제 변화가 있는가
+        "reasons": List[str],          # 판정 이유
+        "prepared_count": int,         # 비교에 사용된 prepared 항목 수
+        "manifest_count": int,         # manifest 항목 수
+        "samples": {                   # 디버그 샘플(각 5개 이내)
+          "only_in_prepared": [...],
+          "only_in_manifest": [...]
+        }
+      }
+    """
     reasons: List[str] = []
-    if not has_local_index:
-        reasons.append("no_local_index")
-    if id_set_diff:
-        reasons.append(f"id_set_diff: prepared_only={len(ids_drive-ids_mani)} manifest_only={len(ids_mani-ids_drive)}")
-    if prep_digest != mani_digest:
-        reasons.append("fingerprint_mismatch")
 
-    # 빌드 필요 여부: 로컬이 없거나, ID 집합이 다르거나, 바이너리 fingerprint가 달라진 경우
-    would_rebuild = (not has_local_index) or id_set_diff or ("fingerprint_mismatch" in reasons)
+    # prepared fingerprints
+    try:
+        prepared_set, prepared_list = _fingerprint_set_for_prepared(gdrive_folder_id)
+    except Exception as e:
+        return {
+            "changed": False,
+            "reasons": [f"prepared_list_failed:{type(e).__name__}"],
+            "prepared_count": 0,
+            "manifest_count": 0,
+            "samples": {"only_in_prepared": [], "only_in_manifest": []},
+        }
 
-    sample = [{"name": f.get("name"), "mt": f.get("modifiedTime")} for f in files_rel[:5]]
+    # manifest fingerprints
+    manifest = _load_manifest_dict()
+    if manifest is None:
+        # manifest가 없으면 최초 빌드가 필요하므로 '변경'으로 간주
+        return {
+            "changed": True,
+            "reasons": ["no_local_manifest"],
+            "prepared_count": len(prepared_set),
+            "manifest_count": 0,
+            "samples": {"only_in_prepared": list(map(str, list(prepared_set)[:5])), "only_in_manifest": []},
+        }
+
+    manifest_set, manifest_list = _fingerprint_set_for_manifest(manifest)
+
+    # 집합 비교(내용 중심)
+    only_prepared = prepared_set - manifest_set
+    only_manifest = manifest_set - prepared_set
+
+    if not only_prepared and not only_manifest:
+        return {
+            "changed": False,
+            "reasons": [],
+            "prepared_count": len(prepared_set),
+            "manifest_count": len(manifest_set),
+            "samples": {"only_in_prepared": [], "only_in_manifest": []},
+        }
+
+    # down-grade 규칙은 이미 fingerprint 수준에서 이름/위치를 제거했으므로
+    # 여기서 남는 차이는 실제 추가/삭제/콘텐츠 변경으로 본다.
+    reasons.append("content_diff")
 
     return {
-        "would_rebuild": bool(would_rebuild),
+        "changed": True,
         "reasons": reasons,
-        "has_local_index": bool(has_local_index),
-        "prepared_count": len(files_rel),
-        "manifest_docs": len(man_rel),
-        "prepared_digest": prep_digest,
-        "manifest_digest": mani_digest,
-        "prepared_sample": sample,
-        "prepared_fp_sample": prep_fp_sample,   # ← 디버그용
-        "manifest_fp_sample": mani_fp_sample,   # ← 디버그용
-        "skipped_non_prepared": skipped_prepared + skipped_manifest,
-        "changed": id_set_diff or ("fingerprint_mismatch" in reasons),
-        "checked_at": _now_kst_str(),
+        "prepared_count": len(prepared_set),
+        "manifest_count": len(manifest_set),
+        "samples": {
+            "only_in_prepared": list(map(str, list(only_prepared)[:5])),
+            "only_in_manifest": list(map(str, list(only_manifest)[:5])),
+        },
     }
+# ===== [09] END ===============================================================
 
 
-def quick_precheck(gdrive_folder_id: Optional[str] = None) -> Dict[str, Any]:
-    """이전 이름과 호환을 위한 래퍼."""
-    return precheck_build_needed(gdrive_folder_id)
 
 
 
