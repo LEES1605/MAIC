@@ -505,82 +505,132 @@ def _page_range_linear(total_len: int, pages: Optional[int], start: int, end: in
     return f"{sp}" if sp == ep else f"{sp}–{ep}"
 
 
-# ===== [08] QUALITY REPORT & BACKUP ZIP =====================================
-def _percentiles(values: List[int], ps: List[float]) -> Dict[str, Optional[int]]:
-    if not values:
-        return {f"p{int(p*100)}": None for p in ps}
-    vals = sorted(values)
-    out: Dict[str, Optional[int]] = {}
-    for p in ps:
-        k = int(round((len(vals) - 1) * p))
-        out[f"p{int(p*100)}"] = vals[k]
-    return out
+# ===== [07] BUILD FROM PREPARED =============================================
+def _guess_section_hint(text: str) -> Optional[str]:
+    import re
+    if not text: return None
+    lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
+    for ln in lines[:5]:
+        if 8 <= len(ln) <= 120:
+            if re.search(r"^(Chapter|Unit|Lesson|Section|Part)\s+[0-9IVX]+[:\-\.\s]", ln, re.I): return ln
+            if re.fullmatch(r"[A-Za-z0-9\s\-\(\)\.\,']{8,120}", ln) and sum(c.isalpha() for c in ln) > len(ln)*0.5:
+                return ln
+    head = text.strip().split("\n", 1)[0]
+    return (head[:80] + "…") if len(head) > 80 else (head or None)
 
-def _quality_report(manifest: Dict[str, Any], extra_counts: Optional[Dict[str, int]] = None) -> Dict[str, Any]:
-    chunks_path = PERSIST_DIR / "chunks.jsonl"
-    lengths: List[int] = []
-    by_mime: Dict[str, List[int]] = {}
-
-    if chunks_path.exists():
-        for ln in chunks_path.read_text(encoding="utf-8").splitlines():
-            if not ln.strip(): continue
-            try:
-                obj = json.loads(ln)
-                txt = obj.get("text", "")
-                lnth = len(txt)
-                lengths.append(lnth)
-                mime = (obj.get("meta", {}) or {}).get("mime", "unknown")
-                by_mime.setdefault(mime, []).append(lnth)
-            except Exception:
-                pass
-
-    avg = round(sum(lengths) / len(lengths), 1) if lengths else None
-    pct = _percentiles(lengths, [0.5, 0.9, 0.99])
-    longest = max(lengths) if lengths else None
-    shortest = min(lengths) if lengths else None
-
-    mime_distribution: Dict[str, Any] = {}
-    for m, vs in by_mime.items():
-        mime_distribution[m] = {
-            "docs": sum(1 for _ in vs),
-            "avg_chunk_len": round(sum(vs)/len(vs), 1) if vs else None,
-        }
-
-    report = {
-        "docs_total": len(manifest),
-        "chunks_total": sum(m.get("chunk_count", 0) for m in manifest.values()),
-        "avg_chunk_length_chars": avg,
-        **pct,
-        "longest_chunk_chars": longest,
-        "shortest_chunk_chars": shortest,
-        "mime_distribution": mime_distribution,
-        "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-    }
-
-    if extra_counts:
-        for k in ("new_docs", "updated_docs", "unchanged_docs"):
-            if k in extra_counts:
-                report[k] = int(extra_counts[k])
-
-    QUALITY_REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    QUALITY_REPORT_PATH.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    return report
-
-def _make_and_upload_backup_zip(service, backup_id: Optional[str]) -> Optional[str]:
-    if not backup_id:
-        return None
-    ts = time.strftime("%Y%m%d-%H%M%S")
-    zip_path = APP_DATA_DIR / f"index_backup_{ts}.zip"
-    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        cj = PERSIST_DIR / "chunks.jsonl"
-        if cj.exists(): zf.write(cj, arcname="chunks.jsonl")
-        if MANIFEST_PATH.exists(): zf.write(MANIFEST_PATH, arcname="manifest.json")
-        if QUALITY_REPORT_PATH.exists(): zf.write(QUALITY_REPORT_PATH, arcname="quality_report.json")
+def _pdf_page_count_quick(service, file_id: str) -> Optional[int]:
     try:
-        return _upload_zip(service, backup_id, zip_path, zip_path.name)
-    finally:
-        try: zip_path.unlink(missing_ok=True)
-        except Exception: pass
+        import pypdf
+        data = _download_file_bytes(service, file_id)
+        return len(pypdf.PdfReader(io.BytesIO(data)).pages)
+    except Exception:
+        return None
+
+def _build_from_prepared(service, prepared_id: str) -> Tuple[int, int, Dict[str, Any], Dict[str, int]]:
+    files = _list_files(service, prepared_id)
+    manifest = _load_manifest(MANIFEST_PATH)
+    prev_ids = set(manifest.keys())
+    out_path = PERSIST_DIR / "chunks.jsonl"
+
+    stats: Dict[str, int] = {
+        "gdocs": 0, "text_like": 0, "pdf_parsed": 0, "pdf_skipped": 0, "others_skipped": 0,
+        "new_docs": 0, "updated_docs": 0, "unchanged_docs": 0
+    }
+    new_lines: List[str] = []
+    processed, total_chunks = 0, 0
+    changed_ids: set[str] = set()
+
+    for f in files:
+        meta_base = {
+            "id": f["id"],
+            "name": f.get("name"),
+            "mimeType": f.get("mimeType"),
+            "modifiedTime": f.get("modifiedTime"),
+            "md5Checksum": f.get("md5Checksum"),
+            "size": f.get("size"),
+        }
+        text = _extract_text(service, f, stats)
+        if not text or not text.strip():
+            continue
+
+        now_meta = {**meta_base, "content_sha1": _sha1(text)}
+        prev_meta = manifest.get(f["id"], {})
+
+        need = _need_update(prev_meta, now_meta)
+        if not need:
+            stats["unchanged_docs"] += 1
+            continue
+        if f["id"] not in prev_ids:
+            stats["new_docs"] += 1
+        else:
+            stats["updated_docs"] += 1
+
+        chunks = _chunk_text(text, target_chars=1200, overlap=120)
+
+        pages = _pdf_page_count_quick(service, f["id"]) if (f.get("mimeType") == "application/pdf") else None
+        total_len = len(text)
+        running_start = 0
+
+        for i, ch in enumerate(chunks):
+            start = running_start
+            end = start + len(ch)
+            keep = min(120, len(ch))
+            running_start = end - keep
+
+            rec = {
+                "doc_id": f["id"],
+                "doc_name": f.get("name"),
+                "chunk_index": i,
+                "text": ch,
+                "grammar_tags": _extract_grammar_tags(ch),  # ← ★ 추가: 태그를 레코드에 저장
+                "meta": {
+                    "file_id": f["id"],
+                    "file_name": f.get("name"),
+                    "source_drive_url": f"https://drive.google.com/file/d/{f['id']}/view",
+                    "mime": f.get("mimeType"),
+                    "modified": f.get("modifiedTime"),
+                    "page_approx": _page_range_linear(total_len, pages, start, end),
+                    "section_hint": _guess_section_hint(ch),
+                },
+            }
+            new_lines.append(json.dumps(rec, ensure_ascii=False))
+
+        now_meta["chunk_count"] = len(chunks)
+        manifest[f["id"]] = now_meta
+
+        processed += 1
+        total_chunks += len(chunks)
+        changed_ids.add(f["id"])
+
+    existing: List[str] = []
+    if out_path.exists():
+        existing = [ln for ln in out_path.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    filtered_existing = []
+    for ln in existing:
+        try:
+            obj = json.loads(ln)
+            if obj.get("doc_id") in changed_ids:
+                continue
+        except Exception:
+            pass
+    filtered_existing.append(ln)
+
+    merged = filtered_existing + new_lines
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text("\n".join(merged) + ("\n" if merged else ""), encoding="utf-8")
+    _save_manifest(MANIFEST_PATH, manifest)
+
+    return processed, total_chunks, manifest, stats
+
+def _page_range_linear(total_len: int, pages: Optional[int], start: int, end: int) -> Optional[str]:
+    if not pages or total_len <= 0:
+        return None
+    def pos2pg(pos: int) -> int:
+        p = int((max(0, min(pos, total_len-1)) / max(1, total_len-1)) * (pages - 1)) + 1
+        return max(1, min(p, pages))
+    sp, ep = pos2pg(start), pos2pg(max(start, end-1))
+    return f"{sp}" if sp == ep else f"{sp}–{ep}"
+
 
 
 # ===== [09] QUICK PRECHECK (변경 여부만 빠르게) ===============================
