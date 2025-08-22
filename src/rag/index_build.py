@@ -376,6 +376,7 @@ def _need_update(prev: Dict[str, Any], now_meta: Dict[str, Any]) -> bool:
         return prev["content_sha1"] != now_meta["content_sha1"]
     return True
 
+
 # ===== [07] BUILD FROM PREPARED =============================================
 def _guess_section_hint(text: str) -> Optional[str]:
     import re
@@ -504,7 +505,11 @@ def _page_range_linear(total_len: int, pages: Optional[int], start: int, end: in
     sp, ep = pos2pg(start), pos2pg(max(start, end-1))
     return f"{sp}" if sp == ep else f"{sp}–{ep}"
 
+
 # ===== [08] QUALITY REPORT & BACKUP ZIP =====================================
+# 로컬 백업 디렉토리(태그 진단 패널에서 표시하는 경로와 동일하게 사용)
+BACKUP_DIR = APP_DATA_DIR / "backup"
+
 def _quality_report(manifest: Dict[str, Any], extra_counts: Optional[Dict[str, int]] = None) -> Dict[str, Any]:
     """
     chunks.jsonl을 스캔해 grammar_tags 분포를 집계하고,
@@ -520,16 +525,12 @@ def _quality_report(manifest: Dict[str, Any], extra_counts: Optional[Dict[str, i
             from zoneinfo import ZoneInfo  # Python 3.9+
             dt = datetime.now(ZoneInfo("Asia/Seoul"))
         except Exception:
-            # zoneinfo 미지원 환경에서는 로컬시간으로 폴백
             dt = datetime.now()
         report["generated_at"] = dt.strftime("%Y-%m-%d %H:%M:%S")
     except Exception:
-        # 최후 폴백
         report["generated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
 
     report["manifest_docs"] = len(manifest or {})
-
-    # 기본 통계(빌드 단계에서 넘어온 카운터를 그대로 기록)
     extra_counts = extra_counts or {}
     report["counts"] = {
         "gdocs":          int(extra_counts.get("gdocs", 0)),
@@ -564,17 +565,13 @@ def _quality_report(manifest: Dict[str, Any], extra_counts: Optional[Dict[str, i
                             continue
                         tag_counts[t] = tag_counts.get(t, 0) + 1
         except Exception as e:
-            # 리포트 생성은 앱 동작을 막지 않도록 방어적으로 처리
             st.warning(f"quality_report 스캔 중 경고: {type(e).__name__}: {e}")
 
     report["total_chunks"] = total_chunks
     report["grammar_tag_counts"] = dict(sorted(tag_counts.items(), key=lambda kv: (-kv[1], kv[0])))
-
-    # 상위 20개 태그만 별도로 제공
     top20 = sorted(tag_counts.items(), key=lambda kv: (-kv[1], kv[0]))[:20]
     report["top_tags"] = [{"tag": k, "count": v} for k, v in top20]
 
-    # 파일 저장
     try:
         QUALITY_REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
         QUALITY_REPORT_PATH.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -589,28 +586,26 @@ def _make_and_upload_backup_zip(service, backup_folder_id: Optional[str]) -> Opt
     REQ_FILES(chunks.jsonl, manifest.json, quality_report.json)을 ZIP으로 묶고,
     backup_folder_id가 있으면 Google Drive에 업로드합니다.
     파일명 타임스탬프는 **KST(Asia/Seoul) 기준 YYYYMMDD_HHMM**.
+    또한 동일 ZIP을 로컬 BACKUP_DIR에도 보관합니다.
     반환값: 업로드된 파일 ID(없으면 None)
     """
     # ZIP 생성 경로
-    backup_dir = APP_DATA_DIR / "backup"
-    backup_dir.mkdir(parents=True, exist_ok=True)
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
 
     # === 타임스탬프(KST, YYYYMMDD_HHMM) ===
     try:
         from datetime import datetime
         try:
-            from zoneinfo import ZoneInfo  # Python 3.9+
+            from zoneinfo import ZoneInfo
             dt = datetime.now(ZoneInfo("Asia/Seoul"))
         except Exception:
-            # zoneinfo 미지원 환경에서는 로컬시간으로 폴백
             dt = datetime.now()
         ts = dt.strftime("%Y%m%d_%H%M")
     except Exception:
-        # 최후 폴백(희귀): 기존 방식이나마 보장
         ts = time.strftime("%Y%m%d_%H%M")
 
     zip_name = f"backup_{ts}.zip"
-    zip_path = backup_dir / zip_name
+    zip_path = BACKUP_DIR / zip_name
 
     # ZIP 구성
     try:
@@ -624,7 +619,6 @@ def _make_and_upload_backup_zip(service, backup_folder_id: Optional[str]) -> Opt
                 elif fname == "quality_report.json":
                     p = QUALITY_REPORT_PATH
                 else:
-                    # 혹시 모를 추가 항목에 대비 — persist 폴더에 있으면 포함
                     cand = PERSIST_DIR / fname
                     if cand.exists():
                         p = cand
@@ -741,13 +735,15 @@ def _atomic_write_bytes(path: Path, data: bytes) -> None:
 def restore_latest_backup_to_local(service=None, backup_folder_id: Optional[str] = None) -> Dict[str, Any]:
     """
     최신 backup_*.zip을 내려받아 REQ_FILES만 로컬에 원자 복구.
+    ✅ 동시에 내려받은 ZIP을 BACKUP_DIR에도 캐시(보관)합니다.
     성공 시 .ready 마커를 생성.
     반환 예:
       {
         "ok": True,
         "restored": ["chunks.jsonl", "manifest.json", ...],
         "backup_meta": {...},
-        "after_hash": {"chunks.jsonl": "...", ...}
+        "after_hash": {"chunks.jsonl": "...", ...},
+        "local_cache": "/home/.../.maic/backup/restored_backup_YYYYMMDD_HHMM.zip"
       }
     """
     try:
@@ -758,6 +754,15 @@ def restore_latest_backup_to_local(service=None, backup_folder_id: Optional[str]
 
         # ZIP 바이트 다운로드
         zbytes = _download_file_bytes(svc, meta["id"])
+
+        # ✅ 로컬에도 캐시(요청 ②): restored_{원본이름} 형태로 저장
+        try:
+            BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+            cache_name = f"restored_{meta.get('name','backup.zip')}"
+            local_cache = BACKUP_DIR / cache_name
+            _atomic_write_bytes(local_cache, zbytes)
+        except Exception:
+            local_cache = None  # 캐시 실패는 치명적이지 않음
 
         restored: List[str] = []
         after_hash: Dict[str, Optional[str]] = {}
@@ -793,14 +798,18 @@ def restore_latest_backup_to_local(service=None, backup_folder_id: Optional[str]
 
         # .ready 마커 생성
         try:
-            (PERSIST_DIR).mkdir(parents=True, exist_ok=True)
+            PERSIST_DIR.mkdir(parents=True, exist_ok=True)
             (PERSIST_DIR / ".ready").write_text(time.strftime("%Y-%m-%d %H:%M:%S") + " restored\n", encoding="utf-8")
         except Exception:
             pass
 
-        return {"ok": True, "restored": restored, "backup_meta": meta, "after_hash": after_hash}
+        out = {"ok": True, "restored": restored, "backup_meta": meta, "after_hash": after_hash}
+        if local_cache is not None:
+            out["local_cache"] = str(local_cache)
+        return out
     except Exception as e:
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
 
 
 # ===== [09] QUICK PRECHECK (변경 여부만 빠르게) ===============================
