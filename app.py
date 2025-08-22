@@ -763,7 +763,6 @@ def render_simple_qa():
 # ===== [07] MAIN =============================================================
 def main():
     # (A) 호환성 shim -----------------------------------------------------------
-    # 예전 코드가 기대하는 _index_ready()를 새 로직(get_index_status)로 매핑
     def _index_ready() -> bool:
         try:
             return get_index_status() == "ready"
@@ -792,16 +791,15 @@ def main():
         """
         html = f"""
         <div class="topbar">
-          <div class="title">AI Teacher — MAIC</div>
+          <div class="title">LEES AI Teacher — V1.0</div>
           <div>{badge}</div>
         </div>
         """
         st.markdown(css + html, unsafe_allow_html=True)
 
-    # 0) 타이틀 먼저
     _render_title_with_status()
 
-    # (1) 관리자 모드: 사전점검을 먼저 실행해 '업데이트 여부'를 즉시 질문 ----------------
+    # (1) 관리자 모드: 사전점검 먼저 → 질문 ---------------------------------------
     import importlib as _importlib
     from pathlib import Path as _Path
     _mod = None
@@ -823,7 +821,7 @@ def main():
     pre = {}
     if _quick_precheck is not None:
         try:
-            pre = _quick_precheck()
+            pre = _quick_precheck("")
         except Exception as e:
             st.warning(f"사전점검 실패: {type(e).__name__}: {e}")
             pre = {}
@@ -841,10 +839,13 @@ def main():
     has_backup = bool(cmpres.get("has_backup"))
     same_hash  = bool(cmpres.get("same"))
 
-    # 1-3) 변경이 있으면 '즉시 질문'
+    # 1-3) 변경이 있다고 나오면 '즉시 질문' (이유별 문구 분기)
     if changed_flag and not st.session_state.get("_admin_update_prompt_done"):
         with st.container(border=True):
-            st.info("📎 prepared 폴더에서 **새 자료(변경/신규)** 가 감지되었습니다.")
+            if "no_local_manifest" in reasons_list:
+                st.info("📎 아직 인덱스가 없습니다. **최초 빌드가 필요**합니다.")
+            else:
+                st.info("📎 prepared 폴더에서 **새 자료(변경/신규)** 가 감지되었습니다.")
             c1, c2 = st.columns(2)
             with c1:
                 do_update = st.button("업데이트 (다시 최적화 실행)", type="primary", key="admin_update_now")
@@ -853,7 +854,6 @@ def main():
 
         if do_update:
             st.session_state["_admin_update_prompt_done"] = True
-            # ↓ 다시 최적화 실행(빌드) → 백업 업로드 → 연결
             _run_res = _build_then_backup_then_attach()
             if _run_res:
                 st.rerun()
@@ -862,9 +862,7 @@ def main():
 
         if later:
             st.session_state["_admin_update_prompt_done"] = True
-            # ↓ 네 로직 3~5단계 반영
             if has_local:
-                # 로컬과 백업 비교가 가능하면 안내만 하고 즉시 연결
                 if has_backup and not same_hash:
                     st.warning("로컬과 백업 내용이 다릅니다. (기존 로컬로 연결합니다)")
                 _ = _attach_with_status("로컬 인덱스에 연결 중…")
@@ -875,14 +873,12 @@ def main():
                 else:
                     st.stop()
             else:
-                st.error("로컬/백업 모두 없어 연결할 수 없습니다. 업데이트(다시 최적화)를 실행하세요.")
+                st.error("로컬/백업 모두 없어 연결할 수 없습니다. 먼저 ‘업데이트(다시 최적화)’를 실행해 주세요.")
                 st.stop()
 
-        # 질문이 떠있는 동안은 아래 로직 실행하지 않음
         st.stop()
 
-    # (2) 변경이 없거나 질문을 이미 처리한 경우 → 일반 플로우 ----------------------------
-    # 결정 로그 출력용
+    # (2) 변경이 없거나 질문 처리 후 → 일반 플로우 ---------------------------------
     decision_log = st.empty()
     decision_log.info(
         "auto-boot(admin): changed={} reasons={} | has_local={} has_backup={} same_hash={}".format(
@@ -890,7 +886,6 @@ def main():
         )
     )
 
-    # (2.1) 연결/복구/빌드 유틸들 -------------------------------------------------
     import time
     def _attach_with_status(label="두뇌 자동 연결 중…") -> bool:
         try:
@@ -940,20 +935,29 @@ def main():
         return _attach_with_status("복구 후 두뇌 연결 중…")
 
     def _build_then_backup_then_attach():
+        """
+        안전 임포트: 함수 스코프에서 모듈을 로드하고 build 함수를 가져온다.
+        전역 심볼 유무에 관계없이 동작하도록 처리.
+        """
+        import importlib
+        from pathlib import Path as __Path
         try:
-            _PERSIST_DIR_OBJ = getattr(_mod, "PERSIST_DIR", _Path.home() / ".maic" / "persist") if _mod else (_Path.home() / ".maic" / "persist")
-            _make_and_upload_backup_zip_fn = getattr(_mod, "_make_and_upload_backup_zip", None) if _mod else None
-        except Exception:
-            _PERSIST_DIR_OBJ = _Path.home() / ".maic" / "persist"
-            _make_and_upload_backup_zip_fn = None
+            _m = importlib.import_module("src.rag.index_build")
+        except Exception as e:
+            st.error(f"인덱스 빌더 모듈 임포트 실패: {type(e).__name__}: {e}")
+            return False
 
-        if build_index_with_checkpoint is None:
-            st.error("인덱스 빌더 모듈을 찾지 못했습니다. (src.rag.index_build)")
+        build_index_with_checkpoint = getattr(_m, "build_index_with_checkpoint", None)
+        _make_and_upload_backup_zip_fn = getattr(_m, "_make_and_upload_backup_zip", None)
+        _PERSIST_DIR_OBJ = getattr(_m, "PERSIST_DIR", __Path.home() / ".maic" / "persist")
+
+        if not callable(build_index_with_checkpoint):
+            st.error("인덱스 빌더 함수를 찾지 못했습니다. (build_index_with_checkpoint)")
             return False
 
         prog = st.progress(0); log = st.empty()
         def _pct(v: int, msg: str | None = None):
-            prog.progress(max(0, min(int(v), 100))); 
+            prog.progress(max(0, min(int(v), 100)))
             if msg: log.info(str(msg))
         def _msg(s: str): log.write(f"• {s}")
 
@@ -968,7 +972,7 @@ def main():
                 s.update(label="다시 최적화 완료 ✅", state="complete")
             st.json(res)
             try:
-                if _make_and_upload_backup_zip_fn:
+                if callable(_make_and_upload_backup_zip_fn):
                     _ = _make_and_upload_backup_zip_fn(None, None)
             except Exception:
                 pass
@@ -986,9 +990,10 @@ def main():
         elif has_backup:
             _restore_then_attach()
         else:
-            _build_then_backup_then_attach()
+            # 최초 빌드 필요(로컬/백업 모두 없음)
+            st.info("현재 인덱스가 없습니다. ‘업데이트(다시 최적화 실행)’을 눌러 최초 빌드를 진행해 주세요.")
 
-    # (3) 관리자 화면 섹션들 -------------------------------------------------------
+    # (3) 관리자 화면 섹션 ---------------------------------------------------------
     render_brain_prep_main()
     st.divider()
     render_tag_diagnostics()
