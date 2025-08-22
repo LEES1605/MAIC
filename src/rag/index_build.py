@@ -864,7 +864,7 @@ def _is_relevant_prepared_item(meta: Dict[str, Any]) -> bool:
     name = (meta.get("name") or "").lower()
     mime = meta.get("mimeType") or ""
 
-    # 폴더류는 제외
+    # 폴더류 제외
     if mime == "application/vnd.google-apps.folder":
         return False
 
@@ -872,7 +872,7 @@ def _is_relevant_prepared_item(meta: Dict[str, Any]) -> bool:
     if name.endswith(".zip") or name.startswith("backup_") or name.startswith("restored_") or "backup" in name:
         return False
 
-    # MIME 화이트리스트만 허용 (허용 목록에 없으면 제외)
+    # MIME 화이트리스트만 허용
     if (mime in _ALLOWED_MIMES) or mime.startswith("text/"):
         return True
     return False
@@ -906,21 +906,6 @@ def precheck_build_needed(gdrive_folder_id: Optional[str] = None) -> Dict[str, A
     """
     prepared(드라이브)와 로컬(manifest/chunks)을 빠르게 비교해,
     '빌드가 필요한지' 판단을 반환합니다.
-
-    반환 예:
-    {
-      "would_rebuild": true,            # ← UI가 사용하는 핵심 플래그
-      "reasons": ["no_local_index", ...],
-      "has_local_index": false,
-      "prepared_count": 12,
-      "manifest_docs": 0,
-      "prepared_digest": "...",
-      "manifest_digest": "...",
-      "prepared_sample": [{"name": "...", "mt": "..."}, ...],
-      "skipped_non_prepared": 3,
-      "changed": true,                  # 드라이브-매니페스트 차이 여부(참고)
-      "checked_at": "YYYY-mm-dd HH:MM:SS"
-    }
     """
     svc = _drive_client()
     prepared_id = _find_folder_id("PREPARED", fallback=gdrive_folder_id)
@@ -931,7 +916,7 @@ def precheck_build_needed(gdrive_folder_id: Optional[str] = None) -> Dict[str, A
     files_all = _list_files(svc, prepared_id)
     files_rel, skipped_prepared = _filter_prepared_files(files_all)
 
-    # 로컬 manifest 로드 → 동일한 기준으로 필터
+    # 로컬 manifest 로드 → 동일 기준으로 필터
     man_all = _load_manifest(MANIFEST_PATH)
     man_rel, skipped_manifest = _filter_manifest_for_prepared(man_all)
 
@@ -950,7 +935,6 @@ def precheck_build_needed(gdrive_folder_id: Optional[str] = None) -> Dict[str, A
     if prep_digest[:12] != mani_digest[:12]:
         reasons.append("digest_mismatch")
 
-    # 빌드 필요 여부: 로컬이 없거나, 드라이브와 매니페스트가 다르면 True
     would_rebuild = (not has_local_index) or ("digest_mismatch" in reasons) or ("file_count_diff" in reasons)
 
     sample = [{"name": f.get("name"), "mt": f.get("modifiedTime")} for f in files_rel[:5]]
