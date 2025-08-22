@@ -762,23 +762,16 @@ def render_simple_qa():
 
 # ===== [07] MAIN =============================================================
 def main():
-    # (A) 타이틀+상태 배지 렌더러 ------------------------------------------------
-    def _is_attached_session() -> bool:
-        """
-        단일 기준 헬퍼(get_index_status)만 사용.
-        'ready'이면 세션 부착 완료로 간주.
-        """
+    # (A) 호환성 shim -----------------------------------------------------------
+    # 과거 코드가 기대하는 _index_ready()를 새 로직(get_index_status)로 매핑
+    def _index_ready() -> bool:
         try:
             return get_index_status() == "ready"
         except Exception:
-            # 헬퍼 미존재 등 비정상 케이스에서는 보수적으로 False
             return False
 
+    # (B) 타이틀+상태 배지 ------------------------------------------------------
     def _render_title_with_status():
-        """
-        타이틀 우측 배지 또한 get_index_status()만 사용.
-        드리프트 방지를 위해 로컬 파일 조회/세션키 직접접근 금지.
-        """
         status = get_index_status()  # 'ready' | 'pending' | 'missing'
         if status == "ready":
             badge = '<span class="pill pill-green">🟢 두뇌 준비됨</span>'
@@ -808,7 +801,7 @@ def main():
     # 0) 타이틀 먼저
     _render_title_with_status()
 
-    # (1) 자동 사전점검 실행 1회
+    # (1) 자동 사전점검(있으면 사용, 없으면 건너뜀) -----------------------------
     if not st.session_state.get("_precheck_auto_done", False):
         st.session_state["_precheck_auto_done"] = True
         if precheck_build_needed is not None:
@@ -819,7 +812,7 @@ def main():
         else:
             st.session_state["_precheck_res"] = None
 
-    # (1.5) 부팅 시 결정 계산
+    # (1.5) 부팅 의사결정 컨텍스트 구성 -----------------------------------------
     if not st.session_state.get("_boot_flow_initialized", False):
         st.session_state["_boot_flow_initialized"] = True
 
@@ -830,13 +823,10 @@ def main():
             _PERSIST_DIR = getattr(_mod, "PERSIST_DIR", Path.home() / ".maic" / "persist")
             _compare_local_vs_backup = getattr(_mod, "compare_local_vs_backup", None)
         except Exception:
-            _mod = None
             _PERSIST_DIR = Path.home() / ".maic" / "persist"
             _compare_local_vs_backup = None
 
-        st.session_state["_boot_ctx"] = st.session_state.get("_boot_ctx", {})
-        _ctx = st.session_state["_boot_ctx"]
-
+        _ctx = st.session_state.setdefault("_boot_ctx", {})
         _ctx["compare"] = None
         if _compare_local_vs_backup is not None:
             try:
@@ -876,7 +866,7 @@ def main():
         _ctx["reason"] = reason
         st.session_state["_persist_dir_str"] = str(_PERSIST_DIR)
 
-    # (1.6) 실행/렌더
+    # (1.6) 실행/렌더 -----------------------------------------------------------
     from pathlib import Path as _Path
     import importlib as _importlib
     import time
@@ -886,14 +876,9 @@ def main():
     cmpres = _ctx.get("compare") or {}
     pre = _ctx.get("pre") or {}
     decision_log = st.empty()
-
     _PERSIST_DIR_LOG = st.session_state.get("_persist_dir_str", str(_Path.home() / ".maic" / "persist"))
 
     def _attach_with_status(label="두뇌 자동 연결 중…") -> bool:
-        """
-        연결 성공 시 brain_attached=True를 확실히 기록하고,
-        최초 페인트 동기화를 위해 1회 rerun.
-        """
         try:
             with st.status(label, state="running") as s:
                 bar = st.progress(0)
@@ -905,7 +890,6 @@ def main():
                     s.update(label="두뇌 자동 연결 완료 ✅", state="complete")
                 else:
                     s.update(label="두뇌 자동 연결 실패 ❌", state="error")
-                # 🔁 상단 헤더가 초기 상태로 남지 않도록 1회 재실행
                 if ok and not st.session_state.get("_post_attach_rerun_done"):
                     st.session_state["_post_attach_rerun_done"] = True
                     st.rerun()
@@ -963,23 +947,23 @@ def main():
         def _msg(s: str): log.write(f"• {s}")
 
         try:
-            with st.status("변경 반영을 위한 재최적화 실행 중…", state="running") as s:
+            with st.status("변경 반영을 위한 다시 최적화 실행 중…", state="running") as s:  # ← 문구: 재최적화 → 다시 최적화
                 res = build_index_with_checkpoint(
                     update_pct=_pct, update_msg=_msg,
                     gdrive_folder_id="", gcp_creds={},
                     persist_dir=str(_PERSIST_DIR_OBJ), remote_manifest={},
                 )
                 prog.progress(100)
-                s.update(label="재최적화 완료 ✅", state="complete")
+                s.update(label="다시 최적화 완료 ✅", state="complete")
             st.json(res)
             try:
                 if _make_and_upload_backup_zip_fn:
                     _ = _make_and_upload_backup_zip_fn(None, None)
             except Exception:
                 pass
-            return _attach_with_status("재최적화 후 두뇌 연결 중…")
+            return _attach_with_status("다시 최적화 후 두뇌 연결 중…")
         except Exception as e:
-            st.error(f"재최적화 실패: {type(e).__name__}: {e}")
+            st.error(f"다시 최적화 실패: {type(e).__name__}: {e}")
             return False
 
     if plan:
@@ -990,18 +974,18 @@ def main():
             )
         )
 
-    # 단일 기준 기반으로만 분기
-    if plan == "attach" and not _is_attached_session():
+    # 단일 기준 기반으로만 분기 + 연결 상태 아닌 경우만 수행
+    if plan == "attach" and not _index_ready():
         _attach_with_status()
-    elif plan == "restore" and not _is_attached_session():
+    elif plan == "restore" and not _index_ready():
         _restore_then_attach()
-    elif plan == "build" and not _is_attached_session():
+    elif plan == "build" and not _index_ready():
         _build_then_backup_then_attach()
-    elif plan == "ask" and not _is_attached_session():
+    elif plan == "ask" and not _index_ready():
         st.warning("📌 새 자료(변경/신규)가 감지되었습니다. 어떻게 진행할까요?")
         c1, c2 = st.columns(2)
         with c1:
-            if st.button("예, 재최적화 실행", type="primary", key="boot_ask_build"):
+            if st.button("예, 다시 최적화 실행", type="primary", key="boot_ask_build"):  # ← 문구 통일
                 if _build_then_backup_then_attach():
                     st.session_state["_boot_ctx"]["plan"] = "done"
                     st.rerun()
