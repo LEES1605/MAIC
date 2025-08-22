@@ -149,58 +149,153 @@ st.divider()
 
 # ===== [05] RAG: Build/Restore Panels =======================================
 def render_brain_prep_main():
-    st.markdown("### 🧠 강의 준비")
-    c1, c2 = st.columns([0.4, 0.6])
+    st.markdown("### 🧠 강의 준비 (자동 사전점검 기반)")
 
-    # -------------------- 좌측: 두뇌 연결/초기화 -----------------------------
-    with c1:
-        # 진행바가 항상 같은 위치에 뜨도록 전용 컨테이너 확보
-        progress_slot = st.empty()  # ← [NEW] 진행바 표시 위치 고정
+    # 자동 사전점검 결과
+    pre = st.session_state.get("_precheck_res")
+    had_auto = st.session_state.get("_precheck_auto_done", False)
 
-        if st.button("🧠 AI 두뇌 준비(복구/연결)", type="primary", key="btn_attach_restore"):
-            # 진행바 시작 (눈에 보이는 단계 업데이트)
-            bar = progress_slot.progress(0)
-            try:
-                # 상태 상자 + 단계별 퍼센트 업데이트
-                try:
-                    with st.status("두뇌 연결을 준비 중…", state="running") as s:
-                        bar.progress(5);   time.sleep(0.12)
-                        bar.progress(20);  time.sleep(0.12)
+    # 상태 배너 ---------------------------------------------------------------
+    banner = st.container()
+    with banner:
+        if pre:
+            would = bool(pre.get("would_rebuild"))
+            total = pre.get("total_files", 0)
+            new_n = pre.get("new_docs", 0)
+            upd_n = pre.get("updated_docs", 0)
+            unchg = pre.get("unchanged_docs", 0)
 
-                        # 실제 연결 시도
+            if would:
+                st.info(f"🔎 자동 사전점검 결과: **신규 {new_n} / 변경 {upd_n} 건** 감지됨 · 총 {total}개 (변경 없음 {unchg})")
+            else:
+                st.success(f"🔎 자동 사전점검 결과: **변경 없음** · 총 {total}개 (변경 없음 {unchg})")
+        else:
+            if had_auto:
+                st.warning("자동 사전점검을 시도했지만 결과를 가져오지 못했습니다. 네트워크/권한을 확인하거나 ‘다시 점검’을 눌러 주세요.")
+            else:
+                st.caption("자동 사전점검 준비 중…")
+
+    st.divider()
+
+    # 흐름형 CTA 패널 ---------------------------------------------------------
+    cta = st.container()
+    with cta:
+        cols = st.columns([0.5, 0.5])
+        with cols[0]:
+            st.caption("현재 두뇌 상태")
+            _index_status_badge()
+        with cols[1]:
+            st.caption("작업 선택")
+
+        # 버튼 영역
+        c1, c2 = st.columns([0.6, 0.4])
+
+        # [A] 사전점검 결과가 있는 경우
+        if pre:
+            would = bool(pre.get("would_rebuild"))
+
+            if would:
+                # 1차 CTA: 재최적화
+                with c1:
+                    if st.button("🛠 재최적화 실행 (변경 반영)", type="primary", key="cta_build"):
+                        if build_index_with_checkpoint is None:
+                            st.error("인덱스 빌더 모듈을 찾지 못했습니다. (src.rag.index_build)")
+                        else:
+                            prog = st.progress(0)
+                            log = st.empty()
+
+                            def _pct(v: int, msg: str | None = None):
+                                prog.progress(max(0, min(int(v), 100)))
+                                if msg:
+                                    log.info(str(msg))
+
+                            def _msg(s: str):
+                                log.write(f"• {s}")
+
+                            try:
+                                with st.status("재최적화 중…", state="running") as s:
+                                    res = build_index_with_checkpoint(
+                                        update_pct=_pct,
+                                        update_msg=_msg,
+                                        gdrive_folder_id="",
+                                        gcp_creds={},
+                                        persist_dir="",
+                                        remote_manifest={},
+                                    )
+                                    prog.progress(100)
+                                    s.update(label="최적화 완료 ✅", state="complete")
+                                st.success("최적화가 완료되었습니다.")
+                                st.json(res)
+                                # 완료 후 자동 연결
+                                if _auto_attach_or_restore_silently():
+                                    st.success("두뇌가 새 인덱스로 재연결되었습니다.")
+                                # 사전점검 결과 초기화(다시 점검 유도)
+                                st.session_state.pop("_precheck_res", None)
+                            except Exception as e:
+                                st.error(f"최적화 실패: {type(e).__name__}: {e}")
+
+                # 2차 CTA: 지금은 연결만
+                with c2:
+                    if st.button("지금은 연결만", key="cta_connect_anyway"):
                         ok = _auto_attach_or_restore_silently()
-
-                        bar.progress(55);  time.sleep(0.12)
-                        # (필요 시, 추가 점검/로깅 단계가 있다면 여기에서 70~85% 사용)
-                        bar.progress(85);  time.sleep(0.12)
-                        bar.progress(100)
-
                         if ok:
-                            s.update(label="두뇌 연결 완료 ✅", state="complete")
-                            st.success("두뇌 연결이 완료되었습니다.")
-                            progress_slot.empty()  # 진행바 자리를 정리
+                            st.success("두뇌 연결 완료 ✅")
                             st.rerun()
                         else:
-                            s.update(label="두뇌 연결 실패 ❌", state="error")
-                            st.error("두뇌 연결에 실패했습니다. 먼저 ‘사전점검→재최적화’를 실행해 인덱스를 만들어 주세요.")
-                            progress_slot.empty()
-                except Exception:
-                    # 구버전 Streamlit 호환: 상태 상자 없이 진행바만
-                    bar.progress(10); time.sleep(0.12)
+                            st.error("두뇌 연결 실패. 먼저 재최적화를 실행해 인덱스를 만들어 주세요.")
+
+            else:
+                # 변경 없음 → 1차 CTA: 바로 연결
+                with c1:
+                    if st.button("🧠 두뇌 연결", type="primary", key="cta_connect"):
+                        ok = _auto_attach_or_restore_silently()
+                        if ok:
+                            st.success("두뇌 연결 완료 ✅")
+                            st.rerun()
+                        else:
+                            st.error("두뇌 연결 실패. 필요 시 ‘다시 점검’ 후 재최적화를 실행하세요.")
+
+                with c2:
+                    # 보조: 다시 점검
+                    if st.button("🔄 다시 점검", key="cta_recheck"):
+                        try:
+                            if precheck_build_needed is None:
+                                st.error("사전점검 모듈을 찾지 못했습니다. (src.rag.index_build)")
+                            else:
+                                res = precheck_build_needed("")
+                                st.session_state["_precheck_res"] = res
+                                st.success("사전점검이 완료되었습니다.")
+                                st.rerun()
+                        except Exception as e:
+                            st.error(f"사전점검 실패: {type(e).__name__}: {e}")
+
+        # [B] 사전점검 결과가 없는 경우(자동 점검 실패 등)
+        else:
+            with c1:
+                if st.button("🔎 사전점검 실행", type="primary", key="cta_precheck_manual"):
+                    if precheck_build_needed is None:
+                        st.error("사전점검 모듈을 찾지 못했습니다. (src.rag.index_build)")
+                    else:
+                        try:
+                            res = precheck_build_needed("")
+                            st.session_state["_precheck_res"] = res
+                            st.success("사전점검이 완료되었습니다.")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"사전점검 실패: {type(e).__name__}: {e}")
+            with c2:
+                if st.button("🧠 두뇌 연결 시도", key="cta_connect_when_no_precheck"):
                     ok = _auto_attach_or_restore_silently()
-                    bar.progress(70); time.sleep(0.12)
-                    bar.progress(100); time.sleep(0.05)
-                    progress_slot.empty()
                     if ok:
-                        st.success("두뇌 연결이 완료되었습니다.")
+                        st.success("두뇌 연결 완료 ✅")
                         st.rerun()
                     else:
-                        st.error("두뇌 연결에 실패했습니다. 먼저 ‘사전점검→재최적화’를 실행해 인덱스를 만들어 주세요.")
-            except Exception as e:
-                progress_slot.empty()
-                st.error(f"연결 중 오류: {type(e).__name__}: {e}")
+                        st.error("두뇌 연결 실패. 먼저 사전점검/재최적화를 실행하세요.")
 
-        if st.button("📥 강의 자료 다시 불러오기 (두뇌 초기화)", key="btn_reset_local"):
+    # Advanced(접기) — 강제 초기화 등 ----------------------------------------
+    with st.expander("고급(Advanced)", expanded=False):
+        st.caption("일반적으로는 필요 없습니다. 문제가 있을 때만 사용하세요.")
+        if st.button("🧹 강제 초기화 (두뇌 캐시 삭제)", key="btn_reset_local_advanced"):
             try:
                 base = Path.home() / ".maic"
                 persist = base / "persist"
@@ -209,85 +304,11 @@ def render_brain_prep_main():
                     shutil.rmtree(persist)
                 if "rag_index" in st.session_state:
                     st.session_state["rag_index"] = None
-                st.success("두뇌 파일이 초기화되었습니다. ‘AI 두뇌 준비’를 다시 눌러 연결해 주세요.")
+                st.success("두뇌 파일이 초기화되었습니다. 위의 ‘사전점검/재최적화→연결’ 순서로 다시 준비해 주세요.")
             except Exception as e:
                 st.error(f"초기화 중 오류: {type(e).__name__}")
                 st.exception(e)
 
-    # -------------------- 우측: 사전점검 → 재최적화 --------------------------
-    with c2:
-        st.markdown("#### ⚙️ 인덱스 최적화 — **사전점검 후 실행**")
-        st.caption("변경이 없으면 재최적화는 생략, 필요 시 2차 확인 버튼으로만 강제 실행")
-
-        if st.button("🔎 사전점검 (변경 여부 확인)", key="btn_precheck"):
-            if precheck_build_needed is None:
-                st.error("사전점검 모듈을 찾지 못했습니다. (src.rag.index_build)")
-            else:
-                try:
-                    res = precheck_build_needed("")  # 시크릿의 PREPARED ID 자동 사용
-                    st.session_state["_precheck_res"] = res
-                    st.success("사전점검이 완료되었습니다.")
-                except Exception as e:
-                    st.session_state.pop("_precheck_res", None)
-                    st.error(f"사전점검 실패: {type(e).__name__}: {e}")
-
-        pre = st.session_state.get("_precheck_res")
-        if pre:
-            cA, cB, cC, cD = st.columns(4)
-            cA.metric("총 파일", pre.get("total_files", 0))
-            cB.metric("신규", pre.get("new_docs", 0))
-            cC.metric("변경", pre.get("updated_docs", 0))
-            cD.metric("변경 없음", pre.get("unchanged_docs", 0))
-
-            if pre.get("new"):
-                with st.expander("🆕 신규 문서 목록", expanded=False):
-                    st.table(pre["new"])
-            if pre.get("updated"):
-                with st.expander("✏️ 변경 문서 목록", expanded=False):
-                    st.table(pre["updated"])
-
-            would = bool(pre.get("would_rebuild"))
-            if not would:
-                st.info("변경 사항이 없습니다. 굳이 재최적화하지 않아도 됩니다.")
-                run_label = "⚠️ 그래도 재최적화 실행"
-                run_help  = "변경이 없어도 강제로 다시 청크/ZIP을 생성합니다."
-            else:
-                run_label = "🛠 재최적화 실행 (변경 반영)"
-                run_help  = "변경/신규 파일만 델타로 반영하여 인덱스를 갱신합니다."
-
-            if st.button(run_label, help=run_help, key="btn_build_confirm"):
-                if build_index_with_checkpoint is None:
-                    st.error("인덱스 빌더 모듈을 찾지 못했습니다. (src.rag.index_build)")
-                else:
-                    prog = st.progress(0)
-                    log = st.empty()
-
-                    def _pct(v: int, msg: str | None = None):
-                        prog.progress(max(0, min(int(v), 100)))
-                        if msg:
-                            log.info(str(msg))
-
-                    def _msg(s: str):
-                        log.write(f"• {s}")
-
-                    try:
-                        with st.spinner("인덱스를 최적화(빌드)하는 중…"):
-                            res = build_index_with_checkpoint(
-                                update_pct=_pct,
-                                update_msg=_msg,
-                                gdrive_folder_id="",
-                                gcp_creds={},
-                                persist_dir="",
-                                remote_manifest={},
-                            )
-                        prog.progress(100)
-                        st.success("최적화가 완료되었습니다.")
-                        st.json(res)
-                        if _attach_from_local():
-                            st.success("두뇌가 새 인덱스로 재연결되었습니다.")
-                        st.session_state.pop("_precheck_res", None)
-                    except Exception as e:
-                        st.error(f"최적화 실패: {type(e).__name__}: {e}")
 # ===== [05B] TAG DIAGNOSTICS (NEW) ==========================================
 def render_tag_diagnostics():
     """
@@ -491,15 +512,29 @@ def render_simple_qa():
 
 # ===== [07] MAIN =============================================================
 def main():
+    # (1) 세션당 1회 자동 사전점검
+    if not st.session_state.get("_precheck_auto_done", False):
+        st.session_state["_precheck_auto_done"] = True
+        if precheck_build_needed is not None:
+            try:
+                st.session_state["_precheck_res"] = precheck_build_needed("")  # 시크릿 기반 자동 처리
+            except Exception:
+                # 조용한 실패 처리: 패널에서 안내
+                st.session_state["_precheck_res"] = None
+        else:
+            st.session_state["_precheck_res"] = None
+
+    # (2) 준비 패널 (자동 사전점검 결과에 따라 흐름형 CTA)
     render_brain_prep_main()
     st.divider()
 
-    # (NEW) 태그 진단 패널
+    # (3) (NEW) 태그 진단 패널 — 그대로 유지
     render_tag_diagnostics()
     st.divider()
 
-    # 기존 QA 데모
+    # (4) 기존 QA 데모
     render_simple_qa()
 
 if __name__ == "__main__":
     main()
+
