@@ -763,7 +763,7 @@ def render_simple_qa():
 # ===== [07] MAIN =============================================================
 def main():
     # (A) 호환성 shim -----------------------------------------------------------
-    # 과거 코드가 기대하는 _index_ready()를 새 로직(get_index_status)로 매핑
+    # 예전 코드가 기대하는 _index_ready()를 새 로직(get_index_status)로 매핑
     def _index_ready() -> bool:
         try:
             return get_index_status() == "ready"
@@ -801,83 +801,97 @@ def main():
     # 0) 타이틀 먼저
     _render_title_with_status()
 
-    # (1) 자동 사전점검(있으면 사용, 없으면 건너뜀) -----------------------------
-    if not st.session_state.get("_precheck_auto_done", False):
-        st.session_state["_precheck_auto_done"] = True
-        if precheck_build_needed is not None:
-            try:
-                st.session_state["_precheck_res"] = precheck_build_needed("")
-            except Exception:
-                st.session_state["_precheck_res"] = None
-        else:
-            st.session_state["_precheck_res"] = None
-
-    # (1.5) 부팅 의사결정 컨텍스트 구성 -----------------------------------------
-    if not st.session_state.get("_boot_flow_initialized", False):
-        st.session_state["_boot_flow_initialized"] = True
-
-        import importlib
-        from pathlib import Path
-        try:
-            _mod = importlib.import_module("src.rag.index_build")
-            _PERSIST_DIR = getattr(_mod, "PERSIST_DIR", Path.home() / ".maic" / "persist")
-            _compare_local_vs_backup = getattr(_mod, "compare_local_vs_backup", None)
-        except Exception:
-            _PERSIST_DIR = Path.home() / ".maic" / "persist"
-            _compare_local_vs_backup = None
-
-        _ctx = st.session_state.setdefault("_boot_ctx", {})
-        _ctx["compare"] = None
-        if _compare_local_vs_backup is not None:
-            try:
-                _ctx["compare"] = _compare_local_vs_backup()
-            except Exception as e:
-                st.warning(f"백업/로컬 비교 실패: {type(e).__name__}: {e}")
-
-        _ctx["pre"] = st.session_state.get("_precheck_res") or {}
-
-        plan = "attach"; reason = []
-        cmpres = _ctx.get("compare") or {}
-        has_local  = bool(cmpres.get("has_local"))
-        has_backup = bool(cmpres.get("has_backup"))
-        same_hash  = bool(cmpres.get("same"))
-
-        pre = _ctx.get("pre") or {}
-        changed_flag = bool(pre.get("changed"))
-        reasons_list = list(pre.get("reasons") or [])
-        only_no_local = (reasons_list and set(reasons_list).issubset({"no_local_index"}))
-
-        if has_local and not has_backup:
-            plan = "attach"; reason.append("local_only")
-        elif has_local and has_backup and same_hash:
-            plan = "attach"; reason.append("hash_equal")
-        elif (not has_local) and has_backup:
-            plan = "restore"; reason.append("restore_first_no_local")
-        else:
-            if has_backup:
-                if changed_flag and not only_no_local:
-                    plan = "ask"; reason.append("new_material_detected")
-                else:
-                    plan = "restore"; reason.append("use_backup_restore")
-            else:
-                plan = "build"; reason.append("no_backup_available")
-
-        _ctx["plan"] = plan
-        _ctx["reason"] = reason
-        st.session_state["_persist_dir_str"] = str(_PERSIST_DIR)
-
-    # (1.6) 실행/렌더 -----------------------------------------------------------
-    from pathlib import Path as _Path
+    # (1) 관리자 모드: 사전점검을 먼저 실행해 '업데이트 여부'를 즉시 질문 ----------------
     import importlib as _importlib
-    import time
+    from pathlib import Path as _Path
+    _mod = None
+    _quick_precheck = None
+    _compare_local_vs_backup = None
+    _PERSIST_DIR = _Path.home() / ".maic" / "persist"
+    try:
+        _mod = _importlib.import_module("src.rag.index_build")
+        _quick_precheck = getattr(_mod, "quick_precheck", None)
+        _compare_local_vs_backup = getattr(_mod, "compare_local_vs_backup", None)
+        _PERSIST_DIR = getattr(_mod, "PERSIST_DIR", _PERSIST_DIR)
+    except Exception:
+        pass
 
-    _ctx = st.session_state.get("_boot_ctx", {})
-    plan = _ctx.get("plan")
-    cmpres = _ctx.get("compare") or {}
-    pre = _ctx.get("pre") or {}
+    def _has_local_index_files() -> bool:
+        return (_PERSIST_DIR / "chunks.jsonl").exists() or (_PERSIST_DIR / ".ready").exists()
+
+    # 1-1) 빠른 변경 감지
+    pre = {}
+    if _quick_precheck is not None:
+        try:
+            pre = _quick_precheck()
+        except Exception as e:
+            st.warning(f"사전점검 실패: {type(e).__name__}: {e}")
+            pre = {}
+    changed_flag = bool(pre.get("changed"))
+    reasons_list = list(pre.get("reasons") or [])
+
+    # 1-2) 로컬/백업 상태
+    cmpres = {}
+    if _compare_local_vs_backup is not None:
+        try:
+            cmpres = _compare_local_vs_backup() or {}
+        except Exception:
+            cmpres = {}
+    has_local  = bool(cmpres.get("has_local")) or _has_local_index_files()
+    has_backup = bool(cmpres.get("has_backup"))
+    same_hash  = bool(cmpres.get("same"))
+
+    # 1-3) 변경이 있으면 '즉시 질문'
+    if changed_flag and not st.session_state.get("_admin_update_prompt_done"):
+        with st.container(border=True):
+            st.info("📎 prepared 폴더에서 **새 자료(변경/신규)** 가 감지되었습니다.")
+            c1, c2 = st.columns(2)
+            with c1:
+                do_update = st.button("업데이트 (다시 최적화 실행)", type="primary", key="admin_update_now")
+            with c2:
+                later = st.button("다음에 업데이트", key="admin_update_later")
+
+        if do_update:
+            st.session_state["_admin_update_prompt_done"] = True
+            # ↓ 다시 최적화 실행(빌드) → 백업 업로드 → 연결
+            _run_res = _build_then_backup_then_attach()
+            if _run_res:
+                st.rerun()
+            else:
+                st.stop()
+
+        if later:
+            st.session_state["_admin_update_prompt_done"] = True
+            # ↓ 네 로직 3~5단계 반영
+            if has_local:
+                # 로컬과 백업 비교가 가능하면 안내만 하고 즉시 연결
+                if has_backup and not same_hash:
+                    st.warning("로컬과 백업 내용이 다릅니다. (기존 로컬로 연결합니다)")
+                _ = _attach_with_status("로컬 인덱스에 연결 중…")
+                st.rerun()
+            elif has_backup:
+                if _restore_then_attach():
+                    st.rerun()
+                else:
+                    st.stop()
+            else:
+                st.error("로컬/백업 모두 없어 연결할 수 없습니다. 업데이트(다시 최적화)를 실행하세요.")
+                st.stop()
+
+        # 질문이 떠있는 동안은 아래 로직 실행하지 않음
+        st.stop()
+
+    # (2) 변경이 없거나 질문을 이미 처리한 경우 → 일반 플로우 ----------------------------
+    # 결정 로그 출력용
     decision_log = st.empty()
-    _PERSIST_DIR_LOG = st.session_state.get("_persist_dir_str", str(_Path.home() / ".maic" / "persist"))
+    decision_log.info(
+        "auto-boot(admin): changed={} reasons={} | has_local={} has_backup={} same_hash={}".format(
+            changed_flag, reasons_list, has_local, has_backup, same_hash
+        )
+    )
 
+    # (2.1) 연결/복구/빌드 유틸들 -------------------------------------------------
+    import time
     def _attach_with_status(label="두뇌 자동 연결 중…") -> bool:
         try:
             with st.status(label, state="running") as s:
@@ -903,16 +917,14 @@ def main():
                 st.session_state["_post_attach_rerun_done"] = True
                 st.rerun()
             elif ok:
-                st.success("두뇌 자동 연결 완료 ✅")
-                _render_title_with_status()
+                st.success("두뇌 자동 연결 완료 ✅"); _render_title_with_status()
             else:
                 st.error("두뇌 자동 연결 실패")
             return bool(ok)
 
     def _restore_then_attach():
         try:
-            _mod2 = _importlib.import_module("src.rag.index_build")
-            _restore = getattr(_mod2, "restore_latest_backup_to_local", None)
+            _restore = getattr(_mod, "restore_latest_backup_to_local", None) if _mod else None
         except Exception:
             _restore = None
         if _restore is None:
@@ -929,9 +941,8 @@ def main():
 
     def _build_then_backup_then_attach():
         try:
-            _mod3 = _importlib.import_module("src.rag.index_build")
-            _PERSIST_DIR_OBJ = getattr(_mod3, "PERSIST_DIR", _Path.home() / ".maic" / "persist")
-            _make_and_upload_backup_zip_fn = getattr(_mod3, "_make_and_upload_backup_zip", None)
+            _PERSIST_DIR_OBJ = getattr(_mod, "PERSIST_DIR", _Path.home() / ".maic" / "persist") if _mod else (_Path.home() / ".maic" / "persist")
+            _make_and_upload_backup_zip_fn = getattr(_mod, "_make_and_upload_backup_zip", None) if _mod else None
         except Exception:
             _PERSIST_DIR_OBJ = _Path.home() / ".maic" / "persist"
             _make_and_upload_backup_zip_fn = None
@@ -942,12 +953,12 @@ def main():
 
         prog = st.progress(0); log = st.empty()
         def _pct(v: int, msg: str | None = None):
-            prog.progress(max(0, min(int(v), 100)))
+            prog.progress(max(0, min(int(v), 100))); 
             if msg: log.info(str(msg))
         def _msg(s: str): log.write(f"• {s}")
 
         try:
-            with st.status("변경 반영을 위한 다시 최적화 실행 중…", state="running") as s:  # ← 문구: 재최적화 → 다시 최적화
+            with st.status("변경 반영을 위한 다시 최적화 실행 중…", state="running") as s:
                 res = build_index_with_checkpoint(
                     update_pct=_pct, update_msg=_msg,
                     gdrive_folder_id="", gcp_creds={},
@@ -966,42 +977,22 @@ def main():
             st.error(f"다시 최적화 실패: {type(e).__name__}: {e}")
             return False
 
-    if plan:
-        decision_log.info(
-            "auto-boot: plan=`{}` | reasons={} | has_local={} has_backup={} same_hash={} | changed={} | path={}".format(
-                plan, _ctx.get("reason"), bool(cmpres.get("has_local")), bool(cmpres.get("has_backup")),
-                bool(cmpres.get("same")), bool(pre.get("changed")), _PERSIST_DIR_LOG
-            )
-        )
+    # (2.2) 일반 플로우: 로컬 > 백업 > 빌드 --------------------------------------
+    if _index_ready():
+        _render_title_with_status()
+    else:
+        if has_local:
+            _attach_with_status()
+        elif has_backup:
+            _restore_then_attach()
+        else:
+            _build_then_backup_then_attach()
 
-    # 단일 기준 기반으로만 분기 + 연결 상태 아닌 경우만 수행
-    if plan == "attach" and not _index_ready():
-        _attach_with_status()
-    elif plan == "restore" and not _index_ready():
-        _restore_then_attach()
-    elif plan == "build" and not _index_ready():
-        _build_then_backup_then_attach()
-    elif plan == "ask" and not _index_ready():
-        st.warning("📌 새 자료(변경/신규)가 감지되었습니다. 어떻게 진행할까요?")
-        c1, c2 = st.columns(2)
-        with c1:
-            if st.button("예, 다시 최적화 실행", type="primary", key="boot_ask_build"):  # ← 문구 통일
-                if _build_then_backup_then_attach():
-                    st.session_state["_boot_ctx"]["plan"] = "done"
-                    st.rerun()
-        with c2:
-            if st.button("아니오, 백업으로 복구 후 연결", key="boot_ask_restore"):
-                if _restore_then_attach():
-                    st.session_state["_boot_ctx"]["plan"] = "done"
-                    st.rerun()
-
-    # (2) 준비 패널
+    # (3) 관리자 화면 섹션들 -------------------------------------------------------
     render_brain_prep_main()
     st.divider()
-    # (3) 태그 진단
     render_tag_diagnostics()
     st.divider()
-    # (4) QA 데모
     render_simple_qa()
 
 if __name__ == "__main__":
