@@ -574,12 +574,27 @@ def _make_and_upload_backup_zip(service, backup_folder_id: Optional[str]) -> Opt
     """
     REQ_FILES(chunks.jsonl, manifest.json, quality_report.json)을 ZIP으로 묶고,
     backup_folder_id가 있으면 Google Drive에 업로드합니다.
+    파일명 타임스탬프는 **KST(Asia/Seoul) 기준 YYYYMMDD_HHMM**.
     반환값: 업로드된 파일 ID(없으면 None)
     """
     # ZIP 생성 경로
     backup_dir = APP_DATA_DIR / "backup"
     backup_dir.mkdir(parents=True, exist_ok=True)
-    ts = time.strftime("%Y%m%d_%H%M%S")
+
+    # === 타임스탬프(KST, YYYYMMDD_HHMM) ===
+    try:
+        from datetime import datetime
+        try:
+            from zoneinfo import ZoneInfo  # Python 3.9+
+            dt = datetime.now(ZoneInfo("Asia/Seoul"))
+        except Exception:
+            # zoneinfo 미지원 환경에서는 로컬시간으로 폴백
+            dt = datetime.now()
+        ts = dt.strftime("%Y%m%d_%H%M")
+    except Exception:
+        # 최후 폴백(희귀): 기존 방식이나마 보장
+        ts = time.strftime("%Y%m%d_%H%M")
+
     zip_name = f"backup_{ts}.zip"
     zip_path = backup_dir / zip_name
 
