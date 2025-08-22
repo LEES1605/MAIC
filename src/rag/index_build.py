@@ -643,11 +643,55 @@ def _make_and_upload_backup_zip(service, backup_folder_id: Optional[str]) -> Opt
     return None
 
 # ===== [09] QUICK PRECHECK (변경 여부만 빠르게) ===============================
-def quick_precheck(gdrive_folder_id: Optional[str] = None) -> Dict[str, Any]:
+def _now_kst_str() -> str:
+    """로그 표시에 쓰는 KST 타임스탬프 문자열."""
+    try:
+        from datetime import datetime
+        try:
+            from zoneinfo import ZoneInfo  # Python 3.9+
+            return datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:
+            return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return time.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _digest_from_files(fs: List[Dict[str, Any]]) -> str:
+    parts = []
+    for f in fs:
+        parts.append(
+            f"{f.get('id')}|{f.get('modifiedTime')}|{f.get('md5Checksum') or f.get('size') or ''}"
+        )
+    return _sha1("|".join(parts))
+
+
+def _digest_from_manifest(m: Dict[str, Any]) -> str:
+    parts = []
+    for fid, v in sorted(m.items()):
+        parts.append(
+            f"{fid}|{v.get('modifiedTime')}|{v.get('md5Checksum') or v.get('size') or ''}|{v.get('content_sha1','')}"
+        )
+    return _sha1("|".join(parts))
+
+
+def precheck_build_needed(gdrive_folder_id: Optional[str] = None) -> Dict[str, Any]:
     """
-    prepared 폴더와 현재 manifest를 '메타데이터 수준'으로 빠르게 비교.
-    - 변경 없음이면 {"changed": False, ...}
-    - 변경 있으면 {"changed": True, reasons: [...], ...}
+    prepared(드라이브)와 로컬(manifest/chunks)을 빠르게 비교해,
+    '빌드가 필요한지' 판단을 반환합니다.
+
+    반환 예:
+    {
+      "would_rebuild": true,            # ← UI가 사용하는 핵심 플래그
+      "reasons": ["no_local_index", ...],
+      "has_local_index": false,
+      "prepared_count": 12,
+      "manifest_docs": 0,
+      "prepared_digest": "...",
+      "manifest_digest": "...",
+      "prepared_sample": [{"name": "...", "mt": "..."}, ...],
+      "changed": true,                  # 드라이브-매니페스트 차이 여부(참고)
+      "checked_at": "YYYY-mm-dd HH:MM:SS(KST)"
+    }
     """
     svc = _drive_client()
     prepared_id = _find_folder_id("PREPARED", fallback=gdrive_folder_id)
@@ -657,40 +701,46 @@ def quick_precheck(gdrive_folder_id: Optional[str] = None) -> Dict[str, Any]:
     files = _list_files(svc, prepared_id)
     man = _load_manifest(MANIFEST_PATH)
 
-    def digest_from_files(fs: List[Dict[str, Any]]) -> str:
-        parts = []
-        for f in fs:
-            parts.append(f"{f.get('id')}|{f.get('modifiedTime')}|{f.get('md5Checksum') or f.get('size') or ''}")
-        return _sha1("|".join(parts))
+    # 로컬 인덱스 존재 여부
+    has_local_index = (PERSIST_DIR / "chunks.jsonl").exists()
 
-    def digest_from_manifest(m: Dict[str, Any]) -> str:
-        parts = []
-        for fid, v in sorted(m.items()):
-            parts.append(f"{fid}|{v.get('modifiedTime')}|{v.get('md5Checksum') or v.get('size') or ''}|{v.get('content_sha1','')}")
-        return _sha1("|".join(parts))
-
-    prep_digest = digest_from_files(files)
-    mani_digest = digest_from_manifest(man)
+    # 드라이브-매니페스트 비교(메타데이터 기준)
+    prep_digest = _digest_from_files(files)
+    mani_digest = _digest_from_manifest(man)
 
     reasons: List[str] = []
+    if not has_local_index:
+        reasons.append("no_local_index")
     if len(files) != len(man):
         reasons.append(f"file_count_diff: prepared={len(files)} manifest={len(man)}")
     if prep_digest[:12] != mani_digest[:12]:
         reasons.append("digest_mismatch")
 
-    changed = bool(reasons)
+    # 빌드 필요 여부: 로컬이 없거나, 드라이브와 매니페스트가 다르면 True
+    would_rebuild = (not has_local_index) or ("digest_mismatch" in reasons) or ("file_count_diff" in reasons)
+
     sample = [{"name": f.get("name"), "mt": f.get("modifiedTime")} for f in files[:5]]
 
     return {
-        "changed": changed,
+        "would_rebuild": bool(would_rebuild),   # ✅ UI 호환 키
         "reasons": reasons,
+        "has_local_index": bool(has_local_index),
         "prepared_count": len(files),
         "manifest_docs": len(man),
         "prepared_digest": prep_digest,
         "manifest_digest": mani_digest,
         "prepared_sample": sample,
-        "checked_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "changed": ("digest_mismatch" in reasons) or ("file_count_diff" in reasons),
+        "checked_at": _now_kst_str(),
     }
+
+
+def quick_precheck(gdrive_folder_id: Optional[str] = None) -> Dict[str, Any]:
+    """
+    이전 이름과의 호환을 위해 남겨둔 래퍼.
+    실제 계산은 precheck_build_needed()에서 수행합니다.
+    """
+    return precheck_build_needed(gdrive_folder_id)
 
 
 # ===== [10] PUBLIC ENTRY (빌드 실행) =========================================
