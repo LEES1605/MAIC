@@ -227,33 +227,77 @@ def render_brain_prep_main():
                                 st.success("최적화가 완료되었습니다.")
                                 st.json(res)
                                 # 완료 후 자동 연결
-                                if _auto_attach_or_restore_silently():
-                                    st.success("두뇌가 새 인덱스로 재연결되었습니다.")
+                                try:
+                                    with st.status("두뇌 연결을 준비 중…", state="running") as s2:
+                                        bar = st.progress(0)
+                                        bar.progress(15); time.sleep(0.12)
+                                        ok = _auto_attach_or_restore_silently()
+                                        bar.progress(100)
+                                        if ok:
+                                            s2.update(label="두뇌 연결 완료 ✅", state="complete")
+                                            st.rerun()
+                                        else:
+                                            s2.update(label="두뇌 연결 실패 ❌", state="error")
+                                except Exception:
+                                    ok = _auto_attach_or_restore_silently()
+                                    if ok:
+                                        st.success("두뇌 연결 완료 ✅")
+                                        st.rerun()
+                                    else:
+                                        st.error("두뇌 연결 실패. 다시 점검 후 재최적화를 실행하세요.")
                                 # 사전점검 결과 초기화(다시 점검 유도)
                                 st.session_state.pop("_precheck_res", None)
                             except Exception as e:
                                 st.error(f"최적화 실패: {type(e).__name__}: {e}")
 
-                # 2차 CTA: 지금은 연결만
+                # 2차 CTA: 지금은 연결만  ← 여기 상태상자/진행바 복원
                 with c2:
                     if st.button("지금은 연결만", key="cta_connect_anyway"):
-                        ok = _auto_attach_or_restore_silently()
-                        if ok:
-                            st.success("두뇌 연결 완료 ✅")
-                            st.rerun()
-                        else:
-                            st.error("두뇌 연결 실패. 먼저 재최적화를 실행해 인덱스를 만들어 주세요.")
+                        try:
+                            with st.status("두뇌 연결을 준비 중…", state="running") as s:
+                                bar = st.progress(0)
+                                bar.progress(10); time.sleep(0.12)
+                                ok = _auto_attach_or_restore_silently()
+                                bar.progress(100)
+                                if ok:
+                                    s.update(label="두뇌 연결 완료 ✅", state="complete")
+                                    st.rerun()
+                                else:
+                                    s.update(label="두뇌 연결 실패 ❌", state="error")
+                                    st.error("먼저 재최적화를 실행해 인덱스를 만들어 주세요.")
+                        except Exception:
+                            with st.spinner("두뇌 연결 중…"):
+                                ok = _auto_attach_or_restore_silently()
+                            if ok:
+                                st.success("두뇌 연결 완료 ✅")
+                                st.rerun()
+                            else:
+                                st.error("두뇌 연결 실패. 먼저 재최적화를 실행해 인덱스를 만들어 주세요.")
 
             else:
-                # 변경 없음 → 1차 CTA: 바로 연결
+                # 변경 없음 → 1차 CTA: 바로 연결  ← 여기 상태상자/진행바 복원
                 with c1:
                     if st.button("🧠 두뇌 연결", type="primary", key="cta_connect"):
-                        ok = _auto_attach_or_restore_silently()
-                        if ok:
-                            st.success("두뇌 연결 완료 ✅")
-                            st.rerun()
-                        else:
-                            st.error("두뇌 연결 실패. 필요 시 ‘다시 점검’ 후 재최적화를 실행하세요.")
+                        try:
+                            with st.status("두뇌 연결을 준비 중…", state="running") as s:
+                                bar = st.progress(0)
+                                bar.progress(20); time.sleep(0.12)
+                                ok = _auto_attach_or_restore_silently()
+                                bar.progress(100)
+                                if ok:
+                                    s.update(label="두뇌 연결 완료 ✅", state="complete")
+                                    st.rerun()
+                                else:
+                                    s.update(label="두뇌 연결 실패 ❌", state="error")
+                                    st.error("두뇌 연결 실패. 필요 시 ‘다시 점검’ 후 재최적화를 실행하세요.")
+                        except Exception:
+                            with st.spinner("두뇌 연결 중…"):
+                                ok = _auto_attach_or_restore_silently()
+                            if ok:
+                                st.success("두뇌 연결 완료 ✅")
+                                st.rerun()
+                            else:
+                                st.error("두뇌 연결 실패. 필요 시 ‘다시 점검’ 후 재최적화를 실행하세요.")
 
                 with c2:
                     # 보조: 다시 점검
@@ -285,12 +329,26 @@ def render_brain_prep_main():
                             st.error(f"사전점검 실패: {type(e).__name__}: {e}")
             with c2:
                 if st.button("🧠 두뇌 연결 시도", key="cta_connect_when_no_precheck"):
-                    ok = _auto_attach_or_restore_silently()
-                    if ok:
-                        st.success("두뇌 연결 완료 ✅")
-                        st.rerun()
-                    else:
-                        st.error("두뇌 연결 실패. 먼저 사전점검/재최적화를 실행하세요.")
+                    try:
+                        with st.status("두뇌 연결을 준비 중…", state="running") as s:
+                            bar = st.progress(0)
+                            bar.progress(10); time.sleep(0.12)
+                            ok = _auto_attach_or_restore_silently()
+                            bar.progress(100)
+                            if ok:
+                                s.update(label="두뇌 연결 완료 ✅", state="complete")
+                                st.rerun()
+                            else:
+                                s.update(label="두뇌 연결 실패 ❌", state="error")
+                                st.error("먼저 사전점검/재최적화를 실행하세요.")
+                    except Exception:
+                        with st.spinner("두뇌 연결 중…"):
+                            ok = _auto_attach_or_restore_silently()
+                        if ok:
+                            st.success("두뇌 연결 완료 ✅")
+                            st.rerun()
+                        else:
+                            st.error("두뇌 연결 실패. 먼저 사전점검/재최적화를 실행하세요.")
 
     # Advanced(접기) — 강제 초기화 등 ----------------------------------------
     with st.expander("고급(Advanced)", expanded=False):
@@ -308,6 +366,7 @@ def render_brain_prep_main():
             except Exception as e:
                 st.error(f"초기화 중 오류: {type(e).__name__}")
                 st.exception(e)
+
 
 # ===== [05B] TAG DIAGNOSTICS (NEW) ==========================================
 def render_tag_diagnostics():
