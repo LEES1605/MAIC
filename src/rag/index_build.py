@@ -642,6 +642,167 @@ def _make_and_upload_backup_zip(service, backup_folder_id: Optional[str]) -> Opt
 
     return None
 
+
+# -------- NEW: Drive↔Local 비교/복구 헬퍼들 ----------------------------------
+def sha1_file(path: Path) -> Optional[str]:
+    """로컬 파일의 SHA-1 해시(16진) 계산. 없으면 None."""
+    try:
+        if not path.exists() or not path.is_file():
+            return None
+        h = hashlib.sha1()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    except Exception:
+        return None
+
+
+def sha1_in_zip_bytes(zip_bytes: bytes, member_name: str) -> Optional[str]:
+    """ZIP 바이트 안 특정 멤버의 SHA-1 해시 계산. 없거나 오류면 None."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+            try:
+                with zf.open(member_name, "r") as m:
+                    h = hashlib.sha1()
+                    for chunk in iter(lambda: m.read(1024 * 1024), b""):
+                        h.update(chunk)
+                    return h.hexdigest()
+            except KeyError:
+                return None
+    except Exception:
+        return None
+
+
+def latest_backup_summary(service=None, backup_folder_id: Optional[str] = None, *, compute_hash: bool = False) -> Optional[Dict[str, Any]]:
+    """
+    백업 폴더의 최신 backup_*.zip 메타를 반환.
+    compute_hash=True이면 ZIP 내부 chunks.jsonl의 SHA-1도 함께 계산.
+    """
+    try:
+        svc = service or _drive_client()
+        bfid = _find_folder_id("BACKUP") or _find_folder_id("DEFAULT") or backup_folder_id
+        if not bfid:
+            return None
+        latest = _find_latest_zip(svc, bfid)
+        if not latest:
+            return None
+        info = {
+            "id": latest["id"],
+            "name": latest.get("name"),
+            "modifiedTime": latest.get("modifiedTime"),
+            "size": int(latest.get("size") or 0),
+            "folder_id": bfid,
+        }
+        if compute_hash:
+            try:
+                zbytes = _download_file_bytes(svc, latest["id"])
+                info["chunks_sha1"] = sha1_in_zip_bytes(zbytes, "chunks.jsonl")
+            except Exception:
+                info["chunks_sha1"] = None
+        return info
+    except Exception:
+        return None
+
+
+def compare_local_vs_backup(service=None, backup_folder_id: Optional[str] = None) -> Dict[str, Any]:
+    """
+    로컬 chunks.jsonl 해시와 최신 백업 ZIP 내부 chunks.jsonl 해시를 비교.
+    반환: { 'local_sha1':..., 'backup_sha1':..., 'same': bool, 'has_local': bool, 'has_backup': bool, 'meta': {...} }
+    """
+    svc = service or _drive_client()
+    meta = latest_backup_summary(svc, backup_folder_id, compute_hash=True)
+    local_path = PERSIST_DIR / "chunks.jsonl"
+    lsha = sha1_file(local_path)
+    bsha = meta.get("chunks_sha1") if meta else None
+    return {
+        "local_sha1": lsha,
+        "backup_sha1": bsha,
+        "same": (lsha is not None and bsha is not None and lsha == bsha),
+        "has_local": lsha is not None,
+        "has_backup": bsha is not None,
+        "meta": meta or {},
+    }
+
+
+def _atomic_write_bytes(path: Path, data: bytes) -> None:
+    """tmp에 쓰고 fsync 후 교체하여 안전하게 저장."""
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(tmp, "wb") as f:
+        f.write(data)
+        try:
+            f.flush(); os.fsync(f.fileno())
+        except Exception:
+            pass
+    os.replace(tmp, path)
+
+
+def restore_latest_backup_to_local(service=None, backup_folder_id: Optional[str] = None) -> Dict[str, Any]:
+    """
+    최신 backup_*.zip을 내려받아 REQ_FILES만 로컬에 원자 복구.
+    성공 시 .ready 마커를 생성.
+    반환 예:
+      {
+        "ok": True,
+        "restored": ["chunks.jsonl", "manifest.json", ...],
+        "backup_meta": {...},
+        "after_hash": {"chunks.jsonl": "...", ...}
+      }
+    """
+    try:
+        svc = service or _drive_client()
+        meta = latest_backup_summary(svc, backup_folder_id, compute_hash=False)
+        if not meta:
+            return {"ok": False, "error": "no_backup_found"}
+
+        # ZIP 바이트 다운로드
+        zbytes = _download_file_bytes(svc, meta["id"])
+
+        restored: List[str] = []
+        after_hash: Dict[str, Optional[str]] = {}
+
+        with zipfile.ZipFile(io.BytesIO(zbytes)) as zf:
+            for fname in REQ_FILES:
+                try:
+                    with zf.open(fname, "r") as m:
+                        data = m.read()
+                        # 대상 경로 결정
+                        if fname == "chunks.jsonl":
+                            dst = PERSIST_DIR / "chunks.jsonl"
+                        elif fname == "manifest.json":
+                            dst = MANIFEST_PATH
+                        elif fname == "quality_report.json":
+                            dst = QUALITY_REPORT_PATH
+                        else:
+                            dst = PERSIST_DIR / fname
+                        _atomic_write_bytes(dst, data)
+                        restored.append(fname)
+                except KeyError:
+                    # ZIP에 해당 파일이 없으면 건너뜀
+                    continue
+
+        # 사후 해시 계산(있을 경우)
+        for fname in REQ_FILES:
+            if fname == "chunks.jsonl":
+                after_hash[fname] = sha1_file(PERSIST_DIR / "chunks.jsonl")
+            elif fname == "manifest.json":
+                after_hash[fname] = sha1_file(MANIFEST_PATH)
+            elif fname == "quality_report.json":
+                after_hash[fname] = sha1_file(QUALITY_REPORT_PATH)
+
+        # .ready 마커 생성
+        try:
+            (PERSIST_DIR).mkdir(parents=True, exist_ok=True)
+            (PERSIST_DIR / ".ready").write_text(time.strftime("%Y-%m-%d %H:%M:%S") + " restored\n", encoding="utf-8")
+        except Exception:
+            pass
+
+        return {"ok": True, "restored": restored, "backup_meta": meta, "after_hash": after_hash}
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+
 # ===== [09] QUICK PRECHECK (변경 여부만 빠르게) ===============================
 def _now_kst_str() -> str:
     """로그 표시에 쓰는 KST 타임스탬프 문자열."""
