@@ -725,7 +725,6 @@ def render_simple_qa():
 def main():
     # (A) 타이틀+상태 배지 렌더러 ------------------------------------------------
     def _is_attached_session() -> bool:
-        """세션에 존재 가능한 다양한 키로 '두뇌 연결됨' 신호를 탐지."""
         ss = st.session_state
         return bool(
             ss.get("brain_attached") or
@@ -738,8 +737,6 @@ def main():
     def _render_title_with_status():
         import importlib
         from pathlib import Path
-
-        # PERSIST_DIR 안전하게 도출
         try:
             _mod = importlib.import_module("src.rag.index_build")
             _PERSIST_DIR_OBJ = getattr(_mod, "PERSIST_DIR", Path.home() / ".maic" / "persist")
@@ -747,16 +744,17 @@ def main():
             _PERSIST_DIR_OBJ = Path.home() / ".maic" / "persist"
 
         chunks_ok = (_PERSIST_DIR_OBJ / "chunks.jsonl").exists()
-        is_attached = _is_attached_session()
+        ready_mark_ok = (_PERSIST_DIR_OBJ / ".ready").exists()
+        files_signal = bool(chunks_ok or ready_mark_ok)
 
-        if is_attached and chunks_ok:
+        is_attached = _is_attached_session()
+        if is_attached:
             badge = '<span class="pill pill-green">🟢 두뇌 준비됨</span>'
-        elif chunks_ok and not is_attached:
+        elif files_signal:
             badge = '<span class="pill pill-amber">🟡 연결 대기</span>'
         else:
             badge = '<span class="pill pill-gray">🔴 준비 안 됨</span>'
 
-        # 간단 스타일(페이지 내 국소 적용)
         css = """
         <style>
         .topbar {display:flex; align-items:center; justify-content: space-between; gap:12px; margin-bottom: 6px;}
@@ -775,28 +773,26 @@ def main():
         """
         st.markdown(css + html, unsafe_allow_html=True)
 
-    # 0) 타이틀+상태 먼저 보여주기(부팅 플로우 전/후 모두 최신 상태가 보이도록)
+    # 0) 타이틀 먼저
     _render_title_with_status()
 
-    # (1) 세션당 1회 자동 사전점검(드라이브 변화 감지용)
+    # (1) 자동 사전점검 실행 1회
     if not st.session_state.get("_precheck_auto_done", False):
         st.session_state["_precheck_auto_done"] = True
         if precheck_build_needed is not None:
             try:
-                st.session_state["_precheck_res"] = precheck_build_needed("")  # 시크릿 기반 자동 처리
+                st.session_state["_precheck_res"] = precheck_build_needed("")
             except Exception:
                 st.session_state["_precheck_res"] = None
         else:
             st.session_state["_precheck_res"] = None
 
-    # (1.5) 부팅 시 1회: 백업↔로컬 비교 → 복구/질문/연결 (결정만 계산)
+    # (1.5) 부팅 시 결정 계산
     if not st.session_state.get("_boot_flow_initialized", False):
         st.session_state["_boot_flow_initialized"] = True
 
         import importlib
         from pathlib import Path
-
-        # index_build 모듈에서 필요한 항목 바인딩(실패해도 아래에서 방어)
         try:
             _mod = importlib.import_module("src.rag.index_build")
             _PERSIST_DIR = getattr(_mod, "PERSIST_DIR", Path.home() / ".maic" / "persist")
@@ -806,11 +802,9 @@ def main():
             _PERSIST_DIR = Path.home() / ".maic" / "persist"
             _compare_local_vs_backup = None
 
-        # 비교/사전점검 결과를 세션에 저장(다음 렌더에서 재사용)
         st.session_state["_boot_ctx"] = st.session_state.get("_boot_ctx", {})
         _ctx = st.session_state["_boot_ctx"]
 
-        # ① 드라이브 백업 ↔ 로컬 해시 비교
         _ctx["compare"] = None
         if _compare_local_vs_backup is not None:
             try:
@@ -818,31 +812,24 @@ def main():
             except Exception as e:
                 st.warning(f"백업/로컬 비교 실패: {type(e).__name__}: {e}")
 
-        # ② 새 자료 감지(사전점검) — 이미 (1)에서 계산됨
         _ctx["pre"] = st.session_state.get("_precheck_res") or {}
 
-        # ③ 결정: attach / restore / ask / build
-        plan = "attach"
-        reason = []
-
+        plan = "attach"; reason = []
         cmpres = _ctx.get("compare") or {}
         has_local  = bool(cmpres.get("has_local"))
         has_backup = bool(cmpres.get("has_backup"))
         same_hash  = bool(cmpres.get("same"))
 
-        # 🔎 precheck에서 '진짜 자료 변화'만 추출
         pre = _ctx.get("pre") or {}
         changed_flag = bool(pre.get("changed"))
         reasons_list = list(pre.get("reasons") or [])
         only_no_local = (reasons_list and set(reasons_list).issubset({"no_local_index"}))
 
-        # ✅ 분기 로직 (restore-first when no local)
         if has_local and not has_backup:
             plan = "attach"; reason.append("local_only")
         elif has_local and has_backup and same_hash:
             plan = "attach"; reason.append("hash_equal")
         elif (not has_local) and has_backup:
-            # 로컬이 비어 있고 백업이 있으면 무조건 복구 먼저
             plan = "restore"; reason.append("restore_first_no_local")
         else:
             if has_backup:
@@ -855,10 +842,9 @@ def main():
 
         _ctx["plan"] = plan
         _ctx["reason"] = reason
-        # ✅ 로그에서 사용할 경로 문자열을 세션에 저장(재실행해도 안전)
         st.session_state["_persist_dir_str"] = str(_PERSIST_DIR)
 
-    # (1.6) 부팅 플로우 실행/렌더링 (여기서는 항상 안전하게 재계산/재임포트)
+    # (1.6) 실행/렌더
     from pathlib import Path as _Path
     import importlib as _importlib
     import time
@@ -869,31 +855,34 @@ def main():
     pre = _ctx.get("pre") or {}
     decision_log = st.empty()
 
-    # ✅ 재실행에도 안전한 경로(문자열)를 사용
     _PERSIST_DIR_LOG = st.session_state.get("_persist_dir_str", str(_Path.home() / ".maic" / "persist"))
 
-    # 실행 헬퍼들 ---------------------------------------------------------------
     def _attach_with_status(label="두뇌 자동 연결 중…") -> bool:
-        import time
         try:
             with st.status(label, state="running") as s:
                 bar = st.progress(0)
                 bar.progress(25); time.sleep(0.08)
                 ok = _auto_attach_or_restore_silently()
-                # ✅ 연결 상태를 명시 플래그로 저장
                 st.session_state["brain_attached"] = bool(ok)
                 bar.progress(100)
                 if ok:
                     s.update(label="두뇌 자동 연결 완료 ✅", state="complete")
                 else:
                     s.update(label="두뇌 자동 연결 실패 ❌", state="error")
-                # 배지 즉시 갱신
-                _render_title_with_status()
+                # 🔁 상단 헤더가 초기 상태로 남지 않도록 1회 재실행
+                if ok and not st.session_state.get("_post_attach_rerun_done"):
+                    st.session_state["_post_attach_rerun_done"] = True
+                    st.rerun()
+                else:
+                    _render_title_with_status()
                 return bool(ok)
         except Exception:
             ok = _auto_attach_or_restore_silently()
             st.session_state["brain_attached"] = bool(ok)
-            if ok:
+            if ok and not st.session_state.get("_post_attach_rerun_done"):
+                st.session_state["_post_attach_rerun_done"] = True
+                st.rerun()
+            elif ok:
                 st.success("두뇌 자동 연결 완료 ✅")
                 _render_title_with_status()
             else:
@@ -919,7 +908,6 @@ def main():
         return _attach_with_status("복구 후 두뇌 연결 중…")
 
     def _build_then_backup_then_attach():
-        # 매 호출 시 안전하게 import
         try:
             _mod3 = _importlib.import_module("src.rag.index_build")
             _PERSIST_DIR_OBJ = getattr(_mod3, "PERSIST_DIR", _Path.home() / ".maic" / "persist")
@@ -933,41 +921,31 @@ def main():
             return False
 
         prog = st.progress(0); log = st.empty()
-
         def _pct(v: int, msg: str | None = None):
             prog.progress(max(0, min(int(v), 100)))
             if msg: log.info(str(msg))
-
-        def _msg(s: str):
-            log.write(f"• {s}")
+        def _msg(s: str): log.write(f"• {s}")
 
         try:
             with st.status("변경 반영을 위한 재최적화 실행 중…", state="running") as s:
                 res = build_index_with_checkpoint(
-                    update_pct=_pct,
-                    update_msg=_msg,
-                    gdrive_folder_id="",
-                    gcp_creds={},
-                    persist_dir=str(_PERSIST_DIR_OBJ),
-                    remote_manifest={},
+                    update_pct=_pct, update_msg=_msg,
+                    gdrive_folder_id="", gcp_creds={},
+                    persist_dir=str(_PERSIST_DIR_OBJ), remote_manifest={},
                 )
                 prog.progress(100)
                 s.update(label="재최적화 완료 ✅", state="complete")
             st.json(res)
-
-            # ZIP 백업 업로드(옵션)
             try:
                 if _make_and_upload_backup_zip_fn:
                     _ = _make_and_upload_backup_zip_fn(None, None)
             except Exception:
                 pass
-
             return _attach_with_status("재최적화 후 두뇌 연결 중…")
         except Exception as e:
             st.error(f"재최적화 실패: {type(e).__name__}: {e}")
             return False
 
-    # 의사결정 로그 (재실행에도 안전)
     if plan:
         decision_log.info(
             "auto-boot: plan=`{}` | reasons={} | has_local={} has_backup={} same_hash={} | changed={} | path={}".format(
@@ -976,17 +954,13 @@ def main():
             )
         )
 
-    # 계획대로 실행
-    if plan == "attach" and not st.session_state.get("rag_index"):
+    if plan == "attach" and not _is_attached_session():
         _attach_with_status()
-
-    elif plan == "restore" and not st.session_state.get("rag_index"):
+    elif plan == "restore" and not _is_attached_session():
         _restore_then_attach()
-
-    elif plan == "build" and not st.session_state.get("rag_index"):
+    elif plan == "build" and not _is_attached_session():
         _build_then_backup_then_attach()
-
-    elif plan == "ask" and not st.session_state.get("rag_index"):
+    elif plan == "ask" and not _is_attached_session():
         st.warning("📌 새 자료(변경/신규)가 감지되었습니다. 어떻게 진행할까요?")
         c1, c2 = st.columns(2)
         with c1:
@@ -1003,11 +977,9 @@ def main():
     # (2) 준비 패널
     render_brain_prep_main()
     st.divider()
-
-    # (3) 태그 진단 패널
+    # (3) 태그 진단
     render_tag_diagnostics()
     st.divider()
-
     # (4) QA 데모
     render_simple_qa()
 
