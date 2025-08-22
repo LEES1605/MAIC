@@ -723,6 +723,49 @@ def render_simple_qa():
 
 # ===== [07] MAIN =============================================================
 def main():
+    # (A) 타이틀+상태 배지 렌더러 ------------------------------------------------
+    def _render_title_with_status():
+        import importlib
+        from pathlib import Path
+
+        # PERSIST_DIR 안전하게 도출
+        try:
+            _mod = importlib.import_module("src.rag.index_build")
+            _PERSIST_DIR_OBJ = getattr(_mod, "PERSIST_DIR", Path.home() / ".maic" / "persist")
+        except Exception:
+            _PERSIST_DIR_OBJ = Path.home() / ".maic" / "persist"
+
+        chunks_ok = (_PERSIST_DIR_OBJ / "chunks.jsonl").exists()
+        is_attached = bool(st.session_state.get("rag_index"))
+        if is_attached and chunks_ok:
+            badge = '<span class="pill pill-green">🟢 두뇌 준비됨</span>'
+        elif chunks_ok and not is_attached:
+            badge = '<span class="pill pill-amber">🟡 연결 대기</span>'
+        else:
+            badge = '<span class="pill pill-gray">🔴 준비 안 됨</span>'
+
+        # 간단 스타일(페이지 내 국소 적용)
+        css = """
+        <style>
+        .topbar {display:flex; align-items:center; justify-content: space-between; gap:12px; margin-bottom: 6px;}
+        .title {font-size: 1.75rem; font-weight: 700; line-height: 1.2; margin: 0;}
+        .pill {display:inline-block; padding:6px 10px; border-radius:999px; font-weight:600; font-size:0.95rem;}
+        .pill-green {background:#16a34a22; color:#16a34a; border:1px solid #16a34a55;}
+        .pill-amber {background:#f59e0b22; color:#b45309; border:1px solid #f59e0b55;}
+        .pill-gray {background:#6b728022; color:#374151; border:1px solid #6b728055;}
+        </style>
+        """
+        html = f"""
+        <div class="topbar">
+          <div class="title">AI Teacher — MAIC</div>
+          <div>{badge}</div>
+        </div>
+        """
+        st.markdown(css + html, unsafe_allow_html=True)
+
+    # 0) 타이틀+상태 먼저 보여주기(부팅 플로우 전/후 모두 최신 상태가 보이도록)
+    _render_title_with_status()
+
     # (1) 세션당 1회 자동 사전점검(드라이브 변화 감지용)
     if not st.session_state.get("_precheck_auto_done", False):
         st.session_state["_precheck_auto_done"] = True
@@ -809,6 +852,7 @@ def main():
 
     # 실행 헬퍼들 ---------------------------------------------------------------
     def _attach_with_status(label="두뇌 자동 연결 중…") -> bool:
+        import time
         try:
             with st.status(label, state="running") as s:
                 bar = st.progress(0)
@@ -819,16 +863,20 @@ def main():
                     s.update(label="두뇌 자동 연결 완료 ✅", state="complete")
                 else:
                     s.update(label="두뇌 자동 연결 실패 ❌", state="error")
+                # 연결 상태가 바뀌었으니 타이틀 배지도 즉시 갱신
+                _render_title_with_status()
                 return bool(ok)
         except Exception:
             ok = _auto_attach_or_restore_silently()
             if ok:
                 st.success("두뇌 자동 연결 완료 ✅")
+                _render_title_with_status()
             else:
                 st.error("두뇌 자동 연결 실패")
             return bool(ok)
 
     def _restore_then_attach():
+        import time
         try:
             _mod2 = _importlib.import_module("src.rag.index_build")
             _restore = getattr(_mod2, "restore_latest_backup_to_local", None)
@@ -847,6 +895,7 @@ def main():
         return _attach_with_status("복구 후 두뇌 연결 중…")
 
     def _build_then_backup_then_attach():
+        import time
         # 매 호출 시 안전하게 import
         try:
             _mod3 = _importlib.import_module("src.rag.index_build")
@@ -876,7 +925,7 @@ def main():
                     update_msg=_msg,
                     gdrive_folder_id="",
                     gcp_creds={},
-                    persist_dir=str(_PERSIST_DIR_OBJ),  # ✅ 항상 안전한 경로 사용
+                    persist_dir=str(_PERSIST_DIR_OBJ),
                     remote_manifest={},
                 )
                 prog.progress(100)
@@ -941,5 +990,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
