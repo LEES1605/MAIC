@@ -151,7 +151,7 @@ def render_header():
     return
 # ===== [04] END =============================================
 
-# ===== [04A] MODE & ADMIN BUTTON (즉시 반영: rerun 포함) =====================
+# ===== [04A] MODE & ADMIN BUTTON (콜백 제거: 즉시 갱신용 rerun) ================
 import os as _os
 import streamlit as st
 
@@ -166,58 +166,34 @@ def _get_admin_pin() -> str:
 
 
 # ── [04A-2] 세션키 초기화 ------------------------------------------------------
-for k, v in {
-    "is_admin": False,
-    "_admin_auth_open": False,
-}.items():
-    if k not in st.session_state:
-        st.session_state[k] = v
+if "is_admin" not in st.session_state:
+    st.session_state["is_admin"] = False
+if "_admin_auth_open" not in st.session_state:
+    st.session_state["_admin_auth_open"] = False
 # ===== [04A-2] END ============================================================
 
 
-# ── [04A-3] 상태 전환 유틸(즉시 재렌더) ---------------------------------------
-def _set_admin(on: bool, toast_msg: str | None = None):
-    st.session_state["is_admin"] = bool(on)
-    st.session_state["_admin_auth_open"] = False
-    if toast_msg:
-        try:
-            st.toast(toast_msg)
-        except Exception:
-            pass
-    st.rerun()  # ← 핵심: 같은 클릭 이벤트 내에서 즉시 반영
-
-def _open_auth_panel():
-    st.session_state["_admin_auth_open"] = True
-    st.rerun()
-# ===== [04A-3] END ============================================================
-
-
-# ── [04A-4] 상단 우측 관리자 버튼 & 인증 패널 -----------------------------------
+# ── [04A-3] 상단 우측 관리자 버튼 & 인증 패널 (콜백 미사용) ----------------------
 with st.container():
     _, right = st.columns([0.7, 0.3])
     with right:
         btn_slot = st.empty()
 
-        # 현재 상태에 따라 라벨/동작 분기
         if st.session_state["is_admin"]:
-            # 관리자 모드일 때는 '관리자 종료'가 바로 떠야 함
-            btn_slot.button(
-                "🔓 관리자 종료",
-                key="btn_close_admin",
-                use_container_width=True,
-                on_click=_set_admin,
-                kwargs={"on": False, "toast_msg": "관리자 모드 해제됨"},
-            )
+            # 관리자 모드일 때: 종료 버튼이 바로 보여야 함
+            if btn_slot.button("🔓 관리자 종료", key="btn_close_admin", use_container_width=True):
+                st.session_state["is_admin"] = False
+                st.session_state["_admin_auth_open"] = False
+                try: st.toast("관리자 모드 해제됨")
+                except Exception: pass
+                st.rerun()  # ← 콜백이 아닌 본문에서 rerun: 즉시 라벨 갱신
         else:
-            # 학생 모드일 때는 '관리자' 버튼이 바로 떠야 함
-            btn_slot.button(
-                "🔒 관리자",
-                key="btn_open_admin",
-                use_container_width=True,
-                on_click=_open_auth_panel,
-            )
+            # 학생 모드일 때: 관리자 버튼
+            if btn_slot.button("🔒 관리자", key="btn_open_admin", use_container_width=True):
+                st.session_state["_admin_auth_open"] = True
+                st.rerun()  # 인증 패널을 즉시 표시
 
-        # 인증 패널: 열기로 전환되면 즉시 보이게(별도 키)
+        # 인증 패널: 열림 상태이면 표시
         if st.session_state["_admin_auth_open"] and not st.session_state["is_admin"]:
             with st.container(border=True):
                 st.markdown("**관리자 PIN 입력**")
@@ -229,17 +205,22 @@ with st.container():
                     with c2:
                         cancel = st.form_submit_button("취소")
 
-                # 폼 제출 처리
                 if cancel:
                     st.session_state["_admin_auth_open"] = False
                     st.rerun()
-                elif ok:
+                if ok:
                     if pin_try == _get_admin_pin():
-                        _set_admin(True, "관리자 모드 진입 ✅")  # 여기서 rerun
+                        st.session_state["is_admin"] = True
+                        st.session_state["_admin_auth_open"] = False
+                        try: st.toast("관리자 모드 진입 ✅")
+                        except Exception: pass
+                        st.rerun()  # 입장 직후 즉시 라벨 "관리자 종료"로
                     else:
                         st.error("PIN이 올바르지 않습니다.")
+# ===== [04A-3] END ============================================================
 
-# 역할 캡션
+
+# ── [04A-4] 역할 캡션 ---------------------------------------------------------
 if st.session_state.get("is_admin", False):
     st.caption("역할: **관리자** — 상단 버튼으로 종료 가능")
 else:
