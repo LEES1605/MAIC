@@ -914,7 +914,6 @@ def render_simple_qa():
 
 # ===== [06] END ==============================================================
 
-
 # ===== [07] MAIN =============================================================
 def main():
     # (A) 호환성 shim -----------------------------------------------------------
@@ -934,8 +933,13 @@ def main():
     # (B) 타이틀+상태 배지 ------------------------------------------------------
     def _render_title_with_status():
         status = get_index_status()  # 'ready' | 'pending' | 'missing'
+        is_admin = st.session_state.get("is_admin", False)
+
         if status == "ready":
-            badge = '<span class="pill pill-green">🟢 두뇌 준비됨</span>'
+            if is_admin:
+                badge = '<span class="pill pill-green">🟢 두뇌 준비됨</span>'
+            else:
+                badge = '<span class="pill pill-green">🟢 LEES AI 선생님이 답변준비 완료</span>'
         elif status == "pending":
             badge = '<span class="pill pill-amber">🟡 연결 대기</span>'
         else:
@@ -979,7 +983,8 @@ def main():
                 if res.get("ok") and not res.get("skipped"):
                     st.toast("품질 리포트 갱신 완료 ✅", icon="✅")
             except Exception:
-                st.toast("품질 리포트 갱신 실패", icon="⚠️")
+                if st.session_state.get("is_admin", False):
+                    st.toast("품질 리포트 갱신 실패", icon="⚠️")
 
     def _auto_attach_or_restore_silently():
         return _attach_from_local()
@@ -1008,7 +1013,8 @@ def main():
                     st.session_state["_post_attach_rerun_done"] = True
                     st.rerun()
             else:
-                st.error("두뇌 자동 연결 실패")
+                if st.session_state.get("is_admin", False):
+                    st.error("두뇌 자동 연결 실패")
             return bool(ok)
 
     def _restore_then_attach():
@@ -1019,7 +1025,6 @@ def main():
             st.error(f"복구 모듈 임포트 실패: {type(e).__name__}: {e}")
             return False
 
-    # (D) 0단계: 로컬 인덱스가 없으면 **무조건 선(先)복구)** --------------------------
         _restore = getattr(_m, "restore_latest_backup_to_local", None)
         if not callable(_restore):
             st.error("복구 함수를 찾지 못했습니다. (restore_latest_backup_to_local)")
@@ -1090,8 +1095,6 @@ def main():
     # (E) 부팅: 로컬 인덱스 없으면 선복구
     local_ok = _has_local_index_files()
     if not local_ok and not _index_ready():
-        log = st.empty()
-        log.info("boot: local_missing → try_restore_first")
         if _restore_then_attach():
             st.rerun()
         else:
@@ -1156,17 +1159,19 @@ def main():
         st.stop()
 
     # (G) 일반 플로우 ------------------------------------------------------------
-    decision_log = st.empty()
-    decision_log.info(
-        "auto-boot(is_admin={}) admin_changed={} reasons={}".format(is_admin, changed_flag, reasons_list)
-    )
+    if is_admin:
+        decision_log = st.empty()
+        decision_log.info(
+            "auto-boot(is_admin={}) admin_changed={} reasons={}".format(is_admin, changed_flag, reasons_list)
+        )
 
     if not _index_ready():
         # 로컬은 있으니 바로 연결 시도(복구는 위에서 처리됨)
         if _attach_with_status():
             st.rerun()
         else:
-            st.info("두뇌 연결 실패. 필요 시 ‘업데이트(다시 최적화)’를 실행해 주세요.")
+            if is_admin:
+                st.info("두뇌 연결 실패. 필요 시 ‘업데이트(다시 최적화)’를 실행해 주세요.")
     # 헤더는 상단에서만 1회 렌더
 
     # (H) 화면 섹션 (관리자 버튼 기반 분기) -----------------------------------------
@@ -1183,3 +1188,4 @@ def main():
 if __name__ == "__main__":
     main()
 # ===== [07] END ==============================================================
+
