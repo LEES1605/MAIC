@@ -763,12 +763,19 @@ def render_simple_qa():
 # ===== [07] MAIN =============================================================
 def main():
     # (A) 호환성 shim -----------------------------------------------------------
-    # (기존 코드 호환: 일부 렌더 함수가 _index_ready()를 참조할 수 있으므로 유지)
+    # render_simple_qa 등 모듈 전역에서 사용할 수 있도록 전역 심볼로도 노출
     def _index_ready() -> bool:
         try:
             return get_index_status() == "ready"
         except Exception:
             return False
+    globals()['_index_ready'] = _index_ready  # ★ 전역에 심볼 노출(NameError 방지)
+
+    # 로컬 인덱스 존재 여부(간단판·폴백)
+    from pathlib import Path as __Path
+    def _has_local_index_files() -> bool:
+        p = __Path.home() / ".maic" / "persist"
+        return (p / "chunks.jsonl").exists() or (p / ".ready").exists()
 
     # (B) 타이틀+상태 배지 ------------------------------------------------------
     def _render_title_with_status():
@@ -911,7 +918,6 @@ def main():
             return False
 
     # (D) 0단계: 로컬 인덱스가 없으면 **무조건 선(先)복구** ---------------------------
-    #  - 사전점검/질문보다 먼저 수행하여 '최초 빌드 필요' 오탐을 차단
     local_ok = _has_local_index_files()
     if not local_ok and not _index_ready():
         log = st.empty()
@@ -970,7 +976,6 @@ def main():
 
         if later:
             st.session_state["_admin_update_prompt_done"] = True
-            # 합의: 기본은 최신 백업 ZIP으로 복구 후 연결
             if _restore_then_attach():
                 st.rerun()
             else:
@@ -985,7 +990,6 @@ def main():
     if _index_ready():
         _render_title_with_status()
     else:
-        # 로컬은 있으니 바로 연결 시도(복구는 위에서 처리됨)
         if _attach_with_status():
             st.rerun()
         else:
