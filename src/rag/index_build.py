@@ -1027,6 +1027,200 @@ def build_index_with_checkpoint(
         "auth_mode": "oauth-first"
     }
 
+# ===== [10A] QUALITY REPORTER (품질 리포트 생성/저장/업로드) =====================
+from pathlib import Path as _QPath
+from typing import Any as _Any, Dict as _Dict, List as _List, Optional as _Opt
+import json as _json, datetime as _dt
+from collections import Counter as _Counter
+
+# 상위에서 이미 정의되어 있으면 그대로 사용
+try:
+    PERSIST_DIR = PERSIST_DIR  # type: ignore[name-defined]
+except Exception:
+    PERSIST_DIR = _QPath.home() / ".maic" / "persist"
+
+try:
+    BACKUP_DIR = BACKUP_DIR  # type: ignore[name-defined]
+except Exception:
+    BACKUP_DIR = _QPath.home() / ".maic" / "backup"
+
+try:
+    QUALITY_REPORT_PATH = QUALITY_REPORT_PATH  # type: ignore[name-defined]
+except Exception:
+    QUALITY_REPORT_PATH = _QPath.home() / ".maic" / "quality_report.json"
+
+def _now_iso_z() -> str:
+    return _dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+
+def _p95(_vals: _List[int]) -> int:
+    if not _vals: return 0
+    s = sorted(_vals); k = int(0.95 * (len(s) - 1))
+    return s[k]
+
+def _scan_chunks_for_quality(_chunks_path: _QPath, top_n: int = 20) -> _Dict[str, _Any]:
+    total = with_tags = without_tags = 0
+    char_total = word_total = 0
+    char_lens: _List[int] = []; word_lens: _List[int] = []
+    invalid_empty = invalid_non_str = dup_in_chunk = 0
+    tag_freq: _Counter[str] = _Counter()
+    missing_doc_id = missing_source = missing_page = 0
+    invalid_samples: _List[_Dict[str, _Any]] = []
+    missing_samples: _List[_Dict[str, _Any]] = []
+    parse_errors: _List[str] = []
+
+    def _push_invalid(s): 
+        if len(invalid_samples) < 10: invalid_samples.append(s)
+    def _push_missing(s): 
+        if len(missing_samples) < 10: missing_samples.append(s)
+
+    with _chunks_path.open("r", encoding="utf-8") as fh:
+        for i, line in enumerate(fh, 1):
+            ln = line.strip()
+            if not ln: continue
+            try:
+                obj = _json.loads(ln)
+            except Exception:
+                if len(parse_errors) < 10: parse_errors.append(f"line {i}")
+                continue
+
+            text = obj.get("text") or obj.get("content") or ""
+            if not isinstance(text, str): text = str(text or "")
+            tlen = len(text); wlen = len(text.split())
+            char_total += tlen; word_total += wlen
+            char_lens.append(tlen); word_lens.append(wlen)
+            total += 1
+
+            tags = obj.get("grammar_tags") or []
+            if not isinstance(tags, list):
+                invalid_non_str += 1; _push_invalid({"line": i, "reason": "tags_not_list"}); tags = []
+            if tags: with_tags += 1
+            else:    without_tags += 1
+
+            seen = set()
+            for t in tags:
+                if not isinstance(t, str):
+                    invalid_non_str += 1; _push_invalid({"line": i, "tag": t, "reason": "non_string"}); continue
+                t2 = t.strip()
+                if not t2:
+                    invalid_empty += 1; _push_invalid({"line": i, "tag": t, "reason": "empty"}); continue
+                if t2 in seen:
+                    dup_in_chunk += 1; _push_invalid({"line": i, "tag": t2, "reason": "dup_in_chunk"})
+                seen.add(t2); tag_freq[t2] += 1
+
+            if not obj.get("doc_id"):
+                missing_doc_id += 1; _push_missing({"line": i, "field": "doc_id"})
+            if not obj.get("source"):
+                missing_source += 1; _push_missing({"line": i, "field": "source"})
+            if obj.get("page") in (None, "", -1):
+                missing_page += 1; _push_missing({"line": i, "field": "page"})
+
+    return {
+        "generated_at": _now_iso_z(),
+        "summary": {
+            "chunks": total,
+            "with_tags": with_tags,
+            "without_tags": without_tags,
+            "with_tags_ratio": round(with_tags / total, 4) if total else 0.0,
+        },
+        "length": {
+            "chars_avg": round(char_total / total, 2) if total else 0.0,
+            "words_avg": round(word_total / total, 2) if total else 0.0,
+            "chars_p95": _p95(char_lens),
+            "words_p95": _p95(word_lens),
+        },
+        "tags": {
+            "freq_top": tag_freq.most_common(int(top_n or 20)),
+            "unique_count": len(tag_freq),
+            "invalid": {
+                "empty": invalid_empty,
+                "non_str": invalid_non_str,
+                "dup_in_chunk": dup_in_chunk,
+                "samples": invalid_samples,
+            },
+        },
+        "missing_fields": {
+            "doc_id": missing_doc_id,
+            "source": missing_source,
+            "page": missing_page,
+            "samples": missing_samples,
+        },
+        "parse_errors": parse_errors,
+    }
+
+def _upload_quality_report_to_drive(_report_dict: _Dict[str, _Any]) -> _Dict[str, _Any]:
+    # [08] 구획의 드라이브 헬퍼 재사용
+    _svc_fn = globals().get("_drive_service")
+    _pick_fn = globals().get("_pick_backup_folder_id")
+    try:
+        if callable(_svc_fn) and callable(_pick_fn):
+            svc = _svc_fn(); fid = _pick_fn(svc)
+            if svc and fid:
+                from googleapiclient.http import MediaInMemoryUpload  # type: ignore
+                data = _json.dumps(_report_dict, ensure_ascii=False).encode("utf-8")
+                media = MediaInMemoryUpload(data, mimetype="application/json", resumable=False)
+                name = f"quality_report_{_dt.datetime.now().strftime('%Y%m%d_%H%M')}.json"
+                meta = {"name": name, "parents": [fid], "mimeType": "application/json"}
+                out = svc.files().create(body=meta, media_body=media, fields="id,name").execute()
+                return {"ok": True, "file_id": out.get("id"), "name": out.get("name")}
+    except Exception as e:
+        return {"ok": False, "error": f"upload_failed:{type(e).__name__}"}
+    return {"ok": False, "error": "no_drive_or_folder"}
+
+def _quality_report(manifest: _Dict[str, _Any] | None = None, *, extra_counts: _Dict[str,int] | None = None, top_n: int = 20) -> _Dict[str, _Any]:
+    """
+    [10] PUBLIC ENTRY와의 호환용 함수.
+    - 현재 persist/chunks.jsonl을 스캔해 리포트를 만들고
+      1) 로컬 QUALITY_REPORT_PATH
+      2) 로컬 BACKUP_DIR/quality_report_YYYYMMDD_HHMM.json
+      3) Drive backup_zip(가능하면) 에 업로드까지 수행.
+    - manifest/extra_counts는 요약에 포함만 한다(호환 목적).
+    """
+    chunks = _QPath(PERSIST_DIR) / "chunks.jsonl"
+    if not chunks.exists():
+        return {"ok": False, "error": "chunks_missing", "path": str(chunks)}
+
+    rep = _scan_chunks_for_quality(chunks, top_n=top_n)
+    if manifest is not None:
+        rep["manifest_brief"] = {"entries": len(manifest or {})}
+    if extra_counts:
+        rep["build_stats"] = dict(extra_counts)
+
+    # 1) 로컬 저장
+    QUALITY_REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    QUALITY_REPORT_PATH.write_text(_json.dumps(rep, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    # 2) 로컬 백업 디렉토리에도 타임스탬프 파일로 캐시
+    try:
+        BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+        ts = _dt.datetime.now().strftime("%Y%m%d_%H%M")
+        (BACKUP_DIR / f"quality_report_{ts}.json").write_text(
+            _json.dumps(rep, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    except Exception:
+        pass
+
+    # 3) Drive 업로드
+    uploaded = _upload_quality_report_to_drive(rep)
+
+    return {"ok": True, "path": str(QUALITY_REPORT_PATH), "uploaded": uploaded, "summary": rep.get("summary")}
+
+def autorun_quality_scan_if_stale(top_n: int = 20) -> _Dict[str, _Any]:
+    """
+    chunks.jsonl이 더 새로우면 자동으로 품질 리포트를 갱신.
+    """
+    cj = _QPath(PERSIST_DIR) / "chunks.jsonl"
+    qr = _QPath(QUALITY_REPORT_PATH)
+    if not cj.exists():
+        return {"ok": False, "error": "chunks_missing"}
+    try:
+        cj_m = cj.stat().st_mtime
+        qr_m = qr.stat().st_mtime if qr.exists() else 0
+        if (not qr.exists()) or (qr_m + 1 < cj_m):
+            return _quality_report(None, extra_counts=None, top_n=top_n)
+        return {"ok": True, "skipped": True}
+    except Exception as e:
+        return {"ok": False, "error": f"autorun_failed:{type(e).__name__}"}
+# ===== [10A] END =============================================================
 
 # ===== [11] CLI (optional) ===================================================
 if __name__ == "__main__":
