@@ -769,7 +769,7 @@ def main():
             return get_index_status() == "ready"
         except Exception:
             return False
-    globals()['_index_ready'] = _index_ready  # ★ 전역에 심볼 노출(NameError 방지)
+    globals()['_index_ready'] = _index_ready  # NameError 방지 전역 공개
 
     # 로컬 인덱스 존재 여부(간단판·폴백)
     from pathlib import Path as __Path
@@ -807,10 +807,30 @@ def main():
 
     _render_title_with_status()
 
-    # (C) 유틸: 연결/복구/빌드 ----------------------------------------------------
+    # (C) 유틸: 품질스캐너 트리거 / 연결 / 복구 / 빌드 ----------------------------
     import time
     import importlib as _importlib
     from pathlib import Path as _Path
+
+    def _trigger_quality_autoscan():
+        """attach 성공 직후 품질 리포트 자동 갱신(없거나 오래되면). UI에 짧게 로그."""
+        try:
+            m = _importlib.import_module("src.rag.index_build")
+            fn = getattr(m, "autorun_quality_scan_if_stale", None)
+        except Exception:
+            fn = None
+        if callable(fn):
+            try:
+                res = fn()
+                if res.get("ok") and not res.get("skipped"):
+                    st.toast("품질 리포트 갱신 완료 ✅", icon="✅")
+                elif res.get("skipped"):
+                    # 최신이라 스킵
+                    pass
+                else:
+                    st.toast("품질 리포트 갱신 실패", icon="⚠️")
+            except Exception:
+                st.toast("품질 리포트 갱신 실패", icon="⚠️")
 
     def _attach_with_status(label="두뇌 자동 연결 중…") -> bool:
         """로컬에 있는 인덱스로 세션 부착(복구 이후 호출 가정)."""
@@ -823,6 +843,8 @@ def main():
                 bar.progress(100)
                 if ok:
                     s.update(label="두뇌 자동 연결 완료 ✅", state="complete")
+                    # ★ attach 성공 직후 품질스캐너 자동 실행
+                    _trigger_quality_autoscan()
                 else:
                     s.update(label="두뇌 자동 연결 실패 ❌", state="error")
                 if ok and not st.session_state.get("_post_attach_rerun_done"):
@@ -834,6 +856,8 @@ def main():
         except Exception:
             ok = _auto_attach_or_restore_silently()
             st.session_state["brain_attached"] = bool(ok)
+            if ok:
+                _trigger_quality_autoscan()
             if ok and not st.session_state.get("_post_attach_rerun_done"):
                 st.session_state["_post_attach_rerun_done"] = True
                 st.rerun()
@@ -912,7 +936,9 @@ def main():
                 pass
             if _restore_then_attach():
                 return True
-            return _attach_with_status("두뇌 연결 중…")
+            # 복구 실패 시 로컬 attach 폴백 + 품질스캐너 실행
+            ok = _attach_with_status("두뇌 연결 중…")
+            return bool(ok)
         except Exception as e:
             st.error(f"다시 최적화 실패: {type(e).__name__}: {e}")
             return False
@@ -976,6 +1002,7 @@ def main():
 
         if later:
             st.session_state["_admin_update_prompt_done"] = True
+            # 합의: 기본은 최신 백업 ZIP으로 복구 후 연결
             if _restore_then_attach():
                 st.rerun()
             else:
@@ -990,6 +1017,7 @@ def main():
     if _index_ready():
         _render_title_with_status()
     else:
+        # 로컬은 있으니 바로 연결 시도(복구는 위에서 처리됨)
         if _attach_with_status():
             st.rerun()
         else:
