@@ -507,7 +507,6 @@ def render_tag_diagnostics():
     except Exception:
         pass
 
-
 # ===== [06] SIMPLE QA DEMO (Korean-only, ENTER SUBMIT, CHAT-AREA SPINNER) ====
 def _sentence_quick_fix(user_q: str) -> List[Tuple[str, str]]:
     tips: List[Tuple[str, str]] = []
@@ -543,7 +542,7 @@ def _on_q_enter():
     except Exception:
         pass
 
-# ─────────────────────────── 히스토리/랭킹 유틸 ────────────────────────────
+# ──────────────── 히스토리/랭킹 유틸(개인 집계 포함) ─────────────────
 def _history_path() -> Path:
     p = Path.home() / ".maic"
     try:
@@ -552,22 +551,29 @@ def _history_path() -> Path:
         pass
     return p / "qa_history.jsonl"
 
-def _append_history(q: str):
-    """질문을 세션/로컬에 기록"""
+def _sanitize_user(name: str | None) -> str:
+    s = (name or "").strip()
+    # 너무 긴 이름 방지 및 공백 정리
+    s = re.sub(r"\s+", " ", s)[:40]
+    return s or "guest"
+
+def _append_history(q: str, user: str | None = None):
+    """질문을 세션/로컬에 기록 (개인 집계용 user 포함)"""
     try:
         q = (q or "").strip()
         if not q:
             return
+        user = _sanitize_user(user)
         # 세션 기록(최신 우선)
         if "qa_session_history" not in st.session_state:
             st.session_state["qa_session_history"] = []
-        st.session_state["qa_session_history"].insert(0, {"ts": int(time.time()), "q": q})
+        st.session_state["qa_session_history"].insert(0, {"ts": int(time.time()), "q": q, "user": user})
 
         # 로컬 jsonl append
         import json as _json
         hp = _history_path()
         with hp.open("a", encoding="utf-8") as f:
-            f.write(_json.dumps({"ts": int(time.time()), "q": q}, ensure_ascii=False) + "\n")
+            f.write(_json.dumps({"ts": int(time.time()), "q": q, "user": user}, ensure_ascii=False) + "\n")
     except Exception:
         # 기록 실패는 조용히 무시
         pass
@@ -581,35 +587,33 @@ def _read_history_lines(max_lines: int = 5000) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     try:
         with hp.open("r", encoding="utf-8") as f:
-            # 메모리 보호: 너무 크면 앞부분 스킵
-            lines = f.readlines()[-max_lines:]
+            lines = f.readlines()[-max_lines:]  # 메모리 보호
         for ln in lines:
             try:
-                rows.append(_json.loads(ln))
+                r = _json.loads(ln)
+                if "user" not in r:
+                    r["user"] = "guest"  # 과거 포맷 호환
+                rows.append(r)
             except Exception:
                 continue
     except Exception:
         return []
-    # 최신이 아래쪽이므로 역순 반환(최근 우선)
-    rows.reverse()
+    rows.reverse()  # 최근 우선
     return rows
 
 def _normalize_question(s: str) -> str:
     """랭킹 집계를 위한 질문 정규화(대소문자/공백/문장부호 정리, 한글 보존)"""
     import re as _re
     s = (s or "").strip().lower()
-    # 끝문장부호 제거
-    s = _re.sub(r"[!?。．！?]+$", "", s)
-    # 불필요한 문장부호 제거(한글/영문/숫자/공백/언더스코어만 보존)
-    s = _re.sub(r"[^\w\sㄱ-ㅎ가-힣]", " ", s)
-    # 공백 정리
+    s = _re.sub(r"[!?。．！?]+$", "", s)           # 끝문장부호 제거
+    s = _re.sub(r"[^\w\sㄱ-ㅎ가-힣]", " ", s)      # 한글/영문/숫자/공백 보존
     s = _re.sub(r"\s+", " ", s).strip()
     return s
 
 def _popular_questions(top_n: int = 20) -> List[Tuple[str, int]]:
     """로컬 jsonl 전 범위를 읽어 정규화 기반 빈도 상위 N을 반환 (예시 문구 포함)"""
     from collections import Counter
-    rows = _read_history_lines(max_lines=5000)  # 최근 5천 라인만 집계
+    rows = _read_history_lines(max_lines=5000)  # 최근 5천 라인
     if not rows:
         return []
     counter: Counter[str] = Counter()
@@ -622,11 +626,39 @@ def _popular_questions(top_n: int = 20) -> List[Tuple[str, int]]:
         if not key:
             continue
         counter[key] += 1
-        # 예시 문구는 최초 등장(혹은 더 짧은 문장) 사용
         if key not in exemplar or len(q) < len(exemplar[key]):
             exemplar[key] = q
     ranked = counter.most_common(top_n)
     return [(exemplar[k], c) for k, c in ranked]
+
+def _top3_users() -> List[Tuple[str, int]]:
+    """로컬 jsonl 기반 사용자별 질문 횟수 TOP3 (이름, 카운트)"""
+    from collections import Counter
+    rows = _read_history_lines(max_lines=5000)
+    if not rows:
+        return []
+    ctr = Counter(_sanitize_user(r.get("user")) for r in rows if (r.get("q") or "").strip())
+    top3 = ctr.most_common(3)
+    return [(name, cnt) for name, cnt in top3 if name]
+
+def _render_top3_badges(top3: List[Tuple[str, int]]):
+    """학생 화면 상단 TOP3 뱃지 렌더"""
+    if not top3:
+        return
+    medals = ["🥇", "🥈", "🥉"]
+    parts = []
+    for i, (name, cnt) in enumerate(top3[:3]):
+        medal = medals[i] if i < len(medals) else "🏅"
+        parts.append(f"<span class='rank pill pill-rank'>{medal} {name} · {cnt}회</span>")
+    css = """
+    <style>
+      .rankbar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin: 6px 0 10px 0; }
+      .pill { display:inline-block; padding:6px 10px; border-radius:999px; font-weight:600; font-size:0.95rem; }
+      .pill-rank { background:#2563eb1a; color:#1d4ed8; border:1px solid #2563eb55; }
+    </style>
+    """
+    html = f"<div class='rankbar'>{' '.join(parts)}</div>"
+    st.markdown(css + html, unsafe_allow_html=True)
 
 def _load_into_input(text: str):
     """탭에서 '불러오기' 눌렀을 때 입력창에 복구"""
@@ -642,6 +674,20 @@ def _load_into_input(text: str):
 def render_simple_qa():
     st.markdown("### 💬 질문해 보세요 (간단 데모)")
 
+    # (A) 학생 화면 상단: 개인별 질문 TOP3 (관리자 모드에서는 숨김)
+    is_admin = st.session_state.get("is_admin", False)
+    if not is_admin:
+        try:
+            _render_top3_badges(_top3_users())
+        except Exception:
+            pass
+
+        # 내 이름(임시) 입력 — 로그인 붙이면 회원ID로 대체
+        default_name = st.session_state.get("student_name", "")
+        name = st.text_input("내 이름(임시)", placeholder="예: 지민 / 민수 / 유나", key="student_name", value=default_name)
+        st.caption("※ 로그인 기능 도입 전 임시 식별자입니다. (미입력 시 'guest')")
+
+    # (B) 모드/입력 플로우 -------------------------------------------------------
     mode = st.session_state.get("mode", "Grammar")
     if mode == "Grammar":
         placeholder = "예: 관계대명사 which 사용법을 알려줘"
@@ -650,7 +696,6 @@ def render_simple_qa():
     else:
         placeholder = "예: 이 지문 핵심 요약과 제목 3개, 주제 1개 제안해줘"
 
-    # --- 입력부 ---------------------------------------------------------------
     q = st.text_input("질문 입력", placeholder=placeholder, key="qa_q", on_change=_on_q_enter)
     k = st.slider("검색 결과 개수(top_k)", 1, 10, 5, key="qa_k")
 
@@ -668,11 +713,13 @@ def render_simple_qa():
     # 답변 표시 영역(채팅 위치) 컨테이너
     answer_box = st.container()
 
-    # --- 질의 처리 ------------------------------------------------------------
+    # (C) 질의 처리 -------------------------------------------------------------
     if submitted and (q or "").strip():
         st.session_state["qa_submitted"] = False
+        # 이름(임시) 확정
+        current_user = _sanitize_user(st.session_state.get("student_name") if not is_admin else "admin")
         # 히스토리에는 즉시 기록(두뇌 준비 전이라도 학생의 시도를 남김)
-        _append_history(q)
+        _append_history(q, current_user)
 
         if index_ready:
             try:
@@ -727,7 +774,7 @@ def render_simple_qa():
                         except Exception as e:
                             st.error(f"검색 실패: {type(e).__name__}: {e}")
 
-    # --- 히스토리/인기 탭 ------------------------------------------------------
+    # (D) 히스토리/인기 탭 ------------------------------------------------------
     st.markdown("### 🗂 기록 & 인기 질문")
     tab_hist, tab_pop = st.tabs(["나의 질문 히스토리", "인기 질문(누적)"])
 
@@ -762,6 +809,8 @@ def render_simple_qa():
                 with col3:
                     st.button("➡️ 불러오기", key=f"load_pop_{i}", on_click=_load_into_input, args=(qtext,))
 # ===== [06] END ==============================================================
+
+
 
 # ===== [07] MAIN =============================================================
 def main():
