@@ -591,13 +591,14 @@ def render_tag_diagnostics():
     except Exception:
         pass
 
-# ===== [06] SIMPLE QA DEMO (모바일 최적 + 빈 섹션 숨김 + ensure shim) ==========
+# ===== [06] SIMPLE QA DEMO (모드 ON/OFF 반영 + 기존 기능 유지) ================
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 import time
 import streamlit as st
+from src.ui_components import render_section_title, render_item_row
 
-# ── [06-A] 안전용 shim: _ensure_answer_cache 누락 시 즉시 정의 ─────────────────
+# [06-A] 안전 shim -------------------------------------------------------------
 try:
     _ensure_answer_cache  # type: ignore[name-defined]
 except Exception:
@@ -608,10 +609,8 @@ except Exception:
             st.session_state["preview_norm"] = ""
         if "preview_open" not in st.session_state:
             st.session_state["preview_open"] = False
-# ===== [06-A] END =============================================================
 
-
-# ── [06-B] Quick fix / 렌더 보조 ──────────────────────────────────────────────
+# [06-B] 보조 함수들 (이전 버전과 동일) ----------------------------------------
 def _sentence_quick_fix(user_q: str) -> List[Tuple[str, str]]:
     tips: List[Tuple[str, str]] = []
     import re as _re
@@ -639,10 +638,8 @@ def _on_q_enter():
     st.session_state["qa_submitted"] = True
     try: st.toast("✳️ 답변 준비 중…")
     except Exception: pass
-# ===== [06-B] END =============================================================
 
-
-# ── [06-C] 기록/랭킹(로컬 jsonl) ─────────────────────────────────────────────
+# 기록/랭킹/UI 유틸(이전과 동일) ---------------------------------------------
 def _history_path() -> Path:
     p = Path.home() / ".maic"
     try: p.mkdir(parents=True, exist_ok=True)
@@ -742,10 +739,8 @@ def _render_top3_badges(top3: List[Tuple[str, int]]):
       .sec-title { font-weight:800; font-size:1.1rem; margin: 6px 0 2px 0;}
     </style>"""
     st.markdown(css + f"<div class='sticky-top3'>{' '.join(parts)}</div>", unsafe_allow_html=True)
-# ===== [06-C] END =============================================================
 
-
-# ── [06-D] 프리뷰 캐시 ───────────────────────────────────────────────────────
+# [06-C] 프리뷰 캐시 -----------------------------------------------------------
 def _save_answer_preview(q: str, text: str):
     _ensure_answer_cache()
     norm = _normalize_question(q)
@@ -765,16 +760,12 @@ def _load_and_preview(q: str):
 
 def _close_preview(): st.session_state["preview_open"] = False
 def _resubmit_from_preview(): st.session_state["qa_submitted"] = True; st.rerun()
-# ===== [06-D] END =============================================================
 
-
-# ── [06-E] 메인 Q&A UI ───────────────────────────────────────────────────────
-from src.ui_components import render_section_title, render_item_row
-
+# [06-D] 메인 Q&A UI -----------------------------------------------------------
+#  ⚠️ [04B]의 get_enabled_modes() / is_reason_grammar_enabled()를 사용합니다.
 def render_simple_qa():
-    # 안전 보강: 혹시라도 누락되었을 경우 한 번 더 초기화
+    from __main__ import get_enabled_modes  # [04B]에서 정의됨
     _ensure_answer_cache()
-
     is_admin = st.session_state.get("is_admin", False)
 
     # (0) TOP3 — 학생만
@@ -783,12 +774,25 @@ def render_simple_qa():
 
     # (1) 질문 입력창 + 모드 선택 + 버튼 → 최상단
     st.markdown("### 💬 질문해 보세요")
+
+    # ── 모드 라디오: 관리자 설정에서 켠 모드만 노출
+    enabled = get_enabled_modes()
+    radio_opts: List[str] = []
+    if enabled.get("Grammar", True):  radio_opts.append("문법설명(Grammar)")
+    if enabled.get("Sentence", True): radio_opts.append("문장분석(Sentence)")
+    if enabled.get("Passage", True):  radio_opts.append("지문분석(Passage)")
+
+    if not radio_opts:
+        st.error("관리자에서 모든 질문 모드를 OFF로 설정했습니다. 관리자에게 문의하세요.")
+        return
+
     mode_choice = st.radio(
         "질문의 종류를 선택하세요",
-        options=["문법설명(Grammar)", "문장분석(Sentence)", "지문분석(Passage)"],
+        options=radio_opts,
         key="mode_radio",
         horizontal=True
     )
+
     if "문법" in mode_choice: mode_key, mode_label = "Grammar", "문법설명(Grammar)"
     elif "문장" in mode_choice: mode_key, mode_label = "Sentence", "문장분석(Sentence)"
     else: mode_key, mode_label = "Passage", "지문분석(Passage)"
@@ -813,7 +817,7 @@ def render_simple_qa():
         user = _sanitize_user(st.session_state.get("student_name") if not is_admin else "admin")
         _append_history(q, user)
 
-        # _index_ready는 [07]에서 shim으로 주입됨(없으면 안전하게 안내)
+        # _index_ready는 [07]에서 shim으로 주입됨
         index_ready = False
         try:
             index_ready = bool(globals().get("_index_ready", lambda: False)())
