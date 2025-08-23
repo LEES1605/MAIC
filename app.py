@@ -552,9 +552,9 @@ def _history_path() -> Path:
     return p / "qa_history.jsonl"
 
 def _sanitize_user(name: str | None) -> str:
+    import re as _re
     s = (name or "").strip()
-    # 너무 긴 이름 방지 및 공백 정리
-    s = re.sub(r"\s+", " ", s)[:40]
+    s = _re.sub(r"\s+", " ", s)[:40]  # 너무 긴 이름 방지 및 공백 정리
     return s or "guest"
 
 def _append_history(q: str, user: str | None = None):
@@ -629,7 +629,7 @@ def _popular_questions(top_n: int = 20, days: int = 7) -> List[Tuple[str, int]]:
     for r in rows:
         ts = int(r.get("ts") or 0)
         if cutoff and ts and ts < cutoff:
-            continue  # 7일 이전 데이터 제외
+            continue  # 기간 밖 제외
         q = (r.get("q") or "").strip()
         if not q:
             continue
@@ -642,18 +642,28 @@ def _popular_questions(top_n: int = 20, days: int = 7) -> List[Tuple[str, int]]:
     ranked = counter.most_common(top_n)
     return [(exemplar[k], c) for k, c in ranked]
 
-def _top3_users() -> List[Tuple[str, int]]:
-    """로컬 jsonl 기반 사용자별 질문 횟수 TOP3 (이름, 카운트) — (현재 전체 누적 기준)"""
+def _top3_users(days: int = 7) -> List[Tuple[str, int]]:
+    """사용자별 질문 횟수 TOP3 (기본: 최근 7일 기준)"""
     from collections import Counter
     rows = _read_history_lines(max_lines=5000)
     if not rows:
         return []
-    ctr = Counter(_sanitize_user(r.get("user")) for r in rows if (r.get("q") or "").strip())
+    cutoff = 0
+    if days and days > 0:
+        cutoff = int(time.time()) - days * 86400
+    users: List[str] = []
+    for r in rows:
+        ts = int(r.get("ts") or 0)
+        if cutoff and ts and ts < cutoff:
+            continue
+        if (r.get("q") or "").strip():
+            users.append(_sanitize_user(r.get("user")))
+    ctr = Counter(users)
     top3 = ctr.most_common(3)
     return [(name, cnt) for name, cnt in top3 if name]
 
 def _render_top3_badges(top3: List[Tuple[str, int]]):
-    """학생 화면 상단 TOP3 뱃지 렌더"""
+    """학생 화면 최상단 고정 TOP3 뱃지(최근 7일) — position: sticky"""
     if not top3:
         return
     medals = ["🥇", "🥈", "🥉"]
@@ -663,16 +673,19 @@ def _render_top3_badges(top3: List[Tuple[str, int]]):
         parts.append(f"<span class='rank pill pill-rank'>{medal} {name} · {cnt}회</span>")
     css = """
     <style>
-      .rankbar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin: 6px 0 10px 0; }
+      .sticky-top3 { position: sticky; top: 0; z-index: 999; padding: 8px 6px; 
+                     background: rgba(255,255,255,0.85); backdrop-filter: blur(6px);
+                     border-bottom: 1px solid #e5e7eb; margin-bottom: 8px; }
+      .rankbar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
       .pill { display:inline-block; padding:6px 10px; border-radius:999px; font-weight:600; font-size:0.95rem; }
       .pill-rank { background:#2563eb1a; color:#1d4ed8; border:1px solid #2563eb55; }
     </style>
     """
-    html = f"<div class='rankbar'>{' '.join(parts)}</div>"
+    html = f"<div class='sticky-top3'><div class='rankbar'>{' '.join(parts)}</div></div>"
     st.markdown(css + html, unsafe_allow_html=True)
 
 def _load_into_input(text: str):
-    """탭에서 '불러오기' 눌렀을 때 입력창에 복구"""
+    """리스트에서 '불러오기' 눌렀을 때 입력창에 복구"""
     st.session_state["qa_q"] = text
     st.session_state["qa_submitted"] = False
     try:
@@ -683,19 +696,56 @@ def _load_into_input(text: str):
 
 # ─────────────────────────── 메인 Q&A + 탭 UI ────────────────────────────────
 def render_simple_qa():
-    st.markdown("### 💬 질문해 보세요 (간단 데모)")
-
-    # (A) 학생 화면 상단: 개인별 질문 TOP3 (관리자 모드에서는 숨김)
+    # (0) 학생 화면 최상단: TOP3(최근 7일) 고정 표시
     is_admin = st.session_state.get("is_admin", False)
     if not is_admin:
         try:
-            _render_top3_badges(_top3_users())
+            _render_top3_badges(_top3_users(days=7))
         except Exception:
             pass
 
-        # 내 이름(임시) 입력 — 로그인 붙이면 회원ID로 대체
+    st.markdown("### 🗂 기록 & 인기 질문")  # ← (2) 히스토리/인기 질문을 입력부 '위'로 이동
+    tab_hist, tab_pop = st.tabs(["나의 질문 히스토리", "인기 질문(최근 7일)"])
+
+    # (1) 나의 질문 히스토리 — 세션 기준 표시(최신 20)
+    with tab_hist:
+        sess_rows: List[Dict[str, Any]] = st.session_state.get("qa_session_history", [])
+        if not sess_rows:
+            st.caption("— 이번 세션의 질문 기록이 없습니다.")
+        else:
+            for i, row in enumerate(sess_rows[:20]):
+                qtext = row.get("q", "")
+                ts = row.get("ts", 0)
+                tm = time.strftime("%Y-%m-%d %H:%M", time.localtime(ts)) if ts else "-"
+                col1, col2 = st.columns([0.85, 0.15])
+                with col1:
+                    st.markdown(f"- {qtext}  \n  <span style='color:#6b7280;'>({tm})</span>", unsafe_allow_html=True)
+                with col2:
+                    st.button("➡️ 불러오기", key=f"load_my_{i}", on_click=_load_into_input, args=(qtext,))
+
+    # (2) 인기 질문(최근 7일) — 로컬 jsonl 기반 상위 20
+    with tab_pop:
+        ranked = _popular_questions(top_n=20, days=7)
+        if not ranked:
+            st.caption("— 최근 7일 기준 누적 인기 데이터가 없습니다.")
+        else:
+            for i, (qtext, cnt) in enumerate(ranked):
+                col1, col2, col3 = st.columns([0.70, 0.15, 0.15])
+                with col1:
+                    st.markdown(f"- {qtext}")
+                with col2:
+                    st.markdown(f"**×{cnt}**")
+                with col3:
+                    st.button("➡️ 불러오기", key=f"load_pop_{i}", on_click=_load_into_input, args=(qtext,))
+
+    st.markdown("---")  # 구분선
+    st.markdown("### 💬 질문해 보세요 (간단 데모)")
+
+    # (A) 학생 모드에서 임시 이름 입력(로그인 도입 전까지 식별자)
+    if not is_admin:
         default_name = st.session_state.get("student_name", "")
-        name = st.text_input("내 이름(임시)", placeholder="예: 지민 / 민수 / 유나", key="student_name", value=default_name)
+        st.text_input("내 이름(임시)", placeholder="예: 지민 / 민수 / 유나",
+                      key="student_name", value=default_name)
         st.caption("※ 로그인 기능 도입 전 임시 식별자입니다. (미입력 시 'guest')")
 
     # (B) 모드/입력 플로우 -------------------------------------------------------
@@ -727,10 +777,8 @@ def render_simple_qa():
     # (C) 질의 처리 -------------------------------------------------------------
     if submitted and (q or "").strip():
         st.session_state["qa_submitted"] = False
-        # 이름(임시) 확정
         current_user = _sanitize_user(st.session_state.get("student_name") if not is_admin else "admin")
-        # 히스토리에는 즉시 기록(두뇌 준비 전이라도 학생의 시도를 남김)
-        _append_history(q, current_user)
+        _append_history(q, current_user)  # 기록(로그인 전까지는 임시 이름 사용)
 
         if index_ready:
             try:
@@ -784,41 +832,6 @@ def render_simple_qa():
                             _render_clean_answer(mode, raw_text, refs)
                         except Exception as e:
                             st.error(f"검색 실패: {type(e).__name__}: {e}")
-
-    # (D) 히스토리/인기 탭 ------------------------------------------------------
-    st.markdown("### 🗂 기록 & 인기 질문")
-    tab_hist, tab_pop = st.tabs(["나의 질문 히스토리", "인기 질문(최근 7일)"])
-
-    # (1) 나의 질문 히스토리 — 세션 기준 표시(최신 20)
-    with tab_hist:
-        sess_rows: List[Dict[str, Any]] = st.session_state.get("qa_session_history", [])
-        if not sess_rows:
-            st.caption("— 이번 세션의 질문 기록이 없습니다.")
-        else:
-            for i, row in enumerate(sess_rows[:20]):
-                qtext = row.get("q", "")
-                ts = row.get("ts", 0)
-                tm = time.strftime("%Y-%m-%d %H:%M", time.localtime(ts)) if ts else "-"
-                col1, col2 = st.columns([0.85, 0.15])
-                with col1:
-                    st.markdown(f"- {qtext}  \n  <span style='color:#6b7280;'>({tm})</span>", unsafe_allow_html=True)
-                with col2:
-                    st.button("➡️ 불러오기", key=f"load_my_{i}", on_click=_load_into_input, args=(qtext,))
-
-    # (2) 인기 질문(최근 7일) — 로컬 jsonl 기반 상위 20
-    with tab_pop:
-        ranked = _popular_questions(top_n=20, days=7)
-        if not ranked:
-            st.caption("— 최근 7일 기준 누적 인기 데이터가 없습니다.")
-        else:
-            for i, (qtext, cnt) in enumerate(ranked):
-                col1, col2, col3 = st.columns([0.70, 0.15, 0.15])
-                with col1:
-                    st.markdown(f"- {qtext}")
-                with col2:
-                    st.markdown(f"**×{cnt}**")
-                with col3:
-                    st.button("➡️ 불러오기", key=f"load_pop_{i}", on_click=_load_into_input, args=(qtext,))
 # ===== [06] END ==============================================================
 
 
