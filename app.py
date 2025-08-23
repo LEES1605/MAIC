@@ -610,15 +610,26 @@ def _normalize_question(s: str) -> str:
     s = _re.sub(r"\s+", " ", s).strip()
     return s
 
-def _popular_questions(top_n: int = 20) -> List[Tuple[str, int]]:
-    """로컬 jsonl 전 범위를 읽어 정규화 기반 빈도 상위 N을 반환 (예시 문구 포함)"""
+def _popular_questions(top_n: int = 20, days: int = 7) -> List[Tuple[str, int]]:
+    """
+    로컬 jsonl 기반 질문 텍스트 빈도 상위 N (기본: 최근 7일)
+    - days <= 0 이면 기간 제한 없이 전체
+    """
     from collections import Counter
     rows = _read_history_lines(max_lines=5000)  # 최근 5천 라인
     if not rows:
         return []
+
+    cutoff = 0
+    if days and days > 0:
+        cutoff = int(time.time()) - days * 86400
+
     counter: Counter[str] = Counter()
     exemplar: Dict[str, str] = {}
     for r in rows:
+        ts = int(r.get("ts") or 0)
+        if cutoff and ts and ts < cutoff:
+            continue  # 7일 이전 데이터 제외
         q = (r.get("q") or "").strip()
         if not q:
             continue
@@ -632,7 +643,7 @@ def _popular_questions(top_n: int = 20) -> List[Tuple[str, int]]:
     return [(exemplar[k], c) for k, c in ranked]
 
 def _top3_users() -> List[Tuple[str, int]]:
-    """로컬 jsonl 기반 사용자별 질문 횟수 TOP3 (이름, 카운트)"""
+    """로컬 jsonl 기반 사용자별 질문 횟수 TOP3 (이름, 카운트) — (현재 전체 누적 기준)"""
     from collections import Counter
     rows = _read_history_lines(max_lines=5000)
     if not rows:
@@ -776,7 +787,7 @@ def render_simple_qa():
 
     # (D) 히스토리/인기 탭 ------------------------------------------------------
     st.markdown("### 🗂 기록 & 인기 질문")
-    tab_hist, tab_pop = st.tabs(["나의 질문 히스토리", "인기 질문(누적)"])
+    tab_hist, tab_pop = st.tabs(["나의 질문 히스토리", "인기 질문(최근 7일)"])
 
     # (1) 나의 질문 히스토리 — 세션 기준 표시(최신 20)
     with tab_hist:
@@ -794,11 +805,11 @@ def render_simple_qa():
                 with col2:
                     st.button("➡️ 불러오기", key=f"load_my_{i}", on_click=_load_into_input, args=(qtext,))
 
-    # (2) 인기 질문(누적) — 로컬 jsonl 기반 상위 20
+    # (2) 인기 질문(최근 7일) — 로컬 jsonl 기반 상위 20
     with tab_pop:
-        ranked = _popular_questions(top_n=20)
+        ranked = _popular_questions(top_n=20, days=7)
         if not ranked:
-            st.caption("— 아직 누적 인기 데이터가 없습니다.")
+            st.caption("— 최근 7일 기준 누적 인기 데이터가 없습니다.")
         else:
             for i, (qtext, cnt) in enumerate(ranked):
                 col1, col2, col3 = st.columns([0.70, 0.15, 0.15])
@@ -809,7 +820,6 @@ def render_simple_qa():
                 with col3:
                     st.button("➡️ 불러오기", key=f"load_pop_{i}", on_click=_load_into_input, args=(qtext,))
 # ===== [06] END ==============================================================
-
 
 
 # ===== [07] MAIN =============================================================
