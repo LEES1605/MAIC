@@ -669,7 +669,7 @@ def render_tag_diagnostics():
     except Exception:
         pass
 
-# ===== [06] SIMPLE QA DEMO (히스토리 라디오/좌측정렬/번호) =====================
+# ===== [06] SIMPLE QA DEMO (히스토리 라디오 + 과거답변 캐시 표시) =============
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 import time
@@ -681,11 +681,9 @@ try:
 except Exception:
     def _ensure_answer_cache():
         if "answer_cache" not in st.session_state:
-            st.session_state["answer_cache"] = {}
-        if "preview_norm" not in st.session_state:
-            st.session_state["preview_norm"] = ""
-        if "preview_open" not in st.session_state:
-            st.session_state["preview_open"] = False
+            st.session_state["answer_cache"] = {}  # norm -> {"answer": str, "refs": [...], "mode": str}
+        if "hist_selected_norm" not in st.session_state:
+            st.session_state["hist_selected_norm"] = None
 
 def _on_q_enter():
     st.session_state["qa_submitted"] = True
@@ -729,9 +727,7 @@ def _read_history_lines(max_lines: int = 5000) -> List[Dict[str, Any]]:
             lines = f.readlines()[-max_lines:]
         for ln in lines:
             try:
-                r = _json.loads(ln)
-                if "user" not in r: r["user"] = "guest"
-                rows.append(r)
+                r = _json.loads(ln); r.setdefault("user", "guest"); rows.append(r)
             except Exception: continue
     except Exception: return []
     rows.reverse()
@@ -745,13 +741,13 @@ def _normalize_question(s: str) -> str:
     s = _re.sub(r"\s+", " ", s).strip()
     return s
 
+# 인기/Top3 --------------------------------------------------------------------
 def _popular_questions(top_n: int = 10, days: int = 7) -> List[Tuple[str, int]]:
     from collections import Counter
     rows = _read_history_lines(max_lines=5000)
     if not rows: return []
     cutoff = int(time.time()) - days * 86400 if days and days > 0 else 0
-    counter: Counter[str] = Counter()
-    exemplar: Dict[str, str] = {}
+    counter: Counter[str] = Counter(); exemplar: Dict[str, str] = {}
     for r in rows:
         ts = int(r.get("ts") or 0)
         if cutoff and ts and ts < cutoff: continue
@@ -760,8 +756,7 @@ def _popular_questions(top_n: int = 10, days: int = 7) -> List[Tuple[str, int]]:
         key = _normalize_question(q)
         if not key: continue
         counter[key] += 1
-        if key not in exemplar or len(q) < len(exemplar[key]):
-            exemplar[key] = q
+        if key not in exemplar or len(q) < len(exemplar[key]): exemplar[key] = q
     return [(exemplar[k], c) for k, c in counter.most_common(top_n)]
 
 def _top3_users(days: int = 7) -> List[Tuple[str, int]]:
@@ -773,10 +768,8 @@ def _top3_users(days: int = 7) -> List[Tuple[str, int]]:
     for r in rows:
         ts = int(r.get("ts") or 0)
         if cutoff and ts and ts < cutoff: continue
-        if (r.get("q") or "").strip():
-            users.append(_sanitize_user(r.get("user")))
-    ctr = Counter(users)
-    return ctr.most_common(3)
+        if (r.get("q") or "").strip(): users.append(_sanitize_user(r.get("user")))
+    ctr = Counter(users); return ctr.most_common(3)
 
 def _render_top3_badges(top3: List[Tuple[str, int]]):
     data = list(top3[:3])
@@ -794,7 +787,43 @@ def _render_top3_badges(top3: List[Tuple[str, int]]):
     </style>"""
     st.markdown(css + f"<div class='sticky-top3'>{' '.join(parts)}</div>", unsafe_allow_html=True)
 
-# [06-C] 메인 Q&A UI -----------------------------------------------------------
+# 캐시 -------------------------------------------------------------------------
+def _cache_put(q: str, answer: str, refs: List[Dict[str, str]], mode_label: str):
+    _ensure_answer_cache()
+    norm = _normalize_question(q)
+    st.session_state["answer_cache"][norm] = {
+        "answer": (answer or "").strip(),
+        "refs": refs or [],
+        "mode": mode_label,
+        "ts": int(time.time()),
+    }
+    # 마지막 본 항목 표시용
+    st.session_state["hist_selected_norm"] = norm
+
+def _cache_get(norm: str) -> Dict[str, Any] | None:
+    _ensure_answer_cache()
+    return st.session_state["answer_cache"].get(norm)
+
+def _render_cached(norm: str):
+    data = _cache_get(norm)
+    if not data: 
+        st.warning("이 질문의 저장된 답변이 없어요. 아래 ‘다시 검색’으로 최신 답변을 받아보세요.")
+        if st.button("🔄 이 질문으로 다시 검색", key=f"rehit_{norm}", use_container_width=True):
+            st.session_state["qa_submitted"] = True
+        return
+    st.markdown("#### 📎 이전 답변 보기")
+    st.markdown(f"**선택 모드:** `{data.get('mode','—')}`")
+    with st.expander("원문 응답 보기(영문)"):
+        st.write(data.get("answer","—"))
+    refs = data.get("refs") or []
+    if refs:
+        with st.expander("근거 자료(상위 2개)"):
+            for i, r0 in enumerate(refs[:2], start=1):
+                name = r0.get("doc_id") or r0.get("source") or f"ref{i}"
+                url = r0.get("url") or r0.get("source_url") or ""
+                st.markdown(f"- {name}  " + (f"(<{url}>)" if url else ""))
+
+# 메인 UI ----------------------------------------------------------------------
 def render_simple_qa():
     _ensure_answer_cache()
     is_admin = st.session_state.get("is_admin", False)
@@ -833,6 +862,11 @@ def render_simple_qa():
     if st.button("🧑‍🏫 쌤에게 물어보기", key="qa_go"):
         st.session_state["qa_submitted"] = True
 
+    # (A) 히스토리에서 선택된 과거 답변 표시(있을 때)
+    if st.session_state.get("hist_selected_norm"):
+        _render_cached(st.session_state["hist_selected_norm"])
+
+    # (B) 새 질문 처리
     answer_box = st.container()
     if st.session_state.get("qa_submitted", False) and q.strip():
         st.session_state["qa_submitted"] = False
@@ -860,8 +894,8 @@ def render_simple_qa():
                                 "doc_id": (meta or {}).get("doc_id") or (meta or {}).get("file_name", ""),
                                 "url": (meta or {}).get("source") or (meta or {}).get("url", ""),
                             })
+                    # 간단 모드 힌트
                     if mode_key == "Sentence":
-                        # 간단 오류 교정 힌트
                         import re as _re
                         if _re.search(r"\bI\s+seen\b", q, flags=_re.I):
                             st.markdown("- **I seen** → I **saw** the movie / I **have seen** the movie")
@@ -869,6 +903,8 @@ def render_simple_qa():
                             st.markdown("- **he/she/it don't** → **doesn't**")
                         if _re.search(r"\ba\s+[aeiouAEIOU]", q):
                             st.markdown("- **a + 모음 시작 명사** → 가능하면 **an** + 모음 시작 명사")
+
+                    # 화면 출력
                     st.markdown(f"**선택 모드:** `{mode_label}`")
                     st.markdown("#### ✅ 요약/안내 (한국어)")
                     with st.expander("원문 응답 보기(영문)"):
@@ -879,42 +915,43 @@ def render_simple_qa():
                                 name = r0.get("doc_id") or r0.get("source") or f"ref{i}"
                                 url = r0.get("url") or r0.get("source_url") or ""
                                 st.markdown(f"- {name}  " + (f"(<{url}>)" if url else ""))
+
+                    # 📌 캐시에 저장(이후 히스토리에서 ‘기존 답변’으로 표시)
+                    _cache_put(q, raw, refs, mode_label)
             except Exception as e:
                 st.error(f"검색 실패: {type(e).__name__}: {e}")
         else:
             st.info("아직 두뇌가 준비되지 않았어요. 상단에서 **복구/연결** 또는 **다시 최적화**를 먼저 완료해 주세요.")
 
-    # (히스토리) — 라디오로 좌측정렬 + 번호 매김 + 선택 즉시 실행 -----------------
+    # (C) 히스토리 — 라디오(좌측정렬/번호) + 선택 시 ‘기존 답변’ 표시(새 히스토리 추가 없음)
     sess_rows: List[Dict[str, Any]] = st.session_state.get("qa_session_history", [])[:10]
     if sess_rows:
         st.markdown("<div class='sec-title'>📒 나의 질문 히스토리</div>", unsafe_allow_html=True)
         labels = [f"{i+1}. {row.get('q','')}" for i, row in enumerate(sess_rows)]
-        # 현재 선택(없으면 None)
-        current = st.session_state.get("hist_selected_idx", None)
 
         def _on_hist_change():
             idx = st.session_state.get("hist_radio_idx", None)
             if idx is None: return
             try:
                 qtext = sess_rows[idx].get("q","")
-                st.session_state["hist_selected_idx"] = idx
-                st.session_state["qa_q"] = qtext
-                st.session_state["qa_submitted"] = True
-                # 콜백 내 rerun 불필요(변경 시 자동 rerun)
+                st.session_state["hist_selected_norm"] = _normalize_question(qtext)
+                st.session_state["qa_q"] = qtext           # 입력창 복구
+                st.session_state["qa_submitted"] = False   # 새 검색 금지(히스토리 폭증 방지)
             except Exception:
                 pass
 
         st.radio(
-            label="최근 질문(선택 시 바로 실행)",
+            label="최근 질문(선택 시 ‘기존 답변’ 표시)",
             options=list(range(len(labels))),
             format_func=lambda i: labels[i],
             key="hist_radio_idx",
-            index=current if isinstance(current, int) and 0 <= current < len(labels) else None,
+            index=None,
             on_change=_on_hist_change,
         )
 
-    # (인기 질문 리스트는 헤더 토글 패널에서 표시 중)
+    # (인기 질문 리스트는 헤더 토글 패널에서 표시)
 # ===== [06] END =============================================================
+
 
 
 # ===== [07] MAIN =============================================================
