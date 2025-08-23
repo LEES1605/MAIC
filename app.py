@@ -511,11 +511,12 @@ def render_tag_diagnostics():
 # ===== [06] SIMPLE QA DEMO (Korean-only, ENTER SUBMIT, CHAT-AREA SPINNER) ====
 def _sentence_quick_fix(user_q: str) -> List[Tuple[str, str]]:
     tips: List[Tuple[str, str]] = []
-    if re.search(r"\bI\s+seen\b", user_q, flags=re.I):
+    import re as _re
+    if _re.search(r"\bI\s+seen\b", user_q, flags=_re.I):
         tips.append(("I seen", "I **saw** the movie / I **have seen** the movie"))
-    if re.search(r"\b(he|she|it)\s+don'?t\b", user_q, flags=re.I):
+    if _re.search(r"\b(he|she|it)\s+don'?t\b", user_q, flags=_re.I):
         tips.append(("he/she/it don't", "**doesn't**"))
-    if re.search(r"\ba\s+[aeiouAEIOU]", user_q):
+    if _re.search(r"\ba\s+[aeiouAEIOU]", user_q):
         tips.append(("a + 모음 시작 명사", "가능하면 **an** + 모음 시작 명사"))
     return tips
 
@@ -525,7 +526,7 @@ def _render_clean_answer(mode: str, answer_text: str, refs: List[Dict[str, str]]
     st.markdown("#### ✅ 요약/안내 (한국어)")
     st.write("아래는 자료 기반 엔진의 원문 응답입니다. 현재 단계에서는 원문이 영어일 수 있어요.")
     with st.expander("원문 응답 보기(영문)"):
-        st.write(answer_text.strip() or "—")
+        st.write((answer_text or "").strip() or "—")
 
     if refs:
         with st.expander("근거 자료(상위 2개)"):
@@ -542,14 +543,106 @@ def _on_q_enter():
     except Exception:
         pass
 
+# ─────────────────────────── 히스토리/랭킹 유틸 ────────────────────────────
+def _history_path() -> Path:
+    p = Path.home() / ".maic"
+    try:
+        p.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    return p / "qa_history.jsonl"
+
+def _append_history(q: str):
+    """질문을 세션/로컬에 기록"""
+    try:
+        q = (q or "").strip()
+        if not q:
+            return
+        # 세션 기록(최신 우선)
+        if "qa_session_history" not in st.session_state:
+            st.session_state["qa_session_history"] = []
+        st.session_state["qa_session_history"].insert(0, {"ts": int(time.time()), "q": q})
+
+        # 로컬 jsonl append
+        import json as _json
+        hp = _history_path()
+        with hp.open("a", encoding="utf-8") as f:
+            f.write(_json.dumps({"ts": int(time.time()), "q": q}, ensure_ascii=False) + "\n")
+    except Exception:
+        # 기록 실패는 조용히 무시
+        pass
+
+def _read_history_lines(max_lines: int = 5000) -> List[Dict[str, Any]]:
+    """로컬 jsonl에서 최근 max_lines 라인을 읽어 역순으로 반환"""
+    import json as _json
+    hp = _history_path()
+    if not hp.exists():
+        return []
+    rows: List[Dict[str, Any]] = []
+    try:
+        with hp.open("r", encoding="utf-8") as f:
+            # 메모리 보호: 너무 크면 앞부분 스킵
+            lines = f.readlines()[-max_lines:]
+        for ln in lines:
+            try:
+                rows.append(_json.loads(ln))
+            except Exception:
+                continue
+    except Exception:
+        return []
+    # 최신이 아래쪽이므로 역순 반환(최근 우선)
+    rows.reverse()
+    return rows
+
+def _normalize_question(s: str) -> str:
+    """랭킹 집계를 위한 질문 정규화(대소문자/공백/문장부호 정리, 한글 보존)"""
+    import re as _re
+    s = (s or "").strip().lower()
+    # 끝문장부호 제거
+    s = _re.sub(r"[!?。．！?]+$", "", s)
+    # 불필요한 문장부호 제거(한글/영문/숫자/공백/언더스코어만 보존)
+    s = _re.sub(r"[^\w\sㄱ-ㅎ가-힣]", " ", s)
+    # 공백 정리
+    s = _re.sub(r"\s+", " ", s).strip()
+    return s
+
+def _popular_questions(top_n: int = 20) -> List[Tuple[str, int]]:
+    """로컬 jsonl 전 범위를 읽어 정규화 기반 빈도 상위 N을 반환 (예시 문구 포함)"""
+    from collections import Counter
+    rows = _read_history_lines(max_lines=5000)  # 최근 5천 라인만 집계
+    if not rows:
+        return []
+    counter: Counter[str] = Counter()
+    exemplar: Dict[str, str] = {}
+    for r in rows:
+        q = (r.get("q") or "").strip()
+        if not q:
+            continue
+        key = _normalize_question(q)
+        if not key:
+            continue
+        counter[key] += 1
+        # 예시 문구는 최초 등장(혹은 더 짧은 문장) 사용
+        if key not in exemplar or len(q) < len(exemplar[key]):
+            exemplar[key] = q
+    ranked = counter.most_common(top_n)
+    return [(exemplar[k], c) for k, c in ranked]
+
+def _load_into_input(text: str):
+    """탭에서 '불러오기' 눌렀을 때 입력창에 복구"""
+    st.session_state["qa_q"] = text
+    st.session_state["qa_submitted"] = False
+    try:
+        st.toast("입력창에 불러왔어요")
+    except Exception:
+        pass
+    st.rerun()
+
+# ─────────────────────────── 메인 Q&A + 탭 UI ────────────────────────────────
 def render_simple_qa():
     st.markdown("### 💬 질문해 보세요 (간단 데모)")
-    if not _index_ready():
-        st.info("아직 두뇌가 준비되지 않았어요. 상단의 **AI 두뇌 준비** 또는 **사전점검→다시 최적화 실행**을 먼저 실행해 주세요.")
-        return
 
     mode = st.session_state.get("mode", "Grammar")
-
     if mode == "Grammar":
         placeholder = "예: 관계대명사 which 사용법을 알려줘"
     elif mode == "Sentence":
@@ -563,45 +656,32 @@ def render_simple_qa():
 
     clicked = st.button("검색", key="qa_go")
     submitted = clicked or st.session_state.get("qa_submitted", False)
+    index_ready = False
+    try:
+        index_ready = _index_ready()
+    except Exception:
+        index_ready = False
+
+    if not index_ready:
+        st.info("아직 두뇌가 준비되지 않았어요. 상단에서 **백업 복구→자동 연결** 또는 **다시 최적화 실행**을 먼저 완료해 주세요.")
 
     # 답변 표시 영역(채팅 위치) 컨테이너
     answer_box = st.container()
 
+    # --- 질의 처리 ------------------------------------------------------------
     if submitted and (q or "").strip():
         st.session_state["qa_submitted"] = False
-        try:
-            with answer_box:
-                with st.status("✳️ 답변 준비 중…", state="running") as s:
-                    qe = st.session_state["rag_index"].as_query_engine(top_k=k)
-                    r = qe.query(q)
-                    raw_text = getattr(r, "response", "") or str(r)
+        # 히스토리에는 즉시 기록(두뇌 준비 전이라도 학생의 시도를 남김)
+        _append_history(q)
 
-                    refs: List[Dict[str, str]] = []
-                    hits = getattr(r, "source_nodes", None) or getattr(r, "hits", None)
-                    if hits:
-                        for h in hits[:2]:
-                            meta = getattr(h, "metadata", None) or getattr(h, "node", {}).get("metadata", {})
-                            refs.append({
-                                "doc_id": (meta or {}).get("doc_id") or (meta or {}).get("file_name", ""),
-                                "url": (meta or {}).get("source") or (meta or {}).get("url", ""),
-                            })
-
-                    if mode == "Sentence":
-                        fixes = _sentence_quick_fix(q)
-                        if fixes:
-                            st.markdown("#### ✍️ 빠른 교정 제안 (한국어)")
-                            for bad, good in fixes:
-                                st.markdown(f"- **{bad}** → {good}")
-
-                    _render_clean_answer(mode, raw_text, refs)
-                    s.update(label="완료 ✅", state="complete")
-        except Exception:
-            with answer_box:
-                with st.spinner("✳️ 답변 준비 중…"):
-                    try:
+        if index_ready:
+            try:
+                with answer_box:
+                    with st.status("✳️ 답변 준비 중…", state="running") as s:
                         qe = st.session_state["rag_index"].as_query_engine(top_k=k)
                         r = qe.query(q)
                         raw_text = getattr(r, "response", "") or str(r)
+
                         refs: List[Dict[str, str]] = []
                         hits = getattr(r, "source_nodes", None) or getattr(r, "hits", None)
                         if hits:
@@ -611,15 +691,77 @@ def render_simple_qa():
                                     "doc_id": (meta or {}).get("doc_id") or (meta or {}).get("file_name", ""),
                                     "url": (meta or {}).get("source") or (meta or {}).get("url", ""),
                                 })
+
                         if mode == "Sentence":
                             fixes = _sentence_quick_fix(q)
                             if fixes:
                                 st.markdown("#### ✍️ 빠른 교정 제안 (한국어)")
                                 for bad, good in fixes:
                                     st.markdown(f"- **{bad}** → {good}")
+
                         _render_clean_answer(mode, raw_text, refs)
-                    except Exception as e:
-                        st.error(f"검색 실패: {type(e).__name__}: {e}")
+                        s.update(label="완료 ✅", state="complete")
+            except Exception:
+                with answer_box:
+                    with st.spinner("✳️ 답변 준비 중…"):
+                        try:
+                            qe = st.session_state["rag_index"].as_query_engine(top_k=k)
+                            r = qe.query(q)
+                            raw_text = getattr(r, "response", "") or str(r)
+                            refs: List[Dict[str, str]] = []
+                            hits = getattr(r, "source_nodes", None) or getattr(r, "hits", None)
+                            if hits:
+                                for h in hits[:2]:
+                                    meta = getattr(h, "metadata", None) or getattr(h, "node", {}).get("metadata", {})
+                                    refs.append({
+                                        "doc_id": (meta or {}).get("doc_id") or (meta or {}).get("file_name", ""),
+                                        "url": (meta or {}).get("source") or (meta or {}).get("url", ""),
+                                    })
+                            if mode == "Sentence":
+                                fixes = _sentence_quick_fix(q)
+                                if fixes:
+                                    st.markdown("#### ✍️ 빠른 교정 제안 (한국어)")
+                                    for bad, good in fixes:
+                                        st.markdown(f"- **{bad}** → {good}")
+                            _render_clean_answer(mode, raw_text, refs)
+                        except Exception as e:
+                            st.error(f"검색 실패: {type(e).__name__}: {e}")
+
+    # --- 히스토리/인기 탭 ------------------------------------------------------
+    st.markdown("### 🗂 기록 & 인기 질문")
+    tab_hist, tab_pop = st.tabs(["나의 질문 히스토리", "인기 질문(누적)"])
+
+    # (1) 나의 질문 히스토리 — 세션 기준 표시(최신 20)
+    with tab_hist:
+        sess_rows: List[Dict[str, Any]] = st.session_state.get("qa_session_history", [])
+        if not sess_rows:
+            st.caption("— 이번 세션의 질문 기록이 없습니다.")
+        else:
+            for i, row in enumerate(sess_rows[:20]):
+                qtext = row.get("q", "")
+                ts = row.get("ts", 0)
+                tm = time.strftime("%Y-%m-%d %H:%M", time.localtime(ts)) if ts else "-"
+                col1, col2 = st.columns([0.85, 0.15])
+                with col1:
+                    st.markdown(f"- {qtext}  \n  <span style='color:#6b7280;'>({tm})</span>", unsafe_allow_html=True)
+                with col2:
+                    st.button("➡️ 불러오기", key=f"load_my_{i}", on_click=_load_into_input, args=(qtext,))
+
+    # (2) 인기 질문(누적) — 로컬 jsonl 기반 상위 20
+    with tab_pop:
+        ranked = _popular_questions(top_n=20)
+        if not ranked:
+            st.caption("— 아직 누적 인기 데이터가 없습니다.")
+        else:
+            for i, (qtext, cnt) in enumerate(ranked):
+                col1, col2, col3 = st.columns([0.70, 0.15, 0.15])
+                with col1:
+                    st.markdown(f"- {qtext}")
+                with col2:
+                    st.markdown(f"**×{cnt}**")
+                with col3:
+                    st.button("➡️ 불러오기", key=f"load_pop_{i}", on_click=_load_into_input, args=(qtext,))
+# ===== [06] END ==============================================================
 
 # ===== [07] MAIN =============================================================
 def main():
