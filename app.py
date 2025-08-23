@@ -152,20 +152,57 @@ def render_header():
 # ===== [04] END =============================================
 
 
-# ===== [04A] MODE & ROLE SWITCH (LANG REMOVED) ===============================
+# ===== [04A] MODE & ADMIN BUTTON (LANG REMOVED) ==============================
+# 기본은 학생 화면. 필요할 때만 '관리자' 버튼으로 PIN 인증 → 관리자 모드 진입.
+import os as _os
+
+def _get_admin_pin() -> str:
+    # 우선순위: secrets > env > '0000'(기본)
+    try:
+        pin = st.secrets.get("ADMIN_PIN", None)  # type: ignore[attr-defined]
+    except Exception:
+        pin = None
+    return str(pin or _os.environ.get("ADMIN_PIN") or "0000")
+
+# 세션 상태 초기화
+if "is_admin" not in st.session_state:
+    st.session_state["is_admin"] = False
+if "_admin_auth_open" not in st.session_state:
+    st.session_state["_admin_auth_open"] = False
+
 with st.container():
-    # 역할(관리자/학생) + 모드 스위치
-    c_role, c_mode, c_info = st.columns([0.22, 0.38, 0.40])
+    c_admin, c_mode, c_info = st.columns([0.22, 0.38, 0.40])
 
-    with c_role:
-        role = st.segmented_control(
-            "역할",
-            options=["관리자", "학생"],
-            default=st.session_state.get("role", "관리자"),
-            key="ui_role_segmented",
-        )
-        st.session_state["role"] = role
+    # (좌) 관리자 진입/종료 버튼 + PIN 입력
+    with c_admin:
+        if not st.session_state["is_admin"]:
+            if st.button("🔒 관리자", key="btn_open_admin"):
+                st.session_state["_admin_auth_open"] = True
+        else:
+            if st.button("🔓 관리자 종료", key="btn_close_admin"):
+                st.session_state["is_admin"] = False
+                st.session_state["_admin_auth_open"] = False
+                st.toast("관리자 모드 해제됨")
+        # PIN 입력 폼(필요할 때만 표시)
+        if st.session_state["_admin_auth_open"] and not st.session_state["is_admin"]:
+            with st.form("admin_login_form", clear_on_submit=True):
+                pin_try = st.text_input("관리자 PIN", type="password")
+                c1, c2 = st.columns(2)
+                with c1:
+                    ok = st.form_submit_button("입장")
+                with c2:
+                    cancel = st.form_submit_button("취소")
+                if cancel:
+                    st.session_state["_admin_auth_open"] = False
+                elif ok:
+                    if pin_try == _get_admin_pin():
+                        st.session_state["is_admin"] = True
+                        st.session_state["_admin_auth_open"] = False
+                        st.toast("관리자 모드 진입 ✅")
+                    else:
+                        st.error("PIN이 올바르지 않습니다.")
 
+    # (중) 학습 모드 선택(학생/관리자 공통)
     with c_mode:
         mode = st.segmented_control(
             "모드 선택",
@@ -175,16 +212,17 @@ with st.container():
         )
         st.session_state["mode"] = mode
 
+    # (우) 안내
     with c_info:
-        if st.session_state.get("role", "관리자") == "학생":
-            st.caption("역할: **학생** — 질문/답변 화면만 표시됩니다.")
-        else:
+        if st.session_state.get("is_admin", False):
             if mode == "Grammar":
                 st.caption("역할: **관리자** · 모드: **Grammar** — 문법 Q&A (태깅/부스팅 중심)")
             elif mode == "Sentence":
                 st.caption("역할: **관리자** · 모드: **Sentence** — 문장 분석 (품사/구문/교정 프롬프트 중심)")
             else:
                 st.caption("역할: **관리자** · 모드: **Passage** — 지문 설명 (요약→비유→제목/주제 프롬프트 중심)")
+        else:
+            st.caption("역할: **학생** — 질문/답변 화면만 표시됩니다.")
 
 st.divider()
 # ===== [04A] END =============================================================
