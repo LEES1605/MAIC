@@ -228,7 +228,7 @@ else:
 
 st.divider()
 # ===== [04A] END =============================================================
-# ===== [04B] 관리자 설정 — 이유문법 ON/OFF (영속 저장 포함) ====================
+# ===== [04B] 관리자 설정 — 이유문법 + 모드별 ON/OFF (버튼형·세로배치) ==========
 import json as _json
 from pathlib import Path as _Path
 import streamlit as st
@@ -241,77 +241,176 @@ def _config_path() -> _Path:
     return base / "config.json"
 
 _DEFAULT_CFG = {
-    "reason_grammar_enabled": False,  # 기본값: OFF로 출시
+    "reason_grammar_enabled": False,  # 출시 기본: OFF
+    "mode_enabled": {
+        "Grammar":  True,   # 문법설명
+        "Sentence": True,   # 문장분석
+        "Passage":  True,   # 지문분석
+    },
 }
 
 # ── [04B-2] 설정 로드/저장 -----------------------------------------------------
 def _load_cfg() -> dict:
     cfg_file = _config_path()
     if not cfg_file.exists():
-        return dict(_DEFAULT_CFG)
+        return _DEFAULT_CFG.copy()
     try:
         data = _json.loads(cfg_file.read_text(encoding="utf-8"))
-        # 누락 키 보정
-        for k, v in _DEFAULT_CFG.items():
-            data.setdefault(k, v)
-        return data
     except Exception:
-        return dict(_DEFAULT_CFG)
+        data = {}
+    # 누락 키 보정
+    merged = _DEFAULT_CFG.copy()
+    me = (data or {}).get("mode_enabled", {})
+    if isinstance(me, dict):
+        merged["mode_enabled"].update(me)
+    for k in ("reason_grammar_enabled",):
+        if k in (data or {}):
+            merged[k] = data[k]
+    return merged
 
 def _save_cfg(data: dict) -> None:
     cfg_file = _config_path()
+    # 스키마 정규화 후 저장
+    norm = _DEFAULT_CFG.copy()
     try:
-        cfg_file.write_text(_json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        me = (data or {}).get("mode_enabled", {})
+        if isinstance(me, dict):
+            norm["mode_enabled"].update(me)
+    except Exception:
+        pass
+    norm["reason_grammar_enabled"] = bool((data or {}).get("reason_grammar_enabled", False))
+    try:
+        cfg_file.write_text(_json.dumps(norm, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception as e:
         st.warning(f"설정 저장 실패: {type(e).__name__}: {e}")
 
-# ── [04B-3] 세션과 전역 접근자 -------------------------------------------------
-def _cfg_get(key: str, default=None):
+# ── [04B-3] 세션/전역 접근자 ---------------------------------------------------
+def _cfg_cache() -> dict:
     st.session_state.setdefault("_app_cfg_cache", _load_cfg())
-    return st.session_state["_app_cfg_cache"].get(key, default)
+    return st.session_state["_app_cfg_cache"]
+
+def _cfg_get(key: str, default=None):
+    return _cfg_cache().get(key, default)
 
 def _cfg_set(key: str, value) -> None:
-    st.session_state.setdefault("_app_cfg_cache", _load_cfg())
-    st.session_state["_app_cfg_cache"][key] = value
+    _cfg_cache()[key] = value
     _save_cfg(st.session_state["_app_cfg_cache"])
 
 def is_reason_grammar_enabled() -> bool:
-    """앱 어디서나 사용할 수 있는 읽기용 헬퍼"""
     return bool(_cfg_get("reason_grammar_enabled", False))
 
-# ── [04B-4] 관리자 UI(체크박스) ------------------------------------------------
+def get_enabled_modes() -> dict:
+    merged = _DEFAULT_CFG["mode_enabled"].copy()
+    me = _cfg_get("mode_enabled", {})
+    if isinstance(me, dict):
+        merged.update(me)
+    return merged
+
+# ── [04B-4] 작은 UI 유틸: 세로 카드 + 켜기/끄기 두 버튼 ------------------------
+def _onoff_row(title: str, desc: str, current: bool, set_fn, *, on_key: str, off_key: str):
+    """
+    세로 카드 하나를 렌더링하고, '켜기/끄기' 두 버튼을 보여준다.
+    현재 상태에 따라 해당 버튼을 primary로 강조한다.
+    """
+    with st.container(border=True):
+        st.markdown(f"**{title}**")
+        if desc:
+            st.caption(desc)
+
+        c1, c2 = st.columns(2)
+        with c1:
+            # '켜기' 버튼: 현재 True면 primary
+            if st.button("🔵 켜기", key=on_key, type=("primary" if current else "secondary"), use_container_width=True):
+                set_fn(True)
+        with c2:
+            # '끄기' 버튼: 현재 False면 primary
+            if st.button("⚪ 끄기", key=off_key, type=("primary" if not current else "secondary"), use_container_width=True):
+                set_fn(False)
+
+# ── [04B-5] 관리자 UI(세로배치 버튼형) -----------------------------------------
 def render_admin_settings_panel():
-    """관리자용 설정 카드: 이유문법 ON/OFF 토글"""
+    """관리자용 설정 카드: 이유문법 + 모드별 ON/OFF — 버튼형/세로배치"""
     if not st.session_state.get("is_admin", False):
-        return  # 학생 화면엔 숨김
+        return
+
+    # 간단 스타일(여백 조정)
+    st.markdown("""
+    <style>
+      .stButton>button { height: 40px; }
+    </style>
+    """, unsafe_allow_html=True)
 
     with st.container(border=True):
         st.subheader("관리자 설정")
-        st.caption("이유문법 기능은 자료 정리 후 단계적으로 활성화합니다. 출시 기본은 OFF입니다.")
+        st.caption("모드는 학생에게 노출할 기능만 켜세요. 버튼에 색이 들어온 쪽이 현재 상태입니다.")
 
-        current = is_reason_grammar_enabled()
-        new_val = st.checkbox("이유문법 설명 사용(실험적)", value=current, key="cfg_reason_grammar_checkbox")
-
-        # 콜백 대신 본문에서 직접 감지 → 즉시 저장/재렌더
-        if new_val != current:
-            _cfg_set("reason_grammar_enabled", bool(new_val))
-            try: st.toast("설정을 저장했어요. 화면을 새로고침합니다.")
+        # (A) 이유문법 ON/OFF
+        def _set_reason(val: bool):
+            _cfg_set("reason_grammar_enabled", bool(val))
+            try: st.toast(f"이유문법: {'켜짐' if val else '꺼짐'}")
             except Exception: pass
             st.rerun()
 
-# ── [04B-5] 메인 플로우에 주입 -------------------------------------------------
-# main() 안에서, 관리자 화면 렌더 직전에 아래 한 줄만 호출해 주세요.
-#   render_admin_settings_panel()
-#
-# 예) [07] main()의 (H) 화면 섹션 근처:
-#   if is_admin:
-#       render_admin_settings_panel()   # ← 이 줄 추가
-#       render_brain_prep_main()
-#       st.divider()
-#       render_tag_diagnostics()
-#       st.divider()
-#       render_simple_qa()
-# ===== [04B] END ==============================================================
+        _onoff_row(
+            "이유문법 설명(Reason Grammar)",
+            "국어 비교 중심의 이유문법 설명을 사용할지 여부(자료 정리 전엔 OFF 권장).",
+            is_reason_grammar_enabled(),
+            _set_reason,
+            on_key="rg_on", off_key="rg_off"
+        )
+
+        st.markdown("### 질문 모드 표시 여부")
+
+        # (B) 모드별 ON/OFF — 세로로 각 카드 렌더
+        me = get_enabled_modes()
+
+        def _save_modes_and_rerun(new_dict: dict):
+            merged = get_enabled_modes()
+            merged.update(new_dict or {})
+            _cfg_set("mode_enabled", merged)
+            # 피드백 토스트
+            on_list = [k for k, v in merged.items() if v]
+            try: st.toast("현재 켜진 모드: " + (", ".join(on_list) if on_list else "없음"))
+            except Exception: pass
+            st.rerun()
+
+        # Grammar
+        def _set_grammar(val: bool): _save_modes_and_rerun({"Grammar": bool(val)})
+        _onoff_row(
+            "문법설명 (Grammar)",
+            "규칙→예문 중심의 표준 문법 설명.",
+            bool(me.get("Grammar", True)),
+            _set_grammar,
+            on_key="mode_g_on", off_key="mode_g_off"
+        )
+
+        # Sentence
+        def _set_sentence(val: bool): _save_modes_and_rerun({"Sentence": bool(val)})
+        _onoff_row(
+            "문장분석 (Sentence)",
+            "명사/형용사/부사/전명구 등 기호 표기 방식으로 구조 분석.",
+            bool(me.get("Sentence", True)),
+            _set_sentence,
+            on_key="mode_s_on", off_key="mode_s_off"
+        )
+
+        # Passage
+        def _set_passage(val: bool): _save_modes_and_rerun({"Passage": bool(val)})
+        _onoff_row(
+            "지문분석 (Passage)",
+            "쉬운 비유·예시로 요약, 주제/제목 제안, 서술형 대비 핵심구문.",
+            bool(me.get("Passage", True)),
+            _set_passage,
+            on_key="mode_p_on", off_key="mode_p_off"
+        )
+
+        # (미리보기) 현재 학생에게 보이는 모드
+        enabled_list = [name for name, on in get_enabled_modes().items() if on]
+        if enabled_list:
+            st.info("학생에게 표시되는 모드: " + ", ".join(enabled_list))
+        else:
+            st.error("모든 모드가 꺼져 있습니다. 학생 화면에서 질문 모드가 보이지 않아요.")
+# ===== [04B] END =============================================================
 
 
 # ===== [05A] BRAIN PREP MAIN =======================================
