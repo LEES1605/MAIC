@@ -173,34 +173,37 @@ if "_admin_auth_open" not in st.session_state:
 with st.container():
     c_admin, c_mode, c_info = st.columns([0.22, 0.38, 0.40])
 
-    # (좌) 관리자 진입/종료 버튼 + PIN 입력
+    # (좌) 관리자 진입/종료 버튼 - 항상 같은 위치 유지(전용 슬롯)
     with c_admin:
-        if not st.session_state["is_admin"]:
-            if st.button("🔒 관리자", key="btn_open_admin"):
-                st.session_state["_admin_auth_open"] = True
-        else:
-            if st.button("🔓 관리자 종료", key="btn_close_admin"):
+        btn_slot = st.empty()  # ← 버튼 고정 위치(항상 여기에 렌더)
+        if st.session_state["is_admin"]:
+            if btn_slot.button("🔓 관리자 종료", key="btn_close_admin"):
                 st.session_state["is_admin"] = False
                 st.session_state["_admin_auth_open"] = False
                 st.toast("관리자 모드 해제됨")
-        # PIN 입력 폼(필요할 때만 표시)
+        else:
+            if btn_slot.button("🔒 관리자", key="btn_open_admin"):
+                st.session_state["_admin_auth_open"] = True
+
+        # PIN 입력 폼(필요할 때만, 버튼 '아래'에 렌더되어 위치가 변하지 않음)
         if st.session_state["_admin_auth_open"] and not st.session_state["is_admin"]:
-            with st.form("admin_login_form", clear_on_submit=True):
-                pin_try = st.text_input("관리자 PIN", type="password")
-                c1, c2 = st.columns(2)
-                with c1:
-                    ok = st.form_submit_button("입장")
-                with c2:
-                    cancel = st.form_submit_button("취소")
-                if cancel:
-                    st.session_state["_admin_auth_open"] = False
-                elif ok:
-                    if pin_try == _get_admin_pin():
-                        st.session_state["is_admin"] = True
+            with st.container(border=True):
+                with st.form("admin_login_form", clear_on_submit=True):
+                    pin_try = st.text_input("관리자 PIN", type="password")
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        ok = st.form_submit_button("입장")
+                    with c2:
+                        cancel = st.form_submit_button("취소")
+                    if cancel:
                         st.session_state["_admin_auth_open"] = False
-                        st.toast("관리자 모드 진입 ✅")
-                    else:
-                        st.error("PIN이 올바르지 않습니다.")
+                    elif ok:
+                        if pin_try == _get_admin_pin():
+                            st.session_state["is_admin"] = True
+                            st.session_state["_admin_auth_open"] = False
+                            st.toast("관리자 모드 진입 ✅")
+                        else:
+                            st.error("PIN이 올바르지 않습니다.")
 
     # (중) 학습 모드 선택(학생/관리자 공통)
     with c_mode:
@@ -226,7 +229,6 @@ with st.container():
 
 st.divider()
 # ===== [04A] END =============================================================
-
 
 # ===== [05A] BRAIN PREP MAIN =======================================
 def render_brain_prep_main():
