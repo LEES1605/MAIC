@@ -602,7 +602,7 @@ def _read_history_lines(max_lines: int = 5000) -> List[Dict[str, Any]]:
     return rows
 
 def _normalize_question(s: str) -> str:
-    """랭킹 집계를 위한 질문 정규화(대소문자/공백/문장부호 정리, 한글 보존)"""
+    """랭킹/캐시 키를 위한 질문 정규화(대소문자/공백/문장부호 정리, 한글 보존)"""
     import re as _re
     s = (s or "").strip().lower()
     s = _re.sub(r"[!?。．！?]+$", "", s)           # 끝문장부호 제거
@@ -663,12 +663,15 @@ def _top3_users(days: int = 7) -> List[Tuple[str, int]]:
     return [(name, cnt) for name, cnt in top3 if name]
 
 def _render_top3_badges(top3: List[Tuple[str, int]]):
-    """학생 화면 최상단 고정 TOP3 뱃지(최근 7일) — position: sticky"""
-    if not top3:
-        return
+    """학생 화면 최상단 고정 TOP3 뱃지(최근 7일) — 항상 3칸(부족분 플레이스홀더 채움)"""
+    # ── 플레이스홀더 적용 ─────────────────────────────────────────────
+    data = list(top3[:3])
+    while len(data) < 3:
+        data.append(("…", 0))
+
     medals = ["🥇", "🥈", "🥉"]
     parts = []
-    for i, (name, cnt) in enumerate(top3[:3]):
+    for i, (name, cnt) in enumerate(data[:3]):
         medal = medals[i] if i < len(medals) else "🏅"
         parts.append(f"<span class='rank pill pill-rank'>{medal} {name} · {cnt}회</span>")
     css = """
@@ -684,8 +687,50 @@ def _render_top3_badges(top3: List[Tuple[str, int]]):
     html = f"<div class='sticky-top3'><div class='rankbar'>{' '.join(parts)}</div></div>"
     st.markdown(css + html, unsafe_allow_html=True)
 
+# ──────────────── 프리뷰 드로어(세션 캐시 + 열기/닫기) ─────────────────
+def _ensure_answer_cache():
+    if "answer_cache" not in st.session_state:
+        st.session_state["answer_cache"] = {}  # {norm_q: {"preview": str, "ts": int}}
+
+def _save_answer_preview(q: str, text: str):
+    _ensure_answer_cache()
+    norm = _normalize_question(q)
+    preview = (text or "").strip()
+    # 앞부분 800자만 저장(너무 길면 …)
+    if len(preview) > 800:
+        preview = preview[:800].rstrip() + " …"
+    st.session_state["answer_cache"][norm] = {"preview": preview, "ts": int(time.time())}
+    # 현재 프리뷰 대상 갱신 및 열기
+    st.session_state["preview_norm"] = norm
+    st.session_state["preview_open"] = True
+
+def _load_and_preview(q: str):
+    """히스토리/인기 클릭: 입력 복구 + 프리뷰 드로어 열기"""
+    st.session_state["qa_q"] = q
+    st.session_state["qa_submitted"] = False
+    st.session_state["preview_norm"] = _normalize_question(q)
+    st.session_state["preview_open"] = True
+    try:
+        st.toast("미리보기 열었어요")
+    except Exception:
+        pass
+    st.rerun()
+
+def _close_preview():
+    st.session_state["preview_open"] = False
+    st.session_state["preview_norm"] = ""
+
+def _resubmit_from_preview():
+    """프리뷰에서 최신 재검색(다시 답변)"""
+    st.session_state["qa_submitted"] = True
+    try:
+        st.toast("🔄 최신으로 다시 검색합니다…")
+    except Exception:
+        pass
+    st.rerun()
+
 def _load_into_input(text: str):
-    """리스트에서 '불러오기' 눌렀을 때 입력창에 복구"""
+    """(이전 호환) 입력창에만 복구 — 현재는 프리뷰도 여는 _load_and_preview 사용 권장"""
     st.session_state["qa_q"] = text
     st.session_state["qa_submitted"] = False
     try:
@@ -694,9 +739,11 @@ def _load_into_input(text: str):
         pass
     st.rerun()
 
-# ─────────────────────────── 메인 Q&A + 탭 UI ────────────────────────────────
+# ─────────────────────────── 메인 Q&A + 탭/드로어 UI ─────────────────────────
 def render_simple_qa():
-    # (0) 학생 화면 최상단: TOP3(최근 7일) 고정 표시
+    _ensure_answer_cache()
+
+    # (0) 학생 화면 최상단: TOP3(최근 7일) 고정 표시 — 항상 3칸
     is_admin = st.session_state.get("is_admin", False)
     if not is_admin:
         try:
@@ -704,7 +751,7 @@ def render_simple_qa():
         except Exception:
             pass
 
-    st.markdown("### 🗂 기록 & 인기 질문")  # ← (2) 히스토리/인기 질문을 입력부 '위'로 이동
+    st.markdown("### 🗂 기록 & 인기 질문")  # ← (2) 히스토리/인기 질문을 입력부 '위'로 유지
     tab_hist, tab_pop = st.tabs(["나의 질문 히스토리", "인기 질문(최근 7일)"])
 
     # (1) 나의 질문 히스토리 — 세션 기준 표시(최신 20)
@@ -721,7 +768,7 @@ def render_simple_qa():
                 with col1:
                     st.markdown(f"- {qtext}  \n  <span style='color:#6b7280;'>({tm})</span>", unsafe_allow_html=True)
                 with col2:
-                    st.button("➡️ 불러오기", key=f"load_my_{i}", on_click=_load_into_input, args=(qtext,))
+                    st.button("👁️ 미리보기", key=f"load_my_{i}", on_click=_load_and_preview, args=(qtext,))
 
     # (2) 인기 질문(최근 7일) — 로컬 jsonl 기반 상위 20
     with tab_pop:
@@ -736,84 +783,64 @@ def render_simple_qa():
                 with col2:
                     st.markdown(f"**×{cnt}**")
                 with col3:
-                    st.button("➡️ 불러오기", key=f"load_pop_{i}", on_click=_load_into_input, args=(qtext,))
+                    st.button("👁️ 미리보기", key=f"load_pop_{i}", on_click=_load_and_preview, args=(qtext,))
 
     st.markdown("---")  # 구분선
-    st.markdown("### 💬 질문해 보세요 (간단 데모)")
 
-    # (A) 학생 모드에서 임시 이름 입력(로그인 도입 전까지 식별자)
-    if not is_admin:
-        default_name = st.session_state.get("student_name", "")
-        st.text_input("내 이름(임시)", placeholder="예: 지민 / 민수 / 유나",
-                      key="student_name", value=default_name)
-        st.caption("※ 로그인 기능 도입 전 임시 식별자입니다. (미입력 시 'guest')")
+    # (3) 좌/우 2열 레이아웃: (좌) 질문 입력/답변  (우) 프리뷰 드로어
+    c_main, c_drawer = st.columns([0.62, 0.38], gap="small")
 
-    # (B) 모드/입력 플로우 -------------------------------------------------------
-    mode = st.session_state.get("mode", "Grammar")
-    if mode == "Grammar":
-        placeholder = "예: 관계대명사 which 사용법을 알려줘"
-    elif mode == "Sentence":
-        placeholder = "예: I seen the movie yesterday 문장 문제점 분석해줘"
-    else:
-        placeholder = "예: 이 지문 핵심 요약과 제목 3개, 주제 1개 제안해줘"
+    # ===== (좌) 질문 입력/검색/답변 영역 ========================================
+    with c_main:
+        st.markdown("### 💬 질문해 보세요 (간단 데모)")
 
-    q = st.text_input("질문 입력", placeholder=placeholder, key="qa_q", on_change=_on_q_enter)
-    k = st.slider("검색 결과 개수(top_k)", 1, 10, 5, key="qa_k")
+        # (A) 학생 모드에서 임시 이름 입력(로그인 도입 전까지 식별자)
+        if not is_admin:
+            default_name = st.session_state.get("student_name", "")
+            st.text_input("내 이름(임시)", placeholder="예: 지민 / 민수 / 유나",
+                          key="student_name", value=default_name)
+            st.caption("※ 로그인 기능 도입 전 임시 식별자입니다. (미입력 시 'guest')")
 
-    clicked = st.button("검색", key="qa_go")
-    submitted = clicked or st.session_state.get("qa_submitted", False)
-    index_ready = False
-    try:
-        index_ready = _index_ready()
-    except Exception:
+        # (B) 모드/입력 플로우 ---------------------------------------------------
+        mode = st.session_state.get("mode", "Grammar")
+        if mode == "Grammar":
+            placeholder = "예: 관계대명사 which 사용법을 알려줘"
+        elif mode == "Sentence":
+            placeholder = "예: I seen the movie yesterday 문장 문제점 분석해줘"
+        else:
+            placeholder = "예: 이 지문 핵심 요약과 제목 3개, 주제 1개 제안해줘"
+
+        q = st.text_input("질문 입력", placeholder=placeholder, key="qa_q", on_change=_on_q_enter)
+        k = st.slider("검색 결과 개수(top_k)", 1, 10, 5, key="qa_k")
+
+        clicked = st.button("검색", key="qa_go")
+        submitted = clicked or st.session_state.get("qa_submitted", False)
         index_ready = False
+        try:
+            index_ready = _index_ready()
+        except Exception:
+            index_ready = False
 
-    if not index_ready:
-        st.info("아직 두뇌가 준비되지 않았어요. 상단에서 **백업 복구→자동 연결** 또는 **다시 최적화 실행**을 먼저 완료해 주세요.")
+        if not index_ready:
+            st.info("아직 두뇌가 준비되지 않았어요. 상단에서 **백업 복구→자동 연결** 또는 **다시 최적화 실행**을 먼저 완료해 주세요.")
 
-    # 답변 표시 영역(채팅 위치) 컨테이너
-    answer_box = st.container()
+        # 답변 표시 영역(채팅 위치) 컨테이너
+        answer_box = st.container()
 
-    # (C) 질의 처리 -------------------------------------------------------------
-    if submitted and (q or "").strip():
-        st.session_state["qa_submitted"] = False
-        current_user = _sanitize_user(st.session_state.get("student_name") if not is_admin else "admin")
-        _append_history(q, current_user)  # 기록(로그인 전까지는 임시 이름 사용)
+        # (C) 질의 처리 ---------------------------------------------------------
+        if submitted and (q or "").strip():
+            st.session_state["qa_submitted"] = False
+            current_user = _sanitize_user(st.session_state.get("student_name") if not is_admin else "admin")
+            _append_history(q, current_user)  # 기록(로그인 전까지는 임시 이름 사용)
 
-        if index_ready:
-            try:
-                with answer_box:
-                    with st.status("✳️ 답변 준비 중…", state="running") as s:
-                        qe = st.session_state["rag_index"].as_query_engine(top_k=k)
-                        r = qe.query(q)
-                        raw_text = getattr(r, "response", "") or str(r)
-
-                        refs: List[Dict[str, str]] = []
-                        hits = getattr(r, "source_nodes", None) or getattr(r, "hits", None)
-                        if hits:
-                            for h in hits[:2]:
-                                meta = getattr(h, "metadata", None) or getattr(h, "node", {}).get("metadata", {})
-                                refs.append({
-                                    "doc_id": (meta or {}).get("doc_id") or (meta or {}).get("file_name", ""),
-                                    "url": (meta or {}).get("source") or (meta or {}).get("url", ""),
-                                })
-
-                        if mode == "Sentence":
-                            fixes = _sentence_quick_fix(q)
-                            if fixes:
-                                st.markdown("#### ✍️ 빠른 교정 제안 (한국어)")
-                                for bad, good in fixes:
-                                    st.markdown(f"- **{bad}** → {good}")
-
-                        _render_clean_answer(mode, raw_text, refs)
-                        s.update(label="완료 ✅", state="complete")
-            except Exception:
-                with answer_box:
-                    with st.spinner("✳️ 답변 준비 중…"):
-                        try:
+            if index_ready:
+                try:
+                    with answer_box:
+                        with st.status("✳️ 답변 준비 중…", state="running") as s:
                             qe = st.session_state["rag_index"].as_query_engine(top_k=k)
                             r = qe.query(q)
                             raw_text = getattr(r, "response", "") or str(r)
+
                             refs: List[Dict[str, str]] = []
                             hits = getattr(r, "source_nodes", None) or getattr(r, "hits", None)
                             if hits:
@@ -823,15 +850,68 @@ def render_simple_qa():
                                         "doc_id": (meta or {}).get("doc_id") or (meta or {}).get("file_name", ""),
                                         "url": (meta or {}).get("source") or (meta or {}).get("url", ""),
                                     })
+
+                            # 문장 모드 빠른 교정
                             if mode == "Sentence":
                                 fixes = _sentence_quick_fix(q)
                                 if fixes:
                                     st.markdown("#### ✍️ 빠른 교정 제안 (한국어)")
                                     for bad, good in fixes:
                                         st.markdown(f"- **{bad}** → {good}")
+
+                            # 답변 렌더
                             _render_clean_answer(mode, raw_text, refs)
-                        except Exception as e:
-                            st.error(f"검색 실패: {type(e).__name__}: {e}")
+                            # ── 프리뷰 캐시에 저장 + 드로어 열기 ──
+                            _save_answer_preview(q, raw_text)
+
+                            s.update(label="완료 ✅", state="complete")
+                except Exception:
+                    with answer_box:
+                        with st.spinner("✳️ 답변 준비 중…"):
+                            try:
+                                qe = st.session_state["rag_index"].as_query_engine(top_k=k)
+                                r = qe.query(q)
+                                raw_text = getattr(r, "response", "") or str(r)
+                                refs: List[Dict[str, str]] = []
+                                hits = getattr(r, "source_nodes", None) or getattr(r, "hits", None)
+                                if hits:
+                                    for h in hits[:2]:
+                                        meta = getattr(h, "metadata", None) or getattr(h, "node", {}).get("metadata", {})
+                                        refs.append({
+                                            "doc_id": (meta or {}).get("doc_id") or (meta or {}).get("file_name", ""),
+                                            "url": (meta or {}).get("source") or (meta or {}).get("url", ""),
+                                        })
+                                if mode == "Sentence":
+                                    fixes = _sentence_quick_fix(q)
+                                    if fixes:
+                                        st.markdown("#### ✍️ 빠른 교정 제안 (한국어)")
+                                        for bad, good in fixes:
+                                            st.markdown(f"- **{bad}** → {good}")
+                                _render_clean_answer(mode, raw_text, refs)
+                                _save_answer_preview(q, raw_text)
+                            except Exception as e:
+                                st.error(f"검색 실패: {type(e).__name__}: {e}")
+
+    # ===== (우) 프리뷰 드로어 ================================================
+    with c_drawer:
+        if st.session_state.get("preview_open", False):
+            with st.container(border=True):
+                st.markdown("### 📎 미리보기")
+                norm = st.session_state.get("preview_norm", "")
+                cache = st.session_state.get("answer_cache", {})
+                item = cache.get(norm, {}) if norm else {}
+                preview = (item or {}).get("preview") or ""
+                if preview:
+                    st.write(preview)
+                else:
+                    st.info("미리보기가 없어요. 아래 **🔄 다시 검색(최신)** 버튼으로 생성할 수 있어요.")
+                st.markdown("---")
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.button("🔄 다시 검색(최신)", key="btn_preview_resubmit", on_click=_resubmit_from_preview)
+                with c2:
+                    st.button("❌ 닫기", key="btn_preview_close", on_click=_close_preview)
+
 # ===== [06] END ==============================================================
 
 
