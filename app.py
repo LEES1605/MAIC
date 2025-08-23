@@ -669,12 +669,11 @@ def render_tag_diagnostics():
     except Exception:
         pass
 
-# ===== [06] SIMPLE QA DEMO (즉시 재실행 히스토리 + 문구 변경) =================
+# ===== [06] SIMPLE QA DEMO (히스토리 라디오/좌측정렬/번호) =====================
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 import time
 import streamlit as st
-from src.ui_components import render_item_row
 
 # [06-A] 안전 shim -------------------------------------------------------------
 try:
@@ -688,36 +687,12 @@ except Exception:
         if "preview_open" not in st.session_state:
             st.session_state["preview_open"] = False
 
-# [06-B] 보조 함수들 (생략된 부분은 기존과 동일) -------------------------------
-def _sentence_quick_fix(user_q: str) -> List[Tuple[str, str]]:
-    tips: List[Tuple[str, str]] = []
-    import re as _re
-    if _re.search(r"\bI\s+seen\b", user_q, flags=_re.I):
-        tips.append(("I seen", "I **saw** the movie / I **have seen** the movie"))
-    if _re.search(r"\b(he|she|it)\s+don'?t\b", user_q, flags=_re.I):
-        tips.append(("he/she/it don't", "**doesn't**"))
-    if _re.search(r"\ba\s+[aeiouAEIOU]", user_q):
-        tips.append(("a + 모음 시작 명사", "가능하면 **an** + 모음 시작 명사"))
-    return tips
-
-def _render_clean_answer(mode_label: str, answer_text: str, refs: List[Dict[str, str]]):
-    st.markdown(f"**선택 모드:** `{mode_label}`")
-    st.markdown("#### ✅ 요약/안내 (한국어)")
-    with st.expander("원문 응답 보기(영문)"):
-        st.write((answer_text or "").strip() or "—")
-    if refs:
-        with st.expander("근거 자료(상위 2개)"):
-            for i, r in enumerate(refs[:2], start=1):
-                name = r.get("doc_id") or r.get("source") or f"ref{i}"
-                url = r.get("url") or r.get("source_url") or ""
-                st.markdown(f"- {name}  " + (f"(<{url}>)" if url else ""))
-
 def _on_q_enter():
     st.session_state["qa_submitted"] = True
     try: st.toast("✳️ 답변 준비 중…")
     except Exception: pass
 
-# 기록/랭킹 유틸 (기존 동일) ---------------------------------------------------
+# 기록 유틸 ---------------------------------------------------------------------
 def _history_path() -> Path:
     p = Path.home() / ".maic"
     try: p.mkdir(parents=True, exist_ok=True)
@@ -815,6 +790,7 @@ def _render_top3_badges(top3: List[Tuple[str, int]]):
       .pill-rank { margin-right:6px; padding:4px 8px; border-radius:999px; font-size:0.9rem;
                    background:#2563eb1a; color:#1d4ed8; border:1px solid #2563eb55;}
       .sec-title { font-weight:800; font-size:1.1rem; margin: 6px 0 2px 0;}
+      .hist-radio .stRadio > div { row-gap: 0.15rem; }
     </style>"""
     st.markdown(css + f"<div class='sticky-top3'>{' '.join(parts)}</div>", unsafe_allow_html=True)
 
@@ -823,13 +799,11 @@ def render_simple_qa():
     _ensure_answer_cache()
     is_admin = st.session_state.get("is_admin", False)
 
-    # (0) TOP3 — 학생만
     if not is_admin:
         _render_top3_badges(_top3_users())
 
-    # (1) 상단 문구 + 모드 선택 + 입력
     st.markdown("### 💬 질문은 최고의 공부방법이다")
-    # 관리자 설정 반영(안전 접근)
+
     enabled = globals().get("get_enabled_modes", lambda: {"Grammar": True, "Sentence": True, "Passage": True})()
     radio_opts: List[str] = []
     if enabled.get("Grammar", True):  radio_opts.append("문법설명(Grammar)")
@@ -859,7 +833,6 @@ def render_simple_qa():
     if st.button("🧑‍🏫 쌤에게 물어보기", key="qa_go"):
         st.session_state["qa_submitted"] = True
 
-    # (2) 답변 영역
     answer_box = st.container()
     if st.session_state.get("qa_submitted", False) and q.strip():
         st.session_state["qa_submitted"] = False
@@ -888,36 +861,59 @@ def render_simple_qa():
                                 "url": (meta or {}).get("source") or (meta or {}).get("url", ""),
                             })
                     if mode_key == "Sentence":
-                        for bad, good in _sentence_quick_fix(q):
-                            st.markdown(f"- **{bad}** → {good}")
-                    _render_clean_answer(mode_label, raw, refs)
+                        # 간단 오류 교정 힌트
+                        import re as _re
+                        if _re.search(r"\bI\s+seen\b", q, flags=_re.I):
+                            st.markdown("- **I seen** → I **saw** the movie / I **have seen** the movie")
+                        if _re.search(r"\b(he|she|it)\s+don'?t\b", q, flags=_re.I):
+                            st.markdown("- **he/she/it don't** → **doesn't**")
+                        if _re.search(r"\ba\s+[aeiouAEIOU]", q):
+                            st.markdown("- **a + 모음 시작 명사** → 가능하면 **an** + 모음 시작 명사")
+                    st.markdown(f"**선택 모드:** `{mode_label}`")
+                    st.markdown("#### ✅ 요약/안내 (한국어)")
+                    with st.expander("원문 응답 보기(영문)"):
+                        st.write((raw or "").strip() or "—")
+                    if refs:
+                        with st.expander("근거 자료(상위 2개)"):
+                            for i, r0 in enumerate(refs[:2], start=1):
+                                name = r0.get("doc_id") or r0.get("source") or f"ref{i}"
+                                url = r0.get("url") or r0.get("source_url") or ""
+                                st.markdown(f"- {name}  " + (f"(<{url}>)" if url else ""))
             except Exception as e:
                 st.error(f"검색 실패: {type(e).__name__}: {e}")
         else:
             st.info("아직 두뇌가 준비되지 않았어요. 상단에서 **복구/연결** 또는 **다시 최적화**를 먼저 완료해 주세요.")
 
-    # (3) 히스토리 & 인기 — **클릭 시 즉시 실행**(미리보기 제거)
+    # (히스토리) — 라디오로 좌측정렬 + 번호 매김 + 선택 즉시 실행 -----------------
     sess_rows: List[Dict[str, Any]] = st.session_state.get("qa_session_history", [])[:10]
-    ranked: List[Tuple[str, int]] = _popular_questions(top_n=10, days=7)
-
     if sess_rows:
         st.markdown("<div class='sec-title'>📒 나의 질문 히스토리</div>", unsafe_allow_html=True)
-        for row in sess_rows:
-            qtext = row.get("q","")
-            # 행 전체를 버튼으로 만들어 즉시 입력복구+실행
-            if st.button(qtext, key=f"hist_run_{hash(qtext)}", use_container_width=True):
-                st.session_state["qa_q"] = qtext
-                st.session_state["qa_submitted"] = True
-                st.rerun()
+        labels = [f"{i+1}. {row.get('q','')}" for i, row in enumerate(sess_rows)]
+        # 현재 선택(없으면 None)
+        current = st.session_state.get("hist_selected_idx", None)
 
-    if ranked:
-        st.markdown("<div class='sec-title'>🔥 인기 질문 (최근 7일)</div>", unsafe_allow_html=True)
-        for qtext, cnt in ranked:
-            lbl = f"{qtext}  · ×{cnt}"
-            if st.button(lbl, key=f"pop_run_{hash(qtext)}", use_container_width=True):
+        def _on_hist_change():
+            idx = st.session_state.get("hist_radio_idx", None)
+            if idx is None: return
+            try:
+                qtext = sess_rows[idx].get("q","")
+                st.session_state["hist_selected_idx"] = idx
                 st.session_state["qa_q"] = qtext
                 st.session_state["qa_submitted"] = True
-                st.rerun()
+                # 콜백 내 rerun 불필요(변경 시 자동 rerun)
+            except Exception:
+                pass
+
+        st.radio(
+            label="최근 질문(선택 시 바로 실행)",
+            options=list(range(len(labels))),
+            format_func=lambda i: labels[i],
+            key="hist_radio_idx",
+            index=current if isinstance(current, int) and 0 <= current < len(labels) else None,
+            on_change=_on_hist_change,
+        )
+
+    # (인기 질문 리스트는 헤더 토글 패널에서 표시 중)
 # ===== [06] END =============================================================
 
 
