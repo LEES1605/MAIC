@@ -150,60 +150,96 @@ def render_header():
     """
     return
 # ===== [04] END =============================================
-# ===== [04A] MODE & ADMIN BUTTON (LANG REMOVED) ==============================
-# 기본은 학생 화면. 상단 오른쪽에 '관리자' 버튼 → PIN 인증 → 관리자 모드 진입/종료.
-import os as _os
 
+# ===== [04A] MODE & ADMIN BUTTON (즉시 반영: rerun 포함) =====================
+import os as _os
+import streamlit as st
+
+# ── [04A-1] PIN 가져오기 ------------------------------------------------------
 def _get_admin_pin() -> str:
-    # 우선순위: secrets > env > '0000'(기본)
     try:
         pin = st.secrets.get("ADMIN_PIN", None)  # type: ignore[attr-defined]
     except Exception:
         pin = None
     return str(pin or _os.environ.get("ADMIN_PIN") or "0000")
+# ===== [04A-1] END ============================================================
 
-# 세션 상태 초기화
-if "is_admin" not in st.session_state:
-    st.session_state["is_admin"] = False
-if "_admin_auth_open" not in st.session_state:
+
+# ── [04A-2] 세션키 초기화 ------------------------------------------------------
+for k, v in {
+    "is_admin": False,
+    "_admin_auth_open": False,
+}.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
+# ===== [04A-2] END ============================================================
+
+
+# ── [04A-3] 상태 전환 유틸(즉시 재렌더) ---------------------------------------
+def _set_admin(on: bool, toast_msg: str | None = None):
+    st.session_state["is_admin"] = bool(on)
     st.session_state["_admin_auth_open"] = False
+    if toast_msg:
+        try:
+            st.toast(toast_msg)
+        except Exception:
+            pass
+    st.rerun()  # ← 핵심: 같은 클릭 이벤트 내에서 즉시 반영
 
-# 상단 우측 고정 관리자 버튼 (모바일 기준 익숙한 위치)
+def _open_auth_panel():
+    st.session_state["_admin_auth_open"] = True
+    st.rerun()
+# ===== [04A-3] END ============================================================
+
+
+# ── [04A-4] 상단 우측 관리자 버튼 & 인증 패널 -----------------------------------
 with st.container():
-    # 오른쪽 정렬 슬롯
     _, right = st.columns([0.7, 0.3])
     with right:
         btn_slot = st.empty()
-        if st.session_state["is_admin"]:
-            if btn_slot.button("🔓 관리자 종료", key="btn_close_admin"):
-                st.session_state["is_admin"] = False
-                st.session_state["_admin_auth_open"] = False
-                st.toast("관리자 모드 해제됨")
-        else:
-            if btn_slot.button("🔒 관리자", key="btn_open_admin"):
-                st.session_state["_admin_auth_open"] = True
 
-        # PIN 입력 폼(필요할 때만, 버튼 아래 고정)
+        # 현재 상태에 따라 라벨/동작 분기
+        if st.session_state["is_admin"]:
+            # 관리자 모드일 때는 '관리자 종료'가 바로 떠야 함
+            btn_slot.button(
+                "🔓 관리자 종료",
+                key="btn_close_admin",
+                use_container_width=True,
+                on_click=_set_admin,
+                kwargs={"on": False, "toast_msg": "관리자 모드 해제됨"},
+            )
+        else:
+            # 학생 모드일 때는 '관리자' 버튼이 바로 떠야 함
+            btn_slot.button(
+                "🔒 관리자",
+                key="btn_open_admin",
+                use_container_width=True,
+                on_click=_open_auth_panel,
+            )
+
+        # 인증 패널: 열기로 전환되면 즉시 보이게(별도 키)
         if st.session_state["_admin_auth_open"] and not st.session_state["is_admin"]:
             with st.container(border=True):
-                with st.form("admin_login_form", clear_on_submit=True):
-                    pin_try = st.text_input("관리자 PIN", type="password")
+                st.markdown("**관리자 PIN 입력**")
+                with st.form("admin_login_form", clear_on_submit=True, border=False):
+                    pin_try = st.text_input("PIN", type="password")
                     c1, c2 = st.columns(2)
                     with c1:
                         ok = st.form_submit_button("입장")
                     with c2:
                         cancel = st.form_submit_button("취소")
-                    if cancel:
-                        st.session_state["_admin_auth_open"] = False
-                    elif ok:
-                        if pin_try == _get_admin_pin():
-                            st.session_state["is_admin"] = True
-                            st.session_state["_admin_auth_open"] = False
-                            st.toast("관리자 모드 진입 ✅")
-                        else:
-                            st.error("PIN이 올바르지 않습니다.")
 
-# 정보 캡션(학생은 간단, 관리자는 역할/모드 안내)
+                # 폼 제출 처리
+                if cancel:
+                    st.session_state["_admin_auth_open"] = False
+                    st.rerun()
+                elif ok:
+                    if pin_try == _get_admin_pin():
+                        _set_admin(True, "관리자 모드 진입 ✅")  # 여기서 rerun
+                    else:
+                        st.error("PIN이 올바르지 않습니다.")
+
+# 역할 캡션
 if st.session_state.get("is_admin", False):
     st.caption("역할: **관리자** — 상단 버튼으로 종료 가능")
 else:
@@ -211,8 +247,6 @@ else:
 
 st.divider()
 # ===== [04A] END =============================================================
-
-
 
 
 # ===== [05A] BRAIN PREP MAIN =======================================
