@@ -499,6 +499,158 @@ def render_brain_prep_main():
                 st.error(f"초기화 중 오류: {type(e).__name__}")
                 st.exception(e)
 
+# ===== [05A] BRAIN PREP MAIN =======================================
+def render_brain_prep_main():
+    """
+    관리자 준비 패널(다이어트 버전)
+    - ready 상태: UI 완전 숨김(아무 것도 렌더하지 않음)
+    - missing/pending: 최소 안내만, 버튼 없음
+    - Advanced(고급)에서만 수동 조치(강제 복구 / 다시 최적화 / 품질 리포트 재생성)
+    """
+    import importlib
+    from pathlib import Path
+    import streamlit as st
+
+    # 현재 인덱스 상태: 'ready' | 'pending' | 'missing'
+    try:
+        status = get_index_status()
+    except Exception:
+        status = "missing"
+
+    # 1) ready면 패널 자체를 숨김(중복 UI 제거)
+    if status == "ready":
+        return
+
+    # 2) 최소 안내(버튼 없음)
+    with st.container(border=True):
+        if status == "missing":
+            st.warning(
+                "로컬 인덱스가 없습니다. 상단 플로우에서 **백업 복구→자동 연결**을 먼저 시도합니다.\n"
+                "필요 시 아래 **고급(Advanced)**에서 수동으로 복구/다시 최적화를 실행할 수 있습니다."
+            )
+        else:  # 'pending'
+            st.info(
+                "로컬 인덱스 신호(.ready/chunks.jsonl)는 있으나 세션 미연결 상태입니다.\n"
+                "잠시 후 자동 연결되며, 필요 시 **고급(Advanced)**에서 수동 조치가 가능합니다."
+            )
+
+    # 3) Advanced(수동 조치 전용)
+    with st.expander("고급(Advanced) — 문제가 있을 때만 사용", expanded=False):
+        st.caption("아래 동작은 관리자 전용 수동 조치입니다.")
+
+        # a) 최신 백업에서 강제 복구 → 연결
+        if st.button("📦 최신 백업에서 강제 복구 → 연결", key="adv_force_restore"):
+            try:
+                mod = importlib.import_module("src.rag.index_build")
+                restore_fn = getattr(mod, "restore_latest_backup_to_local", None)
+                if not callable(restore_fn):
+                    st.error("복구 함수를 찾지 못했습니다. (restore_latest_backup_to_local)")
+                else:
+                    with st.status("백업에서 로컬로 복구 중…", state="running") as s:
+                        res = restore_fn()
+                        if not (res and res.get("ok")):
+                            s.update(label="복구 실패 ❌", state="error")
+                            st.error(f"복구 실패: {res.get('error') if res else 'unknown'}")
+                        else:
+                            s.update(label="복구 완료 ✅", state="complete")
+                            with st.status("두뇌 연결 중…", state="running") as s2:
+                                ok = _auto_attach_or_restore_silently()
+                                if ok:
+                                    s2.update(label="두뇌 연결 완료 ✅", state="complete")
+                                    st.rerun()
+                                else:
+                                    s2.update(label="두뇌 연결 실패 ❌", state="error")
+            except Exception as e:
+                st.error(f"강제 복구 중 오류: {type(e).__name__}: {e}")
+
+        # b) 다시 최적화 실행 → 백업 업로드 → 복구 → 연결
+        if st.button("🛠 다시 최적화 실행 → 백업 업로드 → 복구 → 연결", key="adv_rebuild_pipeline"):
+            try:
+                try:
+                    mod = importlib.import_module("src.rag.index_build")
+                except Exception as e:
+                    st.error(f"인덱스 빌더 모듈 임포트 실패: {type(e).__name__}: {e}")
+                    mod = None
+
+                build_fn = getattr(mod, "build_index_with_checkpoint", None) if mod else None
+                upload_zip_fn = getattr(mod, "_make_and_upload_backup_zip", None) if mod else None
+                persist_dir = getattr(mod, "PERSIST_DIR", Path.home() / ".maic" / "persist") if mod else (Path.home() / ".maic" / "persist")
+                restore_fn = getattr(mod, "restore_latest_backup_to_local", None) if mod else None
+
+                if not callable(build_fn):
+                    st.error("인덱스 빌더 함수를 찾지 못했습니다. (build_index_with_checkpoint)")
+                else:
+                    prog = st.progress(0); log = st.empty()
+                    def _pct(v: int, msg: str | None = None):
+                        try:
+                            prog.progress(max(0, min(int(v), 100)))
+                        except Exception:
+                            pass
+                        if msg: log.info(str(msg))
+                    def _msg(s: str): log.write(f"• {s}")
+
+                    with st.status("다시 최적화 실행 중…", state="running") as s:
+                        res = build_fn(
+                            update_pct=_pct, update_msg=_msg,
+                            gdrive_folder_id="", gcp_creds={},
+                            persist_dir=str(persist_dir), remote_manifest={}
+                        )
+                        prog.progress(100)
+                        s.update(label="다시 최적화 완료 ✅", state="complete")
+                    st.json(res)
+
+                    # ZIP 업로드(있으면)
+                    try:
+                        if callable(upload_zip_fn):
+                            _ = upload_zip_fn(None, None)
+                    except Exception:
+                        pass
+
+                    # 최신 ZIP으로 복구 후 연결
+                    if callable(restore_fn):
+                        with st.status("백업에서 로컬로 복구 중…", state="running") as s2:
+                            rr = restore_fn()
+                            if not (rr and rr.get("ok")):
+                                s2.update(label="복구 실패 ❌", state="error")
+                                st.error(f"복구 실패: {rr.get('error') if rr else 'unknown'}")
+                            else:
+                                s2.update(label="복구 완료 ✅", state="complete")
+
+                    with st.status("두뇌 연결 중…", state="running") as s3:
+                        ok = _auto_attach_or_restore_silently()
+                        if ok:
+                            s3.update(label="두뇌 연결 완료 ✅", state="complete")
+                            st.rerun()
+                        else:
+                            s3.update(label="두뇌 연결 실패 ❌", state="error")
+            except Exception as e:
+                st.error(f"재최적화 파이프라인 중 오류: {type(e).__name__}: {e}")
+
+        # c) 품질 리포트 다시 생성(강제)
+        if st.button("📊 품질 리포트 다시 생성(강제)", key="adv_regen_quality"):
+            try:
+                mod = importlib.import_module("src.rag.index_build")
+                force_fn = getattr(mod, "_quality_report", None)
+                auto_fn  = getattr(mod, "autorun_quality_scan_if_stale", None)
+                if callable(force_fn):
+                    with st.status("품질 리포트 생성 중…", state="running") as s:
+                        r = force_fn(None, extra_counts=None, top_n=20)
+                        s.update(label="생성 완료 ✅", state="complete")
+                        st.success(f"저장 경로: {r.get('path', '~/.maic/quality_report.json')}")
+                elif callable(auto_fn):
+                    r = auto_fn(top_n=20)
+                    if r.get("ok") and not r.get("skipped"):
+                        st.success("품질 리포트 갱신 완료 ✅")
+                    elif r.get("skipped"):
+                        st.info("이미 최신입니다. (스킵됨)")
+                    else:
+                        st.error("품질 리포트 갱신 실패")
+                else:
+                    st.error("품질 리포트 함수를 찾지 못했습니다.")
+            except Exception as e:
+                st.error(f"품질 리포트 생성 중 오류: {type(e).__name__}: {e}")
+# ===== [05A] END ===========================================
+
 # ===== [05B] TAG DIAGNOSTICS (NEW) ==========================================
 def render_tag_diagnostics():
     """
