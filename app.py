@@ -228,7 +228,7 @@ else:
 
 st.divider()
 # ===== [04A] END =============================================================
-# ===== [04B] 관리자 설정 — 이유문법 + 모드별 ON/OFF (버튼형·세로배치) ==========
+# ===== [04B] 관리자 설정 — 이유문법 + 모드별 ON/OFF (라디오·세로배치) ==========
 import json as _json
 from pathlib import Path as _Path
 import streamlit as st
@@ -263,9 +263,8 @@ def _load_cfg() -> dict:
     me = (data or {}).get("mode_enabled", {})
     if isinstance(me, dict):
         merged["mode_enabled"].update(me)
-    for k in ("reason_grammar_enabled",):
-        if k in (data or {}):
-            merged[k] = data[k]
+    if "reason_grammar_enabled" in (data or {}):
+        merged["reason_grammar_enabled"] = bool(data["reason_grammar_enabled"])
     return merged
 
 def _save_cfg(data: dict) -> None:
@@ -275,7 +274,7 @@ def _save_cfg(data: dict) -> None:
     try:
         me = (data or {}).get("mode_enabled", {})
         if isinstance(me, dict):
-            norm["mode_enabled"].update(me)
+            norm["mode_enabled"].update({k: bool(v) for k, v in me.items()})
     except Exception:
         pass
     norm["reason_grammar_enabled"] = bool((data or {}).get("reason_grammar_enabled", False))
@@ -303,108 +302,88 @@ def get_enabled_modes() -> dict:
     merged = _DEFAULT_CFG["mode_enabled"].copy()
     me = _cfg_get("mode_enabled", {})
     if isinstance(me, dict):
-        merged.update(me)
+        merged.update({k: bool(v) for k, v in me.items()})
     return merged
 
-# ── [04B-4] 작은 UI 유틸: 세로 카드 + 켜기/끄기 두 버튼 ------------------------
-def _onoff_row(title: str, desc: str, current: bool, set_fn, *, on_key: str, off_key: str):
-    """
-    세로 카드 하나를 렌더링하고, '켜기/끄기' 두 버튼을 보여준다.
-    현재 상태에 따라 해당 버튼을 primary로 강조한다.
-    """
-    with st.container(border=True):
-        st.markdown(f"**{title}**")
-        if desc:
-            st.caption(desc)
-
-        c1, c2 = st.columns(2)
-        with c1:
-            # '켜기' 버튼: 현재 True면 primary
-            if st.button("🔵 켜기", key=on_key, type=("primary" if current else "secondary"), use_container_width=True):
-                set_fn(True)
-        with c2:
-            # '끄기' 버튼: 현재 False면 primary
-            if st.button("⚪ 끄기", key=off_key, type=("primary" if not current else "secondary"), use_container_width=True):
-                set_fn(False)
-
-# ── [04B-5] 관리자 UI(세로배치 버튼형) -----------------------------------------
+# ── [04B-4] 관리자 UI(라디오형·세로배치·컴팩트) -------------------------------
 def render_admin_settings_panel():
-    """관리자용 설정 카드: 이유문법 + 모드별 ON/OFF — 버튼형/세로배치"""
+    """관리자용 설정 카드: 이유문법 + 모드별 ON/OFF (라디오·세로배치)"""
     if not st.session_state.get("is_admin", False):
         return
 
-    # 간단 스타일(여백 조정)
+    # 라디오 간격을 조금 줄여 모바일에서도 컴팩트하게
     st.markdown("""
     <style>
-      .stButton>button { height: 40px; }
+      .stRadio > div { row-gap: 0.25rem; }
+      .st-emotion-cache-10trblm p { margin-bottom: 0.35rem; }
     </style>
     """, unsafe_allow_html=True)
 
     with st.container(border=True):
         st.subheader("관리자 설정")
-        st.caption("모드는 학생에게 노출할 기능만 켜세요. 버튼에 색이 들어온 쪽이 현재 상태입니다.")
+        st.caption("동그란 선택지에서 ‘켜기/끄기’를 고르면 바로 반영됩니다. (자동 저장·자동 새로고침)")
 
-        # (A) 이유문법 ON/OFF
-        def _set_reason(val: bool):
-            _cfg_set("reason_grammar_enabled", bool(val))
-            try: st.toast(f"이유문법: {'켜짐' if val else '꺼짐'}")
-            except Exception: pass
-            st.rerun()
-
-        _onoff_row(
-            "이유문법 설명(Reason Grammar)",
-            "국어 비교 중심의 이유문법 설명을 사용할지 여부(자료 정리 전엔 OFF 권장).",
-            is_reason_grammar_enabled(),
-            _set_reason,
-            on_key="rg_on", off_key="rg_off"
-        )
-
-        st.markdown("### 질문 모드 표시 여부")
-
-        # (B) 모드별 ON/OFF — 세로로 각 카드 렌더
+        # 현재 설정 로드
+        current_rg = is_reason_grammar_enabled()
         me = get_enabled_modes()
 
-        def _save_modes_and_rerun(new_dict: dict):
+        # (A) 이유문법 — 라디오(끄기/켜기)
+        st.markdown("**이유문법 설명(Reason Grammar)**")
+        rg_choice = st.radio(
+            label="이유문법 설명",
+            options=["끄기", "켜기"],
+            index=(1 if current_rg else 0),
+            horizontal=True,
+            key="rg_radio",
+        )
+
+        # (B) 모드별 — 세로로 각 라디오
+        st.markdown("### 질문 모드 표시 여부")
+        g_choice = st.radio(
+            label="문법설명 (Grammar)",
+            options=["끄기", "켜기"],
+            index=(1 if me.get("Grammar", True) else 0),
+            horizontal=True,
+            key="mode_g_radio",
+        )
+        s_choice = st.radio(
+            label="문장분석 (Sentence)",
+            options=["끄기", "켜기"],
+            index=(1 if me.get("Sentence", True) else 0),
+            horizontal=True,
+            key="mode_s_radio",
+        )
+        p_choice = st.radio(
+            label="지문분석 (Passage)",
+            options=["끄기", "켜기"],
+            index=(1 if me.get("Passage", True) else 0),
+            horizontal=True,
+            key="mode_p_radio",
+        )
+
+        # 값 변환
+        new_rg = (rg_choice == "켜기")
+        new_me = {
+            "Grammar":  (g_choice == "켜기"),
+            "Sentence": (s_choice == "켜기"),
+            "Passage":  (p_choice == "켜기"),
+        }
+
+        # 변경 감지 → 저장 (Streamlit이 자동 rerun 하므로 st.rerun() 불필요)
+        changed = (new_rg != current_rg) or any(new_me.get(k) != me.get(k) for k in ("Grammar","Sentence","Passage"))
+        if changed:
+            _cfg_set("reason_grammar_enabled", bool(new_rg))
+            # 기존 값에 덮어쓰기 형식으로 저장
             merged = get_enabled_modes()
-            merged.update(new_dict or {})
+            merged.update(new_me)
             _cfg_set("mode_enabled", merged)
-            # 피드백 토스트
-            on_list = [k for k, v in merged.items() if v]
-            try: st.toast("현재 켜진 모드: " + (", ".join(on_list) if on_list else "없음"))
-            except Exception: pass
-            st.rerun()
+            try:
+                on_list = [k for k, v in merged.items() if v]
+                st.toast("저장됨 · 켜진 모드: " + (", ".join(on_list) if on_list else "없음"))
+            except Exception:
+                pass
 
-        # Grammar
-        def _set_grammar(val: bool): _save_modes_and_rerun({"Grammar": bool(val)})
-        _onoff_row(
-            "문법설명 (Grammar)",
-            "규칙→예문 중심의 표준 문법 설명.",
-            bool(me.get("Grammar", True)),
-            _set_grammar,
-            on_key="mode_g_on", off_key="mode_g_off"
-        )
-
-        # Sentence
-        def _set_sentence(val: bool): _save_modes_and_rerun({"Sentence": bool(val)})
-        _onoff_row(
-            "문장분석 (Sentence)",
-            "명사/형용사/부사/전명구 등 기호 표기 방식으로 구조 분석.",
-            bool(me.get("Sentence", True)),
-            _set_sentence,
-            on_key="mode_s_on", off_key="mode_s_off"
-        )
-
-        # Passage
-        def _set_passage(val: bool): _save_modes_and_rerun({"Passage": bool(val)})
-        _onoff_row(
-            "지문분석 (Passage)",
-            "쉬운 비유·예시로 요약, 주제/제목 제안, 서술형 대비 핵심구문.",
-            bool(me.get("Passage", True)),
-            _set_passage,
-            on_key="mode_p_on", off_key="mode_p_off"
-        )
-
-        # (미리보기) 현재 학생에게 보이는 모드
+        # (미리보기) 학생에게 보이는 모드 안내
         enabled_list = [name for name, on in get_enabled_modes().items() if on]
         if enabled_list:
             st.info("학생에게 표시되는 모드: " + ", ".join(enabled_list))
