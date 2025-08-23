@@ -591,7 +591,7 @@ def render_tag_diagnostics():
     except Exception:
         pass
 
-# ===== [06] SIMPLE QA DEMO (모드 ON/OFF 반영 + 기존 기능 유지) ================
+# ===== [06] SIMPLE QA DEMO (모드 ON/OFF 안전 접근 + 기존 기능 유지) ============
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 import time
@@ -609,6 +609,27 @@ except Exception:
             st.session_state["preview_norm"] = ""
         if "preview_open" not in st.session_state:
             st.session_state["preview_open"] = False
+
+# 🔐 NEW: [06-A2] 관리자 설정 안전 접근(직접 import 대신 전역 조회 + 기본값) -----
+def _enabled_modes_safe() -> Dict[str, bool]:
+    """
+    [04B]에서 정의한 get_enabled_modes()가 있으면 사용, 없으면 기본값 반환.
+    Streamlit 실행 컨텍스트에서 __main__ import가 실패할 수 있으므로 안전하게 처리.
+    """
+    try:
+        f = globals().get("get_enabled_modes", None)
+        if callable(f):
+            me = f()
+        else:
+            me = {"Grammar": True, "Sentence": True, "Passage": True}
+    except Exception:
+        me = {"Grammar": True, "Sentence": True, "Passage": True}
+    # 누락 키 보정
+    base = {"Grammar": True, "Sentence": True, "Passage": True}
+    base.update(me or {})
+    return base
+# ===== [06-A2] END ============================================================
+
 
 # [06-B] 보조 함수들 (이전 버전과 동일) ----------------------------------------
 def _sentence_quick_fix(user_q: str) -> List[Tuple[str, str]]:
@@ -762,9 +783,7 @@ def _close_preview(): st.session_state["preview_open"] = False
 def _resubmit_from_preview(): st.session_state["qa_submitted"] = True; st.rerun()
 
 # [06-D] 메인 Q&A UI -----------------------------------------------------------
-#  ⚠️ [04B]의 get_enabled_modes() / is_reason_grammar_enabled()를 사용합니다.
 def render_simple_qa():
-    from __main__ import get_enabled_modes  # [04B]에서 정의됨
     _ensure_answer_cache()
     is_admin = st.session_state.get("is_admin", False)
 
@@ -775,8 +794,8 @@ def render_simple_qa():
     # (1) 질문 입력창 + 모드 선택 + 버튼 → 최상단
     st.markdown("### 💬 질문해 보세요")
 
-    # ── 모드 라디오: 관리자 설정에서 켠 모드만 노출
-    enabled = get_enabled_modes()
+    # ── 🔐 관리자 설정 반영: 켜진 모드만 표시(안전 접근)
+    enabled = _enabled_modes_safe()
     radio_opts: List[str] = []
     if enabled.get("Grammar", True):  radio_opts.append("문법설명(Grammar)")
     if enabled.get("Sentence", True): radio_opts.append("문장분석(Sentence)")
@@ -881,6 +900,7 @@ def render_simple_qa():
                 st.button("👁️ 미리보기", key=f"pop_prev_{hash(qtext)}", on_click=_load_and_preview, args=(qtext,))
             render_item_row(qtext, right_btn=_right)
 # ===== [06] END ==============================================================
+
 
 
 # ===== [07] MAIN =============================================================
