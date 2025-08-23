@@ -495,151 +495,126 @@ def render_brain_prep_main():
 # ===== [05B] TAG DIAGNOSTICS (NEW) ==========================================
 def render_tag_diagnostics():
     """
-    실제 인덱스 빌드 설정(src.rag.index_build의 PERSIST_DIR)을 사용하여
-    chunks.jsonl, quality_report.json 경로/존재 여부를 점검하고 샘플을 보여주는 패널.
+    태그/인덱스 진단 패널
+    - quality_report.json 유무
+    - 로컬 ZIP: backup_*.zip + restored_*.zip (최신 5개)
+    - 드라이브 ZIP: backup_zip 폴더의 ZIP (최신 5개)
+    - 로컬 인덱스 파일(.ready, chunks.jsonl) 표시
     """
-    import json as _json
-    import importlib
-    from pathlib import Path as _P
+    import importlib, traceback
+    from pathlib import Path
+    from datetime import datetime
+    import streamlit as st
 
-    # --- 실제 경로 바인딩: src.rag.index_build에서 가져오되, 실패 시 폴백 ---
-    _persist_dir = None
-    _quality_report_path = None
-    _backup_dir = None
-    _mod_err = None
+    # 기본 경로
+    PERSIST_DIR = Path.home() / ".maic" / "persist"
+    BACKUP_DIR = Path.home() / ".maic" / "backup"
+    QUALITY_REPORT_PATH = Path.home() / ".maic" / "quality_report.json"
+
+    # src.rag.index_build 값 우선
     try:
-        _mod = importlib.import_module("src.rag.index_build")
-        _persist_dir = getattr(_mod, "PERSIST_DIR", None)
-        _quality_report_path = getattr(_mod, "QUALITY_REPORT_PATH", None)
-        _app_data_dir = getattr(_mod, "APP_DATA_DIR", _P.home() / ".maic")
-        _backup_dir = _app_data_dir / "backup"
-    except Exception as e:
-        _mod_err = f"{type(e).__name__}: {e}"
+        _m = importlib.import_module("src.rag.index_build")
+        PERSIST_DIR = getattr(_m, "PERSIST_DIR", PERSIST_DIR)
+        BACKUP_DIR = getattr(_m, "BACKUP_DIR", BACKUP_DIR)
+        QUALITY_REPORT_PATH = getattr(_m, "QUALITY_REPORT_PATH", QUALITY_REPORT_PATH)
+    except Exception:
+        _m = None
 
-    if _persist_dir is None:
-        _persist_dir = _P.home() / ".maic" / "persist"
-    if _quality_report_path is None:
-        _quality_report_path = _P.home() / ".maic" / "quality_report.json"
-    if _backup_dir is None:
-        _backup_dir = _P.home() / ".maic" / "backup"
-
-    _chunks_path = _persist_dir / "chunks.jsonl"
-
-    st.markdown("### 🧪 태그 확인(임시 진단)")
-    cols = st.columns([0.55, 0.45])
-
-    # 왼쪽: 경로/상태 요약 -----------------------------------------------------
-    with cols[0]:
-        st.caption("**실제 경로(설정값 기준)**")
-        st.code(
-            f"PERSIST_DIR         = {str(_persist_dir)}\n"
-            f"chunks.jsonl        = {str(_chunks_path)}\n"
-            f"QUALITY_REPORT_PATH = {str(_quality_report_path)}\n"
-            f"BACKUP_DIR          = {str(_backup_dir)}",
-            language="bash",
-        )
-        if _mod_err:
-            st.warning("경고: src.rag.index_build 모듈 임포트에 실패하여 폴백 경로를 사용했습니다.\n\n" + _mod_err)
-
-        # 존재 여부 뱃지
-        c1, c2, c3 = st.columns(3)
-        c1.metric("chunks.jsonl", "있음 ✅" if _chunks_path.exists() else "없음 ❌")
-        c2.metric("quality_report.json", "있음 ✅" if _quality_report_path.exists() else "없음 ❌")
-        c3.metric("backup 디렉토리", "있음 ✅" if _backup_dir.exists() else "없음 ❌")
-
-    # 오른쪽: 파일 크기/목록 ---------------------------------------------------
-    with cols[1]:
-        st.caption("**파일 크기(있을 경우)**")
+    def _fmt_size(n):
         try:
-            if _chunks_path.exists():
-                size_mb = _chunks_path.stat().st_size / (1024 * 1024)
-                st.write(f"- chunks.jsonl: 약 {size_mb:.2f} MB")
-            if _quality_report_path.exists():
-                size_kb = _quality_report_path.stat().st_size / 1024
-                st.write(f"- quality_report.json: 약 {size_kb:.1f} KB")
+            n = int(n)
         except Exception:
-            pass
+            return "-"
+        units = ["B", "KB", "MB", "GB", "TB"]
+        i = 0
+        f = float(n)
+        while f >= 1024 and i < len(units) - 1:
+            f /= 1024.0
+            i += 1
+        if i == 0:
+            return f"{int(f)} {units[i]}"
+        return f"{f:.1f} {units[i]}"
 
-        with st.expander("📦 백업 ZIP 목록(최신 5개)"):
-            try:
-                zips = []
-                if _backup_dir.exists():
-                    for p in sorted(_backup_dir.glob("backup_*.zip"), key=lambda x: x.stat().st_mtime, reverse=True):
-                        zips.append({"file": p.name, "size_MB": round(p.stat().st_size / (1024 * 1024), 2)})
-                if zips:
-                    st.dataframe(zips, use_container_width=True, hide_index=True)
-                else:
-                    st.caption("백업 ZIP을 찾지 못했습니다.")
-            except Exception as e:
-                st.error(f"백업 목록 확인 실패: {type(e).__name__}: {e}")
-
-    st.divider()
-
-    # 읽기 옵션
-    max_preview = st.slider("미리보기 라인 수", 1, 50, 5, key="diag_preview_lines")
-    max_scan = st.slider("스캔 라인 수(존재 여부 집계)", 50, 5000, 1000, step=50, key="diag_scan_lines")
-
-    # 버튼: 열어서 확인 --------------------------------------------------------
-    if st.button("열어서 확인", type="primary", key="btn_diag_open"):
-        if not _chunks_path.exists():
-            st.error("chunks.jsonl 파일을 찾지 못했습니다. 먼저 **사전점검 → 재최적화**를 실행해 주세요.")
-            return
+    def _fmt_ts(ts):
         try:
-            lines = _chunks_path.read_text(encoding="utf-8", errors="ignore").splitlines()
-        except Exception as e:
-            st.error(f"파일 읽기 실패: {type(e).__name__}: {e}")
-            return
+            return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
+        except Exception:
+            return "-"
 
-        has_field = 0
-        samples = []
-        scan_n = min(max_scan, len(lines))
+    st.subheader("진단(간단)", anchor=False)
 
-        for i, ln in enumerate(lines[:scan_n]):
-            try:
-                obj = _json.loads(ln)
-            except Exception:
-                continue
-            if "grammar_tags" in obj:
-                has_field += 1
-            if len(samples) < max_preview:
-                samples.append({
-                    "doc_id": obj.get("doc_id"),
-                    "doc_name": obj.get("doc_name"),
-                    "chunk_index": obj.get("chunk_index"),
-                    "grammar_tags": obj.get("grammar_tags", None),
+    # ── 품질 리포트 존재 ─────────────────────────────────────────────────────────
+    qr_exists = QUALITY_REPORT_PATH.exists()
+    qr_badge = "✅ 있음" if qr_exists else "❌ 없음"
+    st.markdown(f"- **품질 리포트(quality_report.json)**: {qr_badge}  (`{QUALITY_REPORT_PATH.as_posix()}`)")
+
+    # ── 로컬 ZIP 목록: backup_* + restored_* (최신 5) ───────────────────────────
+    local_rows = []
+    try:
+        BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+        zips = list(BACKUP_DIR.glob("backup_*.zip")) + list(BACKUP_DIR.glob("restored_*.zip"))
+        zips.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        for p in zips[:5]:
+            stt = p.stat()
+            local_rows.append({"파일명": p.name, "크기": _fmt_size(stt.st_size), "수정시각": _fmt_ts(stt.st_mtime)})
+    except Exception:
+        pass
+
+    # ── 드라이브 ZIP 목록(top5) ─────────────────────────────────────────────────
+    drive_rows = []
+    drive_msg = None
+    try:
+        _drive_service = getattr(_m, "_drive_service", None) if _m else None
+        _pick_backup_folder_id = getattr(_m, "_pick_backup_folder_id", None) if _m else None
+        svc = _drive_service() if callable(_drive_service) else None
+        fid = _pick_backup_folder_id(svc) if callable(_pick_backup_folder_id) else None
+        if svc and fid:
+            resp = svc.files().list(
+                q=f"'{fid}' in parents and trashed=false and mimeType!='application/vnd.google-apps.folder'",
+                fields="files(id,name,modifiedTime,size,mimeType)",
+                includeItemsFromAllDrives=True, supportsAllDrives=True, corpora="allDrives", pageSize=1000
+            ).execute()
+            files = [f for f in resp.get("files", []) if (f.get("name","").lower().endswith(".zip"))]
+            files.sort(key=lambda x: x.get("modifiedTime") or "", reverse=True)
+            for f in files[:5]:
+                drive_rows.append({
+                    "파일명": f.get("name",""),
+                    "크기": _fmt_size(f.get("size") or 0),
+                    "수정시각(UTC)": (f.get("modifiedTime","")[:16].replace("T"," ") if f.get("modifiedTime") else "-"),
                 })
-
-        st.success(f"스캔 완료: 총 {scan_n}줄 중 **grammar_tags** 필드가 보인 줄: **{has_field}**")
-        st.caption("※ 0이어도 ‘필드가 전혀 없다’는 뜻은 아닙니다. 스캔 구간에 해당 줄이 없을 수 있어요. 아래 미리보기를 확인하세요.")
-
-        # 표 미리보기
-        if samples:
-            st.dataframe(samples, use_container_width=True, hide_index=True)
         else:
-            st.warning("미리보기 구간에서 파싱 가능한 샘플을 찾지 못했습니다.")
+            drive_msg = "드라이브 연결/권한 또는 백업 폴더 ID가 없습니다."
+    except Exception:
+        drive_msg = "드라이브 목록 조회 중 오류가 발생했습니다."
 
-        # 원시 JSONL 일부
-        with st.expander("원시 JSONL 일부 보기(상위 미리보기)"):
-            st.code("\n".join(lines[:max_preview]), language="json")
+    # ── 렌더링 ──────────────────────────────────────────────────────────────────
+    with st.container(border=True):
+        st.markdown("### 백업 ZIP 현황", unsafe_allow_html=True)
+        c1, c2 = st.columns(2)
+        with c1:
+            st.caption("로컬 백업 (최신 5)")
+            if local_rows:
+                st.dataframe(local_rows, use_container_width=True, hide_index=True)
+            else:
+                st.markdown("— 표시할 로컬 ZIP이 없습니다.")
+                st.caption("※ 복구가 로컬 ZIP로 진행된 경우에는 `restored_*` 캐시가 남지 않을 수 있습니다.")
+        with c2:
+            st.caption("드라이브 backup_zip (최신 5)")
+            if drive_rows:
+                st.dataframe(drive_rows, use_container_width=True, hide_index=True)
+            else:
+                st.markdown("— 표시할 드라이브 ZIP이 없습니다.")
+                if drive_msg:
+                    st.caption(f"※ {drive_msg}")
 
-        # 다운로드(옵션)
-        with st.expander("파일 내려받기"):
-            try:
-                st.download_button(
-                    label="chunks.jsonl 다운로드",
-                    data=_chunks_path.read_bytes(),
-                    file_name="chunks.jsonl",
-                    mime="application/json",
-                )
-                if _quality_report_path.exists():
-                    st.download_button(
-                        label="quality_report.json 다운로드",
-                        data=_quality_report_path.read_bytes(),
-                        file_name="quality_report.json",
-                        mime="application/json",
-                    )
-            except Exception as e:
-                st.error(f"다운로드 준비 실패: {type(e).__name__}: {e}")
+    # ── 로컬 인덱스 파일 상태 ───────────────────────────────────────────────────
+    try:
+        chunks = (Path(PERSIST_DIR) / "chunks.jsonl")
+        ready = (Path(PERSIST_DIR) / ".ready")
+        st.markdown("- **로컬 인덱스 파일**: " + ("✅ 있음" if chunks.exists() else "❌ 없음") + f" (`{chunks.as_posix()}`)")
+        st.markdown("- **.ready 마커**: " + ("✅ 있음" if ready.exists() else "❌ 없음") + f" (`{ready.as_posix()}`)")
+    except Exception:
+        pass
 
 
 # ===== [06] SIMPLE QA DEMO (mode-aware, ENTER SUBMIT, CHAT-AREA SPINNER) =====
