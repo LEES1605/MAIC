@@ -228,6 +228,90 @@ else:
 
 st.divider()
 # ===== [04A] END =============================================================
+# ===== [04B] 관리자 설정 — 이유문법 ON/OFF (영속 저장 포함) ====================
+import json as _json
+from pathlib import Path as _Path
+import streamlit as st
+
+# ── [04B-1] 설정 파일 경로/기본값 ---------------------------------------------
+def _config_path() -> _Path:
+    base = _Path.home() / ".maic"
+    try: base.mkdir(parents=True, exist_ok=True)
+    except Exception: pass
+    return base / "config.json"
+
+_DEFAULT_CFG = {
+    "reason_grammar_enabled": False,  # 기본값: OFF로 출시
+}
+
+# ── [04B-2] 설정 로드/저장 -----------------------------------------------------
+def _load_cfg() -> dict:
+    cfg_file = _config_path()
+    if not cfg_file.exists():
+        return dict(_DEFAULT_CFG)
+    try:
+        data = _json.loads(cfg_file.read_text(encoding="utf-8"))
+        # 누락 키 보정
+        for k, v in _DEFAULT_CFG.items():
+            data.setdefault(k, v)
+        return data
+    except Exception:
+        return dict(_DEFAULT_CFG)
+
+def _save_cfg(data: dict) -> None:
+    cfg_file = _config_path()
+    try:
+        cfg_file.write_text(_json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as e:
+        st.warning(f"설정 저장 실패: {type(e).__name__}: {e}")
+
+# ── [04B-3] 세션과 전역 접근자 -------------------------------------------------
+def _cfg_get(key: str, default=None):
+    st.session_state.setdefault("_app_cfg_cache", _load_cfg())
+    return st.session_state["_app_cfg_cache"].get(key, default)
+
+def _cfg_set(key: str, value) -> None:
+    st.session_state.setdefault("_app_cfg_cache", _load_cfg())
+    st.session_state["_app_cfg_cache"][key] = value
+    _save_cfg(st.session_state["_app_cfg_cache"])
+
+def is_reason_grammar_enabled() -> bool:
+    """앱 어디서나 사용할 수 있는 읽기용 헬퍼"""
+    return bool(_cfg_get("reason_grammar_enabled", False))
+
+# ── [04B-4] 관리자 UI(체크박스) ------------------------------------------------
+def render_admin_settings_panel():
+    """관리자용 설정 카드: 이유문법 ON/OFF 토글"""
+    if not st.session_state.get("is_admin", False):
+        return  # 학생 화면엔 숨김
+
+    with st.container(border=True):
+        st.subheader("관리자 설정")
+        st.caption("이유문법 기능은 자료 정리 후 단계적으로 활성화합니다. 출시 기본은 OFF입니다.")
+
+        current = is_reason_grammar_enabled()
+        new_val = st.checkbox("이유문법 설명 사용(실험적)", value=current, key="cfg_reason_grammar_checkbox")
+
+        # 콜백 대신 본문에서 직접 감지 → 즉시 저장/재렌더
+        if new_val != current:
+            _cfg_set("reason_grammar_enabled", bool(new_val))
+            try: st.toast("설정을 저장했어요. 화면을 새로고침합니다.")
+            except Exception: pass
+            st.rerun()
+
+# ── [04B-5] 메인 플로우에 주입 -------------------------------------------------
+# main() 안에서, 관리자 화면 렌더 직전에 아래 한 줄만 호출해 주세요.
+#   render_admin_settings_panel()
+#
+# 예) [07] main()의 (H) 화면 섹션 근처:
+#   if is_admin:
+#       render_admin_settings_panel()   # ← 이 줄 추가
+#       render_brain_prep_main()
+#       st.divider()
+#       render_tag_diagnostics()
+#       st.divider()
+#       render_simple_qa()
+# ===== [04B] END ==============================================================
 
 
 # ===== [05A] BRAIN PREP MAIN =======================================
