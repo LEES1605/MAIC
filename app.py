@@ -723,6 +723,7 @@ def main():
             st.error(f"복구 모듈 임포트 실패: {type(e).__name__}: {e}")
             return False
 
+    # (D) 0단계: 로컬 인덱스가 없으면 **무조건 선(先)복구)** --------------------------
         _restore = getattr(_m, "restore_latest_backup_to_local", None)
         if not callable(_restore):
             st.error("복구 함수를 찾지 못했습니다. (restore_latest_backup_to_local)")
@@ -790,7 +791,7 @@ def main():
             st.error(f"다시 최적화 실패: {type(e).__name__}: {e}")
             return False
 
-    # (D) 0단계: 로컬 인덱스가 없으면 **무조건 선(先)복구)** --------------------------
+    # (E) 부팅: 로컬 인덱스 없으면 선복구
     local_ok = _has_local_index_files()
     if not local_ok and not _index_ready():
         log = st.empty()
@@ -807,8 +808,8 @@ def main():
                     st.stop()
         st.stop()
 
-    # (E) 사전점검(내용 중심) → 변경 있으면 질문 (관리자 전용) -----------------------
-    role = st.session_state.get("role", "관리자")
+    # (F) 사전점검(관리자 전용): 변경 있으면 질문 -----------------------------------
+    is_admin = st.session_state.get("is_admin", False)
     _mod = None
     _quick_precheck = None
     _PERSIST_DIR = _Path.home() / ".maic" / "persist"
@@ -820,17 +821,17 @@ def main():
         pass
 
     pre = {}
-    if role == "관리자" and callable(_quick_precheck):
+    if is_admin and callable(_quick_precheck):
         try:
             pre = _quick_precheck("")
         except Exception as e:
             st.warning(f"사전점검 실패: {type(e).__name__}: {e}")
             pre = {}
 
-    changed_flag = bool(pre.get("changed")) if role == "관리자" else False
-    reasons_list = list(pre.get("reasons") or []) if role == "관리자" else []
+    changed_flag = bool(pre.get("changed")) if is_admin else False
+    reasons_list = list(pre.get("reasons") or []) if is_admin else []
 
-    if role == "관리자" and changed_flag and not st.session_state.get("_admin_update_prompt_done"):
+    if is_admin and changed_flag and not st.session_state.get("_admin_update_prompt_done"):
         with st.container(border=True):
             if "no_local_manifest" in reasons_list:
                 st.info("📎 아직 인덱스가 없습니다. **최초 빌드가 필요**합니다.")
@@ -858,10 +859,10 @@ def main():
                 st.stop()
         st.stop()
 
-    # (F) 일반 플로우 ------------------------------------------------------------
+    # (G) 일반 플로우 ------------------------------------------------------------
     decision_log = st.empty()
     decision_log.info(
-        "auto-boot(role={}) admin_changed={} reasons={}".format(role, changed_flag, reasons_list)
+        "auto-boot(is_admin={}) admin_changed={} reasons={}".format(is_admin, changed_flag, reasons_list)
     )
 
     if not _index_ready():
@@ -872,14 +873,15 @@ def main():
             st.info("두뇌 연결 실패. 필요 시 ‘업데이트(다시 최적화)’를 실행해 주세요.")
     # 헤더는 상단에서만 1회 렌더
 
-    # (G) 화면 섹션 (역할 분기) ---------------------------------------------------
-    if role == "관리자":
+    # (H) 화면 섹션 (관리자 버튼 기반 분기) -----------------------------------------
+    if is_admin:
         render_brain_prep_main()
         st.divider()
         render_tag_diagnostics()
         st.divider()
         render_simple_qa()
-    else:  # 학생
+    else:
+        # 학생 기본 화면: Q&A만
         render_simple_qa()
 
 if __name__ == "__main__":
