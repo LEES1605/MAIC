@@ -82,11 +82,9 @@ st.set_page_config(page_title="AI Teacher (Clean)", layout="wide")
 if "rag_index" not in st.session_state:
     st.session_state["rag_index"] = None
 
-# 모드/언어/제출 플래그
+# 모드/제출 플래그 (언어는 한국어 고정이므로 상태 저장하지 않음)
 if "mode" not in st.session_state:
     st.session_state["mode"] = "Grammar"  # Grammar | Sentence | Passage
-if "lang" not in st.session_state:
-    st.session_state["lang"] = "한국어"     # 한국어 | English
 if "qa_submitted" not in st.session_state:
     st.session_state["qa_submitted"] = False
 
@@ -154,9 +152,9 @@ def render_header():
 # ===== [04] END =============================================
 
 
-# ===== [04A] MODE & LANG SWITCH =============================================
+# ===== [04A] MODE SWITCH (LANG REMOVED) ======================================
 with st.container():
-    c_mode, c_lang, c_info = st.columns([0.35, 0.20, 0.45])
+    c_mode, c_info = st.columns([0.45, 0.55])
     with c_mode:
         mode = st.segmented_control(
             "모드 선택",
@@ -165,14 +163,6 @@ with st.container():
             key="ui_mode_segmented",
         )
         st.session_state["mode"] = mode
-    with c_lang:
-        lang = st.segmented_control(
-            "출력 언어",
-            options=["한국어", "English"],
-            default=st.session_state.get("lang", "한국어"),
-            key="ui_lang_segmented",
-        )
-        st.session_state["lang"] = lang
     with c_info:
         if mode == "Grammar":
             st.caption("모드: **Grammar** — 문법 Q&A (태깅/부스팅 중심)")
@@ -461,7 +451,7 @@ def render_tag_diagnostics():
         pass
 
 
-# ===== [06] SIMPLE QA DEMO (mode-aware, ENTER SUBMIT, CHAT-AREA SPINNER) =====
+# ===== [06] SIMPLE QA DEMO (Korean-only, ENTER SUBMIT, CHAT-AREA SPINNER) ====
 def _sentence_quick_fix(user_q: str) -> List[Tuple[str, str]]:
     tips: List[Tuple[str, str]] = []
     if re.search(r"\bI\s+seen\b", user_q, flags=re.I):
@@ -472,16 +462,12 @@ def _sentence_quick_fix(user_q: str) -> List[Tuple[str, str]]:
         tips.append(("a + 모음 시작 명사", "가능하면 **an** + 모음 시작 명사"))
     return tips
 
-def _render_clean_answer(mode: str, answer_text: str, refs: List[Dict[str, str]], lang: str):
-    st.markdown(f"**선택 모드:** `{mode}` · **출력 언어:** `{lang}`")
+def _render_clean_answer(mode: str, answer_text: str, refs: List[Dict[str, str]]):
+    st.markdown(f"**선택 모드:** `{mode}`")
 
-    if lang == "한국어":
-        st.markdown("#### ✅ 요약/안내 (한국어)")
-        st.write("아래는 자료 기반 엔진의 원문 응답입니다. 현재 단계에서는 원문이 영어일 수 있어요.")
-        with st.expander("원문 응답 보기(영문)"):
-            st.write(answer_text.strip() or "—")
-    else:
-        st.markdown("#### ✅ Answer")
+    st.markdown("#### ✅ 요약/안내 (한국어)")
+    st.write("아래는 자료 기반 엔진의 원문 응답입니다. 현재 단계에서는 원문이 영어일 수 있어요.")
+    with st.expander("원문 응답 보기(영문)"):
         st.write(answer_text.strip() or "—")
 
     if refs:
@@ -506,7 +492,6 @@ def render_simple_qa():
         return
 
     mode = st.session_state.get("mode", "Grammar")
-    lang = st.session_state.get("lang", "한국어")
 
     if mode == "Grammar":
         placeholder = "예: 관계대명사 which 사용법을 알려줘"
@@ -551,7 +536,7 @@ def render_simple_qa():
                             for bad, good in fixes:
                                 st.markdown(f"- **{bad}** → {good}")
 
-                    _render_clean_answer(mode, raw_text, refs, lang)
+                    _render_clean_answer(mode, raw_text, refs)
                     s.update(label="완료 ✅", state="complete")
         except Exception:
             with answer_box:
@@ -575,7 +560,7 @@ def render_simple_qa():
                                 st.markdown("#### ✍️ 빠른 교정 제안 (한국어)")
                                 for bad, good in fixes:
                                     st.markdown(f"- **{bad}** → {good}")
-                        _render_clean_answer(mode, raw_text, refs, lang)
+                        _render_clean_answer(mode, raw_text, refs)
                     except Exception as e:
                         st.error(f"검색 실패: {type(e).__name__}: {e}")
 
@@ -624,10 +609,10 @@ def main():
         """
         st.markdown(css + html, unsafe_allow_html=True)
 
+    # 헤더는 이 렌더 사이클에서 **단 한 번만** 출력
     _render_title_with_status()
 
     # (C) 유틸: 품질스캐너 트리거 / 연결 / 복구 / 빌드 ----------------------------
-    import time
     import importlib as _importlib
     from pathlib import Path as _Path
 
@@ -643,10 +628,7 @@ def main():
                 res = fn()
                 if res.get("ok") and not res.get("skipped"):
                     st.toast("품질 리포트 갱신 완료 ✅", icon="✅")
-                elif res.get("skipped"):
-                    pass  # 최신
-                else:
-                    st.toast("품질 리포트 갱신 실패", icon="⚠️")
+                # 최신이면 스킵 표시 없이 조용히 통과
             except Exception:
                 st.toast("품질 리포트 갱신 실패", icon="⚠️")
 
@@ -654,32 +636,25 @@ def main():
         """로컬에 있는 인덱스로 세션 부착(복구 이후 호출 가정)."""
         try:
             with st.status(label, state="running") as s:
-                bar = st.progress(0)
-                bar.progress(25); time.sleep(0.08)
                 ok = _auto_attach_or_restore_silently()
                 st.session_state["brain_attached"] = bool(ok)
-                bar.progress(100)
                 if ok:
                     s.update(label="두뇌 자동 연결 완료 ✅", state="complete")
-                    _trigger_quality_autoscan()  # ★ attach 성공 직후 자동 품질스캔
+                    _trigger_quality_autoscan()  # attach 후 품질스캔
+                    if not st.session_state.get("_post_attach_rerun_done"):
+                        st.session_state["_post_attach_rerun_done"] = True
+                        st.rerun()
                 else:
                     s.update(label="두뇌 자동 연결 실패 ❌", state="error")
-                if ok and not st.session_state.get("_post_attach_rerun_done"):
-                    st.session_state["_post_attach_rerun_done"] = True
-                    st.rerun()
-                else:
-                    _render_title_with_status()
                 return bool(ok)
         except Exception:
             ok = _auto_attach_or_restore_silently()
             st.session_state["brain_attached"] = bool(ok)
             if ok:
                 _trigger_quality_autoscan()
-            if ok and not st.session_state.get("_post_attach_rerun_done"):
-                st.session_state["_post_attach_rerun_done"] = True
-                st.rerun()
-            elif ok:
-                st.success("두뇌 자동 연결 완료 ✅"); _render_title_with_status()
+                if not st.session_state.get("_post_attach_rerun_done"):
+                    st.session_state["_post_attach_rerun_done"] = True
+                    st.rerun()
             else:
                 st.error("두뇌 자동 연결 실패")
             return bool(ok)
@@ -753,7 +728,6 @@ def main():
                 pass
             if _restore_then_attach():
                 return True
-            # 복구 실패 시 로컬 attach 폴백 + 품질스캐너 실행
             ok = _attach_with_status("두뇌 연결 중…")
             return bool(ok)
         except Exception as e:
@@ -819,7 +793,6 @@ def main():
 
         if later:
             st.session_state["_admin_update_prompt_done"] = True
-            # 합의: 기본은 최신 백업 ZIP으로 복구 후 연결
             if _restore_then_attach():
                 st.rerun()
             else:
@@ -831,14 +804,13 @@ def main():
     decision_log = st.empty()
     decision_log.info("auto-boot(admin): local_ok={} | changed={} reasons={}".format(local_ok, changed_flag, reasons_list))
 
-    if _index_ready():
-        _render_title_with_status()
-    else:
+    if not _index_ready():
         # 로컬은 있으니 바로 연결 시도(복구는 위에서 처리됨)
         if _attach_with_status():
             st.rerun()
         else:
             st.info("두뇌 연결 실패. 필요 시 ‘업데이트(다시 최적화)’를 실행해 주세요.")
+    # 주의: 헤더는 페이지 상단에서 이미 1회 렌더했으므로 여기서 재렌더하지 않음
 
     # (G) 관리자 화면 섹션 --------------------------------------------------------
     render_brain_prep_main()
