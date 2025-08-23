@@ -152,9 +152,20 @@ def render_header():
 # ===== [04] END =============================================
 
 
-# ===== [04A] MODE SWITCH (LANG REMOVED) ======================================
+# ===== [04A] MODE & ROLE SWITCH (LANG REMOVED) ===============================
 with st.container():
-    c_mode, c_info = st.columns([0.45, 0.55])
+    # 역할(관리자/학생) + 모드 스위치
+    c_role, c_mode, c_info = st.columns([0.22, 0.38, 0.40])
+
+    with c_role:
+        role = st.segmented_control(
+            "역할",
+            options=["관리자", "학생"],
+            default=st.session_state.get("role", "관리자"),
+            key="ui_role_segmented",
+        )
+        st.session_state["role"] = role
+
     with c_mode:
         mode = st.segmented_control(
             "모드 선택",
@@ -163,15 +174,20 @@ with st.container():
             key="ui_mode_segmented",
         )
         st.session_state["mode"] = mode
+
     with c_info:
-        if mode == "Grammar":
-            st.caption("모드: **Grammar** — 문법 Q&A (태깅/부스팅 중심)")
-        elif mode == "Sentence":
-            st.caption("모드: **Sentence** — 문장 분석 (품사/구문/교정 프롬프트 중심)")
+        if st.session_state.get("role", "관리자") == "학생":
+            st.caption("역할: **학생** — 질문/답변 화면만 표시됩니다.")
         else:
-            st.caption("모드: **Passage** — 지문 설명 (요약→비유→제목/주제 프롬프트 중심)")
+            if mode == "Grammar":
+                st.caption("역할: **관리자** · 모드: **Grammar** — 문법 Q&A (태깅/부스팅 중심)")
+            elif mode == "Sentence":
+                st.caption("역할: **관리자** · 모드: **Sentence** — 문장 분석 (품사/구문/교정 프롬프트 중심)")
+            else:
+                st.caption("역할: **관리자** · 모드: **Passage** — 지문 설명 (요약→비유→제목/주제 프롬프트 중심)")
 
 st.divider()
+# ===== [04A] END =============================================================
 
 # ===== [05A] BRAIN PREP MAIN =======================================
 def render_brain_prep_main():
@@ -567,7 +583,6 @@ def render_simple_qa():
 # ===== [07] MAIN =============================================================
 def main():
     # (A) 호환성 shim -----------------------------------------------------------
-    # render_simple_qa 등 모듈 전역에서 사용할 수 있도록 전역 심볼로도 노출
     def _index_ready() -> bool:
         try:
             return get_index_status() == "ready"
@@ -628,9 +643,11 @@ def main():
                 res = fn()
                 if res.get("ok") and not res.get("skipped"):
                     st.toast("품질 리포트 갱신 완료 ✅", icon="✅")
-                # 최신이면 스킵 표시 없이 조용히 통과
             except Exception:
                 st.toast("품질 리포트 갱신 실패", icon="⚠️")
+
+    def _auto_attach_or_restore_silently():
+        return _attach_from_local()
 
     def _attach_with_status(label="두뇌 자동 연결 중…") -> bool:
         """로컬에 있는 인덱스로 세션 부착(복구 이후 호출 가정)."""
@@ -734,7 +751,7 @@ def main():
             st.error(f"다시 최적화 실패: {type(e).__name__}: {e}")
             return False
 
-    # (D) 0단계: 로컬 인덱스가 없으면 **무조건 선(先)복구** ---------------------------
+    # (D) 0단계: 로컬 인덱스가 없으면 **무조건 선(先)복구)** --------------------------
     local_ok = _has_local_index_files()
     if not local_ok and not _index_ready():
         log = st.empty()
@@ -751,7 +768,8 @@ def main():
                     st.stop()
         st.stop()
 
-    # (E) 사전점검(내용 중심) → 변경 있으면 질문 -----------------------------------
+    # (E) 사전점검(내용 중심) → 변경 있으면 질문 (관리자 전용) -----------------------
+    role = st.session_state.get("role", "관리자")
     _mod = None
     _quick_precheck = None
     _PERSIST_DIR = _Path.home() / ".maic" / "persist"
@@ -763,16 +781,17 @@ def main():
         pass
 
     pre = {}
-    if callable(_quick_precheck):
+    if role == "관리자" and callable(_quick_precheck):
         try:
             pre = _quick_precheck("")
         except Exception as e:
             st.warning(f"사전점검 실패: {type(e).__name__}: {e}")
             pre = {}
-    changed_flag = bool(pre.get("changed"))
-    reasons_list = list(pre.get("reasons") or [])
 
-    if changed_flag and not st.session_state.get("_admin_update_prompt_done"):
+    changed_flag = bool(pre.get("changed")) if role == "관리자" else False
+    reasons_list = list(pre.get("reasons") or []) if role == "관리자" else []
+
+    if role == "관리자" and changed_flag and not st.session_state.get("_admin_update_prompt_done"):
         with st.container(border=True):
             if "no_local_manifest" in reasons_list:
                 st.info("📎 아직 인덱스가 없습니다. **최초 빌드가 필요**합니다.")
@@ -802,7 +821,9 @@ def main():
 
     # (F) 일반 플로우 ------------------------------------------------------------
     decision_log = st.empty()
-    decision_log.info("auto-boot(admin): local_ok={} | changed={} reasons={}".format(local_ok, changed_flag, reasons_list))
+    decision_log.info(
+        "auto-boot(role={}) admin_changed={} reasons={}".format(role, changed_flag, reasons_list)
+    )
 
     if not _index_ready():
         # 로컬은 있으니 바로 연결 시도(복구는 위에서 처리됨)
@@ -810,14 +831,18 @@ def main():
             st.rerun()
         else:
             st.info("두뇌 연결 실패. 필요 시 ‘업데이트(다시 최적화)’를 실행해 주세요.")
-    # 주의: 헤더는 페이지 상단에서 이미 1회 렌더했으므로 여기서 재렌더하지 않음
+    # 헤더는 상단에서만 1회 렌더
 
-    # (G) 관리자 화면 섹션 --------------------------------------------------------
-    render_brain_prep_main()
-    st.divider()
-    render_tag_diagnostics()
-    st.divider()
-    render_simple_qa()
+    # (G) 화면 섹션 (역할 분기) ---------------------------------------------------
+    if role == "관리자":
+        render_brain_prep_main()
+        st.divider()
+        render_tag_diagnostics()
+        st.divider()
+        render_simple_qa()
+    else:  # 학생
+        render_simple_qa()
 
 if __name__ == "__main__":
     main()
+# ===== [07] END ==============================================================
