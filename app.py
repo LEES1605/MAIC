@@ -75,6 +75,7 @@ if precheck_build_needed is None or build_index_with_checkpoint is None:
         + "4) import 철자: index_build(언더스코어), index.build(점) 아님"
     )
 
+
 # ===== [03] SESSION & HELPERS — START ========================================
 st.set_page_config(page_title="AI Teacher (Clean)", layout="wide")
 
@@ -105,6 +106,22 @@ def _force_persist_dir() -> str:
     os.environ["MAIC_PERSIST_DIR"] = str(target)
     return str(target)
 
+def _resolve_paths():
+    """모듈에 정의된 경로 우선으로 PERSIST_DIR / BACKUP_DIR / QUALITY_REPORT_PATH 반환."""
+    import importlib
+    from pathlib import Path
+    PERSIST_DIR = Path.home() / ".maic" / "persist"
+    BACKUP_DIR  = Path.home() / ".maic" / "backup"
+    QUALITY_REPORT_PATH = Path.home() / ".maic" / "quality_report.json"
+    try:
+        m = importlib.import_module("src.rag.index_build")
+        PERSIST_DIR = getattr(m, "PERSIST_DIR", PERSIST_DIR)
+        BACKUP_DIR  = getattr(m, "BACKUP_DIR", BACKUP_DIR)
+        QUALITY_REPORT_PATH = getattr(m, "QUALITY_REPORT_PATH", QUALITY_REPORT_PATH)
+    except Exception:
+        pass
+    return PERSIST_DIR, BACKUP_DIR, QUALITY_REPORT_PATH
+
 def _is_attached_session() -> bool:
     """세션에 실제로 두뇌가 붙었는지(여러 키 중 하나라도 있으면 True)."""
     ss = st.session_state
@@ -118,15 +135,10 @@ def _is_attached_session() -> bool:
 
 def _has_local_index_files() -> bool:
     """로컬 PERSIST_DIR 안에 .ready 또는 chunks.jsonl 이 있는지 신호만 확인."""
-    import importlib
     from pathlib import Path as _P
-    try:
-        _mod = importlib.import_module("src.rag.index_build")
-        _PERSIST_DIR = getattr(_mod, "PERSIST_DIR", _P.home() / ".maic" / "persist")
-    except Exception:
-        _PERSIST_DIR = _P.home() / ".maic" / "persist"
-    chunks_ok = (_PERSIST_DIR / "chunks.jsonl").exists()
-    ready_ok  = (_PERSIST_DIR / ".ready").exists()
+    PERSIST_DIR, _, _ = _resolve_paths()
+    chunks_ok = (_P(PERSIST_DIR) / "chunks.jsonl").exists()
+    ready_ok  = (_P(PERSIST_DIR) / ".ready").exists()
     return bool(chunks_ok or ready_ok)
 
 def get_index_status() -> str:
@@ -156,11 +168,98 @@ def _attach_from_local() -> bool:
     except Exception:
         return False
 
+# ── NEW: 품질 리포트 작성 ------------------------------------------------------
+def _write_quality_report(auto_info: dict | None = None) -> None:
+    """
+    품질 리포트(JSON)를 ~/.maic/quality_report.json (또는 모듈 지정 경로)에 기록.
+    - persist_dir, chunks.jsonl 유무/라인수/크기/mtime
+    - .ready 유무
+    - 최신 백업 ZIP(backup_* or restored_*) 정보
+    - 마지막 자동복구 시도 요약(auto_info)
+    """
+    import json, os
+    from pathlib import Path
+    from datetime import datetime
+
+    PERSIST_DIR, BACKUP_DIR, QUALITY_REPORT_PATH = _resolve_paths()
+    PERSIST_DIR = Path(PERSIST_DIR)
+    BACKUP_DIR  = Path(BACKUP_DIR)
+    QUALITY_REPORT_PATH = Path(QUALITY_REPORT_PATH)
+    try:
+        QUALITY_REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+
+    chunks_path = PERSIST_DIR / "chunks.jsonl"
+    ready_path  = PERSIST_DIR / ".ready"
+    chunks_exists = chunks_path.exists()
+    chunks_size = chunks_path.stat().st_size if chunks_exists else 0
+    chunks_mtime = chunks_path.stat().st_mtime if chunks_exists else None
+
+    # 안전/가벼운 라인수 계산 (최대 500만 라인까지 순회)
+    chunks_lines = None
+    if chunks_exists:
+        try:
+            cnt = 0
+            with chunks_path.open("r", encoding="utf-8", errors="ignore") as f:
+                for _ in f:
+                    cnt += 1
+                    if cnt > 5_000_000:
+                        break
+            chunks_lines = cnt
+        except Exception:
+            chunks_lines = None
+
+    # 최신 백업 ZIP
+    latest_backup = None
+    try:
+        cand = list(BACKUP_DIR.glob("backup_*.zip")) + list(BACKUP_DIR.glob("restored_*.zip"))
+        if cand:
+            cand.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+            p = cand[0]
+            stt = p.stat()
+            latest_backup = {
+                "name": p.name,
+                "size": stt.st_size,
+                "mtime": stt.st_mtime,
+            }
+    except Exception:
+        latest_backup = None
+
+    report = {
+        "version": 1,
+        "generated_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "persist_dir": str(PERSIST_DIR),
+        "chunks": {
+            "exists": chunks_exists,
+            "lines": chunks_lines,
+            "size": chunks_size,
+            "mtime": chunks_mtime,
+        },
+        "ready_marker": {
+            "exists": ready_path.exists(),
+            "mtime": (ready_path.stat().st_mtime if ready_path.exists() else None),
+        },
+        "latest_backup": latest_backup,
+        "auto_restore": auto_info or st.session_state.get("_auto_restore_last", {}),
+        "env": {
+            "MAIC_PERSIST_DIR": os.environ.get("MAIC_PERSIST_DIR"),
+        },
+    }
+
+    try:
+        with QUALITY_REPORT_PATH.open("w", encoding="utf-8") as f:
+            json.dump(report, f, ensure_ascii=False, indent=2)
+    except Exception:
+        # 리포트 실패는 앱 동작에 영향 없음
+        pass
+
 def _auto_attach_or_restore_silently() -> bool:
     """
     파일 유무를 기준으로 자동화:
       (A) 로컬 파일이 있으면 → attach 시도(실패 시 드라이브 복구→재부착)
       (B) 로컬 파일이 없으면 → 드라이브 복구 → (여전히 없으면 재빌드) → 부착
+    최종 부착 성공 시 품질 리포트 생성.
     모든 에러는 삼키고 False 반환.
     """
     _force_persist_dir()
@@ -226,6 +325,7 @@ def _auto_attach_or_restore_silently() -> bool:
             st.session_state["_auto_restore_last"]["step"] = "attached_local"
             st.session_state["_auto_restore_last"]["local_attach"] = True
             st.session_state["_auto_restore_last"]["final_attach"] = True
+            _write_quality_report(st.session_state["_auto_restore_last"])
             return True
         # 파일은 있는데 부착 실패 → 드라이브 복구 후 재부착 시도
         st.session_state["_auto_restore_last"]["local_attach"] = False
@@ -233,19 +333,17 @@ def _auto_attach_or_restore_silently() -> bool:
         if _attach_from_local():
             st.session_state["_auto_restore_last"]["step"] = "restored_and_attached"
             st.session_state["_auto_restore_last"]["final_attach"] = True
+            _write_quality_report(st.session_state["_auto_restore_last"])
             return True
 
     # (B) 로컬 파일이 없는 경우: 복구 → 재빌드 → 부착
-    # 드라이브 복구
     if not st.session_state["_auto_restore_last"]["has_files_before"]:
         restored = _try_restore_from_drive()
         # 복구 후에도 파일이 없으면 재빌드
         if not _has_local_index_files():
             rebuilt = _try_rebuild_minimal()
-            # 재빌드 후 파일 상태 반영(참고용)
             st.session_state["_auto_restore_last"]["has_files_after_rebuild"] = _has_local_index_files()
             if not rebuilt and not st.session_state["_auto_restore_last"]["has_files_after_rebuild"]:
-                # 재빌드 자체가 불가하거나 파일이 여전히 없음
                 st.session_state["_auto_restore_last"]["step"] = "no_files_could_be_prepared"
                 st.session_state["_auto_restore_last"]["final_attach"] = False
                 return False
@@ -254,6 +352,7 @@ def _auto_attach_or_restore_silently() -> bool:
     if _attach_from_local():
         st.session_state["_auto_restore_last"]["step"] = "final_attached"
         st.session_state["_auto_restore_last"]["final_attach"] = True
+        _write_quality_report(st.session_state["_auto_restore_last"])
         return True
 
     st.session_state["_auto_restore_last"]["step"] = "attach_failed"
