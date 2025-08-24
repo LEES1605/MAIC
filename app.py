@@ -89,17 +89,12 @@ if "qa_submitted" not in st.session_state:
     st.session_state["qa_submitted"] = False
 
 def _force_persist_dir() -> str:
-    """
-    내부 모듈들이 다른 경로를 보더라도, 런타임에서 ~/.maic/persist 로 강제 통일.
-    - src.rag.index_build / rag.index_build 의 PERSIST_DIR 속성 주입
-    - 환경변수 MAIC_PERSIST_DIR 도 세팅(내부 코드가 읽을 수 있음)
-    """
+    """내부 모듈들이 다른 경로를 보더라도 ~/.maic/persist 로 강제 통일."""
     import importlib, os
     from pathlib import Path
     target = Path.home() / ".maic" / "persist"
     try: target.mkdir(parents=True, exist_ok=True)
     except Exception: pass
-
     for modname in ("src.rag.index_build", "rag.index_build"):
         try:
             m = importlib.import_module(modname)
@@ -148,9 +143,8 @@ def get_index_status() -> str:
     return "missing"
 
 def _attach_from_local() -> bool:
-    # ⬅️ 붙이기 전에 경로 강제 통일
+    """현재 PERSIST_DIR 기준으로 인덱스 부착."""
     _force_persist_dir()
-
     if get_or_build_index is None:
         return False
     try:
@@ -164,84 +158,109 @@ def _attach_from_local() -> bool:
 
 def _auto_attach_or_restore_silently() -> bool:
     """
-    1) 로컬에서 부착 시도
-    2) 실패하면: 드라이브 최신 backup_zip → 로컬로 복구 → 다시 부착
-    3) 그래도 실패하면: 최소 옵션으로 build_index_with_checkpoint() 실행 → 다시 부착
-    (에러는 모두 삼키고 False 반환)
+    파일 유무를 기준으로 자동화:
+      (A) 로컬 파일이 있으면 → attach 시도(실패 시 드라이브 복구→재부착)
+      (B) 로컬 파일이 없으면 → 드라이브 복구 → (여전히 없으면 재빌드) → 부착
+    모든 에러는 삼키고 False 반환.
     """
+    _force_persist_dir()
     st.session_state["_auto_restore_last"] = {
         "step": "start",
+        "has_files_before": _has_local_index_files(),
         "local_attach": None,
         "drive_restore": None,
         "rebuild": None,
         "final_attach": None,
     }
 
-    # 모든 시도 전에 persist 경로 강제 통일
-    _force_persist_dir()
-
-    # 1) 로컬 attach
-    if _attach_from_local():
-        st.session_state["_auto_restore_last"]["step"] = "attached_local"
-        st.session_state["_auto_restore_last"]["local_attach"] = True
-        return True
-    st.session_state["_auto_restore_last"]["local_attach"] = False
-
-    # 2) 드라이브에서 복구 시도
+    # ── 공통: 드라이브 복구 함수/재빌드 함수 준비
+    import importlib
+    restore_fn = None
     try:
-        import importlib
         mod = importlib.import_module("src.rag.index_build")
         restore_fn = getattr(mod, "restore_latest_backup_to_local", None)
-        if callable(restore_fn):
-            res = restore_fn()
-            ok = bool(isinstance(res, dict) and res.get("ok"))
-            st.session_state["_auto_restore_last"]["drive_restore"] = ok
-            if ok and _has_local_index_files():
-                if _attach_from_local():
-                    st.session_state["_auto_restore_last"]["step"] = "restored_and_attached"
-                    st.session_state["_auto_restore_last"]["final_attach"] = True
-                    return True
     except Exception:
-        st.session_state["_auto_restore_last"]["drive_restore"] = False
+        restore_fn = None
 
-    # 3) 마지막 안전망: 인덱스 재생성(최소 옵션)
-    try:
-        import importlib
-        if callable(build_index_with_checkpoint):
-            from pathlib import Path
-            try:
-                mod2 = importlib.import_module("src.rag.index_build")
-                persist_dir = getattr(mod2, "PERSIST_DIR", Path.home() / ".maic" / "persist")
-            except Exception:
-                persist_dir = Path.home() / ".maic" / "persist"
+    def _try_restore_from_drive() -> bool:
+        ok = False
+        try:
+            if callable(restore_fn):
+                res = restore_fn()
+                ok = bool(isinstance(res, dict) and res.get("ok"))
+        except Exception:
+            ok = False
+        st.session_state["_auto_restore_last"]["drive_restore"] = ok
+        return ok
 
-            try:
-                build_index_with_checkpoint(
-                    update_pct=lambda *_a, **_k: None,
-                    update_msg=lambda *_a, **_k: None,
-                    gdrive_folder_id="",
-                    gcp_creds={},
-                    persist_dir=str(persist_dir),
-                    remote_manifest={},
-                )
-                st.session_state["_auto_restore_last"]["rebuild"] = True
-            except TypeError:
-                build_index_with_checkpoint()
-                st.session_state["_auto_restore_last"]["rebuild"] = True
-        else:
-            st.session_state["_auto_restore_last"]["rebuild"] = False
-    except Exception:
-        st.session_state["_auto_restore_last"]["rebuild"] = False
+    def _try_rebuild_minimal() -> bool:
+        ok = False
+        try:
+            if callable(build_index_with_checkpoint):
+                from pathlib import Path as _P
+                try:
+                    mod2 = importlib.import_module("src.rag.index_build")
+                    persist_dir = getattr(mod2, "PERSIST_DIR", _P.home() / ".maic" / "persist")
+                except Exception:
+                    persist_dir = _P.home() / ".maic" / "persist"
+                try:
+                    build_index_with_checkpoint(
+                        update_pct=lambda *_a, **_k: None,
+                        update_msg=lambda *_a, **_k: None,
+                        gdrive_folder_id="",
+                        gcp_creds={},
+                        persist_dir=str(persist_dir),
+                        remote_manifest={},
+                    )
+                    ok = True
+                except TypeError:
+                    build_index_with_checkpoint(); ok = True
+        except Exception:
+            ok = False
+        st.session_state["_auto_restore_last"]["rebuild"] = ok
+        return ok
 
-    # 재부착 최종 시도
+    # (A) 로컬 파일이 있는 경우: 우선 부착 시도
+    if st.session_state["_auto_restore_last"]["has_files_before"]:
+        if _attach_from_local():
+            st.session_state["_auto_restore_last"]["step"] = "attached_local"
+            st.session_state["_auto_restore_last"]["local_attach"] = True
+            st.session_state["_auto_restore_last"]["final_attach"] = True
+            return True
+        # 파일은 있는데 부착 실패 → 드라이브 복구 후 재부착 시도
+        st.session_state["_auto_restore_last"]["local_attach"] = False
+        _try_restore_from_drive()
+        if _attach_from_local():
+            st.session_state["_auto_restore_last"]["step"] = "restored_and_attached"
+            st.session_state["_auto_restore_last"]["final_attach"] = True
+            return True
+
+    # (B) 로컬 파일이 없는 경우: 복구 → 재빌드 → 부착
+    # 드라이브 복구
+    if not st.session_state["_auto_restore_last"]["has_files_before"]:
+        restored = _try_restore_from_drive()
+        # 복구 후에도 파일이 없으면 재빌드
+        if not _has_local_index_files():
+            rebuilt = _try_rebuild_minimal()
+            # 재빌드 후 파일 상태 반영(참고용)
+            st.session_state["_auto_restore_last"]["has_files_after_rebuild"] = _has_local_index_files()
+            if not rebuilt and not st.session_state["_auto_restore_last"]["has_files_after_rebuild"]:
+                # 재빌드 자체가 불가하거나 파일이 여전히 없음
+                st.session_state["_auto_restore_last"]["step"] = "no_files_could_be_prepared"
+                st.session_state["_auto_restore_last"]["final_attach"] = False
+                return False
+
+    # 최종 부착
     if _attach_from_local():
-        st.session_state["_auto_restore_last"]["step"] = "rebuilt_and_attached"
+        st.session_state["_auto_restore_last"]["step"] = "final_attached"
         st.session_state["_auto_restore_last"]["final_attach"] = True
         return True
 
+    st.session_state["_auto_restore_last"]["step"] = "attach_failed"
     st.session_state["_auto_restore_last"]["final_attach"] = False
     return False
 # ===== [03] SESSION & HELPERS — END ==========================================
+
 
 # ===== [04] HEADER ==========================================
 def render_header():
