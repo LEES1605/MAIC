@@ -608,86 +608,173 @@ def render_brain_prep_main():
 # ===== [05A] END ===========================================
 
 
-# ===== [05B] TAG DIAGNOSTICS (NEW) — START ==================================
+# ===== [05B] TAG DIAGNOSTICS (BACKUP PRESENCE RESTORE) — START ==============
 def render_tag_diagnostics():
     """
     태그/인덱스 진단 패널
     - 자동 복구 상태(_auto_restore_last) 표시
-    - 현재 rag_index 객체의 persist_dir 추정 경로 표시
-    - quality_report.json 유무
-    - 로컬 ZIP: backup_*.zip + restored_*.zip (최신 5개)
-    - 드라이브 ZIP: backup_zip 폴더의 ZIP (최신 5개)
-    - 로컬 인덱스 파일(.ready, chunks.jsonl) 표시
+    - rag_index persist 경로 추정(가능한 경우)
+    - 백업 파일 유무(로컬/드라이브) 배지 ✅/❌   ← 복구된 기능
+    - 품질 리포트 존재 여부
+    - 로컬/드라이브 ZIP 목록(최신 5개)
+    - 로컬 인덱스 파일(.ready, chunks.jsonl) 상태
     """
-    import importlib, traceback
+    import importlib
     from pathlib import Path
     from datetime import datetime
     import json as _json
     import streamlit as st
 
-    # 기본 경로
+    # ── 기본 경로(모듈 값 우선) ────────────────────────────────────────────────
     PERSIST_DIR = Path.home() / ".maic" / "persist"
-    BACKUP_DIR = Path.home() / ".maic" / "backup"
+    BACKUP_DIR  = Path.home() / ".maic" / "backup"
     QUALITY_REPORT_PATH = Path.home() / ".maic" / "quality_report.json"
-
-    # src.rag.index_build 값 우선
+    _m = None
     try:
         _m = importlib.import_module("src.rag.index_build")
         PERSIST_DIR = getattr(_m, "PERSIST_DIR", PERSIST_DIR)
-        BACKUP_DIR = getattr(_m, "BACKUP_DIR", BACKUP_DIR)
+        BACKUP_DIR  = getattr(_m, "BACKUP_DIR", BACKUP_DIR)
         QUALITY_REPORT_PATH = getattr(_m, "QUALITY_REPORT_PATH", QUALITY_REPORT_PATH)
     except Exception:
-        _m = None
+        pass
+
+    def _fmt_size(n):
+        try:
+            n = int(n)
+        except Exception:
+            return "-"
+        units = ["B","KB","MB","GB","TB"]; i=0; f=float(n)
+        while f>=1024 and i<len(units)-1:
+            f/=1024.0; i+=1
+        return (f"{int(f)} {units[i]}" if i==0 else f"{f:.1f} {units[i]}")
+
+    def _fmt_ts(ts):
+        try:
+            return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
+        except Exception:
+            return "-"
 
     st.subheader("진단(간단)", anchor=False)
 
-    # ── 자동 복구 상태 표시 ─────────────────────────────────────────────────────
+    # ── 자동 복구 상태 ────────────────────────────────────────────────────────
     auto_info = st.session_state.get("_auto_restore_last")
     with st.container(border=True):
         st.markdown("### 자동 복구 상태")
         if not auto_info:
-            st.caption("아직 자동 복구 시도 기록이 없습니다.")
+            st.caption("아직 자동 복구 시도 기록이 없습니다. (앱 시작 시 자동 시도)")
         else:
             st.code(_json.dumps(auto_info, ensure_ascii=False, indent=2), language="json")
 
-    # ── rag_index persist 경로 확인 ─────────────────────────────────────────────
+    # ── rag_index persist 경로 추정 ───────────────────────────────────────────
     with st.container(border=True):
         st.markdown("### rag_index Persist 경로 추정")
         rag = st.session_state.get("rag_index")
-        if rag is None:
-            st.caption("rag_index 객체가 세션에 없습니다.")
-        else:
-            cand = None
-            # 흔히 쓰는 속성들 점검
+        found = None
+        if rag is not None:
             for attr in ("persist_dir", "storage_context", "vector_store", "index_struct"):
                 try:
                     val = getattr(rag, attr, None)
                     if val:
-                        cand = str(val)
-                        break
+                        found = str(val); break
                 except Exception:
-                    continue
-            st.write("🔍 rag_index 내부 persist_dir/유사 속성:", cand or "(발견되지 않음)")
+                    pass
+        st.write("🔍 rag_index 내부 persist_dir/유사 속성:",
+                 found or "(발견되지 않음)")
 
-    # ── 품질 리포트 존재 ─────────────────────────────────────────────────────────
-    qr_exists = QUALITY_REPORT_PATH.exists()
-    qr_badge = "✅ 있음" if qr_exists else "❌ 없음"
-    st.markdown(f"- **품질 리포트(quality_report.json)**: {qr_badge}  (`{QUALITY_REPORT_PATH.as_posix()}`)")
-
-    # ── 로컬 ZIP 목록 ──────────────────────────────────────────────────────────
+    # ── 백업 파일 유무 배지 (복구된 기능) ───────────────────────────────────────
+    # 로컬 ZIP 존재 확인
     local_rows = []
+    local_has = False
     try:
         BACKUP_DIR.mkdir(parents=True, exist_ok=True)
         zips = list(BACKUP_DIR.glob("backup_*.zip")) + list(BACKUP_DIR.glob("restored_*.zip"))
         zips.sort(key=lambda p: p.stat().st_mtime, reverse=True)
         for p in zips[:5]:
             stt = p.stat()
-            local_rows.append({"파일명": p.name, "크기": stt.st_size, "수정시각": stt.st_mtime})
+            local_rows.append({"파일명": p.name, "크기": _fmt_size(stt.st_size), "수정시각": _fmt_ts(stt.st_mtime)})
+        local_has = len(zips) > 0
+    except Exception:
+        local_rows = []
+        local_has = False
+
+    # 드라이브 ZIP 존재 확인
+    drive_rows = []
+    drive_has = False
+    drive_msg = None
+    drive_folder_id = None
+    try:
+        _drive_service = getattr(_m, "_drive_service", None) if _m else None
+        _pick_backup_folder_id = getattr(_m, "_pick_backup_folder_id", None) if _m else None
+        svc = _drive_service() if callable(_drive_service) else None
+        drive_folder_id = _pick_backup_folder_id(svc) if (svc and callable(_pick_backup_folder_id)) else None
+        if svc and drive_folder_id:
+            resp = svc.files().list(
+                q=f"'{drive_folder_id}' in parents and trashed=false and mimeType!='application/vnd.google-apps.folder'",
+                fields="files(id,name,modifiedTime,size,mimeType)",
+                includeItemsFromAllDrives=True, supportsAllDrives=True, corpora="allDrives", pageSize=200
+            ).execute()
+            files = [f for f in resp.get("files", []) if (f.get("name","").lower().endswith(".zip"))]
+            files.sort(key=lambda x: x.get("modifiedTime") or "", reverse=True)
+            drive_rows = [{
+                "파일명": f.get("name",""),
+                "크기": _fmt_size(f.get("size") or 0),
+                "수정시각(UTC)": (f.get("modifiedTime","")[:16].replace("T"," ") if f.get("modifiedTime") else "-"),
+            } for f in files[:5]]
+            drive_has = len(files) > 0
+        else:
+            drive_msg = "드라이브 연결/권한 또는 backup_zip 폴더 식별이 되지 않았습니다."
+    except Exception:
+        drive_msg = "드라이브 목록 조회 중 오류가 발생했습니다."
+
+    with st.container(border=True):
+        st.markdown("### 백업 파일 유무 (요약)")
+        st.markdown(f"- **로컬 백업 ZIP**: {'✅ 있음' if local_has else '❌ 없음'}  (`{BACKUP_DIR.as_posix()}`)")
+        st.markdown(
+            "- **드라이브 백업 ZIP**: "
+            + ("✅ 있음" if drive_has else "❌ 없음")
+            + (f"  (folder_id: `{drive_folder_id}`)" if drive_folder_id else "")
+        )
+        if drive_msg:
+            st.caption(f"※ {drive_msg}")
+
+    # ── 품질 리포트 존재 ───────────────────────────────────────────────────────
+    qr_exists = QUALITY_REPORT_PATH.exists()
+    st.markdown(f"- **품질 리포트(quality_report.json)**: "
+                + ("✅ 있음" if qr_exists else "❌ 없음")
+                + f"  (`{QUALITY_REPORT_PATH.as_posix()}`)")
+
+    # ── 백업 ZIP 목록(로컬/드라이브) ───────────────────────────────────────────
+    with st.container(border=True):
+        st.markdown("### 백업 ZIP 현황")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.caption("로컬 백업 (최신 5)")
+            if local_rows:
+                st.dataframe(local_rows, use_container_width=True, hide_index=True)
+            else:
+                st.markdown("— 표시할 로컬 ZIP이 없습니다.")
+                st.caption("※ 복구가 로컬 ZIP 없이 직접 진행되었을 수도 있습니다.")
+        with c2:
+            st.caption("드라이브 backup_zip (최신 5)")
+            if drive_rows:
+                st.dataframe(drive_rows, use_container_width=True, hide_index=True)
+            else:
+                st.markdown("— 표시할 드라이브 ZIP이 없습니다.")
+                if drive_msg:
+                    st.caption(f"※ {drive_msg}")
+
+    # ── 로컬 인덱스 파일 상태 ────────────────────────────────────────────────
+    try:
+        chunks = (Path(PERSIST_DIR) / "chunks.jsonl")
+        ready  = (Path(PERSIST_DIR) / ".ready")
+        st.markdown("- **로컬 인덱스 파일**: " + ("✅ 있음" if chunks.exists() else "❌ 없음")
+                    + f" (`{chunks.as_posix()}`)")
+        st.markdown("- **.ready 마커**: " + ("✅ 있음" if ready.exists() else "❌ 없음")
+                    + f" (`{ready.as_posix()}`)")
     except Exception:
         pass
+# ===== [05B] TAG DIAGNOSTICS (BACKUP PRESENCE RESTORE) — END =================
 
-    # (나머지 ZIP/로컬 인덱스 체크 로직은 기존과 동일) …
-# ===== [05B] TAG DIAGNOSTICS (NEW) — END ====================================
 
 
 # ===== [06] SIMPLE QA DEMO — 히스토리 인라인 + 답변 직표시 + 골든우선 + 규칙기반 합성기 + 피드백(라디오, 항상 유지) ==
