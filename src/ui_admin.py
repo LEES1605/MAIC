@@ -28,40 +28,45 @@ def ensure_admin_session_keys() -> None:
 def render_admin_controls() -> None:
     """
     상단 우측 '관리자' 버튼과 PIN 인증 폼을 렌더링.
-    '🔎 진단' 클릭 시 세션 플래그를 세팅하고 rerun 후, 아이프레임에서 부모 문서로 스크롤을 실행.
+    + '🔎 진단'은 스크롤 대신 상단에 '진단(퀵패널)'을 즉시 펼쳐서 표시.
     """
     import streamlit as st
-    try:
-        from streamlit.components.v1 import html as _html
-    except Exception:
-        _html = None
+    from pathlib import Path
+    from datetime import datetime
+    import importlib
 
-    # 클릭 직후 rerun된 다음 렌더 주기에서 스크롤 실행 (부모 문서로 접근)
-    if st.session_state.pop("_goto_diag", False) and _html:
-        _html(
-            """
-            <script>
-              (function(){
-                function go(){
-                  // 아이프레임 내에서 부모 문서 DOM을 우선 시도
-                  var doc = (window.parent && window.parent.document) ? window.parent.document : document;
-                  var el = null;
-                  try { el = doc.getElementById('diag'); } catch(e) {}
-                  if (el) { 
-                    try { el.scrollIntoView({behavior:'smooth', block:'start'}); return; } catch(e) {}
-                  }
-                  // 최후 수단: 부모 위치 해시 변경
-                  try { window.parent.location.hash = 'diag'; } catch(e) { location.hash = 'diag'; }
-                }
-                // 렌더 타이밍을 고려해 여러 번 시도
-                setTimeout(go, 50);
-                setTimeout(go, 300);
-                setTimeout(go, 800);
-              })();
-            </script>
-            """,
-            height=0, width=0
-        )
+    # 내부 상태 플래그 준비
+    if "_diag_quick_open" not in st.session_state:
+        st.session_state["_diag_quick_open"] = False
+
+    def _fmt_size(n):
+        try:
+            n = int(n)
+        except Exception:
+            return "-"
+        units = ["B","KB","MB","GB","TB"]; i=0; f=float(n)
+        while f>=1024 and i<len(units)-1:
+            f/=1024.0; i+=1
+        return (f"{int(f)} {units[i]}" if i==0 else f"{f:.1f} {units[i]}")
+
+    def _fmt_ts(ts):
+        try:
+            return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
+        except Exception:
+            return "-"
+
+    def _resolve_paths():
+        PERSIST_DIR = Path.home() / ".maic" / "persist"
+        BACKUP_DIR  = Path.home() / ".maic" / "backup"
+        QUALITY_REPORT_PATH = Path.home() / ".maic" / "quality_report.json"
+        try:
+            m = importlib.import_module("src.rag.index_build")
+            PERSIST_DIR = getattr(m, "PERSIST_DIR", PERSIST_DIR)
+            BACKUP_DIR  = getattr(m, "BACKUP_DIR", BACKUP_DIR)
+            QUALITY_REPORT_PATH = getattr(m, "QUALITY_REPORT_PATH", QUALITY_REPORT_PATH)
+        except Exception:
+            pass
+        return PERSIST_DIR, BACKUP_DIR, QUALITY_REPORT_PATH
 
     with st.container():
         _, right = st.columns([0.7, 0.3])
@@ -83,11 +88,12 @@ def render_admin_controls() -> None:
                         st.session_state["_admin_auth_open"] = True
                         st.rerun()
 
-            # --- 진단으로 이동: 플래그 세팅 → rerun → 부모 문서로 스크롤 ---
+            # --- 진단 퀵패널 토글 버튼 ---
             with c_diag:
-                if st.button("🔎 진단", key="btn_goto_diag", use_container_width=True, help="하단 진단 섹션(#diag)으로 이동"):
-                    st.session_state["_goto_diag"] = True
-                    st.rerun()
+                label = "🔎 진단 열기" if not st.session_state["_diag_quick_open"] else "🔎 진단 닫기"
+                if st.button(label, key="btn_toggle_diag_quick", use_container_width=True,
+                             help="상단에서 바로 보는 진단(퀵패널)을 토글합니다."):
+                    st.session_state["_diag_quick_open"] = not st.session_state["_diag_quick_open"]
 
             # --- 인증 패널 ---
             if st.session_state.get("_admin_auth_open", False) and not st.session_state.get("is_admin", False):
@@ -113,6 +119,91 @@ def render_admin_controls() -> None:
                         st.rerun()
                     else:
                         st.error("PIN이 올바르지 않습니다.")
+
+    # ── 진단(퀵패널) -----------------------------------------------------------
+    if st.session_state.get("_diag_quick_open", False):
+        PERSIST_DIR, BACKUP_DIR, QUALITY_REPORT_PATH = _resolve_paths()
+
+        # 로컬 인덱스 파일 상태
+        chunks = (Path(PERSIST_DIR) / "chunks.jsonl")
+        ready  = (Path(PERSIST_DIR) / ".ready")
+        chunks_ok = chunks.exists()
+        ready_ok  = ready.exists()
+
+        # 로컬 백업 ZIP
+        local_has = False
+        local_rows = []
+        try:
+            BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+            zips = list(BACKUP_DIR.glob("backup_*.zip")) + list(BACKUP_DIR.glob("restored_*.zip"))
+            zips.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+            local_has = len(zips) > 0
+            for p in zips[:5]:
+                stt = p.stat()
+                local_rows.append({"파일명": p.name, "크기": _fmt_size(stt.st_size), "수정시각": _fmt_ts(stt.st_mtime)})
+        except Exception:
+            pass
+
+        # 드라이브 백업 ZIP (있으면 확인)
+        drive_has = False
+        drive_folder_id = None
+        drive_msg = None
+        try:
+            m = importlib.import_module("src.rag.index_build")
+            _drive_service = getattr(m, "_drive_service", None)
+            _pick_backup_folder_id = getattr(m, "_pick_backup_folder_id", None)
+            svc = _drive_service() if callable(_drive_service) else None
+            drive_folder_id = _pick_backup_folder_id(svc) if (svc and callable(_pick_backup_folder_id)) else None
+            if svc and drive_folder_id:
+                resp = svc.files().list(
+                    q=f"'{drive_folder_id}' in parents and trashed=false and mimeType!='application/vnd.google-apps.folder'",
+                    fields="files(id,name)", includeItemsFromAllDrives=True, supportsAllDrives=True,
+                    corpora="allDrives", pageSize=1
+                ).execute()
+                files = resp.get("files", [])
+                drive_has = len(files) > 0
+            else:
+                drive_msg = "드라이브 연결/권한 또는 backup_zip 폴더 식별이 되지 않았습니다."
+        except Exception:
+            drive_msg = "드라이브 목록 조회 중 오류가 발생했습니다."
+
+        # 자동 복구 상태
+        auto_info = st.session_state.get("_auto_restore_last", {})
+        step = str(auto_info.get("step", "—"))
+        ok_local = auto_info.get("local_attach")
+        ok_drive = auto_info.get("drive_restore")
+        ok_build = auto_info.get("rebuild")
+        ok_final = auto_info.get("final_attach")
+        def _b(label, ok):
+            return f"✅ {label}" if ok is True else (f"❌ {label}" if ok is False else f"— {label}")
+
+        with st.container(border=True):
+            st.markdown("### 진단(퀵패널)")
+            st.markdown("- 단계: **" + step + "**")
+            st.markdown("- " + " · ".join([
+                _b("로컬부착", ok_local),
+                _b("드라이브복구", ok_drive),
+                _b("재빌드", ok_build),
+                _b("최종부착", ok_final),
+            ]))
+            st.markdown(f"- **로컬 인덱스 파일**: {'✅ 있음' if chunks_ok else '❌ 없음'}  (`{chunks.as_posix()}`)")
+            st.markdown(f"- **.ready 마커**: {'✅ 있음' if ready_ok else '❌ 없음'}  (`{ready.as_posix()}`)")
+            st.markdown(f"- **로컬 백업 ZIP**: {'✅ 있음' if local_has else '❌ 없음'}  (`{BACKUP_DIR.as_posix()}`)")
+            st.markdown(
+                "- **드라이브 백업 ZIP**: "
+                + ("✅ 있음" if drive_has else "❌ 없음")
+                + (f"  (folder_id: `{drive_folder_id}`)" if drive_folder_id else "")
+            )
+            if drive_msg:
+                st.caption(f"※ {drive_msg}")
+            try:
+                import json as _json
+                st.code(_json.dumps(auto_info, ensure_ascii=False, indent=2), language="json")
+            except Exception:
+                pass
+
+            # 필요하면 전체 진단 섹션으로 이동하는 링크(앵커)
+            st.markdown("— [전체 진단 섹션 보기](#diag)")
 # ── [UA-01C] 관리자 버튼/인증 패널 — END --------------------------------------
 
 
