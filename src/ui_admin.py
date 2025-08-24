@@ -88,12 +88,13 @@ def render_admin_controls() -> None:
                         st.session_state["_admin_auth_open"] = True
                         st.rerun()
 
-            # --- 진단 퀵패널 토글 버튼 ---
+            # --- 진단 퀵패널 토글 버튼 (클릭 즉시 rerun으로 1회 클릭 반영) ---
             with c_diag:
-                label = "🔎 진단 열기" if not st.session_state["_diag_quick_open"] else "🔎 진단 닫기"
+                label = "🔎 진단 닫기" if st.session_state["_diag_quick_open"] else "🔎 진단 열기"
                 if st.button(label, key="btn_toggle_diag_quick", use_container_width=True,
                              help="상단에서 바로 보는 진단(퀵패널)을 토글합니다."):
                     st.session_state["_diag_quick_open"] = not st.session_state["_diag_quick_open"]
+                    st.rerun()  # ← 여기 추가: 즉시 재실행하여 버튼 라벨/패널 상태를 한 번에 반영
 
             # --- 인증 패널 ---
             if st.session_state.get("_admin_auth_open", False) and not st.session_state.get("is_admin", False):
@@ -196,15 +197,11 @@ def render_admin_controls() -> None:
             )
             if drive_msg:
                 st.caption(f"※ {drive_msg}")
-            try:
-                import json as _json
-                st.code(_json.dumps(auto_info, ensure_ascii=False, indent=2), language="json")
-            except Exception:
-                pass
 
-            # 필요하면 전체 진단 섹션으로 이동하는 링크(앵커)
-            st.markdown("— [전체 진단 섹션 보기](#diag)")
+            # (혼동 방지) 하단 전체 진단 섹션 링크 대신 안내 캡션으로 변경
+            st.caption("전체 진단 세부는 페이지 하단의 **진단/로그(관리자 전용)** 섹션에서 확인할 수 있어요.")
 # ── [UA-01C] 관리자 버튼/인증 패널 — END --------------------------------------
+
 
 
 
