@@ -669,7 +669,7 @@ def render_tag_diagnostics():
     except Exception:
         pass
 
-# ===== [06] SIMPLE QA DEMO — 인라인 펼치기형 히스토리 ==========================
+# ===== [06] SIMPLE QA DEMO — 인라인 펼치기 + 답변 직표시 =======================
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 import time
@@ -684,7 +684,7 @@ def _ensure_state():
     if "last_submit_ts" not in st.session_state:
         st.session_state["last_submit_ts"] = 0
     if "SHOW_TOP3_STICKY" not in st.session_state:
-        st.session_state["SHOW_TOP3_STICKY"] = False  # 기본 숨김(원장님 요청 반영)
+        st.session_state["SHOW_TOP3_STICKY"] = False  # 기본 숨김
 
 # ── [06-B] 파일 I/O (히스토리) -------------------------------------------------
 def _history_path() -> Path:
@@ -724,7 +724,7 @@ def _read_history_lines(max_lines: int = 5000) -> List[Dict[str, Any]]:
             except Exception: continue
     except Exception:
         return []
-    rows.reverse()  # 최근이 위로
+    rows.reverse()
     return rows
 
 def _normalize_question(s: str) -> str:
@@ -746,7 +746,6 @@ def _top3_users(days: int = 7) -> List[Tuple[str, int]]:
         ts = int(r.get("ts") or 0)
         if ts < cutoff: continue
         if (r.get("q") or "").strip(): users.append(_sanitize_user(r.get("user")))
-    from collections import Counter
     ctr = Counter(users); return ctr.most_common(3)
 
 def _render_top3_badges():
@@ -781,13 +780,14 @@ def _cache_get(norm: str) -> Dict[str, Any] | None:
     return st.session_state["answer_cache"].get(norm)
 
 def _render_cached_block(norm: str):
+    """히스토리 펼침: 답변 본문을 즉시 보여주고, 근거만 선택사항(expander)"""
     data = _cache_get(norm)
     if not data:
         st.info("이 질문의 저장된 답변이 없어요. 아래 ‘다시 검색’으로 최신 답변을 받아보세요.")
         return
-    st.markdown(f"**선택 모드:** `{data.get('mode','—')}`")
-    with st.expander("원문 응답 보기(영문)"):
-        st.write(data.get("answer","—"))
+    # 답변 본문 즉시 표시
+    st.write(data.get("answer","—"))
+    # 근거 자료는 선택 사항
     refs = data.get("refs") or []
     if refs:
         with st.expander("근거 자료(상위 2개)"):
@@ -801,7 +801,7 @@ def render_simple_qa():
     _ensure_state()
     is_admin = st.session_state.get("is_admin", False)
 
-    _render_top3_badges()  # 기본은 숨김(토글로 켜기)
+    _render_top3_badges()  # 기본 숨김
 
     st.markdown("### 💬 질문은 모든 천재들이 가장 많이 사용하는 공부 방법이다!")
 
@@ -836,7 +836,7 @@ def render_simple_qa():
     if "qa_q_form" in st.session_state:
         st.session_state["qa_q"] = st.session_state["qa_q_form"]
 
-    # 새 질문 처리(중복 가드)
+    # 새 질문 처리(중복 가드) — ✅ 요약/안내 제거, 곧바로 답변 본문 출력
     if submitted and (st.session_state.get("qa_q","").strip()):
         q = st.session_state["qa_q"].strip()
         guard_key = f"{_normalize_question(q)}|{mode_key}"
@@ -870,19 +870,9 @@ def render_simple_qa():
                                     "doc_id": (meta or {}).get("doc_id") or (meta or {}).get("file_name", ""),
                                     "url": (meta or {}).get("source") or (meta or {}).get("url", ""),
                                 })
-                        # Sentence 모드 간단 힌트
-                        if mode_key == "Sentence":
-                            import re as _re
-                            if _re.search(r"\bI\s+seen\b", q, flags=_re.I):
-                                st.markdown("- **I seen** → I **saw** the movie / I **have seen** the movie")
-                            if _re.search(r"\b(he|she|it)\s+don'?t\b", q, flags=_re.I):
-                                st.markdown("- **he/she/it don't** → **doesn't**")
-                            if _re.search(r"\ba\s+[aeiouAEIOU]", q):
-                                st.markdown("- **a + 모음 시작 명사** → 가능하면 **an** + 모음 시작 명사")
-                        st.markdown(f"**선택 모드:** `{mode_label}`")
-                        st.markdown("#### ✅ 요약/안내 (한국어)")
-                        with st.expander("원문 응답 보기(영문)"):
-                            st.write((raw or "").strip() or "—")
+                        # ✅ 답변 본문을 즉시 보여줍니다(요약/안내 제거)
+                        st.write((raw or "").strip() or "—")
+                        # 근거 자료는 선택 사항
                         if refs:
                             with st.expander("근거 자료(상위 2개)"):
                                 for i, r0 in enumerate(refs[:2], start=1):
@@ -895,10 +885,9 @@ def render_simple_qa():
             else:
                 st.info("아직 두뇌가 준비되지 않았어요. 상단에서 **복구/연결** 또는 **다시 최적화**를 먼저 완료해 주세요.")
 
-    # 📒 나의 질문 히스토리 — 인라인 펼치기
+    # 📒 나의 질문 히스토리 — 인라인 펼치기(답변 직표시)
     rows = _read_history_lines(max_lines=5000)
     st.markdown("#### 📒 나의 질문 히스토리")
-    # 정규화 기준 유니크 3개
     uniq: List[Dict[str, Any]] = []
     seen = set()
     for r in rows:
@@ -917,9 +906,7 @@ def render_simple_qa():
             if i < len(uniq):
                 title = f"{i+1}. {uniq[i]['q']}"
                 with st.expander(title, expanded=False):
-                    # 캐시 프리뷰
-                    _render_cached_block(uniq[i]["norm"])
-                    # 다시 검색 버튼
+                    _render_cached_block(uniq[i]["norm"])  # 답변 즉시 표시
                     if st.button("🔄 이 질문으로 다시 검색", key=f"rehit_{uniq[i]['norm']}", use_container_width=True):
                         st.session_state["qa_q"] = uniq[i]["q"]
                         st.rerun()
