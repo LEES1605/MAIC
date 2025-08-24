@@ -28,9 +28,35 @@ def ensure_admin_session_keys() -> None:
 def render_admin_controls() -> None:
     """
     상단 우측 '관리자' 버튼과 PIN 인증 폼을 렌더링.
-    + '🔎 진단'은 새창 없이 같은 탭에서 #diag 로 이동하는 앵커 버튼(HTML)로 구현.
+    '🔎 진단'은 클릭 시 세션 플래그를 세팅하고 rerun 후 렌더 초기에 JS로 #diag로 스크롤.
+    (rerun 타이밍 문제를 우회하기 위해 3회 지연 실행)
     """
     import streamlit as st
+    try:
+        from streamlit.components.v1 import html as _html
+    except Exception:
+        _html = None
+
+    # 클릭 직후 rerun된 다음 렌더 주기에서 스크롤 실행
+    if st.session_state.pop("_goto_diag", False) and _html:
+        _html(
+            """
+            <script>
+              (function(){
+                function go(){
+                  const el = document.getElementById('diag');
+                  if (el) { el.scrollIntoView({behavior:'smooth', block:'start'}); }
+                  else { window.location.hash = 'diag'; }
+                }
+                // 렌더 안정화를 위해 여러 번 시도
+                setTimeout(go, 100);
+                setTimeout(go, 400);
+                setTimeout(go, 800);
+              })();
+            </script>
+            """,
+            height=0, width=0
+        )
 
     with st.container():
         _, right = st.columns([0.7, 0.3])
@@ -52,20 +78,11 @@ def render_admin_controls() -> None:
                         st.session_state["_admin_auth_open"] = True
                         st.rerun()
 
-            # --- 진단으로 이동: 새창 금지(target=_self) 앵커 버튼 ---
+            # --- 진단으로 이동: 플래그 세팅 → rerun → 렌더 초기에 스크롤 ---
             with c_diag:
-                st.markdown(
-                    '''
-                    <a href="#diag" target="_self"
-                       style="
-                         display:block; text-align:center; padding:0.5rem 0.75rem;
-                         border:1px solid rgba(255,255,255,0.25); border-radius:0.5rem;
-                         text-decoration:none; font-weight:600;">
-                       🔎 진단
-                    </a>
-                    ''',
-                    unsafe_allow_html=True
-                )
+                if st.button("🔎 진단", key="btn_goto_diag", use_container_width=True, help="하단 진단 섹션(#diag)으로 이동"):
+                    st.session_state["_goto_diag"] = True
+                    st.rerun()
 
             # --- 인증 패널 ---
             if st.session_state.get("_admin_auth_open", False) and not st.session_state.get("is_admin", False):
