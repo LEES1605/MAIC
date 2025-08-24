@@ -242,9 +242,6 @@ def _auto_attach_or_restore_silently() -> bool:
     st.session_state["_auto_restore_last"]["final_attach"] = False
     return False
 # ===== [03] SESSION & HELPERS — END ==========================================
-=
-
-
 
 # ===== [04] HEADER ==========================================
 def render_header():
