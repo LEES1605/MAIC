@@ -782,25 +782,9 @@ def _render_top3_badges(top3: List[Tuple[str, int]]):
       .pill-rank { margin-right:6px; padding:4px 8px; border-radius:999px; font-size:0.9rem;
                    background:#2563eb1a; color:#1d4ed8; border:1px solid #2563eb55;}
       .sec-title { font-weight:800; font-size:1.1rem; margin: 6px 0 2px 0;}
-      /* 링크형 히스토리: 좌측 정렬 + 밑줄 + 파란색, 버튼 배경/테두리 제거 */
-      .link-btn .stButton>button { 
-          background: transparent !important; 
-          border: none !important; 
-          padding: 2px 4px !important; 
-          text-align: left !important; 
-          width: 100% !important; 
-          box-shadow: none !important;
-          color: #1d4ed8 !important; 
-          text-decoration: underline; 
-      }
-      /* 플레이스홀더(…): 좌측 정렬+연한 색 */
-      .hist-placeholder { 
-          color: #9ca3af; 
-          padding: 2px 4px; 
-          text-align: left; 
-          width: 100%;
-          display: block;
-      }
+      .hist-link { color:#1d4ed8; text-decoration: underline; }
+      .hist-item { padding: 2px 4px; }
+      .hist-placeholder { color:#9ca3af; padding: 2px 4px; display:block; }
     </style>"""
     st.markdown(css + f"<div class='sticky-top3'>{' '.join(parts)}</div>", unsafe_allow_html=True)
 
@@ -844,10 +828,32 @@ def render_simple_qa():
     _ensure_answer_cache()
     is_admin = st.session_state.get("is_admin", False)
 
+    # 0) URL 쿼리파라미터(histKey) → 선택 복원
+    try:
+        qp = dict(st.query_params)  # Streamlit 최신
+    except Exception:
+        qp = st.experimental_get_query_params()  # 구버전 호환
+    hist_key = None
+    if qp:
+        v = qp.get("histKey")
+        if isinstance(v, list): v = v[0] if v else None
+        hist_key = v if isinstance(v, str) and v.strip() else None
+
+    if hist_key:
+        # 히스토리에서 원문 질문 찾아 입력 복구
+        rows_all = _read_history_lines(max_lines=5000)
+        for r in rows_all:
+            qtext = (r.get("q") or "").strip()
+            if not qtext: continue
+            if _normalize_question(qtext) == hist_key:
+                st.session_state["hist_selected_norm"] = hist_key
+                st.session_state["qa_q"] = qtext
+                break
+
     if not is_admin:
         _render_top3_badges(_top3_users())
 
-    # 🔁 헤더 문구 교체
+    # 🔁 헤더 문구
     st.markdown("### 💬 질문은 모든 천재들이 가장 많이 사용하는 공부 방법이다!")
 
     # 관리자 설정 반영(안전 접근)
@@ -961,19 +967,17 @@ def render_simple_qa():
             if len(uniq) >= 3: break  # 화면에는 최근 3개만
 
         # 3개 고정 출력(좌측 정렬 + 번호). 부족분은 … 로 채우기
-        st.markdown("<div class='link-btn'>", unsafe_allow_html=True)
+        from html import escape as _esc
+        from urllib.parse import quote as _q
         for i in range(3):
             if i < len(uniq):
-                lbl = f"{i+1}. {uniq[i]['q']}"
-                if st.button(lbl, key=f"hist_link_{i}", use_container_width=True):
-                    st.session_state["hist_selected_norm"] = uniq[i]["norm"]
-                    st.session_state["qa_q"] = uniq[i]["q"]  # 입력창 복구
+                lbl_q = _esc(uniq[i]['q'])
+                href = f"?histKey={_q(uniq[i]['norm'])}"
+                st.markdown(f"<div class='hist-item'>{i+1}. <a href='{href}' class='hist-link'>{lbl_q}</a></div>", unsafe_allow_html=True)
             else:
                 st.markdown(f"<span class='hist-placeholder'>{i+1}. …</span>", unsafe_allow_html=True)
-        st.markdown("</div>", unsafe_allow_html=True)
 
 # ===== [06] END ===============================================================
-
 
 # ===== [07] MAIN =============================================================
 def main():
