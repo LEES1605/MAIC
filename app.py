@@ -1002,7 +1002,7 @@ def _render_title_with_status():
         """, unsafe_allow_html=True)
 
     with c2:
-        st.write("")  # 살짝 아래로 내림
+        st.write("")  # 살짝 아래로 내리기
         show = bool(st.session_state.get("show_faq", False))
         label = "📚 친구들이 자주하는 질문" if not show else "📚 친구들이 자주하는 질문 닫기"
         if st.button(label, key="btn_toggle_faq", use_container_width=True):
@@ -1021,34 +1021,36 @@ def _render_title_with_status():
                     # 클릭 시 입력창에 복구(자동검색은 하지 않음)
                     if st.button(f"{qtext}  · ×{cnt}", key=f"faq_{hash(qtext)}", use_container_width=True):
                         st.session_state["qa_q"] = qtext
-                        # 입력창에 바로 반영되도록 한 번 새로 그림(자동 제출은 안 함)
-                        st.rerun()
+                        st.rerun()  # 입력창에 즉시 반영
 
 def main():
     # 0) 헤더
     _render_title_with_status()
 
-    # 1) 자동 연결/복구(가능하면 1회 시도)
+    # 1) 자동 연결/복구(가능하면 1회 시도) — missing/pending 모두 처리
     try:
         before = get_index_status()
     except Exception:
         before = "missing"
 
     try:
-        if before == "pending" and not _is_attached_session():
+        needs_recovery = (before in ("missing", "pending")) and (not _is_attached_session())
+        if needs_recovery:
+            # 내부에서: 백업 복구 → 인덱스 attach (인자 없이 호출)
             _auto_attach_or_restore_silently()
             # 상태가 바뀌면 헤더/배지 동기화를 위해 재실행
             after = get_index_status()
             if after != before:
                 st.rerun()
     except Exception:
-        pass  # 학생 화면에서는 조용히 통과(관리자 로그는 별도 노출)
+        # 학생 화면에서는 조용히 통과(관리자 로그는 별도 영역에서 노출)
+        pass
 
     # 2) 준비 패널(ready면 내부에서 자연히 최소 표시), 질문 패널
     try:
         render_brain_prep_main()
     except Exception:
-        pass  # 없으면 무시
+        pass  # 모듈이 없으면 무시
 
     try:
         render_simple_qa()
