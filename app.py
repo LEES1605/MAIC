@@ -670,7 +670,7 @@ def render_tag_diagnostics():
         pass
 
 
-# ===== [06] SIMPLE QA DEMO — 인라인 펼치기 + 답변 직표시 + no-hit 부드럽게 ====
+# ===== [06] SIMPLE QA DEMO — 히스토리 인라인 + 답변 직표시 + no-hit Fallback ==
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 import time
@@ -685,9 +685,11 @@ def _ensure_state():
     if "last_submit_ts" not in st.session_state:
         st.session_state["last_submit_ts"] = 0
     if "SHOW_TOP3_STICKY" not in st.session_state:
-        st.session_state["SHOW_TOP3_STICKY"] = False  # 기본 숨김
+        st.session_state["SHOW_TOP3_STICKY"] = False
+    if "allow_fallback" not in st.session_state:
+        st.session_state["allow_fallback"] = True  # 교재 no-hit 시 일반 지식 모드 허용
 
-# ── [06-A’] 준비/토글: 관리자 설정을 안전하게 조회(통일 판단) --------------------
+# ── [06-A’] 준비/토글 통일 판단 -------------------------------------------------
 def _is_ready_unified() -> bool:
     """헤더와 동일 기준: get_index_status() == 'ready'"""
     try:
@@ -696,13 +698,6 @@ def _is_ready_unified() -> bool:
         return bool(st.session_state.get("rag_index"))
 
 def _get_enabled_modes_unified() -> Dict[str, bool]:
-    """
-    관리자 토글을 강제 반영:
-    - 1순위: st.session_state["enabled_modes"] or ["admin_modes"]
-             (예: {"Grammar": False, "Sentence": True, "Passage": True})
-    - 2순위: 전역 함수 get_enabled_modes()가 있으면 호출
-    - 3순위: 기본값(모두 True) — 단, 관리자 화면이 아닐 때만 임시 허용
-    """
     # 1) 세션 우선
     for key in ("enabled_modes", "admin_modes", "modes"):
         m = st.session_state.get(key)
@@ -725,10 +720,9 @@ def _get_enabled_modes_unified() -> Dict[str, bool]:
                 }
         except Exception:
             pass
-    # 3) 기본값 — 비관리자만 임시 허용
+    # 3) 기본값 — 비관리자만 임시 허용, 관리자는 보수적 차단
     if not st.session_state.get("is_admin", False):
         return {"Grammar": True, "Sentence": True, "Passage": True}
-    # 관리자 화면인데 정보가 없으면 모두 OFF로 보수적 차단
     return {"Grammar": False, "Sentence": False, "Passage": False}
 
 # ── [06-B] 파일 I/O (히스토리) -------------------------------------------------
@@ -810,7 +804,7 @@ def _popular_questions(top_n: int = 10, days: int = 14) -> List[Tuple[str, int]]
     return [(exemplar[k], c) for k, c in counter.most_common(top_n)]
 
 def _render_top3_badges():
-    if not st.session_state.get("SHOW_TOP3_STICKY"):  # 기본 숨김
+    if not st.session_state.get("SHOW_TOP3_STICKY"):
         return
     data = list(_top3_users()[:3])
     while len(data) < 3: data.append(("…", 0))
@@ -855,22 +849,108 @@ def _render_cached_block(norm: str):
                 url = r0.get("url") or r0.get("source_url") or ""
                 st.markdown(f"- {name}  " + (f"(<{url}>)" if url else ""))
 
+# ── [06-D’] No-hit Fallback(일반 지식) -----------------------------------------
+def _fallback_general_answer(q: str, mode_key: str) -> str | None:
+    prompt = (
+        "너는 한국 학생에게 영어를 쉽게 설명하는 선생님이야. 아래 질문에 대해 "
+        "핵심 개념을 3~5문장으로 설명하고, 간단한 예문 2개를 제시하고, 마지막에 한 줄 요령을 적어줘.\n"
+        f"[질문유형:{mode_key}] 질문: {q}\n"
+        "형식: 1) 핵심 설명 2) 예문-해석 3) 한 줄 요령\n"
+        "주의: 과도한 배경 지식은 생략하고, 정확하게. 한국어로 답변."
+    )
+    # 1) 세션에 등록된 일반 LLM 시도
+    for key in ("general_llm", "llm", "chat_llm"):
+        llm = st.session_state.get(key)
+        if llm:
+            try:
+                if hasattr(llm, "complete"):
+                    r = llm.complete(prompt); return getattr(r, "text", None) or str(r)
+                if hasattr(llm, "predict"):
+                    return llm.predict(prompt)
+                if hasattr(llm, "chat"):
+                    r = llm.chat(prompt); return getattr(r, "text", None) or str(r)
+            except Exception:
+                pass
+    # 2) 전역 헬퍼 함수
+    for fn_name in ("call_general_llm", "call_openai_chat", "call_gemini_chat", "generate_general_answer"):
+        fn = globals().get(fn_name)
+        if callable(fn):
+            try:
+                r = fn(prompt)
+                if isinstance(r, str) and r.strip():
+                    return r
+                if hasattr(r, "text"):
+                    return r.text
+            except Exception:
+                pass
+    # 3) 최후의 안전 메시지
+    return (
+        "일반 지식 모드가 비활성화되어 있어요. 관리자에서 일반 지식 LLM 연결을 켜면 "
+        "교재에 없더라도 기본 설명을 제공할 수 있어요."
+    )
+
+# ── [06-D’’] ★한국어→영어 용어 확장(Grammar 전용 우선 적용) --------------------
+def _expand_query_for_rag(q: str, mode_key: str) -> str:
+    """한국어 질문에 영어 키워드를 덧붙여 교재(영문) 적중률을 올린다."""
+    q0 = (q or "").strip()
+    if not q0:
+        return q0
+    # 핵심 용어 매핑(필요시 계속 추가 가능)
+    ko_en = {
+        "관계대명사": "relative pronoun|relative pronouns|relative clause",
+        "관계절": "relative clause",
+        "관계부사": "relative adverb|relative adverbs",
+        "현재완료": "present perfect",
+        "과거완료": "past perfect",
+        "대과거": "past perfect",
+        "진행형": "progressive|continuous",
+        "수동태": "passive voice",
+        "가정법": "subjunctive|conditional",
+        "비교급": "comparative",
+        "최상급": "superlative",
+        "to부정사": "to-infinitive|infinitive",
+        "동명사": "gerund",
+        "분사구문": "participial construction|participial phrase",
+        "명사절": "noun clause",
+        "형용사절": "adjective clause|relative clause",
+        "부사절": "adverbial clause",
+        "간접화법": "reported speech|indirect speech",
+        "시제": "tenses|tense",
+        "조동사": "modal verb|modal verbs",
+        "가주어": "expletive there/it|dummy subject",
+        "도치": "inversion",
+        "대동사": "do-support|pro-verb do",
+        "강조구문": "cleft sentence|it-cleft|wh-cleft",
+    }
+    extras = []
+    for ko, en in ko_en.items():
+        if ko in q0:
+            extras.extend([en, f'"{en}"'])
+    # Grammar 모드일수록 검색 힌트 강화
+    if mode_key == "Grammar":
+        extras += ["grammar explanation", "ESL", "examples", "usage"]
+    # 중복 제거하면서 결합
+    merged = []
+    for t in [q0] + extras:
+        if t and t not in merged:
+            merged.append(t)
+    return " ".join(merged)
+
 # ── [06-E] 메인 렌더 -----------------------------------------------------------
 def render_simple_qa():
     _ensure_state()
     is_admin = st.session_state.get("is_admin", False)
 
-    _render_top3_badges()  # 기본 숨김
+    _render_top3_badges()
 
     st.markdown("### 💬 질문은 모든 천재들이 가장 많이 사용하는 공부 방법이다!")
 
-    # ✅ 관리자 토글 반영: 라디오 옵션 구성
+    # 관리자 토글 반영: 라디오 옵션
     enabled = _get_enabled_modes_unified()
     radio_opts: List[str] = []
     if enabled.get("Grammar", False):  radio_opts.append("문법설명(Grammar)")
     if enabled.get("Sentence", False): radio_opts.append("문장분석(Sentence)")
     if enabled.get("Passage", False):  radio_opts.append("지문분석(Passage)")
-
     if not radio_opts:
         st.error("관리자에서 모든 질문 모드를 OFF로 설정했습니다. 관리자에게 문의하세요.")
         return
@@ -897,12 +977,12 @@ def render_simple_qa():
     if "qa_q_form" in st.session_state:
         st.session_state["qa_q"] = st.session_state["qa_q_form"]
 
-    # ✅ 제출 차단: 꺼진 모드는 실행 불가
+    # 제출 차단: 꺼진 모드는 실행 불가
     if submitted and not enabled.get(mode_key, False):
         st.warning("이 질문 유형은 지금 관리자에서 꺼져 있어요. 다른 유형을 선택해 주세요.")
         return
 
-    # 새 질문 처리(중복 가드) — 곧바로 답변 본문 출력
+    # 새 질문 처리 — 곧바로 답변 본문 출력
     if submitted and (st.session_state.get("qa_q","").strip()):
         q = st.session_state["qa_q"].strip()
         guard_key = f"{_normalize_question(q)}|{mode_key}"
@@ -920,9 +1000,12 @@ def render_simple_qa():
             if index_ready:
                 try:
                     with answer_box:
+                        # ✅ 한국어→영어 용어 확장 적용 (Grammar 등)
+                        q_expanded = _expand_query_for_rag(q, mode_key)
+
                         # 1차 검색
                         qe = st.session_state["rag_index"].as_query_engine(top_k=k)
-                        r = qe.query(q)
+                        r = qe.query(q_expanded)
                         raw = getattr(r, "response", "") or str(r)
                         hits = getattr(r, "source_nodes", None) or getattr(r, "hits", None)
 
@@ -935,20 +1018,25 @@ def render_simple_qa():
                             return cond_txt or cond_hits
 
                         if _is_nohit(raw, hits):
-                            # 2차: 더 넓게(top_k=10) 재검색
+                            # 2차: 더 넓게(top_k=10) 재검색 (확장 쿼리 그대로 사용)
                             qe_wide = st.session_state["rag_index"].as_query_engine(top_k=max(10, int(k) if isinstance(k,int) else 5))
-                            r2 = qe_wide.query(q)
+                            r2 = qe_wide.query(q_expanded)
                             raw2 = getattr(r2, "response", "") or str(r2)
                             hits2 = getattr(r2, "source_nodes", None) or getattr(r2, "hits", None)
                             if not _is_nohit(raw2, hits2):
                                 raw, hits = raw2, hits2
                             else:
-                                st.warning("교재에서 딱 맞는 근거를 찾지 못했어요. 질문을 조금 더 구체적으로 써 주면 더 잘 찾아요.\n예: “현재완료 기본형을 예문 2개로 설명해줘”")
-                                if is_admin:
-                                    st.caption("관리자 팁: prepared 폴더에 관련 교재가 있는지 확인하고, ‘다시 최적화(인덱스 갱신)’를 실행해 보세요.")
+                                # ✅ Fallback: 일반 지식 모드
+                                if st.session_state.get("allow_fallback", True):
+                                    fb = _fallback_general_answer(q, mode_key) or ""
+                                    st.write(fb.strip() or "—")
+                                    st.caption("※ 교재 근거 없음 — 일반 지식으로 답변했어요.")
+                                    _cache_put(q, fb, [], f"{mode_label} · Fallback")
+                                else:
+                                    st.warning("교재에서 딱 맞는 근거를 찾지 못했어요. 질문을 더 구체적으로 써 주세요.\n예: “현재완료 기본형을 예문 2개로 설명해줘”")
                                 return
 
-                        # ✅ 답변 본문 바로 표시
+                        # ✅ 교재 기반 답변 본문 바로 표시
                         st.write((raw or "").strip() or "—")
 
                         # 근거 자료(선택)
@@ -994,7 +1082,7 @@ def render_simple_qa():
             if i < len(uniq):
                 title = f"{i+1}. {uniq[i]['q']}"
                 with st.expander(title, expanded=False):
-                    _render_cached_block(uniq[i]["norm"])  # 답변 즉시 표시
+                    _render_cached_block(uniq[i]["norm"])
                     if st.button("🔄 이 질문으로 다시 검색", key=f"rehit_{uniq[i]['norm']}", use_container_width=True):
                         st.session_state["qa_q"] = uniq[i]["q"]
                         st.rerun()
