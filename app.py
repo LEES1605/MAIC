@@ -1068,7 +1068,7 @@ def _render_active_result_panel(container=None):
                 url = r0.get("url") or r0.get("source_url") or ""
                 target.markdown(f"- {name}  " + (f"(<{url}>)" if url else ""))
 
-    # 라디오(유지형) + 저장/수정
+    # 라디오(유지형) + 저장
     guard_key = f"{norm}|{mode_key}"
     saved = _get_last_rating(norm, user, mode_key)
     default_rating = saved if saved in (1,2,3,4,5) else 3
@@ -1089,15 +1089,15 @@ def _render_active_result_panel(container=None):
 
     c1, c2 = target.columns([1,4])
     with c1:
-        if target.button("💾 저장/수정", key=f"save_{guard_key}"):
+        if target.button("💾 저장", key=f"save_{guard_key}"):
             try:
                 _save_feedback(ar["q"], data.get("answer",""), int(st.session_state[rv_key]), mode_key, data.get("source",""), user)
-                try: st.toast("✅ 저장/수정 완료!", icon="✅")
-                except Exception: target.success("저장/수정 완료!")
+                try: st.toast("✅ 저장 완료!", icon="✅")
+                except Exception: target.success("저장 완료!")
             except Exception as _e:
                 target.warning(f"저장에 실패했어요: {_e}")
     with c2:
-        target.caption(f"현재 저장된 값: {saved if saved else '—'} (라디오 선택 후 ‘저장/수정’ 클릭)")
+        target.caption(f"현재 저장된 값: {saved if saved else '—'} (라디오 선택 후 ‘저장’ 클릭)")
 
 # ── [06-E] 메인 렌더 -----------------------------------------------------------
 def render_simple_qa():
@@ -1257,7 +1257,6 @@ def render_simple_qa():
                         st.rerun()
 
 # ===== [06] END ===============================================================
-
 
 
 # ===== [07] MAIN — 오케스트레이터 ============================================
