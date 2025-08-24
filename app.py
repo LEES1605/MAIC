@@ -669,7 +669,7 @@ def render_tag_diagnostics():
     except Exception:
         pass
 
-# ===== [06] SIMPLE QA DEMO — 히스토리 인라인 + 답변 직표시 + 규칙기반 합성기 + 피드백(라디오, 항상 유지) ==
+# ===== [06] SIMPLE QA DEMO — 히스토리 인라인 + 답변 직표시 + 골든우선 + 규칙기반 합성기 + 피드백(라디오, 항상 유지) ==
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 import time
@@ -725,7 +725,7 @@ def _get_enabled_modes_unified() -> Dict[str, bool]:
         return {"Grammar": True, "Sentence": True, "Passage": True}
     return {"Grammar": False, "Sentence": False, "Passage": False}
 
-# ── [06-B] 파일 I/O (히스토리 & 피드백) -----------------------------------------
+# ── [06-B] 파일 I/O (히스토리 & 피드백 & 골든) ----------------------------------
 def _app_dir() -> Path:
     p = Path.home() / ".maic"
     try: p.mkdir(parents=True, exist_ok=True)
@@ -835,6 +835,9 @@ def _render_cached_block(norm: str):
     if not data:
         st.info("이 질문의 저장된 답변이 없어요. 아래 ‘다시 검색’으로 최신 답변을 받아보세요.")
         return
+    # 골든 배지
+    if data.get("source") == "golden":
+        st.markdown("**⭐ 친구들이 이해 잘한 설명**")
     st.write(data.get("answer","—"))
     refs = data.get("refs") or []
     if refs:
@@ -1048,6 +1051,71 @@ def _ensure_nonempty_answer_rule_based(q: str, mode_key: str, hits: Any, raw: st
             return fb, "fallback_info"
     return "설명을 불러오는 중 문제가 있었어요. 질문을 조금 더 구체적으로 써 주세요.", "error"
 
+# ── [06-D⁵] 골든 해설 우선 검색 -------------------------------------------------
+_GOLDEN_MIN_SCORE = 0.52  # 필요시 0.45~0.6 사이로 조정
+
+def _read_golden_rows(max_lines: int = 20000) -> List[Dict[str, Any]]:
+    import json as _json
+    p = _golden_path()
+    if not p.exists(): return []
+    rows: List[Dict[str, Any]] = []
+    try:
+        with p.open("r", encoding="utf-8") as f:
+            for ln in f.readlines()[-max_lines:]:
+                try:
+                    o = _json.loads(ln)
+                    # 기대 필드: ts, user, mode, q_norm, question, answer, source
+                    if o.get("answer"):
+                        rows.append(o)
+                except Exception:
+                    continue
+    except Exception:
+        return []
+    rows.reverse()
+    return rows
+
+def _tokenize_for_sim(s: str) -> set[str]:
+    import re as _re
+    s = (s or "").lower()
+    s = _re.sub(r"[^\w\sㄱ-ㅎ가-힣]", " ", s)
+    toks = [t for t in s.split() if len(t) >= 2]
+    # 간단 불용어
+    stop = {"the","a","an","to","of","and","or","in","on","for","is","are","was","were","be","been","being"}
+    return set(t for t in toks if t not in stop)
+
+def _jaccard(a: set[str], b: set[str]) -> float:
+    if not a or not b: return 0.0
+    inter = a & b
+    union = a | b
+    return float(len(inter)) / float(len(union))
+
+def _search_golden_best(q: str, mode_key: str) -> Tuple[str, float] | None:
+    q_norm = _normalize_question(q)
+    rows = _read_golden_rows()
+    # 1) 동일 정규질문 우선
+    same = [r for r in rows if r.get("q_norm") == q_norm and r.get("mode") == mode_key and r.get("answer")]
+    if same:
+        # 최신 ts 우선
+        same.sort(key=lambda r: int(r.get("ts") or 0), reverse=True)
+        return (same[0]["answer"], 1.0)
+
+    # 2) 유사도 기반(간단 자카드)
+    q_expanded = _expand_query_for_rag(q, mode_key)
+    qset = _tokenize_for_sim(q_expanded)
+    best_ans, best_score = None, 0.0
+    for r in rows:
+        if r.get("mode") != mode_key: 
+            continue
+        cand_q = (r.get("question") or r.get("q_norm") or "")
+        cset = _tokenize_for_sim(str(cand_q))
+        s = _jaccard(qset, cset)
+        if s > best_score:
+            best_score = s
+            best_ans = r.get("answer")
+    if best_ans and best_score >= _GOLDEN_MIN_SCORE:
+        return (best_ans, best_score)
+    return None
+
 # ✅ 항상 보이는 결과 패널 (컨테이너에 그릴 수도 있음)
 def _render_active_result_panel(container=None):
     target = container or st
@@ -1058,6 +1126,10 @@ def _render_active_result_panel(container=None):
     data = _cache_get(norm)
     if not data:
         return
+
+    # 골든 배지
+    if (ar.get("origin") == "golden") or (data.get("source") == "golden"):
+        target.markdown("**⭐ 친구들이 이해 잘한 설명**")
 
     target.write(data.get("answer","—"))
     refs = data.get("refs") or []
@@ -1141,7 +1213,7 @@ def render_simple_qa():
         st.warning("이 질문 유형은 지금 관리자에서 꺼져 있어요. 다른 유형을 선택해 주세요.")
         return
 
-    # ▶ 제출 시 검색·합성 후, active_result에 저장하고 같은 자리에서 즉시 결과 패널 렌더
+    # ▶ 제출 시: ① 골든 우선 → ② RAG → ③ 룰기반/폴백
     if submitted and (st.session_state.get("qa_q","").strip()):
         q = st.session_state["qa_q"].strip()
         guard_key = f"{_normalize_question(q)}|{mode_key}"
@@ -1156,78 +1228,83 @@ def render_simple_qa():
             area = st.container()
             with area:
                 thinking = st.empty()
-                thinking.info("🧠 답변 생각중… 교재에서 관련 내용을 찾고 정리하고 있어요.")
+                thinking.info("🧠 답변 생각중… 베스트 해설과 교재를 차례로 확인하고 있어요.")
 
-            index_ready = _is_ready_unified()
             final, origin = "", "unknown"
             refs: List[Dict[str, str]] = []
 
-            if index_ready:
-                try:
-                    q_expanded = _expand_query_for_rag(q, mode_key)
-                    qe = st.session_state["rag_index"].as_query_engine(top_k=k)
-                    r = qe.query(q_expanded)
-                    raw = getattr(r, "response", "") or ""
-                    hits = getattr(r, "source_nodes", None) or getattr(r, "hits", None)
+            # ① 골든 우선
+            golden = _search_golden_best(q, mode_key)
+            if golden:
+                final, _score = golden
+                origin = "golden"
 
-                    def _is_nohit(raw_txt, hits_obj) -> bool:
-                        txt = (raw_txt or "").strip().lower()
-                        bad_phrases = ["관련 결과를 찾지 못", "no relevant", "no result", "not find"]
-                        cond_txt = (not txt) or any(p in txt for p in bad_phrases)
-                        cond_hits = (not hits_obj) or (hasattr(hits_obj, "__len__") and len(hits_obj) == 0)
-                        return cond_txt or cond_hits
-
-                    if _is_nohit(raw, hits):
-                        qe_wide = st.session_state["rag_index"].as_query_engine(top_k=max(10, int(k) if isinstance(k,int) else 5))
-                        r2 = qe_wide.query(q_expanded)
-                        raw2 = getattr(r2, "response", "") or ""
-                        hits2 = getattr(r2, "source_nodes", None) or getattr(r2, "hits", None)
-                        if not _is_nohit(raw2, hits2):
-                            raw, hits = raw2, hits2
-
-                    final, origin = _ensure_nonempty_answer_rule_based(q, mode_key, hits, raw)
-
+            # ② RAG (골든이 없거나 불충분할 때만)
+            if not final:
+                index_ready = _is_ready_unified()
+                if index_ready:
                     try:
-                        if hits:
-                            for h in hits[:2]:
-                                meta = None
-                                if hasattr(h, "metadata") and isinstance(getattr(h, "metadata"), dict):
-                                    meta = h.metadata
-                                elif hasattr(h, "node") and hasattr(h.node, "metadata") and isinstance(h.node.metadata, dict):
-                                    meta = h.node.metadata
-                                meta = meta or {}
-                                refs.append({
-                                    "doc_id": meta.get("doc_id") or meta.get("file_name") or meta.get("filename", ""),
-                                    "url": meta.get("source") or meta.get("url", ""),
-                                })
-                    except Exception:
-                        refs = []
+                        q_expanded = _expand_query_for_rag(q, mode_key)
+                        qe = st.session_state["rag_index"].as_query_engine(top_k=k)
+                        r = qe.query(q_expanded)
+                        raw = getattr(r, "response", "") or ""
+                        hits = getattr(r, "source_nodes", None) or getattr(r, "hits", None)
 
-                except Exception as e:
-                    with area:
-                        thinking.empty()
-                        st.error(f"검색 실패: {type(e).__name__}: {e}")
-                        final, origin = "설명을 불러오는 중 문제가 있었어요. 다시 시도해 주세요.", "error"
+                        def _is_nohit(raw_txt, hits_obj) -> bool:
+                            txt = (raw_txt or "").strip().lower()
+                            bad_phrases = ["관련 결과를 찾지 못", "no relevant", "no result", "not find"]
+                            cond_txt = (not txt) or any(p in txt for p in bad_phrases)
+                            cond_hits = (not hits_obj) or (hasattr(hits_obj, "__len__") and len(hits_obj) == 0)
+                            return cond_txt or cond_hits
 
-            else:
-                with area:
-                    thinking.empty()
-                    st.info("아직 두뇌가 준비되지 않았어요. 상단에서 **복구/연결** 또는 **다시 최적화**를 먼저 완료해 주세요.")
-                    final, origin = "", "not_ready"
+                        if _is_nohit(raw, hits):
+                            qe_wide = st.session_state["rag_index"].as_query_engine(top_k=max(10, int(k) if isinstance(k,int) else 5))
+                            r2 = qe_wide.query(q_expanded)
+                            raw2 = getattr(r2, "response", "") or ""
+                            hits2 = getattr(r2, "source_nodes", None) or getattr(r2, "hits", None)
+                            if not _is_nohit(raw2, hits2):
+                                raw, hits = raw2, hits2
+
+                        final, origin = _ensure_nonempty_answer_rule_based(q, mode_key, hits, raw)
+
+                        try:
+                            if hits:
+                                for h in hits[:2]:
+                                    meta = None
+                                    if hasattr(h, "metadata") and isinstance(getattr(h, "metadata"), dict):
+                                        meta = h.metadata
+                                    elif hasattr(h, "node") and hasattr(h.node, "metadata") and isinstance(h.node.metadata, dict):
+                                        meta = h.node.metadata
+                                    meta = meta or {}
+                                    refs.append({
+                                        "doc_id": meta.get("doc_id") or meta.get("file_name") or meta.get("filename", ""),
+                                        "url": meta.get("source") or meta.get("url", ""),
+                                    })
+                        except Exception:
+                            refs = []
+
+                    except Exception as e:
+                        with area:
+                            thinking.empty()
+                            st.error(f"검색 실패: {type(e).__name__}: {e}")
+                            final, origin = "설명을 불러오는 중 문제가 있었어요. 다시 시도해 주세요.", "error"
+                else:
+                    # ③ 룰기반/폴백(두뇌 미준비)
+                    final, origin = _ensure_nonempty_answer_rule_based(q, mode_key, hits=None, raw="")
 
             # 캐시 + 활성 결과 저장
-            _cache_put(q, final, refs, {"Grammar":"문법설명(Grammar)","Sentence":"문장분석(Sentence)","Passage":"지문분석(Passage)"}[mode_key], origin)
+            _cache_put(q, final, refs, {"Grammar":"문법설명(Grammar)","Sentence":"문장분석(Sentence)","Passage":"지문분석(Passage)"}[mode_key], origin or "unknown")
             st.session_state["active_result"] = {
                 "q": q, "q_norm": _normalize_question(q),
-                "mode_key": mode_key, "user": user, "origin": origin
+                "mode_key": mode_key, "user": user, "origin": origin or "unknown"
             }
 
-            # ⬇️ 제출 직후, 같은 컨테이너에 즉시 결과 패널을 렌더(라디오가 바로 보임)
+            # 제출 직후, 같은 컨테이너에 즉시 결과 패널 렌더
             with area:
                 thinking.empty()
                 _render_active_result_panel(container=area)
 
-    # ⬇️ 제출 여부와 무관하게, 항상 마지막 결과 패널을 렌더(라디오 클릭 재실행 대비)
+    # 제출 여부와 무관하게, 항상 마지막 결과 패널을 렌더(라디오 클릭 재실행 대비)
     _render_active_result_panel()
 
     # 📒 나의 질문 히스토리 — 인라인 펼치기
