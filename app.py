@@ -669,7 +669,7 @@ def render_tag_diagnostics():
     except Exception:
         pass
 
-# ===== [06] SIMPLE QA DEMO — form 단일제출 + 중복가드 + 링크형 히스토리 ========
+# ===== [06] SIMPLE QA DEMO — 3개 고정/번호·좌측정렬·플레이스홀더 ===============
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 import time
@@ -782,6 +782,7 @@ def _render_top3_badges(top3: List[Tuple[str, int]]):
       .pill-rank { margin-right:6px; padding:4px 8px; border-radius:999px; font-size:0.9rem;
                    background:#2563eb1a; color:#1d4ed8; border:1px solid #2563eb55;}
       .sec-title { font-weight:800; font-size:1.1rem; margin: 6px 0 2px 0;}
+      /* 링크형 히스토리: 좌측 정렬 + 밑줄 + 파란색, 버튼 배경/테두리 제거 */
       .link-btn .stButton>button { 
           background: transparent !important; 
           border: none !important; 
@@ -791,6 +792,14 @@ def _render_top3_badges(top3: List[Tuple[str, int]]):
           box-shadow: none !important;
           color: #1d4ed8 !important; 
           text-decoration: underline; 
+      }
+      /* 플레이스홀더(…): 좌측 정렬+연한 색 */
+      .hist-placeholder { 
+          color: #9ca3af; 
+          padding: 2px 4px; 
+          text-align: left; 
+          width: 100%;
+          display: block;
       }
     </style>"""
     st.markdown(css + f"<div class='sticky-top3'>{' '.join(parts)}</div>", unsafe_allow_html=True)
@@ -838,7 +847,8 @@ def render_simple_qa():
     if not is_admin:
         _render_top3_badges(_top3_users())
 
-    st.markdown("### 💬 질문은 최고의 공부방법이다")
+    # 🔁 헤더 문구 교체
+    st.markdown("### 💬 질문은 모든 천재들이 가장 많이 사용하는 공부 방법이다!")
 
     # 관리자 설정 반영(안전 접근)
     enabled = globals().get("get_enabled_modes", lambda: {"Grammar": True, "Sentence": True, "Passage": True})()
@@ -859,7 +869,7 @@ def render_simple_qa():
     if not is_admin:
         st.text_input("내 이름(임시)", key="student_name", placeholder="예: 지민 / 민수 / 유나")
 
-    # 👉 폼으로 단일 제출(Enter/버튼 모두 form_submit으로 수렴)
+    # 👉 폼으로 단일 제출(중복 방지)
     placeholder = (
         "예: 관계대명사 which 사용법을 알려줘" if mode_key == "Grammar"
         else "예: I seen the movie yesterday 문장 문제점 분석해줘" if mode_key == "Sentence"
@@ -869,7 +879,6 @@ def render_simple_qa():
         q = st.text_input("질문 입력", value=st.session_state.get("qa_q",""), placeholder=placeholder, key="qa_q_form")
         k = st.slider("검색 결과 개수(top_k)", 1, 10, 5, key="qa_k") if is_admin else 5
         submitted = st.form_submit_button("🧑‍🏫 쌤에게 물어보기")
-    # 폼 외부로 q 동기화
     if "qa_q_form" in st.session_state:
         st.session_state["qa_q"] = st.session_state["qa_q_form"]
 
@@ -880,20 +889,15 @@ def render_simple_qa():
     # (B) 새 질문 처리 — 단일 제출 + 중복 가드
     if submitted and (st.session_state.get("qa_q","").strip()):
         q = st.session_state["qa_q"].strip()
-        # 중복 가드: 같은 질문/모드가 연속해서 1.5초 내 재제출되면 무시
         guard_key = f"{_normalize_question(q)}|{mode_key}"
         now = time.time()
-        if st.session_state.get("last_submit_key") == guard_key and (now - st.session_state.get("last_submit_ts",0) < 1.5):
-            pass  # 무시
-        else:
+        if not (st.session_state.get("last_submit_key") == guard_key and (now - st.session_state.get("last_submit_ts",0) < 1.5)):
             st.session_state["last_submit_key"] = guard_key
             st.session_state["last_submit_ts"] = now
 
-            # 기록(파일만)
             user = _sanitize_user(st.session_state.get("student_name") if not is_admin else "admin")
             _append_history_file_only(q, user)
 
-            # 검색/생성
             answer_box = st.container()
             index_ready = False
             try:
@@ -916,7 +920,6 @@ def render_simple_qa():
                                     "doc_id": (meta or {}).get("doc_id") or (meta or {}).get("file_name", ""),
                                     "url": (meta or {}).get("source") or (meta or {}).get("url", ""),
                                 })
-                        # 간단 모드 힌트
                         if mode_key == "Sentence":
                             import re as _re
                             if _re.search(r"\bI\s+seen\b", q, flags=_re.I):
@@ -935,19 +938,18 @@ def render_simple_qa():
                                     name = r0.get("doc_id") or r0.get("source") or f"ref{i}"
                                     url = r0.get("url") or r0.get("source_url") or ""
                                     st.markdown(f"- {name}  " + (f"(<{url}>)" if url else ""))
-                        # 화면 표시용 캐시 저장(히스토리에서 ‘이전 답변’로 사용)
                         _cache_put(q, raw, refs, mode_label)
                 except Exception as e:
                     st.error(f"검색 실패: {type(e).__name__}: {e}")
             else:
                 st.info("아직 두뇌가 준비되지 않았어요. 상단에서 **복구/연결** 또는 **다시 최적화**를 먼저 완료해 주세요.")
 
-    # (C) 최근 질문 — 파일에서만 읽고, 정규화로 중복 제거 후 번호 매김 + 링크형 버튼
+    # (C) 최근 질문 — 파일에서 읽고, 정규화 중복 제거 → 상위 3개 + 플레이스홀더(…)
     rows = _read_history_lines(max_lines=5000)
     if rows:
         st.markdown("<div class='sec-title'>📒 나의 질문 히스토리</div>", unsafe_allow_html=True)
 
-        # 정규화 기준으로 중복 제거
+        # 정규화 기준으로 유니크 만들기
         uniq: List[Dict[str, Any]] = []
         seen = set()
         for r in rows:
@@ -956,19 +958,21 @@ def render_simple_qa():
             key = _normalize_question(qtext)
             if key in seen: continue
             seen.add(key); uniq.append({"q": qtext, "norm": key})
-            if len(uniq) >= 10: break  # 화면은 최근 10개만
+            if len(uniq) >= 3: break  # 화면에는 최근 3개만
 
-        # 링크처럼 보이는 버튼 렌더(좌측정렬 + 번호)
+        # 3개 고정 출력(좌측 정렬 + 번호). 부족분은 … 로 채우기
         st.markdown("<div class='link-btn'>", unsafe_allow_html=True)
-        for i, item in enumerate(uniq):
-            lbl = f"{i+1}. {item['q']}"
-            if st.button(lbl, key=f"hist_link_{i}", use_container_width=True):
-                st.session_state["hist_selected_norm"] = item["norm"]
-                st.session_state["qa_q"] = item["q"]          # 입력창 복구
-                # 새 검색은 하지 않고, 바로 위의 ‘이전 답변’ 섹션이 보이도록 유지
+        for i in range(3):
+            if i < len(uniq):
+                lbl = f"{i+1}. {uniq[i]['q']}"
+                if st.button(lbl, key=f"hist_link_{i}", use_container_width=True):
+                    st.session_state["hist_selected_norm"] = uniq[i]["norm"]
+                    st.session_state["qa_q"] = uniq[i]["q"]  # 입력창 복구
+            else:
+                st.markdown(f"<span class='hist-placeholder'>{i+1}. …</span>", unsafe_allow_html=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
-# ===== [06] END ==============================================================
+# ===== [06] END ===============================================================
 
 
 # ===== [07] MAIN =============================================================
