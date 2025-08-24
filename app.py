@@ -940,294 +940,63 @@ def render_simple_qa():
 
 # ===== [06] END ===============================================================
 
-
-
-# ===== [07] MAIN =============================================================
-def main():
-    # (A) 호환성 shim -----------------------------------------------------------
-    def _index_ready() -> bool:
-        try:
-            return get_index_status() == "ready"
-        except Exception:
-            return False
-    globals()['_index_ready'] = _index_ready
-
-    # ── 헤더: 인라인(제목 + 배지) + 우측 FAQ 버튼 -------------------------------
-    def _render_title_with_status():
-        import streamlit as st
-        status = get_index_status()  # 'ready' | 'pending' | 'missing'
-        is_admin = st.session_state.get("is_admin", False)
-
-        # 상태 배지 HTML (학생/관리자 분리)
-        if status == "ready":
-            badge_html = (
-                "<span class='ui-pill ui-pill-green'>🟢 두뇌 준비됨</span>"
-                if is_admin else
-                "<span class='ui-pill ui-pill-green'>🟢 답변준비 완료</span>"
-            )
-        elif status == "pending":
-            badge_html = "<span class='ui-pill'>🟡 연결 대기</span>"
-        else:
-            badge_html = "<span class='ui-pill'>🔴 준비 안 됨</span>"
-
-        # 상단 레이아웃: [제목+배지] | [FAQ 버튼]
-        c1, c2 = st.columns([0.78, 0.22])
-        with c1:
-            st.markdown("""
-            <style>
-              .hdr-row { display:flex; align-items:center; gap:.5rem; line-height:1.3; }
-              .hdr-title { font-size:1.25rem; font-weight:800; }
-              .ui-pill { display:inline-block; padding:2px 10px; border-radius:999px; 
-                         border:1px solid #e5e7eb; background:#f8fafc; font-size:0.9rem; }
-              .ui-pill-green { background:#10b98122; border-color:#10b98166; color:#065f46; }
-            </style>
-            <div class='hdr-row'>
-              <span class='hdr-title'>LEES AI 쌤</span>
-              """ + badge_html + """
-            </div>
-            """, unsafe_allow_html=True)
-
-        with c2:
-            st.write("")  # 살짝 아래 내리기
-            show = bool(st.session_state.get("show_faq", False))
-            label = "📚 자주하는 질문" if not show else "📚 자주하는 질문 닫기"
-            if st.button(label, key="btn_toggle_faq", use_container_width=True):
-                st.session_state["show_faq"] = not show
-
-        # FAQ 패널(토글): 상단에 간단 인기질문 5개
-        if st.session_state.get("show_faq", False):
-            ranked = _popular_questions(top_n=5, days=14)
-            with st.container(border=True):
-                st.markdown("**📚 자주하는 질문** — 최근 2주 기준")
-                if not ranked:
-                    st.caption("아직 집계된 질문이 없어요.")
-                else:
-                    for qtext, cnt in ranked:
-                        # 질문을 누르면 즉시 입력 복구 + 실행
-                        if st.button(f"{qtext}  · ×{cnt}", key=f"faq_{hash(qtext)}", use_container_width=True):
-                            st.session_state["qa_q"] = qtext
-                            st.session_state["qa_submitted"] = True
-
-    # 헤더 1회 렌더
-    _render_title_with_status()
-
-    # (C) 유틸: 품질스캐너/연결/복구/빌드 (기존 그대로) ----------------------------
-    import importlib as _importlib
-    from pathlib import Path as _Path
-
-    def _trigger_quality_autoscan():
-        try:
-            m = _importlib.import_module("src.rag.index_build")
-            fn = getattr(m, "autorun_quality_scan_if_stale", None)
-        except Exception:
-            fn = None
-        if callable(fn):
-            try:
-                res = fn()
-                if res.get("ok") and not res.get("skipped"):
-                    st.toast("품질 리포트 갱신 완료 ✅", icon="✅")
-            except Exception:
-                if st.session_state.get("is_admin", False):
-                    st.toast("품질 리포트 갱신 실패", icon="⚠️")
-
-    def _auto_attach_or_restore_silently():
-        return _attach_from_local()
-
-    def _attach_with_status(label="두뇌 자동 연결 중…") -> bool:
-        try:
-            with st.status(label, state="running") as s:
-                ok = _auto_attach_or_restore_silently()
-                st.session_state["brain_attached"] = bool(ok)
-                if ok:
-                    s.update(label="두뇌 자동 연결 완료 ✅", state="complete")
-                    _trigger_quality_autoscan()
-                    if not st.session_state.get("_post_attach_rerun_done"):
-                        st.session_state["_post_attach_rerun_done"] = True
-                        st.rerun()
-                else:
-                    s.update(label="두뇌 자동 연결 실패 ❌", state="error")
-                return bool(ok)
-        except Exception:
-            ok = _auto_attach_or_restore_silently()
-            st.session_state["brain_attached"] = bool(ok)
-            if ok:
-                _trigger_quality_autoscan()
-                if not st.session_state.get("_post_attach_rerun_done"):
-                    st.session_state["_post_attach_rerun_done"] = True
-                    st.rerun()
-            else:
-                if st.session_state.get("is_admin", False):
-                    st.error("두뇌 자동 연결 실패")
-            return bool(ok)
-
-    def _restore_then_attach():
-        try:
-            _m = _importlib.import_module("src.rag.index_build")
-        except Exception as e:
-            st.error(f"복구 모듈 임포트 실패: {type(e).__name__}: {e}")
-            return False
-
-        _restore = getattr(_m, "restore_latest_backup_to_local", None)
-        if not callable(_restore):
-            st.error("복구 함수를 찾지 못했습니다. (restore_latest_backup_to_local)")
-            return False
-
-        with st.status("백업에서 로컬로 복구 중…", state="running") as s:
-            try:
-                r = _restore()
-            except Exception as e:
-                s.update(label="복구 실패 ❌", state="error")
-                st.error(f"복구 실패: {type(e).__name__}: {e}")
-                return False
-
-            if not r or not r.get("ok"):
-                s.update(label="복구 실패 ❌", state="error")
-                st.error(f"복구 실패: {r.get('error') if r else 'unknown'}")
-                return False
-
-            s.update(label="복구 완료 ✅", state="complete")
-
-        return _attach_with_status("복구 후 두뇌 연결 중…")
-
-    def _build_then_backup_then_attach():
-        try:
-            _m = _importlib.import_module("src.rag.index_build")
-        except Exception as e:
-            st.error(f"인덱스 빌더 모듈 임포트 실패: {type(e).__name__}: {e}")
-            return False
-
-        build_index_with_checkpoint = getattr(_m, "build_index_with_checkpoint", None)
-        _make_and_upload_backup_zip_fn = getattr(_m, "_make_and_upload_backup_zip", None)
-        _PERSIST_DIR_OBJ = getattr(_m, "PERSIST_DIR", _Path.home() / ".maic" / "persist")
-
-        if not callable(build_index_with_checkpoint):
-            st.error("인덱스 빌더 함수를 찾지 못했습니다. (build_index_with_checkpoint)")
-            return False
-
-        prog = st.progress(0); log = st.empty()
-        def _pct(v: int, msg: str | None = None):
-            prog.progress(max(0, min(int(v), 100)))
-            if msg: log.info(str(msg))
-        def _msg(s: str): log.write(f"• {s}")
-
-        try:
-            with st.status("변경 반영을 위한 다시 최적화 실행 중…", state="running") as s:
-                res = build_index_with_checkpoint(
-                    update_pct=_pct, update_msg=_msg,
-                    gdrive_folder_id="", gcp_creds={},
-                    persist_dir=str(_PERSIST_DIR_OBJ), remote_manifest={},
-                )
-                prog.progress(100)
-                s.update(label="다시 최적화 완료 ✅", state="complete")
-            st.json(res)
-            try:
-                if callable(_make_and_upload_backup_zip_fn):
-                    _ = _make_and_upload_backup_zip_fn(None, None)
-            except Exception:
-                pass
-            if _restore_then_attach():
-                return True
-            ok = _attach_with_status("두뇌 연결 중…")
-            return bool(ok)
-        except Exception as e:
-            st.error(f"다시 최적화 실패: {type(e).__name__}: {e}")
-            return False
-
-    # (E) 부팅: 로컬 인덱스 없으면 선복구
-    local_ok = (_Path.home() / ".maic" / "persist" / "chunks.jsonl").exists() or \
-               (_Path.home() / ".maic" / "persist" / ".ready").exists()
-    if not local_ok and not _index_ready():
-        if _restore_then_attach():
-            st.rerun()
-        else:
-            st.info("백업을 찾지 못했거나 손상되었습니다. ‘업데이트(다시 최적화)’를 실행해 주세요.")
-            btn = st.button("업데이트 (다시 최적화 실행)", type="primary", key="boot_build_when_local_missing")
-            if btn:
-                if _build_then_backup_then_attach():
-                    st.rerun()
-                else:
-                    st.stop()
-        st.stop()
-
-    # (F) 사전점검(관리자 전용) --------------------------------------------------
+# ── 헤더: 인라인(제목 + 배지) + 우측 FAQ 버튼 -------------------------------
+def _render_title_with_status():
+    import streamlit as st
+    status = get_index_status()  # 'ready' | 'pending' | 'missing'
     is_admin = st.session_state.get("is_admin", False)
-    import importlib as _importlib
-    from pathlib import Path as _Path
-    _mod = None
-    _quick_precheck = None
-    _PERSIST_DIR = _Path.home() / ".maic" / "persist"
-    try:
-        _mod = _importlib.import_module("src.rag.index_build")
-        _quick_precheck = getattr(_mod, "quick_precheck", None)
-        _PERSIST_DIR = getattr(_mod, "PERSIST_DIR", _PERSIST_DIR)
-    except Exception:
-        pass
 
-    pre = {}
-    if is_admin and callable(_quick_precheck):
-        try:
-            pre = _quick_precheck("")
-        except Exception as e:
-            st.warning(f"사전점검 실패: {type(e).__name__}: {e}")
-            pre = {}
-
-    changed_flag = bool(pre.get("changed")) if is_admin else False
-    reasons_list = list(pre.get("reasons") or []) if is_admin else []
-
-    if is_admin and changed_flag and not st.session_state.get("_admin_update_prompt_done"):
-        with st.container(border=True):
-            if "no_local_manifest" in reasons_list:
-                st.info("📎 아직 인덱스가 없습니다. **최초 빌드가 필요**합니다.")
-            else:
-                st.info("📎 prepared 폴더에서 **새 자료(변경/신규)** 가 감지되었습니다.")
-            c1, c2 = st.columns(2)
-            with c1:
-                do_update = st.button("업데이트 (다시 최적화 실행)", type="primary", key="admin_update_now")
-            with c2:
-                later = st.button("다음에 업데이트", key="admin_update_later")
-
-        if do_update:
-            st.session_state["_admin_update_prompt_done"] = True
-            if _build_then_backup_then_attach():
-                st.rerun()
-            else:
-                st.stop()
-
-        if later:
-            st.session_state["_admin_update_prompt_done"] = True
-            if _restore_then_attach():
-                st.rerun()
-            else:
-                st.info("백업을 찾지 못했거나 손상되었습니다. ‘업데이트(다시 최적화)’를 실행해 주세요.")
-                st.stop()
-        st.stop()
-
-    # (G) 디버그 로그: 관리자에게만 ------------------------------------------------
-    if is_admin:
-        decision_log = st.empty()
-        decision_log.info(
-            "auto-boot(is_admin={}) admin_changed={} reasons={}".format(is_admin, changed_flag, reasons_list)
+    # 상태 배지 HTML (학생/관리자 분리)
+    if status == "ready":
+        badge_html = (
+            "<span class='ui-pill ui-pill-green'>🟢 두뇌 준비됨</span>"
+            if is_admin else
+            "<span class='ui-pill ui-pill-green'>🟢 답변준비 완료</span>"
         )
-
-    if not _index_ready():
-        if _attach_with_status():
-            st.rerun()
-        else:
-            if is_admin:
-                st.info("두뇌 연결 실패. 필요 시 ‘업데이트(다시 최적화)’를 실행해 주세요.")
-
-    # (H) 화면 섹션
-    if is_admin:
-        render_admin_settings_panel()
-        st.divider()
-        render_brain_prep_main()
-        st.divider()
-        render_tag_diagnostics()
-        st.divider()
-        render_simple_qa()
+    elif status == "pending":
+        badge_html = "<span class='ui-pill'>🟡 연결 대기</span>"
     else:
-        render_simple_qa()
+        badge_html = "<span class='ui-pill'>🔴 준비 안 됨</span>"
 
-if __name__ == "__main__":
-    main()
-# ===== [07] END =============================================================
+    # 상단 레이아웃: [제목+배지] | [FAQ 버튼]
+    c1, c2 = st.columns([0.78, 0.22])
+    with c1:
+        st.markdown("""
+        <style>
+          .hdr-row { display:flex; align-items:center; gap:.5rem; line-height:1.3; }
+          .hdr-title { font-size:1.25rem; font-weight:800; }
+          .ui-pill { display:inline-block; padding:2px 10px; border-radius:999px; 
+                     border:1px solid #e5e7eb; background:#f8fafc; font-size:0.9rem; }
+          .ui-pill-green { background:#10b98122; border-color:#10b98166; color:#065f46; }
+        </style>
+        <div class='hdr-row'>
+          <span class='hdr-title'>LEES AI 쌤</span>
+          """ + badge_html + """
+        </div>
+        """, unsafe_allow_html=True)
+
+    with c2:
+        st.write("")  # 살짝 아래 내리기
+        show = bool(st.session_state.get("show_faq", False))
+        label = "📚 친구들이 자주하는 질문" if not show else "📚 친구들이 자주하는 질문 닫기"
+        if st.button(label, key="btn_toggle_faq", use_container_width=True):
+            st.session_state["show_faq"] = not show
+
+    # FAQ 패널(토글): 상단에 간단 인기질문 5개
+    if st.session_state.get("show_faq", False):
+        ranked = _popular_questions(top_n=5, days=14)
+        with st.container(border=True):
+            st.markdown("**📚 친구들이 자주하는 질문** — 최근 2주 기준")
+            if not ranked:
+                st.caption("아직 집계된 질문이 없어요.")
+            else:
+                for qtext, cnt in ranked:
+                    # 질문을 누르면 즉시 입력 복구 + 실행
+                    if st.button(f"{qtext}  · ×{cnt}", key=f"faq_{hash(qtext)}", use_container_width=True):
+                        st.session_state["qa_q"] = qtext
+                        st.session_state["qa_submitted"] = True
+
+# 헤더 1회 렌더
+_render_title_with_status()
+
+
