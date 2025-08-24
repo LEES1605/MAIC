@@ -669,16 +669,16 @@ def render_tag_diagnostics():
     except Exception:
         pass
 
-# ===== [06] SIMPLE QA DEMO — 히스토리 인라인 + 답변 직표시 + 규칙기반 합성기 + Fallback ==
+# ===== [06] SIMPLE QA DEMO — 히스토리 인라인 + 답변 직표시 + 규칙기반 합성기 + 피드백 저장 ==
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 import time
 import streamlit as st
 
-# ── [06-A] 세션/캐시 준비 -------------------------------------------------------
+# ── [06-A] 세션/캐시/상태 준비 ---------------------------------------------------
 def _ensure_state():
     if "answer_cache" not in st.session_state:
-        st.session_state["answer_cache"] = {}  # norm -> {"answer","refs","mode","ts"}
+        st.session_state["answer_cache"] = {}  # norm -> {"answer","refs","mode","ts","source"}
     if "last_submit_key" not in st.session_state:
         st.session_state["last_submit_key"] = None
     if "last_submit_ts" not in st.session_state:
@@ -687,6 +687,8 @@ def _ensure_state():
         st.session_state["SHOW_TOP3_STICKY"] = False
     if "allow_fallback" not in st.session_state:
         st.session_state["allow_fallback"] = True  # 교재 no-hit 시 일반 지식 모드 허용
+    if "saved_ratings" not in st.session_state:
+        st.session_state["saved_ratings"] = {}     # rating_key -> True
 
 # ── [06-A’] 준비/토글 통일 판단 -------------------------------------------------
 def _is_ready_unified() -> bool:
@@ -720,12 +722,24 @@ def _get_enabled_modes_unified() -> Dict[str, bool]:
         return {"Grammar": True, "Sentence": True, "Passage": True}
     return {"Grammar": False, "Sentence": False, "Passage": False}
 
-# ── [06-B] 파일 I/O (히스토리) -------------------------------------------------
-def _history_path() -> Path:
+# ── [06-B] 파일 I/O (히스토리 & 피드백) -----------------------------------------
+def _app_dir() -> Path:
     p = Path.home() / ".maic"
     try: p.mkdir(parents=True, exist_ok=True)
     except Exception: pass
-    return p / "qa_history.jsonl"
+    return p
+
+def _history_path() -> Path: return _app_dir() / "qa_history.jsonl"
+def _feedback_path() -> Path: return _app_dir() / "feedback.jsonl"
+def _golden_path() -> Path: return _app_dir() / "golden_explanations.jsonl"
+
+def _append_jsonl(path: Path, obj: Dict[str, Any]):
+    try:
+        import json as _json
+        with path.open("a", encoding="utf-8") as f:
+            f.write(_json.dumps(obj, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
 
 def _sanitize_user(name: str | None) -> str:
     import re as _re
@@ -783,8 +797,7 @@ def _top3_users(days: int = 7) -> List[Tuple[str, int]]:
     ctr = Counter(users); return ctr.most_common(3)
 
 def _render_top3_badges():
-    if not st.session_state.get("SHOW_TOP3_STICKY"):
-        return
+    if not st.session_state.get("SHOW_TOP3_STICKY"): return
     data = list(_top3_users()[:3])
     while len(data) < 3: data.append(("…", 0))
     medals = ["🥇","🥈","🥉"]
@@ -798,14 +811,15 @@ def _render_top3_badges():
     pills = " ".join(f"<span class='pill'>{medals[i]} {n} · {c}회</span>" for i,(n,c) in enumerate(data))
     st.markdown(css + f"<div class='sticky-top3'>{pills}</div>", unsafe_allow_html=True)
 
-# ── [06-D] 과거 답변 캐시 ------------------------------------------------------
-def _cache_put(q: str, answer: str, refs: List[Dict[str,str]], mode_label: str):
+# ── [06-D] 캐시 + 저장 ----------------------------------------------------------
+def _cache_put(q: str, answer: str, refs: List[Dict[str,str]], mode_label: str, source: str):
     _ensure_state()
     norm = _normalize_question(q)
     st.session_state["answer_cache"][norm] = {
         "answer": (answer or "").strip(),
         "refs": refs or [],
         "mode": mode_label,
+        "source": source,
         "ts": int(time.time()),
     }
 
@@ -827,13 +841,26 @@ def _render_cached_block(norm: str):
                 url = r0.get("url") or r0.get("source_url") or ""
                 st.markdown(f"- {name}  " + (f"(<{url}>)" if url else ""))
 
-# ── [06-D’] 일반 지식 Fallback(옵션) -------------------------------------------
+# ── [06-D’] 피드백 저장 ---------------------------------------------------------
+def _save_feedback(q: str, answer: str, rating: int, mode_key: str, source: str, user: str):
+    q_norm = _normalize_question(q)
+    ts = int(time.time())
+    _append_jsonl(_feedback_path(), {
+        "ts": ts, "user": user, "mode": mode_key, "q_norm": q_norm,
+        "rating": int(rating), "source": source
+    })
+    if int(rating) >= 4:
+        _append_jsonl(_golden_path(), {
+            "ts": ts, "user": user, "mode": mode_key, "q_norm": q_norm,
+            "question": q, "answer": answer, "source": source
+        })
+
+# ── [06-D’’] 일반 지식 Fallback(문구용) -----------------------------------------
 def _fallback_general_answer(q: str, mode_key: str) -> str | None:
-    # LLM 연결 전이므로 안내만 남겨둠
     return ("일반 지식 모드가 비활성화되어 있어요. "
             "관리자에서 일반 지식 LLM 연결을 켜면 교재에 없더라도 기본 설명을 제공할 수 있어요.")
 
-# ── [06-D’’] 한국어→영어 용어 확장(Grammar 중심) -------------------------------
+# ── [06-D’’’] 한국어→영어 용어 확장 --------------------------------------------
 def _expand_query_for_rag(q: str, mode_key: str) -> str:
     q0 = (q or "").strip()
     if not q0: return q0
@@ -875,7 +902,7 @@ def _expand_query_for_rag(q: str, mode_key: str) -> str:
             merged.append(t)
     return " ".join(merged)
 
-# ── [06-D’’’] 히트 텍스트 추출(강화) + 규칙기반 합성기 --------------------------
+# ── [06-D⁴] 규칙기반 합성기 -----------------------------------------------------
 def _extract_hit_text(h) -> str:
     try:
         if isinstance(h, dict):
@@ -993,7 +1020,6 @@ def _compose_answer_rule_based(topic: str) -> str:
             "- This book is easy **to read**. → 이 책은 읽기 쉽다.\n"
             "③ **요령**: 목적·의도 표현에 자주 쓰이며, 일부 동사와 **궁합**이 정해져 있어요(want, hope, plan 등)."
         )
-    # generic
     return (
         "이 단원은 질문과 관련된 문법 항목을 설명합니다. 핵심 개념을 정리하면 다음과 같아요.\n"
         "① 정의/형식: 교재의 규칙을 간단히 외워두기\n"
@@ -1003,21 +1029,20 @@ def _compose_answer_rule_based(topic: str) -> str:
         "요령: 의미와 형태를 **같이** 기억하세요."
     )
 
-def _ensure_nonempty_answer_rule_based(q: str, mode_key: str, hits: Any, raw: str) -> str:
-    # 1) 컨텍스트 수집
+def _ensure_nonempty_answer_rule_based(q: str, mode_key: str, hits: Any, raw: str) -> Tuple[str, str]:
+    """반드시 빈 답변을 내지 않도록 보강하고, 출처 태그도 함께 반환."""
+    # 규칙기반 우선
     ctx = _gather_context(hits)
-    # 2) 토픽 감지(질문/컨텍스트 모두 활용)
     topic = _detect_topic(q, ctx)
-    # 3) 규칙기반 합성
-    ans = _compose_answer_rule_based(topic).strip()
+    ans = (_compose_answer_rule_based(topic) or "").strip()
     if ans:
-        return ans
-    # 4) 최후: (옵션) 일반 지식 Fallback 안내
+        return ans, ("kb_rule" if hits else "rule_based")
+    # 최후: 안내 문구(Fallback)
     if st.session_state.get("allow_fallback", True):
-        fb = _fallback_general_answer(q, mode_key) or ""
-        if fb.strip():
-            return fb.strip()
-    return "설명을 불러오는 중 문제가 있었어요. 질문을 조금 더 구체적으로 써 주세요."
+        fb = (_fallback_general_answer(q, mode_key) or "").strip()
+        if fb:
+            return fb, "fallback_info"
+    return "설명을 불러오는 중 문제가 있었어요. 질문을 조금 더 구체적으로 써 주세요.", "error"
 
 # ── [06-E] 메인 렌더 -----------------------------------------------------------
 def render_simple_qa():
@@ -1027,6 +1052,7 @@ def render_simple_qa():
     _render_top3_badges()
     st.markdown("### 💬 질문은 모든 천재들이 가장 많이 사용하는 공부 방법이다!")
 
+    # 모드 선택
     enabled = _get_enabled_modes_unified()
     radio_opts: List[str] = []
     if enabled.get("Grammar", False):  radio_opts.append("문법설명(Grammar)")
@@ -1045,6 +1071,7 @@ def render_simple_qa():
     if not is_admin:
         st.text_input("내 이름(임시)", key="student_name", placeholder="예: 지민 / 민수 / 유나")
 
+    # 입력
     placeholder = (
         "예: 관계대명사 which 사용법을 알려줘" if mode_key == "Grammar"
         else "예: I seen the movie yesterday 문장 문제점 분석해줘" if mode_key == "Sentence"
@@ -1061,6 +1088,7 @@ def render_simple_qa():
         st.warning("이 질문 유형은 지금 관리자에서 꺼져 있어요. 다른 유형을 선택해 주세요.")
         return
 
+    # 실행
     if submitted and (st.session_state.get("qa_q","").strip()):
         q = st.session_state["qa_q"].strip()
         guard_key = f"{_normalize_question(q)}|{mode_key}"
@@ -1078,6 +1106,8 @@ def render_simple_qa():
                 thinking.info("🧠 답변 생각중… 교재에서 관련 내용을 찾고 정리하고 있어요.")
 
             index_ready = _is_ready_unified()
+            final, origin = "", "unknown"
+            refs: List[Dict[str, str]] = []
 
             if index_ready:
                 try:
@@ -1102,38 +1132,30 @@ def render_simple_qa():
                         hits2 = getattr(r2, "source_nodes", None) or getattr(r2, "hits", None)
                         if not _is_nohit(raw2, hits2):
                             raw, hits = raw2, hits2
-                        else:
-                            final = _ensure_nonempty_answer_rule_based(q, mode_key, None, "")
-                            with answer_box:
-                                thinking.empty()
-                                st.write(final)
-                            _cache_put(q, final, [], f"{mode_label} · Fallback")
-                            return
 
-                    # 규칙기반 보강으로 절대 빈 문자열 방지
-                    final = _ensure_nonempty_answer_rule_based(q, mode_key, hits, raw)
+                    # 규칙기반 보강으로 최종 생성
+                    final, origin = _ensure_nonempty_answer_rule_based(q, mode_key, hits, raw)
+
+                    # 근거 링크
+                    try:
+                        if hits:
+                            for h in hits[:2]:
+                                meta = None
+                                if hasattr(h, "metadata") and isinstance(getattr(h, "metadata"), dict):
+                                    meta = h.metadata
+                                elif hasattr(h, "node") and hasattr(h.node, "metadata") and isinstance(h.node.metadata, dict):
+                                    meta = h.node.metadata
+                                meta = meta or {}
+                                refs.append({
+                                    "doc_id": meta.get("doc_id") or meta.get("file_name") or meta.get("filename", ""),
+                                    "url": meta.get("source") or meta.get("url", ""),
+                                })
+                    except Exception:
+                        refs = []
 
                     with answer_box:
                         thinking.empty()
-                        st.write(final)
-
-                        # 근거 자료(선택)
-                        refs: List[Dict[str, str]] = []
-                        try:
-                            if hits:
-                                for h in hits[:2]:
-                                    meta = None
-                                    if hasattr(h, "metadata") and isinstance(getattr(h, "metadata"), dict):
-                                        meta = h.metadata
-                                    elif hasattr(h, "node") and hasattr(h.node, "metadata") and isinstance(h.node.metadata, dict):
-                                        meta = h.node.metadata
-                                    meta = meta or {}
-                                    refs.append({
-                                        "doc_id": meta.get("doc_id") or meta.get("file_name") or meta.get("filename", ""),
-                                        "url": meta.get("source") or meta.get("url", ""),
-                                    })
-                        except Exception:
-                            refs = []
+                        st.write(final or "—")
                         if refs:
                             with st.expander("근거 자료(상위 2개)"):
                                 for i, r0 in enumerate(refs[:2], start=1):
@@ -1141,16 +1163,41 @@ def render_simple_qa():
                                     url = r0.get("url") or r0.get("source_url") or ""
                                     st.markdown(f"- {name}  " + (f"(<{url}>)" if url else ""))
 
-                    _cache_put(q, final, refs if locals().get("refs", None) else [], mode_label)
-
                 except Exception as e:
                     with answer_box:
                         thinking.empty()
                         st.error(f"검색 실패: {type(e).__name__}: {e}")
+                        final, origin = "설명을 불러오는 중 문제가 있었어요. 다시 시도해 주세요.", "error"
             else:
                 with answer_box:
                     thinking.empty()
                     st.info("아직 두뇌가 준비되지 않았어요. 상단에서 **복구/연결** 또는 **다시 최적화**를 먼저 완료해 주세요.")
+                    final, origin = "", "not_ready"
+
+            # 캐시에 저장
+            _cache_put(q, final, refs, mode_label, origin)
+
+            # ── 🎯 이해도 5단계 피드백 (클릭 즉시 저장)
+            rating_key = f"rating_{guard_key}"
+            emoji_map = {1:"😕 1", 2:"🙁 2", 3:"😐 3", 4:"🙂 4", 5:"😄 5"}
+            rating = st.radio(
+                "이해도는 어땠어?",
+                options=[1,2,3,4,5],
+                format_func=lambda n: emoji_map.get(n, str(n)),
+                horizontal=True,
+                key=rating_key
+            )
+            # 자동 저장: 아직 저장 안 됐고, 선택되었으면 기록
+            if rating and not st.session_state["saved_ratings"].get(rating_key):
+                try:
+                    _save_feedback(q, final, int(rating), mode_key, origin, user)
+                    st.session_state["saved_ratings"][rating_key] = True
+                    try:
+                        st.toast("✅ 저장했어요! 고마워요.", icon="✅")  # 일부 버전에서만 지원
+                    except Exception:
+                        st.success("저장했어요! 고마워요.")
+                except Exception as _e:
+                    st.warning(f"저장에 실패했어요: {_e}")
 
     # 📒 나의 질문 히스토리 — 인라인 펼치기
     rows = _read_history_lines(max_lines=5000)
@@ -1181,7 +1228,6 @@ def render_simple_qa():
                 st.caption(f"{i+1}. …")
 
 # ===== [06] END ===============================================================
-
 
 
 # ===== [07] MAIN — 오케스트레이터 ============================================
