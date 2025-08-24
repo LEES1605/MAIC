@@ -24,32 +24,64 @@ def ensure_admin_session_keys() -> None:
     if "_admin_auth_open" not in st.session_state:
         st.session_state["_admin_auth_open"] = False
 
-# ── [UA-01C] 관리자 버튼/인증 패널 --------------------------------------------
+# ── [UA-01C] 관리자 버튼/인증 패널 — START ------------------------------------
 def render_admin_controls() -> None:
     """
     상단 우측 '관리자' 버튼과 PIN 인증 폼을 렌더링.
-    콜백 대신 본문에서 st.rerun()을 사용하여 즉시 상태 반영.
+    + '🔎 진단' 버튼을 항상 함께 노출하여 #diag 섹션으로 스무스 스크롤.
     """
+    import streamlit as st
+    # components는 함수 내부에서만 임포트(외부 의존 최소화)
+    try:
+        from streamlit.components.v1 import html as _html
+    except Exception:
+        _html = None
+
     with st.container():
         _, right = st.columns([0.7, 0.3])
         with right:
-            btn_slot = st.empty()
+            # 두 개 버튼을 나란히 배치: [관리자] | [진단]
+            c_admin, c_diag = st.columns([0.55, 0.45])
 
+            # --- 관리자 진입/종료 버튼 ---
             if st.session_state.get("is_admin", False):
-                # 관리자 모드일 때: 종료 버튼
-                if btn_slot.button("🔓 관리자 종료", key="btn_close_admin", use_container_width=True):
-                    st.session_state["is_admin"] = False
-                    st.session_state["_admin_auth_open"] = False
-                    try: st.toast("관리자 모드 해제됨")
-                    except Exception: pass
-                    st.rerun()
+                with c_admin:
+                    if st.button("🔓 관리자 종료", key="btn_close_admin", use_container_width=True):
+                        st.session_state["is_admin"] = False
+                        st.session_state["_admin_auth_open"] = False
+                        try: st.toast("관리자 모드 해제됨")
+                        except Exception: pass
+                        st.rerun()
             else:
-                # 학생 모드일 때: 관리자 버튼
-                if btn_slot.button("🔒 관리자", key="btn_open_admin", use_container_width=True):
-                    st.session_state["_admin_auth_open"] = True
-                    st.rerun()
+                with c_admin:
+                    if st.button("🔒 관리자", key="btn_open_admin", use_container_width=True):
+                        st.session_state["_admin_auth_open"] = True
+                        st.rerun()
 
-            # 인증 패널
+            # --- 진단으로 이동 버튼 ---
+            with c_diag:
+                if st.button("🔎 진단", key="btn_goto_diag", use_container_width=True, help="페이지 하단 진단 섹션(#diag)으로 이동"):
+                    if _html:
+                        _html(
+                            """
+                            <script>
+                              (function(){
+                                function go(){
+                                  const el = document.getElementById('diag');
+                                  if(el){ el.scrollIntoView({behavior:'smooth', block:'start'}); }
+                                  else { window.location.hash = 'diag'; }
+                                }
+                                setTimeout(go, 150);
+                              })();
+                            </script>
+                            """,
+                            height=0, width=0
+                        )
+                    else:
+                        # components 사용 불가 환경 대비: 해시만 설정
+                        st.markdown("[진단으로 이동](#diag)")
+
+            # --- 인증 패널 ---
             if st.session_state.get("_admin_auth_open", False) and not st.session_state.get("is_admin", False):
                 with st.container(border=True):
                     st.markdown("**관리자 PIN 입력**")
@@ -73,6 +105,7 @@ def render_admin_controls() -> None:
                         st.rerun()
                     else:
                         st.error("PIN이 올바르지 않습니다.")
+# ── [UA-01C] 관리자 버튼/인증 패널 — END --------------------------------------
 
 # ── [UA-01D] 역할 캡션 --------------------------------------------------------
 def render_role_caption() -> None:
