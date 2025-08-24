@@ -686,9 +686,9 @@ def _ensure_state():
     if "SHOW_TOP3_STICKY" not in st.session_state:
         st.session_state["SHOW_TOP3_STICKY"] = False
     if "allow_fallback" not in st.session_state:
-        st.session_state["allow_fallback"] = True  # 교재 no-hit 시 일반 지식 모드 허용
+        st.session_state["allow_fallback"] = True
     if "saved_ratings" not in st.session_state:
-        st.session_state["saved_ratings"] = {}     # rating_key -> True
+        st.session_state["saved_ratings"] = {}
 
 # ── [06-A’] 준비/토글 통일 판단 -------------------------------------------------
 def _is_ready_unified() -> bool:
@@ -873,6 +873,7 @@ def _expand_query_for_rag(q: str, mode_key: str) -> str:
         "진행형": "progressive|continuous",
         "수동태": "passive voice",
         "가정법": "subjunctive|conditional",
+        "조건문": "conditional|if-clause",
         "비교급": "comparative",
         "최상급": "superlative",
         "to부정사": "to-infinitive|infinitive",
@@ -902,7 +903,7 @@ def _expand_query_for_rag(q: str, mode_key: str) -> str:
             merged.append(t)
     return " ".join(merged)
 
-# ── [06-D⁴] 규칙기반 합성기 -----------------------------------------------------
+# ── [06-D⁴] 규칙기반 합성기 (토픽 감지 개선: 가중치 방식) ------------------------
 def _extract_hit_text(h) -> str:
     try:
         if isinstance(h, dict):
@@ -946,22 +947,67 @@ def _gather_context(hits: Any, max_chars: int = 1500) -> str:
     return " ".join(parts)[:max_chars].strip()
 
 def _detect_topic(q: str, ctx: str) -> str:
+    """질문 키워드에 높은 가중치(2), 컨텍스트는 낮은 가중치(1)로 점수 합."""
     ql = (q or "").lower()
     cl = (ctx or "").lower()
-    rules = {
-        "relative_pronoun": ["관계대명사", "relative pronoun", "relative clause", "who", "which", "that"],
-        "present_perfect": ["현재완료", "present perfect", "have ", "has "],
-        "past_perfect": ["과거완료", "대과거", "past perfect", "had "],
-        "passive": ["수동태", "passive voice"],
-        "gerund": ["동명사", "gerund"],
-        "infinitive": ["to부정사", "부정사", "to-infinitive", "infinitive"],
+    topics: Dict[str, Dict[str, List[str]]] = {
+        "subjunctive": {
+            "q": ["가정법", "조건문", "if ", "만약", "if i were", "were to", "if only", "wish", "as if", "had p.p", "would ", "should "],
+            "c": ["subjunctive", "conditional", "if ", "would ", "were "],
+        },
+        "present_perfect": {
+            "q": ["현재완료", "present perfect"],
+            "c": ["present perfect", "have ", "has ", "since ", "for "],
+        },
+        "past_perfect": {
+            "q": ["과거완료", "대과거", "past perfect"],
+            "c": ["past perfect", "had "],
+        },
+        "passive": {
+            "q": ["수동태", "passive"],
+            "c": ["passive voice", "be ", "been "],
+        },
+        "gerund": {
+            "q": ["동명사", "gerund"],
+            "c": ["-ing", "gerund"],
+        },
+        "infinitive": {
+            "q": ["to부정사", "부정사", "infinitive"],
+            "c": ["to ", "infinitive"],
+        },
+        # ⚠️ 상대적으로 낮은 우선순위 (문서에 흔함)
+        "relative_pronoun": {
+            "q": ["관계대명사", "관계절"],
+            "c": ["relative clause", "relative pronoun", " who ", " which ", " that "],
+        },
     }
-    for key, kws in rules.items():
-        if any(k in ql for k in kws) or any(k in cl for k in kws):
-            return key
-    return "generic"
+    from collections import defaultdict
+    score = defaultdict(int)
+    for t, kw in topics.items():
+        for k in kw.get("q", []):
+            if k in ql: score[t] += 2
+        for k in kw.get("c", []):
+            if k in cl: score[t] += 1
+    if not score:
+        return "generic"
+    # 동점이면 질문 매칭 수가 더 많은 토픽을 우선
+    best = max(score.items(), key=lambda x: (x[1], x[0] != "relative_pronoun"))
+    return best[0]
 
 def _compose_answer_rule_based(topic: str) -> str:
+    if topic == "subjunctive":
+        return (
+            "① **가정법(Subjunctive/Conditional)** 은 사실과 다른 **가정/상상/바람**을 말하는 표현입니다. "
+            "주로 **if절**과 함께 쓰며, 시제를 한 단계 과거로 내려 **현재/과거의 비현실**을 나타냅니다.\n\n"
+            "② **핵심 형태**\n"
+            "- (현재 가정) **If + 과거**, 주절 **would/could + 동사원형**\n"
+            "- (과거 가정) **If + had + p.p.**, 주절 **would/could have + p.p.**\n"
+            "- (공손/가능성 낮음) **If I were you** / **were to**, **should** ~\n"
+            "③ **예문**\n"
+            "- **If I were** you, I **would** take a rest. → 내가 너라면 쉬었을 거야.\n"
+            "- **If he had studied**, he **would have passed**. → 그가 공부했더라면 합격했을 텐데.\n"
+            "④ **요령**: 사실과 다른 가정을 말할 땐 **시제 이동(과거/과거완료)** 과 **would/could** 조합을 기억!"
+        )
     if topic == "relative_pronoun":
         return (
             "① **관계대명사(Relative Pronoun)** 는 앞에 있는 명사를 이어 받아 **형용사절(관계절)** 을 이끌며 "
@@ -978,66 +1024,50 @@ def _compose_answer_rule_based(topic: str) -> str:
             "① **현재완료(Present Perfect)** 는 과거에 한 일이 **현재와 연결된 결과/경험/계속** 을 나타낼 때 씁니다. "
             "**have/has + p.p.** 형태예요.\n\n"
             "② **주요 쓰임**\n"
-            "- 경험: 한 적이 있다/없다 (ever/never)\n"
-            "- 완료·결과: 이제 ~했다(지금 결과가 중요)\n"
-            "- 계속: 과거부터 지금까지 계속(~since, ~for)\n"
+            "- 경험(ever/never), 완료·결과(now), 계속(since/for)\n"
             "③ **예문**\n"
-            "- I **have visited** Jeju **twice**. → 나는 제주도를 두 번 방문한 적이 있어.\n"
-            "- She **has lived** here **for** three years. → 그녀는 3년째 여기서 살고 있어.\n"
-            "④ **요령**: **과거시점(ago, yesterday)** 과는 어울리지 않음. 현재와의 연결이 핵심!"
+            "- I **have visited** Jeju **twice**.\n"
+            "- She **has lived** here **for** three years.\n"
+            "④ **요령**: **어제/ago** 같은 과거시점 표현과는 함께 쓰지 않아요."
         )
     if topic == "past_perfect":
         return (
             "① **과거완료(Past Perfect)** 는 과거의 한 시점보다 **더 이전**에 끝난 일을 말할 때 씁니다. "
             "**had + p.p.** 형태.\n\n"
             "② **예문**\n"
-            "- By the time I arrived, the movie **had started**. → 내가 도착했을 때 영화는 이미 시작했었다.\n"
-            "- He **had finished** homework before dinner. → 그는 저녁 전 숙제를 이미 끝냈었다.\n"
-            "③ **요령**: 과거 두 사건의 **선후관계**를 분명히 보여줄 때 사용!"
+            "- By the time I arrived, the movie **had started**.\n"
+            "- He **had finished** homework before dinner.\n"
+            "③ **요령**: 과거 두 사건의 **선후관계**를 분명히!"
         )
     if topic == "passive":
         return (
-            "① **수동태(Passive Voice)** 는 동작의 **주체보다 대상**을 강조할 때 쓰며, "
-            "**be동사 + p.p.** 로 만듭니다.\n\n"
-            "② **예문**\n"
-            "- The window **was broken** yesterday. → 그 창문은 어제 깨졌다(깨진 상태 강조).\n"
-            "- English **is spoken** worldwide. → 영어는 전 세계에서 사용된다.\n"
-            "③ **요령**: 필요할 때만 **by + 행위자** 를 덧붙여요(대상이 중요할 때)."
+            "① **수동태(Passive Voice)** : **be동사 + p.p.** 로 대상(피동)을 강조.\n"
+            "② **예문**\n- The window **was broken** yesterday.\n- English **is spoken** worldwide.\n"
+            "③ **요령**: 필요할 때만 **by + 행위자**."
         )
     if topic == "gerund":
         return (
-            "① **동명사(Gerund)** 는 동사에 **-ing** 를 붙여 **명사처럼** 쓰는 형태예요.\n\n"
-            "② **예문**\n"
-            "- **Swimming** is fun. → 수영은 재미있다.\n"
-            "- I enjoy **reading**. → 나는 읽는 것을 즐긴다.\n"
-            "③ **요령**: 전치사 뒤에는 **동명사**가 온다(to는 예외적 의미로 부정사와 구분)."
+            "① **동명사(Gerund)** : 동사에 **-ing** 를 붙여 **명사처럼** 사용.\n"
+            "② **예문**\n- **Swimming** is fun.\n- I enjoy **reading**.\n"
+            "③ **요령**: 전치사 뒤에는 동명사."
         )
     if topic == "infinitive":
         return (
-            "① **부정사(Infinitive)** 는 **to + 동사원형**으로, **명사/형용사/부사**처럼 쓰입니다.\n\n"
-            "② **예문**\n"
-            "- I want **to learn** Spanish. → 나는 스페인어를 배우고 싶다.\n"
-            "- This book is easy **to read**. → 이 책은 읽기 쉽다.\n"
-            "③ **요령**: 목적·의도 표현에 자주 쓰이며, 일부 동사와 **궁합**이 정해져 있어요(want, hope, plan 등)."
+            "① **부정사(Infinitive)** : **to + 동사원형** — 명/형/부 역할.\n"
+            "② **예문**\n- I want **to learn** Spanish.\n- This book is easy **to read**.\n"
+            "③ **요령**: 목적·의도 표현에 자주 사용."
         )
     return (
         "이 단원은 질문과 관련된 문법 항목을 설명합니다. 핵심 개념을 정리하면 다음과 같아요.\n"
-        "① 정의/형식: 교재의 규칙을 간단히 외워두기\n"
-        "② 쓰임: 언제 이 형태를 쓰는지(상황/의미)\n"
-        "③ 예문 2개\n"
-        "- 예문 A\n- 예문 B\n"
-        "요령: 의미와 형태를 **같이** 기억하세요."
+        "① 정의/형식 ② 쓰임 ③ 예문 2개 ④ 한 줄 요령"
     )
 
 def _ensure_nonempty_answer_rule_based(q: str, mode_key: str, hits: Any, raw: str) -> Tuple[str, str]:
-    """반드시 빈 답변을 내지 않도록 보강하고, 출처 태그도 함께 반환."""
-    # 규칙기반 우선
     ctx = _gather_context(hits)
     topic = _detect_topic(q, ctx)
     ans = (_compose_answer_rule_based(topic) or "").strip()
     if ans:
         return ans, ("kb_rule" if hits else "rule_based")
-    # 최후: 안내 문구(Fallback)
     if st.session_state.get("allow_fallback", True):
         fb = (_fallback_general_answer(q, mode_key) or "").strip()
         if fb:
@@ -1052,7 +1082,6 @@ def render_simple_qa():
     _render_top3_badges()
     st.markdown("### 💬 질문은 모든 천재들이 가장 많이 사용하는 공부 방법이다!")
 
-    # 모드 선택
     enabled = _get_enabled_modes_unified()
     radio_opts: List[str] = []
     if enabled.get("Grammar", False):  radio_opts.append("문법설명(Grammar)")
@@ -1071,7 +1100,6 @@ def render_simple_qa():
     if not is_admin:
         st.text_input("내 이름(임시)", key="student_name", placeholder="예: 지민 / 민수 / 유나")
 
-    # 입력
     placeholder = (
         "예: 관계대명사 which 사용법을 알려줘" if mode_key == "Grammar"
         else "예: I seen the movie yesterday 문장 문제점 분석해줘" if mode_key == "Sentence"
@@ -1088,7 +1116,6 @@ def render_simple_qa():
         st.warning("이 질문 유형은 지금 관리자에서 꺼져 있어요. 다른 유형을 선택해 주세요.")
         return
 
-    # 실행
     if submitted and (st.session_state.get("qa_q","").strip()):
         q = st.session_state["qa_q"].strip()
         guard_key = f"{_normalize_question(q)}|{mode_key}"
@@ -1133,10 +1160,8 @@ def render_simple_qa():
                         if not _is_nohit(raw2, hits2):
                             raw, hits = raw2, hits2
 
-                    # 규칙기반 보강으로 최종 생성
                     final, origin = _ensure_nonempty_answer_rule_based(q, mode_key, hits, raw)
 
-                    # 근거 링크
                     try:
                         if hits:
                             for h in hits[:2]:
@@ -1174,10 +1199,9 @@ def render_simple_qa():
                     st.info("아직 두뇌가 준비되지 않았어요. 상단에서 **복구/연결** 또는 **다시 최적화**를 먼저 완료해 주세요.")
                     final, origin = "", "not_ready"
 
-            # 캐시에 저장
             _cache_put(q, final, refs, mode_label, origin)
 
-            # ── 🎯 이해도 5단계 피드백 (클릭 즉시 저장)
+            # 이해도 5단계 (현재: 클릭 즉시 저장 – 다음 턴에 ‘수정 가능’ UX 적용)
             rating_key = f"rating_{guard_key}"
             emoji_map = {1:"😕 1", 2:"🙁 2", 3:"😐 3", 4:"🙂 4", 5:"😄 5"}
             rating = st.radio(
@@ -1187,13 +1211,12 @@ def render_simple_qa():
                 horizontal=True,
                 key=rating_key
             )
-            # 자동 저장: 아직 저장 안 됐고, 선택되었으면 기록
             if rating and not st.session_state["saved_ratings"].get(rating_key):
                 try:
                     _save_feedback(q, final, int(rating), mode_key, origin, user)
                     st.session_state["saved_ratings"][rating_key] = True
                     try:
-                        st.toast("✅ 저장했어요! 고마워요.", icon="✅")  # 일부 버전에서만 지원
+                        st.toast("✅ 저장했어요! 고마워요.", icon="✅")
                     except Exception:
                         st.success("저장했어요! 고마워요.")
                 except Exception as _e:
@@ -1224,8 +1247,6 @@ def render_simple_qa():
                     if st.button("🔄 이 질문으로 다시 검색", key=f"rehit_{uniq[i]['norm']}", use_container_width=True):
                         st.session_state["qa_q"] = uniq[i]["q"]
                         st.rerun()
-            else:
-                st.caption(f"{i+1}. …")
 
 # ===== [06] END ===============================================================
 
