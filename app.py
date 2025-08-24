@@ -669,7 +669,7 @@ def render_tag_diagnostics():
     except Exception:
         pass
 
-# ===== [06] SIMPLE QA DEMO — 히스토리 인라인 + 답변 직표시 + 규칙기반 합성기 + 피드백(라디오, 유지) ==
+# ===== [06] SIMPLE QA DEMO — 히스토리 인라인 + 답변 직표시 + 규칙기반 합성기 + 피드백(라디오, 항상 유지) ==
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 import time
@@ -689,9 +689,9 @@ def _ensure_state():
         st.session_state["allow_fallback"] = True
     if "rating_values" not in st.session_state:
         st.session_state["rating_values"] = {}   # guard_key -> 1~5 (UI 유지용)
-    # ✅ 최근 렌더 결과를 항상 유지해서 재실행에도 보여주기
     if "active_result" not in st.session_state:
-        st.session_state["active_result"] = None  # {"q","q_norm","mode_key","user","origin"}
+        # {"q","q_norm","mode_key","user","origin"}
+        st.session_state["active_result"] = None
 
 # ── [06-A’] 준비/토글 통일 판단 -------------------------------------------------
 def _is_ready_unified() -> bool:
@@ -1048,8 +1048,9 @@ def _ensure_nonempty_answer_rule_based(q: str, mode_key: str, hits: Any, raw: st
             return fb, "fallback_info"
     return "설명을 불러오는 중 문제가 있었어요. 질문을 조금 더 구체적으로 써 주세요.", "error"
 
-# ✅ 항상 보이는 결과 패널 (재실행에도 유지)
-def _render_active_result_panel():
+# ✅ 항상 보이는 결과 패널 (컨테이너에 그릴 수도 있음)
+def _render_active_result_panel(container=None):
+    target = container or st
     ar = st.session_state.get("active_result")
     if not ar: 
         return
@@ -1058,14 +1059,14 @@ def _render_active_result_panel():
     if not data:
         return
 
-    st.write(data.get("answer","—"))
+    target.write(data.get("answer","—"))
     refs = data.get("refs") or []
     if refs:
-        with st.expander("근거 자료(상위 2개)"):
+        with target.expander("근거 자료(상위 2개)"):
             for i, r0 in enumerate(refs[:2], start=1):
                 name = r0.get("doc_id") or r0.get("source") or f"ref{i}"
                 url = r0.get("url") or r0.get("source_url") or ""
-                st.markdown(f"- {name}  " + (f"(<{url}>)" if url else ""))
+                target.markdown(f"- {name}  " + (f"(<{url}>)" if url else ""))
 
     # 라디오(유지형) + 저장/수정
     guard_key = f"{norm}|{mode_key}"
@@ -1076,7 +1077,7 @@ def _render_active_result_panel():
         st.session_state[rv_key] = default_rating
 
     emoji = {1:"😕 1", 2:"🙁 2", 3:"😐 3", 4:"🙂 4", 5:"😄 5"}
-    sel = st.radio(
+    sel = target.radio(
         "해설 만족도",
         options=[1,2,3,4,5],
         index=st.session_state[rv_key]-1,
@@ -1086,17 +1087,17 @@ def _render_active_result_panel():
     )
     st.session_state[rv_key] = sel
 
-    c1, c2 = st.columns([1,4])
+    c1, c2 = target.columns([1,4])
     with c1:
-        if st.button("💾 저장/수정", key=f"save_{guard_key}"):
+        if target.button("💾 저장/수정", key=f"save_{guard_key}"):
             try:
                 _save_feedback(ar["q"], data.get("answer",""), int(st.session_state[rv_key]), mode_key, data.get("source",""), user)
                 try: st.toast("✅ 저장/수정 완료!", icon="✅")
-                except Exception: st.success("저장/수정 완료!")
+                except Exception: target.success("저장/수정 완료!")
             except Exception as _e:
-                st.warning(f"저장에 실패했어요: {_e}")
+                target.warning(f"저장에 실패했어요: {_e}")
     with c2:
-        st.caption(f"현재 저장된 값: {saved if saved else '—'} (라디오 선택 후 ‘저장/수정’ 클릭)")
+        target.caption(f"현재 저장된 값: {saved if saved else '—'} (라디오 선택 후 ‘저장/수정’ 클릭)")
 
 # ── [06-E] 메인 렌더 -----------------------------------------------------------
 def render_simple_qa():
@@ -1140,6 +1141,7 @@ def render_simple_qa():
         st.warning("이 질문 유형은 지금 관리자에서 꺼져 있어요. 다른 유형을 선택해 주세요.")
         return
 
+    # ▶ 제출 시 검색·합성 후, active_result에 저장하고 같은 자리에서 즉시 결과 패널 렌더
     if submitted and (st.session_state.get("qa_q","").strip()):
         q = st.session_state["qa_q"].strip()
         guard_key = f"{_normalize_question(q)}|{mode_key}"
@@ -1151,8 +1153,8 @@ def render_simple_qa():
             user = _sanitize_user(st.session_state.get("student_name") if not is_admin else "admin")
             _append_history_file_only(q, user)
 
-            placeholder_box = st.container()
-            with placeholder_box:
+            area = st.container()
+            with area:
                 thinking = st.empty()
                 thinking.info("🧠 답변 생각중… 교재에서 관련 내용을 찾고 정리하고 있어요.")
 
@@ -1201,38 +1203,32 @@ def render_simple_qa():
                     except Exception:
                         refs = []
 
-                    with placeholder_box:
-                        thinking.empty()
-                        # 즉시 1회 보여주고…
-                        st.write(final or "—")
-                        if refs:
-                            with st.expander("근거 자료(상위 2개)"):
-                                for i, r0 in enumerate(refs[:2], start=1):
-                                    name = r0.get("doc_id") or r0.get("source") or f"ref{i}"
-                                    url = r0.get("url") or r0.get("source_url") or ""
-                                    st.markdown(f"- {name}  " + (f"(<{url}>)" if url else ""))
-
                 except Exception as e:
-                    with placeholder_box:
+                    with area:
                         thinking.empty()
                         st.error(f"검색 실패: {type(e).__name__}: {e}")
                         final, origin = "설명을 불러오는 중 문제가 있었어요. 다시 시도해 주세요.", "error"
+
             else:
-                with placeholder_box:
+                with area:
                     thinking.empty()
                     st.info("아직 두뇌가 준비되지 않았어요. 상단에서 **복구/연결** 또는 **다시 최적화**를 먼저 완료해 주세요.")
                     final, origin = "", "not_ready"
 
-            # 결과 캐시 & ▶ 활성 결과로 고정 (재실행에도 남도록)
-            _cache_put(q, final, refs, mode_label, origin)
+            # 캐시 + 활성 결과 저장
+            _cache_put(q, final, refs, {"Grammar":"문법설명(Grammar)","Sentence":"문장분석(Sentence)","Passage":"지문분석(Passage)"}[mode_key], origin)
             st.session_state["active_result"] = {
                 "q": q, "q_norm": _normalize_question(q),
                 "mode_key": mode_key, "user": user, "origin": origin
             }
 
-    # ‼️ 폼을 다시 제출하지 않아도 항상 마지막 결과를 렌더(라디오 클릭 등 재실행 대비)
-    if not submitted:
-        _render_active_result_panel()
+            # ⬇️ 제출 직후, 같은 컨테이너에 즉시 결과 패널을 렌더(라디오가 바로 보임)
+            with area:
+                thinking.empty()
+                _render_active_result_panel(container=area)
+
+    # ⬇️ 제출 여부와 무관하게, 항상 마지막 결과 패널을 렌더(라디오 클릭 재실행 대비)
+    _render_active_result_panel()
 
     # 📒 나의 질문 히스토리 — 인라인 펼치기
     rows = _read_history_lines(max_lines=5000)
@@ -1261,6 +1257,7 @@ def render_simple_qa():
                         st.rerun()
 
 # ===== [06] END ===============================================================
+
 
 
 # ===== [07] MAIN — 오케스트레이터 ============================================
