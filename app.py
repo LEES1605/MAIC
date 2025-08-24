@@ -141,11 +141,23 @@ def _auto_attach_or_restore_silently() -> bool:
     """
     1) 로컬에서 부착 시도
     2) 실패하면: 드라이브 최신 backup_zip → 로컬로 복구 → 다시 부착
+    3) 그래도 실패하면: 최소 옵션으로 build_index_with_checkpoint() 실행 → 다시 부착
     (에러는 모두 삼키고 False 반환)
     """
+    st.session_state["_auto_restore_last"] = {
+        "step": "start",
+        "local_attach": None,
+        "drive_restore": None,
+        "rebuild": None,
+        "final_attach": None,
+    }
+
     # 1) 로컬 attach
     if _attach_from_local():
+        st.session_state["_auto_restore_last"]["step"] = "attached_local"
+        st.session_state["_auto_restore_last"]["local_attach"] = True
         return True
+    st.session_state["_auto_restore_last"]["local_attach"] = False
 
     # 2) 드라이브에서 복구 시도
     try:
@@ -154,17 +166,61 @@ def _auto_attach_or_restore_silently() -> bool:
         restore_fn = getattr(mod, "restore_latest_backup_to_local", None)
         if callable(restore_fn):
             res = restore_fn()
-            # 기대 형태: {"ok": True, "path": "..."} 또는 {"ok": False, "error": "..."}
-            if isinstance(res, dict) and res.get("ok"):
-                # 복구 성공 → 재부착
+            ok = bool(isinstance(res, dict) and res.get("ok"))
+            st.session_state["_auto_restore_last"]["drive_restore"] = ok
+            if ok and _has_local_index_files():
                 if _attach_from_local():
+                    st.session_state["_auto_restore_last"]["step"] = "restored_and_attached"
+                    st.session_state["_auto_restore_last"]["final_attach"] = True
                     return True
     except Exception:
-        # 조용히 실패 처리
-        pass
+        st.session_state["_auto_restore_last"]["drive_restore"] = False
 
+    # 3) 마지막 안전망: 인덱스 재생성(최소 옵션)
+    try:
+        # [01]에서 바인딩된 build_index_with_checkpoint 사용
+        if callable(build_index_with_checkpoint):
+            from pathlib import Path
+            persist_dir = None
+            try:
+                # rag.index_build 에 정의된 PERSIST_DIR 우선
+                mod2 = importlib.import_module("src.rag.index_build")
+                persist_dir = getattr(mod2, "PERSIST_DIR", None)
+                if not persist_dir:
+                    persist_dir = Path.home() / ".maic" / "persist"
+            except Exception:
+                persist_dir = Path.home() / ".maic" / "persist"
+
+            # 최소 인자만 전달 (함수 시그니처 호환을 위해 키워드 인자 이름은 기존 코드와 동일)
+            try:
+                build_index_with_checkpoint(
+                    update_pct=lambda *_a, **_k: None,
+                    update_msg=lambda *_a, **_k: None,
+                    gdrive_folder_id="",
+                    gcp_creds={},
+                    persist_dir=str(persist_dir),
+                    remote_manifest={},
+                )
+                st.session_state["_auto_restore_last"]["rebuild"] = True
+            except TypeError:
+                # 시그니처가 다르면 무인자 호출
+                build_index_with_checkpoint()
+                st.session_state["_auto_restore_last"]["rebuild"] = True
+        else:
+            st.session_state["_auto_restore_last"]["rebuild"] = False
+    except Exception:
+        st.session_state["_auto_restore_last"]["rebuild"] = False
+
+    # 재부착 최종 시도
+    if _attach_from_local():
+        st.session_state["_auto_restore_last"]["step"] = "rebuilt_and_attached"
+        st.session_state["_auto_restore_last"]["final_attach"] = True
+        return True
+
+    st.session_state["_auto_restore_last"]["final_attach"] = False
     return False
 # ===== [03] END ===============================================================
+
 
 
 # ===== [04] HEADER ==========================================
