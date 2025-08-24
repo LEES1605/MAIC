@@ -569,10 +569,11 @@ def render_brain_prep_main():
 # ===== [05A] END ===========================================
 
 
-# ===== [05B] TAG DIAGNOSTICS (NEW) ==========================================
+# ===== [05B] TAG DIAGNOSTICS (NEW) — START ==================================
 def render_tag_diagnostics():
     """
     태그/인덱스 진단 패널
+    - 자동 복구 상태(_auto_restore_last) 표시
     - quality_report.json 유무
     - 로컬 ZIP: backup_*.zip + restored_*.zip (최신 5개)
     - 드라이브 ZIP: backup_zip 폴더의 ZIP (최신 5개)
@@ -581,6 +582,7 @@ def render_tag_diagnostics():
     import importlib, traceback
     from pathlib import Path
     from datetime import datetime
+    import json as _json
     import streamlit as st
 
     # 기본 경로
@@ -606,11 +608,8 @@ def render_tag_diagnostics():
         i = 0
         f = float(n)
         while f >= 1024 and i < len(units) - 1:
-            f /= 1024.0
-            i += 1
-        if i == 0:
-            return f"{int(f)} {units[i]}"
-        return f"{f:.1f} {units[i]}"
+            f /= 1024.0; i += 1
+        return (f"{int(f)} {units[i]}" if i == 0 else f"{f:.1f} {units[i]}")
 
     def _fmt_ts(ts):
         try:
@@ -619,6 +618,32 @@ def render_tag_diagnostics():
             return "-"
 
     st.subheader("진단(간단)", anchor=False)
+
+    # ── 자동 복구 상태 표시 (_auto_restore_last) ───────────────────────────────
+    auto_info = st.session_state.get("_auto_restore_last")
+    with st.container(border=True):
+        st.markdown("### 자동 복구 상태")
+        if not auto_info:
+            st.caption("아직 자동 복구 시도 기록이 없습니다. (앱이 부팅되며 자동으로 시도됩니다)")
+        else:
+            try:
+                st.code(_json.dumps(auto_info, ensure_ascii=False, indent=2), language="json")
+                # 요약 배지
+                step = str(auto_info.get("step", "—"))
+                ok_local = auto_info.get("local_attach")
+                ok_drive = auto_info.get("drive_restore")
+                ok_build = auto_info.get("rebuild")
+                ok_final = auto_info.get("final_attach")
+                badges = []
+                def _b(label, ok):
+                    return f"✅ {label}" if ok is True else (f"❌ {label}" if ok is False else f"— {label}")
+                badges.append(_b("로컬부착", ok_local))
+                badges.append(_b("드라이브복구", ok_drive))
+                badges.append(_b("재빌드", ok_build))
+                badges.append(_b("최종부착", ok_final))
+                st.markdown("- 단계: **" + step + "**  \n- " + " · ".join(badges))
+            except Exception:
+                st.caption("자동 복구 상태를 표시하는 중 오류가 발생했습니다.")
 
     # ── 품질 리포트 존재 ─────────────────────────────────────────────────────────
     qr_exists = QUALITY_REPORT_PATH.exists()
@@ -692,6 +717,8 @@ def render_tag_diagnostics():
         st.markdown("- **.ready 마커**: " + ("✅ 있음" if ready.exists() else "❌ 없음") + f" (`{ready.as_posix()}`)")
     except Exception:
         pass
+# ===== [05B] TAG DIAGNOSTICS (NEW) — END ====================================
+
 
 # ===== [06] SIMPLE QA DEMO — 히스토리 인라인 + 답변 직표시 + 골든우선 + 규칙기반 합성기 + 피드백(라디오, 항상 유지) ==
 from pathlib import Path
