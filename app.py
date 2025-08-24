@@ -846,6 +846,19 @@ def render_tag_diagnostics():
     import json as _json
     import streamlit as st
 
+    # ▶▶ 앵커 요소(필수) + 부드러운 스크롤 CSS
+    st.markdown(
+        """
+        <span id="diag"></span>
+        <style>
+          html { scroll-behavior: smooth; }
+          /* 헤더가 가릴 수 있으니 약간의 여유를 둡니다 */
+          #diag { scroll-margin-top: 80px; }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
     # ── 기본 경로(모듈 값 우선) ────────────────────────────────────────────────
     PERSIST_DIR = Path.home() / ".maic" / "persist"
     BACKUP_DIR  = Path.home() / ".maic" / "backup"
@@ -875,8 +888,7 @@ def render_tag_diagnostics():
         except Exception:
             return "-"
 
-    # ⬇️ 여기 앵커 추가: 헤더에서 #diag로 점프 가능
-    st.subheader("진단(간단)", anchor="diag")
+    st.subheader("진단(간단)", anchor=False)
 
     # ── 자동 복구 상태 ────────────────────────────────────────────────────────
     auto_info = st.session_state.get("_auto_restore_last")
@@ -904,7 +916,6 @@ def render_tag_diagnostics():
                  found or "(발견되지 않음)")
 
     # ── 백업 파일 유무 배지 ──────────────────────────────────────────────────
-    # 로컬 ZIP 존재 확인
     local_rows = []
     local_has = False
     try:
@@ -919,7 +930,6 @@ def render_tag_diagnostics():
         local_rows = []
         local_has = False
 
-    # 드라이브 ZIP 존재 확인
     drive_rows = []
     drive_has = False
     drive_msg = None
@@ -996,6 +1006,7 @@ def render_tag_diagnostics():
     except Exception:
         pass
 # ===== [05B] TAG DIAGNOSTICS (BACKUP PRESENCE RESTORE) — END =================
+
 
 
 
