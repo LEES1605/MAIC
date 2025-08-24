@@ -151,83 +151,25 @@ def render_header():
     return
 # ===== [04] END =============================================
 
-# ===== [04A] MODE & ADMIN BUTTON (콜백 제거: 즉시 갱신용 rerun) ================
-import os as _os
+# ===== [04A] MODE & ADMIN BUTTON (모듈 분리 호출) — START =====================
+from src.ui_admin import (
+    ensure_admin_session_keys,
+    render_admin_controls,
+    render_role_caption,
+)
 import streamlit as st
 
-# ── [04A-1] PIN 가져오기 ------------------------------------------------------
-def _get_admin_pin() -> str:
-    try:
-        pin = st.secrets.get("ADMIN_PIN", None)  # type: ignore[attr-defined]
-    except Exception:
-        pin = None
-    return str(pin or _os.environ.get("ADMIN_PIN") or "0000")
-# ===== [04A-1] END ============================================================
+# 1) 세션 키 보증
+ensure_admin_session_keys()
 
+# 2) 우측 상단 관리자 버튼/인증 패널 렌더 (내부에서 st.rerun 처리)
+render_admin_controls()
 
-# ── [04A-2] 세션키 초기화 ------------------------------------------------------
-if "is_admin" not in st.session_state:
-    st.session_state["is_admin"] = False
-if "_admin_auth_open" not in st.session_state:
-    st.session_state["_admin_auth_open"] = False
-# ===== [04A-2] END ============================================================
-
-
-# ── [04A-3] 상단 우측 관리자 버튼 & 인증 패널 (콜백 미사용) ----------------------
-with st.container():
-    _, right = st.columns([0.7, 0.3])
-    with right:
-        btn_slot = st.empty()
-
-        if st.session_state["is_admin"]:
-            # 관리자 모드일 때: 종료 버튼이 바로 보여야 함
-            if btn_slot.button("🔓 관리자 종료", key="btn_close_admin", use_container_width=True):
-                st.session_state["is_admin"] = False
-                st.session_state["_admin_auth_open"] = False
-                try: st.toast("관리자 모드 해제됨")
-                except Exception: pass
-                st.rerun()  # ← 콜백이 아닌 본문에서 rerun: 즉시 라벨 갱신
-        else:
-            # 학생 모드일 때: 관리자 버튼
-            if btn_slot.button("🔒 관리자", key="btn_open_admin", use_container_width=True):
-                st.session_state["_admin_auth_open"] = True
-                st.rerun()  # 인증 패널을 즉시 표시
-
-        # 인증 패널: 열림 상태이면 표시
-        if st.session_state["_admin_auth_open"] and not st.session_state["is_admin"]:
-            with st.container(border=True):
-                st.markdown("**관리자 PIN 입력**")
-                with st.form("admin_login_form", clear_on_submit=True, border=False):
-                    pin_try = st.text_input("PIN", type="password")
-                    c1, c2 = st.columns(2)
-                    with c1:
-                        ok = st.form_submit_button("입장")
-                    with c2:
-                        cancel = st.form_submit_button("취소")
-
-                if cancel:
-                    st.session_state["_admin_auth_open"] = False
-                    st.rerun()
-                if ok:
-                    if pin_try == _get_admin_pin():
-                        st.session_state["is_admin"] = True
-                        st.session_state["_admin_auth_open"] = False
-                        try: st.toast("관리자 모드 진입 ✅")
-                        except Exception: pass
-                        st.rerun()  # 입장 직후 즉시 라벨 "관리자 종료"로
-                    else:
-                        st.error("PIN이 올바르지 않습니다.")
-# ===== [04A-3] END ============================================================
-
-
-# ── [04A-4] 역할 캡션 ---------------------------------------------------------
-if st.session_state.get("is_admin", False):
-    st.caption("역할: **관리자** — 상단 버튼으로 종료 가능")
-else:
-    st.caption("역할: **학생** — 질문/답변에 집중할 수 있게 단순화했어요.")
-
+# 3) 역할 캡션 + 구분선
+render_role_caption()
 st.divider()
-# ===== [04A] END =============================================================
+# ===== [04A] MODE & ADMIN BUTTON (모듈 분리 호출) — END =======================
+
 # ===== [04B] 관리자 설정 — 이유문법 + 모드별 ON/OFF (라디오·세로배치) ==========
 import json as _json
 from pathlib import Path as _Path
