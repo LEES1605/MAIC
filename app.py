@@ -669,7 +669,7 @@ def render_tag_diagnostics():
     except Exception:
         pass
 
-# ===== [06] SIMPLE QA DEMO — 히스토리 인라인 + 답변 직표시 + 규칙기반 합성기 + 피드백 저장 ==
+# ===== [06] SIMPLE QA DEMO — 히스토리 인라인 + 답변 직표시 + 규칙기반 합성기 + 피드백(라디오) ==
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 import time
@@ -687,8 +687,8 @@ def _ensure_state():
         st.session_state["SHOW_TOP3_STICKY"] = False
     if "allow_fallback" not in st.session_state:
         st.session_state["allow_fallback"] = True
-    if "saved_ratings" not in st.session_state:
-        st.session_state["saved_ratings"] = {}
+    if "rating_values" not in st.session_state:
+        st.session_state["rating_values"] = {}   # guard_key -> 1~5 (UI 유지용)
 
 # ── [06-A’] 준비/토글 통일 판단 -------------------------------------------------
 def _is_ready_unified() -> bool:
@@ -842,16 +842,7 @@ def _render_cached_block(norm: str):
                 st.markdown(f"- {name}  " + (f"(<{url}>)" if url else ""))
 
 # ── [06-D’] 피드백 저장/조회 -----------------------------------------------------
-def _append_jsonl(path: Path, obj: Dict[str, Any]):
-    try:
-        import json as _json
-        with path.open("a", encoding="utf-8") as f:
-            f.write(_json.dumps(obj, ensure_ascii=False) + "\n")
-    except Exception:
-        pass
-
 def _get_last_rating(q_norm: str, user: str, mode_key: str) -> int | None:
-    """같은 사용자·같은 질문·같은 모드의 마지막 평점을 찾아 반환."""
     import json as _json
     p = _feedback_path()
     if not p.exists(): return None
@@ -863,11 +854,11 @@ def _get_last_rating(q_norm: str, user: str, mode_key: str) -> int | None:
                     o = _json.loads(ln)
                     if o.get("q_norm")==q_norm and o.get("user")==user and o.get("mode")==mode_key:
                         r = int(o.get("rating",0))
-                        last = r if 1<=r<=5 else last
+                        if 1 <= r <= 5: last = r
                 except Exception:
                     continue
     except Exception:
-        return last
+        pass
     return last
 
 def _save_feedback(q: str, answer: str, rating: int, mode_key: str, source: str, user: str):
@@ -980,11 +971,11 @@ def _detect_topic(q: str, ctx: str) -> str:
         "passive": ["수동태","passive"],
         "gerund": ["동명사","gerund"],
         "infinitive": ["to부정사","부정사","infinitive"],
-        # NOTE: 분사구문/가정법 등은 다음 턴에서 추가 예정
+        # (다른 항목 추가 예정)
     }
-    for kws in topics.values():
+    for name, kws in topics.items():
         if any(k in ql for k in kws) or any(k in cl for k in kws):
-            return list(topics.keys())[list(topics.values()).index(kws)]
+            return name
     return "generic"
 
 def _compose_answer_rule_based(topic: str) -> str:
@@ -1181,27 +1172,40 @@ def render_simple_qa():
 
             _cache_put(q, final, refs, mode_label, origin)
 
-            # 🎯 이해도: '수정 가능한' 방식으로 변경
+            # 🎯 해설 만족도 — 라디오 + 값 유지 + 저장/수정
             q_norm = _normalize_question(q)
-            prev = _get_last_rating(q_norm, user, mode_key) or 3
+            saved = _get_last_rating(q_norm, user, mode_key)
+            default_rating = saved if saved in (1,2,3,4,5) else 3
+
+            # 세션 상태에 현재 값이 없으면 기본값 주입(→ 클릭해도 안 사라지고 유지)
+            rv_key = f"rating_value_{guard_key}"
+            if rv_key not in st.session_state:
+                st.session_state[rv_key] = default_rating
+
             emoji = {1:"😕 1", 2:"🙁 2", 3:"😐 3", 4:"🙂 4", 5:"😄 5"}
-            sel = st.select_slider(
-                "이해도는 어땠어?",
+            # index는 0-base, 값은 1~5
+            sel = st.radio(
+                "해설 만족도",
                 options=[1,2,3,4,5],
-                value=prev,
-                format_func=lambda n: emoji.get(n, str(n))
+                index=st.session_state[rv_key]-1,
+                format_func=lambda n: emoji.get(n, str(n)),
+                horizontal=True,
+                key=f"rating_radio_{guard_key}"
             )
+            # 라디오 선택을 세션 값에 반영(유지)
+            st.session_state[rv_key] = sel
+
             col1, col2 = st.columns([1,4])
             with col1:
                 if st.button("💾 저장/수정", key=f"save_{guard_key}"):
                     try:
-                        _save_feedback(q, final, int(sel), mode_key, origin, user)
+                        _save_feedback(q, final, int(st.session_state[rv_key]), mode_key, origin, user)
                         try: st.toast("✅ 저장/수정 완료!", icon="✅")
                         except Exception: st.success("저장/수정 완료!")
                     except Exception as _e:
                         st.warning(f"저장에 실패했어요: {_e}")
             with col2:
-                st.caption(f"현재 저장된 값: {prev if prev else '—'} (다시 저장하면 업데이트)")
+                st.caption(f"현재 저장된 값: {saved if saved else '—'} (라디오 선택 후 ‘저장/수정’을 누르면 업데이트)")
 
     # 📒 나의 질문 히스토리 — 인라인 펼치기
     rows = _read_history_lines(max_lines=5000)
