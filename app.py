@@ -922,7 +922,7 @@ def _expand_query_for_rag(q: str, mode_key: str) -> str:
             merged.append(t)
     return " ".join(merged)
 
-# ── [06-D’’’] ★합성 응답: 매치 목록 → 학생용 설명으로 변환 -----------------------
+# ── [06-D’’’] 합성 응답: 매치 목록 → 학생용 설명 변환 ----------------------------
 def _looks_like_debug_listing(text: str) -> bool:
     t = (text or "").strip().lower()
     return (not t) or t.startswith("top matches") or "score=" in t
@@ -947,7 +947,6 @@ def _extract_hit_text(h) -> str:
 
 def _compose_answer_from_hits(q: str, hits: Any, mode_key: str) -> str:
     """매치된 교재 조각들로부터 학생용 설명 합성(LLM 사용)."""
-    # 1) 컨텍스트 추출/절단
     ctx_parts: List[str] = []
     if hits:
         for h in list(hits)[:4]:
@@ -961,8 +960,6 @@ def _compose_answer_from_hits(q: str, hits: Any, mode_key: str) -> str:
     context = "\n\n".join(ctx_parts).strip()
     if not context:
         return ""
-
-    # 2) 합성 프롬프트
     prompt = (
         "너는 한국 중고등학생에게 영어 문법을 가르치는 선생님이야. "
         "아래 [교재 발췌]를 근거로, 질문에 대해 간단하지만 정확한 한국어 설명을 만들어줘. "
@@ -970,8 +967,6 @@ def _compose_answer_from_hits(q: str, hits: Any, mode_key: str) -> str:
         f"[질문] {q}\n\n[교재 발췌]\n{context}\n"
         "주의: 교재에 없는 정보는 상상하지 말고, 용어는 영어/한국어 병기해도 좋아."
     )
-
-    # 3) LLM 호출 (세션/헬퍼 동원)
     for key in ("general_llm", "llm", "chat_llm"):
         llm = st.session_state.get(key)
         if llm:
@@ -993,7 +988,6 @@ def _compose_answer_from_hits(q: str, hits: Any, mode_key: str) -> str:
                 if hasattr(r, "text"): return r.text
             except Exception:
                 pass
-    # 4) 최후: LLM이 전혀 없을 때는 발췌 그대로 반환(디버그 노출 방지)
     return "아래 교재 발췌를 참고해서 정리해 볼래?\n\n" + context[:1200]
 
 # ── [06-E] 메인 렌더 -----------------------------------------------------------
@@ -1053,53 +1047,63 @@ def render_simple_qa():
             user = _sanitize_user(st.session_state.get("student_name") if not is_admin else "admin")
             _append_history_file_only(q, user)
 
+            # 👉 답변이 나올 자리(같은 컨테이너)에 플레이스홀더를 먼저 띄움
             answer_box = st.container()
+            with answer_box:
+                waiting = st.empty()
+                waiting.info("🧠 답변 생각중… 교재에서 관련 내용을 찾고 정리하고 있어요.")
+
             index_ready = _is_ready_unified()
 
             if index_ready:
                 try:
-                    with answer_box:
-                        # 한국어→영어 용어 확장 적용
-                        q_expanded = _expand_query_for_rag(q, mode_key)
+                    # 한국어→영어 용어 확장 적용
+                    q_expanded = _expand_query_for_rag(q, mode_key)
 
-                        # 1차 검색
-                        qe = st.session_state["rag_index"].as_query_engine(top_k=k)
-                        r = qe.query(q_expanded)
-                        raw = getattr(r, "response", "") or ""
-                        hits = getattr(r, "source_nodes", None) or getattr(r, "hits", None)
+                    # 1차 검색
+                    qe = st.session_state["rag_index"].as_query_engine(top_k=k)
+                    r = qe.query(q_expanded)
+                    raw = getattr(r, "response", "") or ""
+                    hits = getattr(r, "source_nodes", None) or getattr(r, "hits", None)
 
-                        # no-hit 판단
-                        def _is_nohit(raw_txt, hits_obj) -> bool:
-                            txt = (raw_txt or "").strip().lower()
-                            bad_phrases = ["관련 결과를 찾지 못", "no relevant", "no result", "not find"]
-                            cond_txt = (not txt) or any(p in txt for p in bad_phrases)
-                            cond_hits = (not hits_obj) or (hasattr(hits_obj, "__len__") and len(hits_obj) == 0)
-                            return cond_txt or cond_hits
+                    # no-hit 판단
+                    def _is_nohit(raw_txt, hits_obj) -> bool:
+                        txt = (raw_txt or "").strip().lower()
+                        bad_phrases = ["관련 결과를 찾지 못", "no relevant", "no result", "not find"]
+                        cond_txt = (not txt) or any(p in txt for p in bad_phrases)
+                        cond_hits = (not hits_obj) or (hasattr(hits_obj, "__len__") and len(hits_obj) == 0)
+                        return cond_txt or cond_hits
 
-                        if _is_nohit(raw, hits):
-                            # 2차: 더 넓게 재검색
-                            qe_wide = st.session_state["rag_index"].as_query_engine(top_k=max(10, int(k) if isinstance(k,int) else 5))
-                            r2 = qe_wide.query(q_expanded)
-                            raw2 = getattr(r2, "response", "") or ""
-                            hits2 = getattr(r2, "source_nodes", None) or getattr(r2, "hits", None)
-                            if not _is_nohit(raw2, hits2):
-                                raw, hits = raw2, hits2
-                            else:
-                                # Fallback: 일반 지식
-                                if st.session_state.get("allow_fallback", True):
-                                    fb = _fallback_general_answer(q, mode_key) or ""
+                    if _is_nohit(raw, hits):
+                        # 2차: 더 넓게 재검색
+                        qe_wide = st.session_state["rag_index"].as_query_engine(top_k=max(10, int(k) if isinstance(k,int) else 5))
+                        r2 = qe_wide.query(q_expanded)
+                        raw2 = getattr(r2, "response", "") or ""
+                        hits2 = getattr(r2, "source_nodes", None) or getattr(r2, "hits", None)
+                        if not _is_nohit(raw2, hits2):
+                            raw, hits = raw2, hits2
+                        else:
+                            # Fallback: 일반 지식
+                            if st.session_state.get("allow_fallback", True):
+                                fb = _fallback_general_answer(q, mode_key) or ""
+                                with answer_box:
+                                    waiting.empty()
                                     st.write(fb.strip() or "—")
                                     st.caption("※ 교재 근거 없음 — 일반 지식으로 답변했어요.")
-                                    _cache_put(q, fb, [], f"{mode_label} · Fallback")
-                                else:
+                                _cache_put(q, fb, [], f"{mode_label} · Fallback")
+                            else:
+                                with answer_box:
+                                    waiting.empty()
                                     st.warning("교재에서 딱 맞는 근거를 찾지 못했어요. 질문을 더 구체적으로 써 주세요.\n예: “현재완료 기본형을 예문 2개로 설명해줘”")
-                                return
+                            return
 
-                        # 🔁 합성 단계: 응답이 비었거나 디버그 목록이면 교재 기반으로 합성
-                        if _looks_like_debug_listing(raw):
-                            raw = _compose_answer_from_hits(q, hits, mode_key)
+                    # 합성 단계: 응답이 비었거나 디버그 목록이면 교재 기반으로 합성
+                    if _looks_like_debug_listing(raw):
+                        raw = _compose_answer_from_hits(q, hits, mode_key)
 
-                        # ✅ 학생용 답변 본문
+                    # ✅ 최종 출력(플레이스홀더 제거 후 같은 자리 교체)
+                    with answer_box:
+                        waiting.empty()
                         st.write((raw or "").strip() or "—")
 
                         # 근거 자료(선택)
@@ -1118,11 +1122,15 @@ def render_simple_qa():
                                     url = r0.get("url") or r0.get("source_url") or ""
                                     st.markdown(f"- {name}  " + (f"(<{url}>)" if url else ""))
 
-                        _cache_put(q, raw, refs, mode_label)
+                    _cache_put(q, raw, refs if locals().get("refs", None) else [], mode_label)
                 except Exception as e:
-                    st.error(f"검색 실패: {type(e).__name__}: {e}")
+                    with answer_box:
+                        waiting.empty()
+                        st.error(f"검색 실패: {type(e).__name__}: {e}")
             else:
-                st.info("아직 두뇌가 준비되지 않았어요. 상단에서 **복구/연결** 또는 **다시 최적화**를 먼저 완료해 주세요.")
+                with answer_box:
+                    waiting.empty()
+                    st.info("아직 두뇌가 준비되지 않았어요. 상단에서 **복구/연결** 또는 **다시 최적화**를 먼저 완료해 주세요.")
 
     # 📒 나의 질문 히스토리 — 인라인 펼치기(답변 직표시)
     rows = _read_history_lines(max_lines=5000)
@@ -1153,7 +1161,6 @@ def render_simple_qa():
                 st.caption(f"{i+1}. …")
 
 # ===== [06] END ===============================================================
-
 
 
 # ===== [07] MAIN — 오케스트레이터 ============================================
