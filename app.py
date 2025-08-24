@@ -669,6 +669,7 @@ def render_tag_diagnostics():
     except Exception:
         pass
 
+
 # ===== [06] SIMPLE QA DEMO — 인라인 펼치기 + 답변 직표시 + no-hit 부드럽게 ====
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
@@ -686,17 +687,49 @@ def _ensure_state():
     if "SHOW_TOP3_STICKY" not in st.session_state:
         st.session_state["SHOW_TOP3_STICKY"] = False  # 기본 숨김
 
-# ── [06-A’] 준비 상태(READY) 통일 판단 ----------------------------------------
+# ── [06-A’] 준비/토글: 관리자 설정을 안전하게 조회(통일 판단) --------------------
 def _is_ready_unified() -> bool:
-    """
-    헤더와 동일 기준으로 통일:
-    - get_index_status() == 'ready' 이면 True
-    - 예외 시엔 rag_index 존재만으로 보수적 판단
-    """
+    """헤더와 동일 기준: get_index_status() == 'ready'"""
     try:
         return (get_index_status() == "ready")
     except Exception:
         return bool(st.session_state.get("rag_index"))
+
+def _get_enabled_modes_unified() -> Dict[str, bool]:
+    """
+    관리자 토글을 강제 반영:
+    - 1순위: st.session_state["enabled_modes"] or ["admin_modes"]
+             (예: {"Grammar": False, "Sentence": True, "Passage": True})
+    - 2순위: 전역 함수 get_enabled_modes()가 있으면 호출
+    - 3순위: 기본값(모두 True) — 단, 관리자 화면이 아닐 때만 임시 허용
+    """
+    # 1) 세션 우선
+    for key in ("enabled_modes", "admin_modes", "modes"):
+        m = st.session_state.get(key)
+        if isinstance(m, dict):
+            return {
+                "Grammar": bool(m.get("Grammar", False)),
+                "Sentence": bool(m.get("Sentence", False)),
+                "Passage": bool(m.get("Passage", False)),
+            }
+    # 2) 전역 함수
+    fn = globals().get("get_enabled_modes")
+    if callable(fn):
+        try:
+            m = fn()
+            if isinstance(m, dict):
+                return {
+                    "Grammar": bool(m.get("Grammar", False)),
+                    "Sentence": bool(m.get("Sentence", False)),
+                    "Passage": bool(m.get("Passage", False)),
+                }
+        except Exception:
+            pass
+    # 3) 기본값 — 비관리자만 임시 허용
+    if not st.session_state.get("is_admin", False):
+        return {"Grammar": True, "Sentence": True, "Passage": True}
+    # 관리자 화면인데 정보가 없으면 모두 OFF로 보수적 차단
+    return {"Grammar": False, "Sentence": False, "Passage": False}
 
 # ── [06-B] 파일 I/O (히스토리) -------------------------------------------------
 def _history_path() -> Path:
@@ -770,8 +803,8 @@ def _popular_questions(top_n: int = 10, days: int = 14) -> List[Tuple[str, int]]
         ts = int(r.get("ts") or 0)
         if cutoff and ts and ts < cutoff: continue
         q = (r.get("q") or "").strip()
-        if not q: continue
         key = _normalize_question(q)
+        if not key: continue
         counter[key] += 1
         if key not in exemplar or len(q) < len(exemplar[key]): exemplar[key] = q
     return [(exemplar[k], c) for k, c in counter.most_common(top_n)]
@@ -831,15 +864,17 @@ def render_simple_qa():
 
     st.markdown("### 💬 질문은 모든 천재들이 가장 많이 사용하는 공부 방법이다!")
 
-    # 모드 선택
-    enabled = globals().get("get_enabled_modes", lambda: {"Grammar": True, "Sentence": True, "Passage": True})()
+    # ✅ 관리자 토글 반영: 라디오 옵션 구성
+    enabled = _get_enabled_modes_unified()
     radio_opts: List[str] = []
-    if enabled.get("Grammar", True):  radio_opts.append("문법설명(Grammar)")
-    if enabled.get("Sentence", True): radio_opts.append("문장분석(Sentence)")
-    if enabled.get("Passage", True):  radio_opts.append("지문분석(Passage)")
+    if enabled.get("Grammar", False):  radio_opts.append("문법설명(Grammar)")
+    if enabled.get("Sentence", False): radio_opts.append("문장분석(Sentence)")
+    if enabled.get("Passage", False):  radio_opts.append("지문분석(Passage)")
+
     if not radio_opts:
-        st.error("관리자에서 모든 질문 모드를 OFF로 설정했습니다.")
+        st.error("관리자에서 모든 질문 모드를 OFF로 설정했습니다. 관리자에게 문의하세요.")
         return
+
     mode_choice = st.radio("질문의 종류를 선택하세요", options=radio_opts, key="mode_radio", horizontal=True)
     if "문법" in mode_choice: mode_key, mode_label = "Grammar", "문법설명(Grammar)"
     elif "문장" in mode_choice: mode_key, mode_label = "Sentence", "문장분석(Sentence)"
@@ -862,7 +897,12 @@ def render_simple_qa():
     if "qa_q_form" in st.session_state:
         st.session_state["qa_q"] = st.session_state["qa_q_form"]
 
-    # 새 질문 처리(중복 가드) — ✅ 요약/안내 제거, 곧바로 답변 본문 출력
+    # ✅ 제출 차단: 꺼진 모드는 실행 불가
+    if submitted and not enabled.get(mode_key, False):
+        st.warning("이 질문 유형은 지금 관리자에서 꺼져 있어요. 다른 유형을 선택해 주세요.")
+        return
+
+    # 새 질문 처리(중복 가드) — 곧바로 답변 본문 출력
     if submitted and (st.session_state.get("qa_q","").strip()):
         q = st.session_state["qa_q"].strip()
         guard_key = f"{_normalize_question(q)}|{mode_key}"
@@ -875,7 +915,7 @@ def render_simple_qa():
             _append_history_file_only(q, user)
 
             answer_box = st.container()
-            index_ready = _is_ready_unified()  # 🔁 준비 판단을 헤더와 완전 통일
+            index_ready = _is_ready_unified()
 
             if index_ready:
                 try:
@@ -895,7 +935,7 @@ def render_simple_qa():
                             return cond_txt or cond_hits
 
                         if _is_nohit(raw, hits):
-                            # 2차: 자동으로 더 넓게(top_k=10) 재검색
+                            # 2차: 더 넓게(top_k=10) 재검색
                             qe_wide = st.session_state["rag_index"].as_query_engine(top_k=max(10, int(k) if isinstance(k,int) else 5))
                             r2 = qe_wide.query(q)
                             raw2 = getattr(r2, "response", "") or str(r2)
@@ -962,7 +1002,6 @@ def render_simple_qa():
                 st.caption(f"{i+1}. …")
 
 # ===== [06] END ===============================================================
-
 
 
 # ===== [07] MAIN — 오케스트레이터 ============================================
