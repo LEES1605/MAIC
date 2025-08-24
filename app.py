@@ -669,8 +669,7 @@ def render_tag_diagnostics():
     except Exception:
         pass
 
-
-# ===== [06] SIMPLE QA DEMO — 히스토리 인라인 + 답변 직표시 + no-hit Fallback ==
+# ===== [06] SIMPLE QA DEMO — 히스토리 인라인 + 답변 직표시 + 합성응답 + Fallback ==
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 import time
@@ -849,7 +848,7 @@ def _render_cached_block(norm: str):
                 url = r0.get("url") or r0.get("source_url") or ""
                 st.markdown(f"- {name}  " + (f"(<{url}>)" if url else ""))
 
-# ── [06-D’] No-hit Fallback(일반 지식) -----------------------------------------
+# ── [06-D’] 일반 지식 Fallback -------------------------------------------------
 def _fallback_general_answer(q: str, mode_key: str) -> str | None:
     prompt = (
         "너는 한국 학생에게 영어를 쉽게 설명하는 선생님이야. 아래 질문에 대해 "
@@ -858,7 +857,6 @@ def _fallback_general_answer(q: str, mode_key: str) -> str | None:
         "형식: 1) 핵심 설명 2) 예문-해석 3) 한 줄 요령\n"
         "주의: 과도한 배경 지식은 생략하고, 정확하게. 한국어로 답변."
     )
-    # 1) 세션에 등록된 일반 LLM 시도
     for key in ("general_llm", "llm", "chat_llm"):
         llm = st.session_state.get(key)
         if llm:
@@ -871,38 +869,28 @@ def _fallback_general_answer(q: str, mode_key: str) -> str | None:
                     r = llm.chat(prompt); return getattr(r, "text", None) or str(r)
             except Exception:
                 pass
-    # 2) 전역 헬퍼 함수
     for fn_name in ("call_general_llm", "call_openai_chat", "call_gemini_chat", "generate_general_answer"):
         fn = globals().get(fn_name)
         if callable(fn):
             try:
                 r = fn(prompt)
-                if isinstance(r, str) and r.strip():
-                    return r
-                if hasattr(r, "text"):
-                    return r.text
+                if isinstance(r, str) and r.strip(): return r
+                if hasattr(r, "text"): return r.text
             except Exception:
                 pass
-    # 3) 최후의 안전 메시지
-    return (
-        "일반 지식 모드가 비활성화되어 있어요. 관리자에서 일반 지식 LLM 연결을 켜면 "
-        "교재에 없더라도 기본 설명을 제공할 수 있어요."
-    )
+    return ("일반 지식 모드가 비활성화되어 있어요. 관리자에서 일반 지식 LLM 연결을 켜면 "
+            "교재에 없더라도 기본 설명을 제공할 수 있어요.")
 
-# ── [06-D’’] ★한국어→영어 용어 확장(Grammar 전용 우선 적용) --------------------
+# ── [06-D’’] 한국어→영어 용어 확장(Grammar 중심) -------------------------------
 def _expand_query_for_rag(q: str, mode_key: str) -> str:
-    """한국어 질문에 영어 키워드를 덧붙여 교재(영문) 적중률을 올린다."""
     q0 = (q or "").strip()
-    if not q0:
-        return q0
-    # 핵심 용어 매핑(필요시 계속 추가 가능)
+    if not q0: return q0
     ko_en = {
         "관계대명사": "relative pronoun|relative pronouns|relative clause",
         "관계절": "relative clause",
         "관계부사": "relative adverb|relative adverbs",
         "현재완료": "present perfect",
         "과거완료": "past perfect",
-        "대과거": "past perfect",
         "진행형": "progressive|continuous",
         "수동태": "passive voice",
         "가정법": "subjunctive|conditional",
@@ -926,15 +914,87 @@ def _expand_query_for_rag(q: str, mode_key: str) -> str:
     for ko, en in ko_en.items():
         if ko in q0:
             extras.extend([en, f'"{en}"'])
-    # Grammar 모드일수록 검색 힌트 강화
     if mode_key == "Grammar":
         extras += ["grammar explanation", "ESL", "examples", "usage"]
-    # 중복 제거하면서 결합
     merged = []
     for t in [q0] + extras:
         if t and t not in merged:
             merged.append(t)
     return " ".join(merged)
+
+# ── [06-D’’’] ★합성 응답: 매치 목록 → 학생용 설명으로 변환 -----------------------
+def _looks_like_debug_listing(text: str) -> bool:
+    t = (text or "").strip().lower()
+    return (not t) or t.startswith("top matches") or "score=" in t
+
+def _extract_hit_text(h) -> str:
+    for attr in ("text", "content", "page_content"):
+        t = getattr(h, attr, None)
+        if t: return str(t)
+    node = getattr(h, "node", None)
+    if node:
+        for cand in ("get_content", "get_text"):
+            fn = getattr(node, cand, None)
+            if callable(fn):
+                try:
+                    t = fn()
+                    if t: return str(t)
+                except Exception:
+                    pass
+        t = getattr(node, "text", None)
+        if t: return str(t)
+    return ""
+
+def _compose_answer_from_hits(q: str, hits: Any, mode_key: str) -> str:
+    """매치된 교재 조각들로부터 학생용 설명 합성(LLM 사용)."""
+    # 1) 컨텍스트 추출/절단
+    ctx_parts: List[str] = []
+    if hits:
+        for h in list(hits)[:4]:
+            t = _extract_hit_text(h)
+            if not t: continue
+            t = t.replace("\n", " ").strip()
+            if t:
+                ctx_parts.append(t)
+            if sum(len(x) for x in ctx_parts) > 2000:
+                break
+    context = "\n\n".join(ctx_parts).strip()
+    if not context:
+        return ""
+
+    # 2) 합성 프롬프트
+    prompt = (
+        "너는 한국 중고등학생에게 영어 문법을 가르치는 선생님이야. "
+        "아래 [교재 발췌]를 근거로, 질문에 대해 간단하지만 정확한 한국어 설명을 만들어줘. "
+        "형식: 1) 핵심 설명(3~5문장) 2) 예문 2개(영문+한국어 해석) 3) 한 줄 요령.\n\n"
+        f"[질문] {q}\n\n[교재 발췌]\n{context}\n"
+        "주의: 교재에 없는 정보는 상상하지 말고, 용어는 영어/한국어 병기해도 좋아."
+    )
+
+    # 3) LLM 호출 (세션/헬퍼 동원)
+    for key in ("general_llm", "llm", "chat_llm"):
+        llm = st.session_state.get(key)
+        if llm:
+            try:
+                if hasattr(llm, "complete"):
+                    r = llm.complete(prompt); return getattr(r, "text", None) or str(r)
+                if hasattr(llm, "predict"):
+                    return llm.predict(prompt)
+                if hasattr(llm, "chat"):
+                    r = llm.chat(prompt); return getattr(r, "text", None) or str(r)
+            except Exception:
+                pass
+    for fn_name in ("call_general_llm", "call_openai_chat", "call_gemini_chat", "generate_general_answer"):
+        fn = globals().get(fn_name)
+        if callable(fn):
+            try:
+                r = fn(prompt)
+                if isinstance(r, str) and r.strip(): return r
+                if hasattr(r, "text"): return r.text
+            except Exception:
+                pass
+    # 4) 최후: LLM이 전혀 없을 때는 발췌 그대로 반환(디버그 노출 방지)
+    return "아래 교재 발췌를 참고해서 정리해 볼래?\n\n" + context[:1200]
 
 # ── [06-E] 메인 렌더 -----------------------------------------------------------
 def render_simple_qa():
@@ -942,7 +1002,6 @@ def render_simple_qa():
     is_admin = st.session_state.get("is_admin", False)
 
     _render_top3_badges()
-
     st.markdown("### 💬 질문은 모든 천재들이 가장 많이 사용하는 공부 방법이다!")
 
     # 관리자 토글 반영: 라디오 옵션
@@ -1000,13 +1059,13 @@ def render_simple_qa():
             if index_ready:
                 try:
                     with answer_box:
-                        # ✅ 한국어→영어 용어 확장 적용 (Grammar 등)
+                        # 한국어→영어 용어 확장 적용
                         q_expanded = _expand_query_for_rag(q, mode_key)
 
                         # 1차 검색
                         qe = st.session_state["rag_index"].as_query_engine(top_k=k)
                         r = qe.query(q_expanded)
-                        raw = getattr(r, "response", "") or str(r)
+                        raw = getattr(r, "response", "") or ""
                         hits = getattr(r, "source_nodes", None) or getattr(r, "hits", None)
 
                         # no-hit 판단
@@ -1018,15 +1077,15 @@ def render_simple_qa():
                             return cond_txt or cond_hits
 
                         if _is_nohit(raw, hits):
-                            # 2차: 더 넓게(top_k=10) 재검색 (확장 쿼리 그대로 사용)
+                            # 2차: 더 넓게 재검색
                             qe_wide = st.session_state["rag_index"].as_query_engine(top_k=max(10, int(k) if isinstance(k,int) else 5))
                             r2 = qe_wide.query(q_expanded)
-                            raw2 = getattr(r2, "response", "") or str(r2)
+                            raw2 = getattr(r2, "response", "") or ""
                             hits2 = getattr(r2, "source_nodes", None) or getattr(r2, "hits", None)
                             if not _is_nohit(raw2, hits2):
                                 raw, hits = raw2, hits2
                             else:
-                                # ✅ Fallback: 일반 지식 모드
+                                # Fallback: 일반 지식
                                 if st.session_state.get("allow_fallback", True):
                                     fb = _fallback_general_answer(q, mode_key) or ""
                                     st.write(fb.strip() or "—")
@@ -1036,7 +1095,11 @@ def render_simple_qa():
                                     st.warning("교재에서 딱 맞는 근거를 찾지 못했어요. 질문을 더 구체적으로 써 주세요.\n예: “현재완료 기본형을 예문 2개로 설명해줘”")
                                 return
 
-                        # ✅ 교재 기반 답변 본문 바로 표시
+                        # 🔁 합성 단계: 응답이 비었거나 디버그 목록이면 교재 기반으로 합성
+                        if _looks_like_debug_listing(raw):
+                            raw = _compose_answer_from_hits(q, hits, mode_key)
+
+                        # ✅ 학생용 답변 본문
                         st.write((raw or "").strip() or "—")
 
                         # 근거 자료(선택)
@@ -1090,6 +1153,7 @@ def render_simple_qa():
                 st.caption(f"{i+1}. …")
 
 # ===== [06] END ===============================================================
+
 
 
 # ===== [07] MAIN — 오케스트레이터 ============================================
