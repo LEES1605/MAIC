@@ -28,7 +28,7 @@ def ensure_admin_session_keys() -> None:
 def render_admin_controls() -> None:
     """
     상단 우측 '관리자' 버튼과 PIN 인증 폼을 렌더링.
-    + '🔎 진단'은 JS 없이 앵커 링크 버튼으로 구현(#diag로 이동, rerun 방지).
+    + '🔎 진단'은 새창 없이 같은 탭에서 #diag 로 이동하는 앵커 버튼(HTML)로 구현.
     """
     import streamlit as st
 
@@ -52,17 +52,20 @@ def render_admin_controls() -> None:
                         st.session_state["_admin_auth_open"] = True
                         st.rerun()
 
-            # --- 진단으로 이동: 앵커 링크 버튼( rerun 발생 X ) ---
+            # --- 진단으로 이동: 새창 금지(target=_self) 앵커 버튼 ---
             with c_diag:
-                if hasattr(st, "link_button"):
-                    st.link_button("🔎 진단", url="#diag", use_container_width=True, help="페이지 하단 진단 섹션(#diag)으로 이동")
-                else:
-                    # 구버전 스트림릿 호환: 단순 앵커 링크 (버튼 스타일은 간단)
-                    st.markdown(
-                        '<a href="#diag" target="_self" style="display:block;text-align:center;padding:0.5rem 0;'
-                        'border:1px solid rgba(255,255,255,0.2);border-radius:0.5rem;text-decoration:none;">🔎 진단</a>',
-                        unsafe_allow_html=True
-                    )
+                st.markdown(
+                    '''
+                    <a href="#diag" target="_self"
+                       style="
+                         display:block; text-align:center; padding:0.5rem 0.75rem;
+                         border:1px solid rgba(255,255,255,0.25); border-radius:0.5rem;
+                         text-decoration:none; font-weight:600;">
+                       🔎 진단
+                    </a>
+                    ''',
+                    unsafe_allow_html=True
+                )
 
             # --- 인증 패널 ---
             if st.session_state.get("_admin_auth_open", False) and not st.session_state.get("is_admin", False):
@@ -89,6 +92,7 @@ def render_admin_controls() -> None:
                     else:
                         st.error("PIN이 올바르지 않습니다.")
 # ── [UA-01C] 관리자 버튼/인증 패널 — END --------------------------------------
+
 
 
 # ── [UA-01D] 역할 캡션 --------------------------------------------------------
