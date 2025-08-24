@@ -138,7 +138,33 @@ def _attach_from_local() -> bool:
         return False
 
 def _auto_attach_or_restore_silently() -> bool:
-    return _attach_from_local()
+    """
+    1) 로컬에서 부착 시도
+    2) 실패하면: 드라이브 최신 backup_zip → 로컬로 복구 → 다시 부착
+    (에러는 모두 삼키고 False 반환)
+    """
+    # 1) 로컬 attach
+    if _attach_from_local():
+        return True
+
+    # 2) 드라이브에서 복구 시도
+    try:
+        import importlib
+        mod = importlib.import_module("src.rag.index_build")
+        restore_fn = getattr(mod, "restore_latest_backup_to_local", None)
+        if callable(restore_fn):
+            res = restore_fn()
+            # 기대 형태: {"ok": True, "path": "..."} 또는 {"ok": False, "error": "..."}
+            if isinstance(res, dict) and res.get("ok"):
+                # 복구 성공 → 재부착
+                if _attach_from_local():
+                    return True
+    except Exception:
+        # 조용히 실패 처리
+        pass
+
+    return False
+# ===== [03] END ===============================================================
 
 
 # ===== [04] HEADER ==========================================
