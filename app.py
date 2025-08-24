@@ -735,7 +735,7 @@ def _normalize_question(s: str) -> str:
     s = _re.sub(r"\s+", " ", s).strip()
     return s
 
-# ── [06-C] TOP3(선택: 기본 숨김) -----------------------------------------------
+# ── [06-C] 인기/Top3(파일 기준) ------------------------------------------------
 def _top3_users(days: int = 7) -> List[Tuple[str, int]]:
     from collections import Counter
     rows = _read_history_lines(max_lines=5000)
@@ -747,6 +747,24 @@ def _top3_users(days: int = 7) -> List[Tuple[str, int]]:
         if ts < cutoff: continue
         if (r.get("q") or "").strip(): users.append(_sanitize_user(r.get("user")))
     ctr = Counter(users); return ctr.most_common(3)
+
+def _popular_questions(top_n: int = 10, days: int = 14) -> List[Tuple[str, int]]:
+    """FAQ 토글용: 최근 N일 인기 질문 (정규화 기준, 짧은 대표문장 유지)"""
+    from collections import Counter
+    rows = _read_history_lines(max_lines=5000)
+    if not rows: return []
+    cutoff = int(time.time()) - days * 86400 if days and days > 0 else 0
+    counter: Counter[str] = Counter(); exemplar: Dict[str, str] = {}
+    for r in rows:
+        ts = int(r.get("ts") or 0)
+        if cutoff and ts and ts < cutoff: continue
+        q = (r.get("q") or "").strip()
+        if not q: continue
+        key = _normalize_question(q)
+        counter[key] += 1
+        if key not in exemplar or len(q) < len(exemplar[key]):
+            exemplar[key] = q
+    return [(exemplar[k], c) for k, c in counter.most_common(top_n)]
 
 def _render_top3_badges():
     if not st.session_state.get("SHOW_TOP3_STICKY"):  # 기본 숨김
@@ -879,7 +897,6 @@ def render_simple_qa():
                             if not _is_nohit(raw2, hits2):
                                 raw, hits = raw2, hits2
                             else:
-                                # 여전히 없으면: 거친 오류 문구 대신 친절 메시지
                                 st.warning("교재에서 딱 맞는 근거를 찾지 못했어요. 질문을 조금 더 구체적으로 써 주면 더 잘 찾아요.\n예: “현재완료 기본형을 예문 2개로 설명해줘”")
                                 if is_admin:
                                     st.caption("관리자 팁: prepared 폴더에 관련 교재가 있는지 확인하고, ‘다시 최적화(인덱스 갱신)’를 실행해 보세요.")
@@ -939,26 +956,35 @@ def render_simple_qa():
                 st.caption(f"{i+1}. …")
 
 # ===== [06] END ===============================================================
+# ===== [07] MAIN — 오케스트레이터 ============================================
+import streamlit as st
 
-# ── 헤더: 인라인(제목 + 배지) + 우측 FAQ 버튼 -------------------------------
 def _render_title_with_status():
-    import streamlit as st
-    status = get_index_status()  # 'ready' | 'pending' | 'missing'
-    is_admin = st.session_state.get("is_admin", False)
+    """
+    상단 헤더: 제목 + 상태배지 + 우측 FAQ 토글
+    - 학생: 🟢 LEES AI 선생님이 답변준비 완료
+    - 관리자: 🟢 두뇌 준비됨
+    """
+    try:
+        status = get_index_status()  # 'ready' | 'pending' | 'missing'
+    except Exception:
+        status = "missing"
 
-    # 상태 배지 HTML (학생/관리자 분리)
+    is_admin = bool(st.session_state.get("is_admin", False))
+
+    # 상태 배지 문구(학생/관리자 분리)
     if status == "ready":
         badge_html = (
             "<span class='ui-pill ui-pill-green'>🟢 두뇌 준비됨</span>"
             if is_admin else
-            "<span class='ui-pill ui-pill-green'>🟢 답변준비 완료</span>"
+            "<span class='ui-pill ui-pill-green'>🟢 LEES AI 선생님이 답변준비 완료</span>"
         )
     elif status == "pending":
         badge_html = "<span class='ui-pill'>🟡 연결 대기</span>"
     else:
         badge_html = "<span class='ui-pill'>🔴 준비 안 됨</span>"
 
-    # 상단 레이아웃: [제목+배지] | [FAQ 버튼]
+    # 레이아웃
     c1, c2 = st.columns([0.78, 0.22])
     with c1:
         st.markdown("""
@@ -976,27 +1002,71 @@ def _render_title_with_status():
         """, unsafe_allow_html=True)
 
     with c2:
-        st.write("")  # 살짝 아래 내리기
+        st.write("")  # 살짝 아래로 내림
         show = bool(st.session_state.get("show_faq", False))
         label = "📚 친구들이 자주하는 질문" if not show else "📚 친구들이 자주하는 질문 닫기"
         if st.button(label, key="btn_toggle_faq", use_container_width=True):
             st.session_state["show_faq"] = not show
 
-    # FAQ 패널(토글): 상단에 간단 인기질문 5개
+    # FAQ 패널
     if st.session_state.get("show_faq", False):
-        ranked = _popular_questions(top_n=5, days=14)
+        popular_fn = globals().get("_popular_questions", None)
+        ranked = popular_fn(top_n=5, days=14) if callable(popular_fn) else []
         with st.container(border=True):
             st.markdown("**📚 친구들이 자주하는 질문** — 최근 2주 기준")
             if not ranked:
                 st.caption("아직 집계된 질문이 없어요.")
             else:
                 for qtext, cnt in ranked:
-                    # 질문을 누르면 즉시 입력 복구 + 실행
+                    # 클릭 시 입력창에 복구(자동검색은 하지 않음)
                     if st.button(f"{qtext}  · ×{cnt}", key=f"faq_{hash(qtext)}", use_container_width=True):
                         st.session_state["qa_q"] = qtext
-                        st.session_state["qa_submitted"] = True
+                        # 입력창에 바로 반영되도록 한 번 새로 그림(자동 제출은 안 함)
+                        st.rerun()
 
-# 헤더 1회 렌더
-_render_title_with_status()
+def main():
+    # 0) 헤더
+    _render_title_with_status()
 
+    # 1) 자동 연결/복구(가능하면 1회 시도)
+    try:
+        before = get_index_status()
+    except Exception:
+        before = "missing"
 
+    try:
+        if before == "pending" and not _is_attached_session():
+            _auto_attach_or_restore_silently()
+            # 상태가 바뀌면 헤더/배지 동기화를 위해 재실행
+            after = get_index_status()
+            if after != before:
+                st.rerun()
+    except Exception:
+        pass  # 학생 화면에서는 조용히 통과(관리자 로그는 별도 노출)
+
+    # 2) 준비 패널(ready면 내부에서 자연히 최소 표시), 질문 패널
+    try:
+        render_brain_prep_main()
+    except Exception:
+        pass  # 없으면 무시
+
+    try:
+        render_simple_qa()
+    except Exception as e:
+        st.error(f"질문 패널 렌더 중 오류: {type(e).__name__}: {e}")
+
+    # 3) 관리자 전용 패널
+    if st.session_state.get("is_admin", False):
+        try:
+            render_admin_settings_panel()
+        except Exception:
+            pass
+        with st.expander("진단/로그(관리자 전용)", expanded=False):
+            try:
+                render_tag_diagnostics()
+            except Exception:
+                st.caption("진단 모듈이 비활성화되어 있습니다.")
+
+if __name__ == "__main__":
+    main()
+# ===== [07] END ===============================================================
