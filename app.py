@@ -360,9 +360,9 @@ def _auto_attach_or_restore_silently() -> bool:
     return False
 # ===== [03] SESSION & HELPERS — END ==========================================
 
-
 # ===== [04] HEADER — START ====================================================
 import streamlit as st
+import streamlit.components.v1 as components  # ← 추가: 스크롤용 JS 삽입
 
 # 캐시: 백업 유무를 10분(ttl=600s) 동안 보존해 드라이브 호출 비용을 최소화
 @st.cache_data(ttl=600, show_spinner=False)
@@ -378,13 +378,11 @@ def _check_backup_presence_cached():
     import importlib
     from pathlib import Path
 
-    # 기본 경로
     BACKUP_DIR = Path.home() / ".maic" / "backup"
     drive_has = False
     drive_folder_id = None
     drive_err = None
 
-    # 모듈이 제공하는 경로/서비스 우선 사용
     try:
         m = importlib.import_module("src.rag.index_build")
         BACKUP_DIR = getattr(m, "BACKUP_DIR", BACKUP_DIR)
@@ -397,7 +395,6 @@ def _check_backup_presence_cached():
                 fid = _pick_backup_folder_id(svc)
                 drive_folder_id = fid
                 if svc and fid:
-                    # 존재 여부만 확인하므로 1개만 조회
                     resp = svc.files().list(
                         q=f"'{fid}' in parents and trashed=false and mimeType!='application/vnd.google-apps.folder'",
                         fields="files(id,name)",
@@ -413,7 +410,6 @@ def _check_backup_presence_cached():
     except Exception:
         pass
 
-    # 로컬 존재 여부
     try:
         BACKUP_DIR.mkdir(parents=True, exist_ok=True)
         local_has = any(list(BACKUP_DIR.glob("backup_*.zip"))) or any(list(BACKUP_DIR.glob("restored_*.zip")))
@@ -427,10 +423,7 @@ def _check_backup_presence_cached():
 
 
 def _brain_status_badge():
-    """
-    두뇌 준비 상태 배지: get_index_status() 값을 사용.
-    ready -> 🟢, pending -> 🟡, missing -> 🔴
-    """
+    """두뇌 준비 상태 배지: get_index_status() 값을 사용. ready→🟢, pending→🟡, missing→🔴"""
     try:
         status = get_index_status()  # [03] 구획에서 정의됨
     except Exception:
@@ -464,24 +457,41 @@ def _backup_badges_line():
 
 def render_header():
     """
-    상단 헤더: 기존 두뇌 상태 + 백업 유무 요약 배지.
-    (헤더 스타일/구성은 단순화하여 안정적으로 유지)
+    상단 헤더: 기존 두뇌 상태 + 백업 유무 요약 배지 + [진단으로 이동] 버튼(JS 스크롤).
     """
     brain = _brain_status_badge()
-    local_badge, drive_badge, l_dir = _backup_badges_line()
+    local_badge, drive_badge, _ = _backup_badges_line()
 
     with st.container():
         c1, c2 = st.columns([0.7, 0.3])
         with c1:
             st.markdown(f"### {brain}")
-            # 백업 배지 라인
             st.markdown(f"{local_badge} · {drive_badge}")
         with c2:
-            # 진단 패널로 안내 (동일 페이지 내 링크 스크롤은 제한되므로, 힌트 텍스트만 제공)
-            st.caption("관리자: 하단의 **진단/로그(관리자 전용)** 섹션에서 상세 상태 확인")
+            # 클릭 즉시 #diag 요소로 스무스 스크롤 (rerun에도 안전)
+            if st.button("🔎 진단으로 이동", use_container_width=True, help="페이지 하단 진단 섹션(#diag)으로 이동"):
+                components.html(
+                    """
+                    <script>
+                      (function(){
+                        function go(){
+                          const el = document.getElementById('diag');
+                          if(el){ el.scrollIntoView({behavior:'smooth', block:'start'}); }
+                          else { window.location.hash = 'diag'; }
+                        }
+                        // 렌더 안정화를 위해 약간 지연 후 실행
+                        setTimeout(go, 150);
+                      })();
+                    </script>
+                    """,
+                    height=0, width=0
+                )
+                try: st.toast("진단으로 이동합니다…")
+                except Exception: pass
 
     st.divider()
 # ===== [04] HEADER — END ======================================================
+
 
 # ===== [04A] MODE & ADMIN BUTTON (모듈 분리 호출) — START =====================
 from src.ui_admin import (
