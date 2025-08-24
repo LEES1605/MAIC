@@ -669,7 +669,7 @@ def render_tag_diagnostics():
     except Exception:
         pass
 
-# ===== [06] SIMPLE QA DEMO — 히스토리 인라인 + 답변 직표시 + 합성응답 + Fallback ==
+# ===== [06] SIMPLE QA DEMO — 히스토리 인라인 + 답변 직표시 + 규칙기반 합성기 + Fallback ==
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 import time
@@ -690,14 +690,12 @@ def _ensure_state():
 
 # ── [06-A’] 준비/토글 통일 판단 -------------------------------------------------
 def _is_ready_unified() -> bool:
-    """헤더와 동일 기준: get_index_status() == 'ready'"""
     try:
         return (get_index_status() == "ready")
     except Exception:
         return bool(st.session_state.get("rag_index"))
 
 def _get_enabled_modes_unified() -> Dict[str, bool]:
-    # 1) 세션 우선
     for key in ("enabled_modes", "admin_modes", "modes"):
         m = st.session_state.get(key)
         if isinstance(m, dict):
@@ -706,7 +704,6 @@ def _get_enabled_modes_unified() -> Dict[str, bool]:
                 "Sentence": bool(m.get("Sentence", False)),
                 "Passage": bool(m.get("Passage", False)),
             }
-    # 2) 전역 함수
     fn = globals().get("get_enabled_modes")
     if callable(fn):
         try:
@@ -719,7 +716,6 @@ def _get_enabled_modes_unified() -> Dict[str, bool]:
                 }
         except Exception:
             pass
-    # 3) 기본값 — 비관리자만 임시 허용, 관리자는 보수적 차단
     if not st.session_state.get("is_admin", False):
         return {"Grammar": True, "Sentence": True, "Passage": True}
     return {"Grammar": False, "Sentence": False, "Passage": False}
@@ -786,22 +782,6 @@ def _top3_users(days: int = 7) -> List[Tuple[str, int]]:
         if (r.get("q") or "").strip(): users.append(_sanitize_user(r.get("user")))
     ctr = Counter(users); return ctr.most_common(3)
 
-def _popular_questions(top_n: int = 10, days: int = 14) -> List[Tuple[str, int]]:
-    from collections import Counter
-    rows = _read_history_lines(max_lines=5000)
-    if not rows: return []
-    cutoff = int(time.time()) - days * 86400 if days and days > 0 else 0
-    counter: Counter[str] = Counter(); exemplar: Dict[str, str] = {}
-    for r in rows:
-        ts = int(r.get("ts") or 0)
-        if cutoff and ts and ts < cutoff: continue
-        q = (r.get("q") or "").strip()
-        key = _normalize_question(q)
-        if not key: continue
-        counter[key] += 1
-        if key not in exemplar or len(q) < len(exemplar[key]): exemplar[key] = q
-    return [(exemplar[k], c) for k, c in counter.most_common(top_n)]
-
 def _render_top3_badges():
     if not st.session_state.get("SHOW_TOP3_STICKY"):
         return
@@ -834,7 +814,6 @@ def _cache_get(norm: str) -> Dict[str, Any] | None:
     return st.session_state["answer_cache"].get(norm)
 
 def _render_cached_block(norm: str):
-    """히스토리 펼침: 답변 본문을 즉시 보여주고, 근거만 선택사항(expander)"""
     data = _cache_get(norm)
     if not data:
         st.info("이 질문의 저장된 답변이 없어요. 아래 ‘다시 검색’으로 최신 답변을 받아보세요.")
@@ -848,38 +827,11 @@ def _render_cached_block(norm: str):
                 url = r0.get("url") or r0.get("source_url") or ""
                 st.markdown(f"- {name}  " + (f"(<{url}>)" if url else ""))
 
-# ── [06-D’] 일반 지식 Fallback -------------------------------------------------
+# ── [06-D’] 일반 지식 Fallback(옵션) -------------------------------------------
 def _fallback_general_answer(q: str, mode_key: str) -> str | None:
-    prompt = (
-        "너는 한국 학생에게 영어를 쉽게 설명하는 선생님이야. 아래 질문에 대해 "
-        "핵심 개념을 3~5문장으로 설명하고, 간단한 예문 2개를 제시하고, 마지막에 한 줄 요령을 적어줘.\n"
-        f"[질문유형:{mode_key}] 질문: {q}\n"
-        "형식: 1) 핵심 설명 2) 예문-해석 3) 한 줄 요령\n"
-        "주의: 과도한 배경 지식은 생략하고, 정확하게. 한국어로 답변."
-    )
-    for key in ("general_llm", "llm", "chat_llm"):
-        llm = st.session_state.get(key)
-        if llm:
-            try:
-                if hasattr(llm, "complete"):
-                    r = llm.complete(prompt); return getattr(r, "text", None) or str(r)
-                if hasattr(llm, "predict"):
-                    return llm.predict(prompt)
-                if hasattr(llm, "chat"):
-                    r = llm.chat(prompt); return getattr(r, "text", None) or str(r)
-            except Exception:
-                pass
-    for fn_name in ("call_general_llm", "call_openai_chat", "call_gemini_chat", "generate_general_answer"):
-        fn = globals().get(fn_name)
-        if callable(fn):
-            try:
-                r = fn(prompt)
-                if isinstance(r, str) and r.strip(): return r
-                if hasattr(r, "text"): return r.text
-            except Exception:
-                pass
-    return ("일반 지식 모드가 비활성화되어 있어요. 관리자에서 일반 지식 LLM 연결을 켜면 "
-            "교재에 없더라도 기본 설명을 제공할 수 있어요.")
+    # LLM 연결 전이므로 안내만 남겨둠
+    return ("일반 지식 모드가 비활성화되어 있어요. "
+            "관리자에서 일반 지식 LLM 연결을 켜면 교재에 없더라도 기본 설명을 제공할 수 있어요.")
 
 # ── [06-D’’] 한국어→영어 용어 확장(Grammar 중심) -------------------------------
 def _expand_query_for_rag(q: str, mode_key: str) -> str:
@@ -897,6 +849,7 @@ def _expand_query_for_rag(q: str, mode_key: str) -> str:
         "비교급": "comparative",
         "최상급": "superlative",
         "to부정사": "to-infinitive|infinitive",
+        "부정사": "infinitive",
         "동명사": "gerund",
         "분사구문": "participial construction|participial phrase",
         "명사절": "noun clause",
@@ -922,24 +875,16 @@ def _expand_query_for_rag(q: str, mode_key: str) -> str:
             merged.append(t)
     return " ".join(merged)
 
-# ── [06-D’’’] 합성 응답 + ★강화된 히트 텍스트 추출 ------------------------------
-def _looks_like_debug_listing(text: str) -> bool:
-    t = (text or "").strip().lower()
-    return (not t) or t.startswith("top matches") or "score=" in t
-
+# ── [06-D’’’] 히트 텍스트 추출(강화) + 규칙기반 합성기 --------------------------
 def _extract_hit_text(h) -> str:
-    """여러 런타임 유형을 폭넓게 커버해서 텍스트를 최대한 뽑아낸다."""
     try:
-        # 0) dict 형태
         if isinstance(h, dict):
             for k in ("text", "content", "page_content", "snippet", "chunk", "excerpt"):
                 v = h.get(k)
                 if v: return str(v)
-        # 1) top-level 속성
         for attr in ("text", "content", "page_content", "snippet"):
             v = getattr(h, attr, None)
             if v: return str(v)
-        # 2) node 객체 내부
         n = getattr(h, "node", None)
         if n:
             for cand in ("get_content", "get_text"):
@@ -954,67 +899,125 @@ def _extract_hit_text(h) -> str:
             if isinstance(md, dict):
                 for k in ("text", "content", "chunk", "excerpt"):
                     if md.get(k): return str(md[k])
-        # 3) 마지막 수단: 문자열화
         s = str(h)
-        if s and s != repr(h):
-            return s
+        if s and s != repr(h): return s
     except Exception:
         pass
     return ""
 
-def _compose_answer_from_hits(q: str, hits: Any, mode_key: str) -> str:
-    """매치된 교재 조각들로부터 학생용 설명 합성(LLM 사용)."""
-    ctx_parts: List[str] = []
+def _gather_context(hits: Any, max_chars: int = 1500) -> str:
+    parts: List[str] = []
     if hits:
         for h in list(hits)[:4]:
             t = _extract_hit_text(h)
             if not t: continue
             t = t.replace("\n", " ").strip()
             if t:
-                ctx_parts.append(t)
-            if sum(len(x) for x in ctx_parts) > 2000:
+                parts.append(t)
+            if sum(len(x) for x in parts) > max_chars:
                 break
-    context = "\n\n".join(ctx_parts).strip()
-    if not context:
-        return ""
-    prompt = (
-        "너는 한국 중고등학생에게 영어 문법을 가르치는 선생님이야. "
-        "아래 [교재 발췌]를 근거로, 질문에 대해 간단하지만 정확한 한국어 설명을 만들어줘. "
-        "형식: 1) 핵심 설명(3~5문장) 2) 예문 2개(영문+한국어 해석) 3) 한 줄 요령.\n\n"
-        f"[질문] {q}\n\n[교재 발췌]\n{context}\n"
-        "주의: 교재에 없는 정보는 상상하지 말고, 용어는 영어/한국어 병기해도 좋아."
-    )
-    for key in ("general_llm", "llm", "chat_llm"):
-        llm = st.session_state.get(key)
-        if llm:
-            try:
-                if hasattr(llm, "complete"):
-                    r = llm.complete(prompt); return getattr(r, "text", None) or str(r)
-                if hasattr(llm, "predict"):
-                    return llm.predict(prompt)
-                if hasattr(llm, "chat"):
-                    r = llm.chat(prompt); return getattr(r, "text", None) or str(r)
-            except Exception:
-                pass
-    for fn_name in ("call_general_llm", "call_openai_chat", "call_gemini_chat", "generate_general_answer"):
-        fn = globals().get(fn_name)
-        if callable(fn):
-            try:
-                r = fn(prompt)
-                if isinstance(r, str) and r.strip(): return r
-                if hasattr(r, "text"): return r.text
-            except Exception:
-                pass
-    return "아래 교재 발췌를 참고해서 정리해 볼래?\n\n" + context[:1200]
+    return " ".join(parts)[:max_chars].strip()
 
-def _ensure_nonempty_answer(q: str, mode_key: str, hits: Any, raw: str) -> str:
-    """절대 빈 문자열이 나오지 않게 보강 체인 적용."""
-    txt = (raw or "").strip()
-    if not txt or _looks_like_debug_listing(txt):
-        txt = _compose_answer_from_hits(q, hits, mode_key).strip()
-    if not txt and st.session_state.get("allow_fallback", True):
-        txt = (_fallback_general_answer(q, mode_key) or "").strip()
-    return txt or "설명을 불러오는 중 문제가 있었어요. 다시 시도해 주세요."
+def _detect_topic(q: str, ctx: str) -> str:
+    ql = (q or "").lower()
+    cl = (ctx or "").lower()
+    rules = {
+        "relative_pronoun": ["관계대명사", "relative pronoun", "relative clause", "who", "which", "that"],
+        "present_perfect": ["현재완료", "present perfect", "have ", "has "],
+        "past_perfect": ["과거완료", "대과거", "past perfect", "had "],
+        "passive": ["수동태", "passive voice"],
+        "gerund": ["동명사", "gerund"],
+        "infinitive": ["to부정사", "부정사", "to-infinitive", "infinitive"],
+    }
+    for key, kws in rules.items():
+        if any(k in ql for k in kws) or any(k in cl for k in kws):
+            return key
+    return "generic"
+
+def _compose_answer_rule_based(topic: str) -> str:
+    if topic == "relative_pronoun":
+        return (
+            "① **관계대명사(Relative Pronoun)** 는 앞에 있는 명사를 이어 받아 **형용사절(관계절)** 을 이끌며 "
+            "사람·사물에 대해 **추가 정보를 덧붙이는** 역할을 합니다. 주로 **who/which/that** 을 쓰고, "
+            "관계대명사가 절에서 **주어/목적어** 자리에 올 수 있어요.\n\n"
+            "② **형식**: 선행사 + 관계대명사 + (주어) + 동사 …\n"
+            "③ **예문**\n"
+            "- The book **that** I bought is interesting. → 내가 산 그 책은 흥미롭다.\n"
+            "- She is the girl **who** won the prize. → 상을 받은 그 소녀가 그녀야.\n"
+            "④ **요령**: 선행사와 관계대명사의 **수 일치**와, **목적격**일 땐 구어에서 종종 생략된다는 점을 기억!"
+        )
+    if topic == "present_perfect":
+        return (
+            "① **현재완료(Present Perfect)** 는 과거에 한 일이 **현재와 연결된 결과/경험/계속** 을 나타낼 때 씁니다. "
+            "**have/has + p.p.** 형태예요.\n\n"
+            "② **주요 쓰임**\n"
+            "- 경험: 한 적이 있다/없다 (ever/never)\n"
+            "- 완료·결과: 이제 ~했다(지금 결과가 중요)\n"
+            "- 계속: 과거부터 지금까지 계속(~since, ~for)\n"
+            "③ **예문**\n"
+            "- I **have visited** Jeju **twice**. → 나는 제주도를 두 번 방문한 적이 있어.\n"
+            "- She **has lived** here **for** three years. → 그녀는 3년째 여기서 살고 있어.\n"
+            "④ **요령**: **과거시점(ago, yesterday)** 과는 어울리지 않음. 현재와의 연결이 핵심!"
+        )
+    if topic == "past_perfect":
+        return (
+            "① **과거완료(Past Perfect)** 는 과거의 한 시점보다 **더 이전**에 끝난 일을 말할 때 씁니다. "
+            "**had + p.p.** 형태.\n\n"
+            "② **예문**\n"
+            "- By the time I arrived, the movie **had started**. → 내가 도착했을 때 영화는 이미 시작했었다.\n"
+            "- He **had finished** homework before dinner. → 그는 저녁 전 숙제를 이미 끝냈었다.\n"
+            "③ **요령**: 과거 두 사건의 **선후관계**를 분명히 보여줄 때 사용!"
+        )
+    if topic == "passive":
+        return (
+            "① **수동태(Passive Voice)** 는 동작의 **주체보다 대상**을 강조할 때 쓰며, "
+            "**be동사 + p.p.** 로 만듭니다.\n\n"
+            "② **예문**\n"
+            "- The window **was broken** yesterday. → 그 창문은 어제 깨졌다(깨진 상태 강조).\n"
+            "- English **is spoken** worldwide. → 영어는 전 세계에서 사용된다.\n"
+            "③ **요령**: 필요할 때만 **by + 행위자** 를 덧붙여요(대상이 중요할 때)."
+        )
+    if topic == "gerund":
+        return (
+            "① **동명사(Gerund)** 는 동사에 **-ing** 를 붙여 **명사처럼** 쓰는 형태예요.\n\n"
+            "② **예문**\n"
+            "- **Swimming** is fun. → 수영은 재미있다.\n"
+            "- I enjoy **reading**. → 나는 읽는 것을 즐긴다.\n"
+            "③ **요령**: 전치사 뒤에는 **동명사**가 온다(to는 예외적 의미로 부정사와 구분)."
+        )
+    if topic == "infinitive":
+        return (
+            "① **부정사(Infinitive)** 는 **to + 동사원형**으로, **명사/형용사/부사**처럼 쓰입니다.\n\n"
+            "② **예문**\n"
+            "- I want **to learn** Spanish. → 나는 스페인어를 배우고 싶다.\n"
+            "- This book is easy **to read**. → 이 책은 읽기 쉽다.\n"
+            "③ **요령**: 목적·의도 표현에 자주 쓰이며, 일부 동사와 **궁합**이 정해져 있어요(want, hope, plan 등)."
+        )
+    # generic
+    return (
+        "이 단원은 질문과 관련된 문법 항목을 설명합니다. 핵심 개념을 정리하면 다음과 같아요.\n"
+        "① 정의/형식: 교재의 규칙을 간단히 외워두기\n"
+        "② 쓰임: 언제 이 형태를 쓰는지(상황/의미)\n"
+        "③ 예문 2개\n"
+        "- 예문 A\n- 예문 B\n"
+        "요령: 의미와 형태를 **같이** 기억하세요."
+    )
+
+def _ensure_nonempty_answer_rule_based(q: str, mode_key: str, hits: Any, raw: str) -> str:
+    # 1) 컨텍스트 수집
+    ctx = _gather_context(hits)
+    # 2) 토픽 감지(질문/컨텍스트 모두 활용)
+    topic = _detect_topic(q, ctx)
+    # 3) 규칙기반 합성
+    ans = _compose_answer_rule_based(topic).strip()
+    if ans:
+        return ans
+    # 4) 최후: (옵션) 일반 지식 Fallback 안내
+    if st.session_state.get("allow_fallback", True):
+        fb = _fallback_general_answer(q, mode_key) or ""
+        if fb.strip():
+            return fb.strip()
+    return "설명을 불러오는 중 문제가 있었어요. 질문을 조금 더 구체적으로 써 주세요."
 
 # ── [06-E] 메인 렌더 -----------------------------------------------------------
 def render_simple_qa():
@@ -1024,7 +1027,6 @@ def render_simple_qa():
     _render_top3_badges()
     st.markdown("### 💬 질문은 모든 천재들이 가장 많이 사용하는 공부 방법이다!")
 
-    # 관리자 토글 반영: 라디오 옵션
     enabled = _get_enabled_modes_unified()
     radio_opts: List[str] = []
     if enabled.get("Grammar", False):  radio_opts.append("문법설명(Grammar)")
@@ -1043,7 +1045,6 @@ def render_simple_qa():
     if not is_admin:
         st.text_input("내 이름(임시)", key="student_name", placeholder="예: 지민 / 민수 / 유나")
 
-    # 질문 폼
     placeholder = (
         "예: 관계대명사 which 사용법을 알려줘" if mode_key == "Grammar"
         else "예: I seen the movie yesterday 문장 문제점 분석해줘" if mode_key == "Sentence"
@@ -1056,12 +1057,10 @@ def render_simple_qa():
     if "qa_q_form" in st.session_state:
         st.session_state["qa_q"] = st.session_state["qa_q_form"]
 
-    # 제출 차단: 꺼진 모드는 실행 불가
     if submitted and not enabled.get(mode_key, False):
         st.warning("이 질문 유형은 지금 관리자에서 꺼져 있어요. 다른 유형을 선택해 주세요.")
         return
 
-    # 새 질문 처리 — 곧바로 답변 본문 출력
     if submitted and (st.session_state.get("qa_q","").strip()):
         q = st.session_state["qa_q"].strip()
         guard_key = f"{_normalize_question(q)}|{mode_key}"
@@ -1073,7 +1072,6 @@ def render_simple_qa():
             user = _sanitize_user(st.session_state.get("student_name") if not is_admin else "admin")
             _append_history_file_only(q, user)
 
-            # 답변 자리에 '생각중' 표시
             answer_box = st.container()
             with answer_box:
                 thinking = st.empty()
@@ -1083,16 +1081,13 @@ def render_simple_qa():
 
             if index_ready:
                 try:
-                    # 한국어→영어 용어 확장 적용
                     q_expanded = _expand_query_for_rag(q, mode_key)
 
-                    # 1차 검색
                     qe = st.session_state["rag_index"].as_query_engine(top_k=k)
                     r = qe.query(q_expanded)
                     raw = getattr(r, "response", "") or ""
                     hits = getattr(r, "source_nodes", None) or getattr(r, "hits", None)
 
-                    # no-hit 판단
                     def _is_nohit(raw_txt, hits_obj) -> bool:
                         txt = (raw_txt or "").strip().lower()
                         bad_phrases = ["관련 결과를 찾지 못", "no relevant", "no result", "not find"]
@@ -1101,7 +1096,6 @@ def render_simple_qa():
                         return cond_txt or cond_hits
 
                     if _is_nohit(raw, hits):
-                        # 2차: 더 넓게 재검색
                         qe_wide = st.session_state["rag_index"].as_query_engine(top_k=max(10, int(k) if isinstance(k,int) else 5))
                         r2 = qe_wide.query(q_expanded)
                         raw2 = getattr(r2, "response", "") or ""
@@ -1109,18 +1103,15 @@ def render_simple_qa():
                         if not _is_nohit(raw2, hits2):
                             raw, hits = raw2, hits2
                         else:
-                            # Fallback: 일반 지식
-                            final = _ensure_nonempty_answer(q, mode_key, None, "")
+                            final = _ensure_nonempty_answer_rule_based(q, mode_key, None, "")
                             with answer_box:
                                 thinking.empty()
                                 st.write(final)
-                                if "근거 없음" in final or "일반 지식" in final:
-                                    st.caption("※ 교재 근거 없음 — 일반 지식으로 답변했어요.")
                             _cache_put(q, final, [], f"{mode_label} · Fallback")
                             return
 
-                    # ✅ 절대 빈 문자열 방지(합성→일반 지식 순 보강)
-                    final = _ensure_nonempty_answer(q, mode_key, hits, raw)
+                    # 규칙기반 보강으로 절대 빈 문자열 방지
+                    final = _ensure_nonempty_answer_rule_based(q, mode_key, hits, raw)
 
                     with answer_box:
                         thinking.empty()
@@ -1132,7 +1123,6 @@ def render_simple_qa():
                             if hits:
                                 for h in hits[:2]:
                                     meta = None
-                                    # 다양한 위치에서 메타데이터 시도
                                     if hasattr(h, "metadata") and isinstance(getattr(h, "metadata"), dict):
                                         meta = h.metadata
                                     elif hasattr(h, "node") and hasattr(h.node, "metadata") and isinstance(h.node.metadata, dict):
@@ -1162,7 +1152,7 @@ def render_simple_qa():
                     thinking.empty()
                     st.info("아직 두뇌가 준비되지 않았어요. 상단에서 **복구/연결** 또는 **다시 최적화**를 먼저 완료해 주세요.")
 
-    # 📒 나의 질문 히스토리 — 인라인 펼치기(답변 직표시)
+    # 📒 나의 질문 히스토리 — 인라인 펼치기
     rows = _read_history_lines(max_lines=5000)
     st.markdown("#### 📒 나의 질문 히스토리")
     uniq: List[Dict[str, Any]] = []
@@ -1191,6 +1181,7 @@ def render_simple_qa():
                 st.caption(f"{i+1}. …")
 
 # ===== [06] END ===============================================================
+
 
 
 # ===== [07] MAIN — 오케스트레이터 ============================================
