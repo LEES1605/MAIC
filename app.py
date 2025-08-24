@@ -841,7 +841,35 @@ def _render_cached_block(norm: str):
                 url = r0.get("url") or r0.get("source_url") or ""
                 st.markdown(f"- {name}  " + (f"(<{url}>)" if url else ""))
 
-# ── [06-D’] 피드백 저장 ---------------------------------------------------------
+# ── [06-D’] 피드백 저장/조회 -----------------------------------------------------
+def _append_jsonl(path: Path, obj: Dict[str, Any]):
+    try:
+        import json as _json
+        with path.open("a", encoding="utf-8") as f:
+            f.write(_json.dumps(obj, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+def _get_last_rating(q_norm: str, user: str, mode_key: str) -> int | None:
+    """같은 사용자·같은 질문·같은 모드의 마지막 평점을 찾아 반환."""
+    import json as _json
+    p = _feedback_path()
+    if not p.exists(): return None
+    last = None
+    try:
+        with p.open("r", encoding="utf-8") as f:
+            for ln in f:
+                try:
+                    o = _json.loads(ln)
+                    if o.get("q_norm")==q_norm and o.get("user")==user and o.get("mode")==mode_key:
+                        r = int(o.get("rating",0))
+                        last = r if 1<=r<=5 else last
+                except Exception:
+                    continue
+    except Exception:
+        return last
+    return last
+
 def _save_feedback(q: str, answer: str, rating: int, mode_key: str, source: str, user: str):
     q_norm = _normalize_question(q)
     ts = int(time.time())
@@ -903,7 +931,7 @@ def _expand_query_for_rag(q: str, mode_key: str) -> str:
             merged.append(t)
     return " ".join(merged)
 
-# ── [06-D⁴] 규칙기반 합성기 (토픽 감지 개선: 가중치 방식) ------------------------
+# ── [06-D⁴] 규칙기반 합성기(간략) -----------------------------------------------
 def _extract_hit_text(h) -> str:
     try:
         if isinstance(h, dict):
@@ -923,10 +951,6 @@ def _extract_hit_text(h) -> str:
             for attr in ("text", "content", "page_content"):
                 v = getattr(n, attr, None)
                 if v: return str(v)
-            md = getattr(n, "metadata", None)
-            if isinstance(md, dict):
-                for k in ("text", "content", "chunk", "excerpt"):
-                    if md.get(k): return str(md[k])
         s = str(h)
         if s and s != repr(h): return s
     except Exception:
@@ -947,67 +971,23 @@ def _gather_context(hits: Any, max_chars: int = 1500) -> str:
     return " ".join(parts)[:max_chars].strip()
 
 def _detect_topic(q: str, ctx: str) -> str:
-    """질문 키워드에 높은 가중치(2), 컨텍스트는 낮은 가중치(1)로 점수 합."""
     ql = (q or "").lower()
     cl = (ctx or "").lower()
-    topics: Dict[str, Dict[str, List[str]]] = {
-        "subjunctive": {
-            "q": ["가정법", "조건문", "if ", "만약", "if i were", "were to", "if only", "wish", "as if", "had p.p", "would ", "should "],
-            "c": ["subjunctive", "conditional", "if ", "would ", "were "],
-        },
-        "present_perfect": {
-            "q": ["현재완료", "present perfect"],
-            "c": ["present perfect", "have ", "has ", "since ", "for "],
-        },
-        "past_perfect": {
-            "q": ["과거완료", "대과거", "past perfect"],
-            "c": ["past perfect", "had "],
-        },
-        "passive": {
-            "q": ["수동태", "passive"],
-            "c": ["passive voice", "be ", "been "],
-        },
-        "gerund": {
-            "q": ["동명사", "gerund"],
-            "c": ["-ing", "gerund"],
-        },
-        "infinitive": {
-            "q": ["to부정사", "부정사", "infinitive"],
-            "c": ["to ", "infinitive"],
-        },
-        # ⚠️ 상대적으로 낮은 우선순위 (문서에 흔함)
-        "relative_pronoun": {
-            "q": ["관계대명사", "관계절"],
-            "c": ["relative clause", "relative pronoun", " who ", " which ", " that "],
-        },
+    topics = {
+        "relative_pronoun": ["관계대명사","relative pronoun","relative clause"," who "," which "," that "],
+        "present_perfect": ["현재완료","present perfect"],
+        "past_perfect": ["과거완료","대과거","past perfect"],
+        "passive": ["수동태","passive"],
+        "gerund": ["동명사","gerund"],
+        "infinitive": ["to부정사","부정사","infinitive"],
+        # NOTE: 분사구문/가정법 등은 다음 턴에서 추가 예정
     }
-    from collections import defaultdict
-    score = defaultdict(int)
-    for t, kw in topics.items():
-        for k in kw.get("q", []):
-            if k in ql: score[t] += 2
-        for k in kw.get("c", []):
-            if k in cl: score[t] += 1
-    if not score:
-        return "generic"
-    # 동점이면 질문 매칭 수가 더 많은 토픽을 우선
-    best = max(score.items(), key=lambda x: (x[1], x[0] != "relative_pronoun"))
-    return best[0]
+    for kws in topics.values():
+        if any(k in ql for k in kws) or any(k in cl for k in kws):
+            return list(topics.keys())[list(topics.values()).index(kws)]
+    return "generic"
 
 def _compose_answer_rule_based(topic: str) -> str:
-    if topic == "subjunctive":
-        return (
-            "① **가정법(Subjunctive/Conditional)** 은 사실과 다른 **가정/상상/바람**을 말하는 표현입니다. "
-            "주로 **if절**과 함께 쓰며, 시제를 한 단계 과거로 내려 **현재/과거의 비현실**을 나타냅니다.\n\n"
-            "② **핵심 형태**\n"
-            "- (현재 가정) **If + 과거**, 주절 **would/could + 동사원형**\n"
-            "- (과거 가정) **If + had + p.p.**, 주절 **would/could have + p.p.**\n"
-            "- (공손/가능성 낮음) **If I were you** / **were to**, **should** ~\n"
-            "③ **예문**\n"
-            "- **If I were** you, I **would** take a rest. → 내가 너라면 쉬었을 거야.\n"
-            "- **If he had studied**, he **would have passed**. → 그가 공부했더라면 합격했을 텐데.\n"
-            "④ **요령**: 사실과 다른 가정을 말할 땐 **시제 이동(과거/과거완료)** 과 **would/could** 조합을 기억!"
-        )
     if topic == "relative_pronoun":
         return (
             "① **관계대명사(Relative Pronoun)** 는 앞에 있는 명사를 이어 받아 **형용사절(관계절)** 을 이끌며 "
@@ -1201,26 +1181,27 @@ def render_simple_qa():
 
             _cache_put(q, final, refs, mode_label, origin)
 
-            # 이해도 5단계 (현재: 클릭 즉시 저장 – 다음 턴에 ‘수정 가능’ UX 적용)
-            rating_key = f"rating_{guard_key}"
-            emoji_map = {1:"😕 1", 2:"🙁 2", 3:"😐 3", 4:"🙂 4", 5:"😄 5"}
-            rating = st.radio(
+            # 🎯 이해도: '수정 가능한' 방식으로 변경
+            q_norm = _normalize_question(q)
+            prev = _get_last_rating(q_norm, user, mode_key) or 3
+            emoji = {1:"😕 1", 2:"🙁 2", 3:"😐 3", 4:"🙂 4", 5:"😄 5"}
+            sel = st.select_slider(
                 "이해도는 어땠어?",
                 options=[1,2,3,4,5],
-                format_func=lambda n: emoji_map.get(n, str(n)),
-                horizontal=True,
-                key=rating_key
+                value=prev,
+                format_func=lambda n: emoji.get(n, str(n))
             )
-            if rating and not st.session_state["saved_ratings"].get(rating_key):
-                try:
-                    _save_feedback(q, final, int(rating), mode_key, origin, user)
-                    st.session_state["saved_ratings"][rating_key] = True
+            col1, col2 = st.columns([1,4])
+            with col1:
+                if st.button("💾 저장/수정", key=f"save_{guard_key}"):
                     try:
-                        st.toast("✅ 저장했어요! 고마워요.", icon="✅")
-                    except Exception:
-                        st.success("저장했어요! 고마워요.")
-                except Exception as _e:
-                    st.warning(f"저장에 실패했어요: {_e}")
+                        _save_feedback(q, final, int(sel), mode_key, origin, user)
+                        try: st.toast("✅ 저장/수정 완료!", icon="✅")
+                        except Exception: st.success("저장/수정 완료!")
+                    except Exception as _e:
+                        st.warning(f"저장에 실패했어요: {_e}")
+            with col2:
+                st.caption(f"현재 저장된 값: {prev if prev else '—'} (다시 저장하면 업데이트)")
 
     # 📒 나의 질문 히스토리 — 인라인 펼치기
     rows = _read_history_lines(max_lines=5000)
