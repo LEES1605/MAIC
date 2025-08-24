@@ -75,7 +75,7 @@ if precheck_build_needed is None or build_index_with_checkpoint is None:
         + "4) import 철자: index_build(언더스코어), index.build(점) 아님"
     )
 
-# ===== [03] SESSION & HELPERS ================================================
+# ===== [03] SESSION & HELPERS — START ========================================
 st.set_page_config(page_title="AI Teacher (Clean)", layout="wide")
 
 # 인덱스 상태
@@ -87,6 +87,28 @@ if "mode" not in st.session_state:
     st.session_state["mode"] = "Grammar"  # Grammar | Sentence | Passage
 if "qa_submitted" not in st.session_state:
     st.session_state["qa_submitted"] = False
+
+def _force_persist_dir() -> str:
+    """
+    내부 모듈들이 다른 경로를 보더라도, 런타임에서 ~/.maic/persist 로 강제 통일.
+    - src.rag.index_build / rag.index_build 의 PERSIST_DIR 속성 주입
+    - 환경변수 MAIC_PERSIST_DIR 도 세팅(내부 코드가 읽을 수 있음)
+    """
+    import importlib, os
+    from pathlib import Path
+    target = Path.home() / ".maic" / "persist"
+    try: target.mkdir(parents=True, exist_ok=True)
+    except Exception: pass
+
+    for modname in ("src.rag.index_build", "rag.index_build"):
+        try:
+            m = importlib.import_module(modname)
+            try: setattr(m, "PERSIST_DIR", target)
+            except Exception: pass
+        except Exception:
+            continue
+    os.environ["MAIC_PERSIST_DIR"] = str(target)
+    return str(target)
 
 def _is_attached_session() -> bool:
     """세션에 실제로 두뇌가 붙었는지(여러 키 중 하나라도 있으면 True)."""
@@ -126,6 +148,9 @@ def get_index_status() -> str:
     return "missing"
 
 def _attach_from_local() -> bool:
+    # ⬅️ 붙이기 전에 경로 강제 통일
+    _force_persist_dir()
+
     if get_or_build_index is None:
         return False
     try:
@@ -151,6 +176,9 @@ def _auto_attach_or_restore_silently() -> bool:
         "rebuild": None,
         "final_attach": None,
     }
+
+    # 모든 시도 전에 persist 경로 강제 통일
+    _force_persist_dir()
 
     # 1) 로컬 attach
     if _attach_from_local():
@@ -178,20 +206,15 @@ def _auto_attach_or_restore_silently() -> bool:
 
     # 3) 마지막 안전망: 인덱스 재생성(최소 옵션)
     try:
-        # [01]에서 바인딩된 build_index_with_checkpoint 사용
+        import importlib
         if callable(build_index_with_checkpoint):
             from pathlib import Path
-            persist_dir = None
             try:
-                # rag.index_build 에 정의된 PERSIST_DIR 우선
                 mod2 = importlib.import_module("src.rag.index_build")
-                persist_dir = getattr(mod2, "PERSIST_DIR", None)
-                if not persist_dir:
-                    persist_dir = Path.home() / ".maic" / "persist"
+                persist_dir = getattr(mod2, "PERSIST_DIR", Path.home() / ".maic" / "persist")
             except Exception:
                 persist_dir = Path.home() / ".maic" / "persist"
 
-            # 최소 인자만 전달 (함수 시그니처 호환을 위해 키워드 인자 이름은 기존 코드와 동일)
             try:
                 build_index_with_checkpoint(
                     update_pct=lambda *_a, **_k: None,
@@ -203,7 +226,6 @@ def _auto_attach_or_restore_silently() -> bool:
                 )
                 st.session_state["_auto_restore_last"]["rebuild"] = True
             except TypeError:
-                # 시그니처가 다르면 무인자 호출
                 build_index_with_checkpoint()
                 st.session_state["_auto_restore_last"]["rebuild"] = True
         else:
@@ -219,7 +241,8 @@ def _auto_attach_or_restore_silently() -> bool:
 
     st.session_state["_auto_restore_last"]["final_attach"] = False
     return False
-# ===== [03] END ===============================================================
+# ===== [03] SESSION & HELPERS — END ==========================================
+=
 
 
 
