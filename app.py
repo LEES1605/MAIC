@@ -669,27 +669,24 @@ def render_tag_diagnostics():
     except Exception:
         pass
 
-# ===== [06] SIMPLE QA DEMO — 3개 고정/번호·좌측정렬·플레이스홀더 ===============
+# ===== [06] SIMPLE QA DEMO — 인라인 펼치기형 히스토리 ==========================
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 import time
 import streamlit as st
 
-# ── [06-A] 안전 shim -----------------------------------------------------------
-try:
-    _ensure_answer_cache  # type: ignore[name-defined]
-except Exception:
-    def _ensure_answer_cache():
-        if "answer_cache" not in st.session_state:
-            st.session_state["answer_cache"] = {}  # norm->{"answer","refs","mode","ts"}
-        if "hist_selected_norm" not in st.session_state:
-            st.session_state["hist_selected_norm"] = None
-        if "last_submit_key" not in st.session_state:
-            st.session_state["last_submit_key"] = None
-        if "last_submit_ts" not in st.session_state:
-            st.session_state["last_submit_ts"] = 0
+# ── [06-A] 세션/캐시 준비 -------------------------------------------------------
+def _ensure_state():
+    if "answer_cache" not in st.session_state:
+        st.session_state["answer_cache"] = {}  # norm -> {"answer","refs","mode","ts"}
+    if "last_submit_key" not in st.session_state:
+        st.session_state["last_submit_key"] = None
+    if "last_submit_ts" not in st.session_state:
+        st.session_state["last_submit_ts"] = 0
+    if "SHOW_TOP3_STICKY" not in st.session_state:
+        st.session_state["SHOW_TOP3_STICKY"] = False  # 기본 숨김(원장님 요청 반영)
 
-# ── [06-B] 기록 유틸(파일만 사용) ----------------------------------------------
+# ── [06-B] 파일 I/O (히스토리) -------------------------------------------------
 def _history_path() -> Path:
     p = Path.home() / ".maic"
     try: p.mkdir(parents=True, exist_ok=True)
@@ -703,20 +700,17 @@ def _sanitize_user(name: str | None) -> str:
     return s or "guest"
 
 def _append_history_file_only(q: str, user: str | None = None):
-    """세션에는 넣지 않고 파일에만 1회 기록."""
     try:
         q = (q or "").strip()
         if not q: return
         user = _sanitize_user(user)
         import json as _json
-        hp = _history_path()
-        with hp.open("a", encoding="utf-8") as f:
+        with _history_path().open("a", encoding="utf-8") as f:
             f.write(_json.dumps({"ts": int(time.time()), "q": q, "user": user}, ensure_ascii=False) + "\n")
     except Exception:
         pass
 
 def _read_history_lines(max_lines: int = 5000) -> List[Dict[str, Any]]:
-    """파일에서만 읽어옴(세션 캐시 사용 안 함)."""
     import json as _json
     hp = _history_path()
     if not hp.exists(): return []
@@ -730,7 +724,7 @@ def _read_history_lines(max_lines: int = 5000) -> List[Dict[str, Any]]:
             except Exception: continue
     except Exception:
         return []
-    rows.reverse()  # 최근 것이 위로
+    rows.reverse()  # 최근이 위로
     return rows
 
 def _normalize_question(s: str) -> str:
@@ -741,56 +735,39 @@ def _normalize_question(s: str) -> str:
     s = _re.sub(r"\s+", " ", s).strip()
     return s
 
-# ── [06-C] 인기/Top3(파일 기준) ------------------------------------------------
-def _popular_questions(top_n: int = 10, days: int = 7) -> List[Tuple[str, int]]:
-    from collections import Counter
-    rows = _read_history_lines(max_lines=5000)
-    if not rows: return []
-    cutoff = int(time.time()) - days * 86400 if days and days > 0 else 0
-    counter: Counter[str] = Counter(); exemplar: Dict[str, str] = {}
-    for r in rows:
-        ts = int(r.get("ts") or 0)
-        if cutoff and ts and ts < cutoff: continue
-        q = (r.get("q") or "").strip()
-        if not q: continue
-        key = _normalize_question(q)
-        counter[key] += 1
-        if key not in exemplar or len(q) < len(exemplar[key]): exemplar[key] = q
-    return [(exemplar[k], c) for k, c in counter.most_common(top_n)]
-
+# ── [06-C] TOP3(선택: 기본 숨김) -----------------------------------------------
 def _top3_users(days: int = 7) -> List[Tuple[str, int]]:
     from collections import Counter
     rows = _read_history_lines(max_lines=5000)
     if not rows: return []
-    cutoff = int(time.time()) - days * 86400 if days and days > 0 else 0
+    cutoff = int(time.time()) - days * 86400
     users: List[str] = []
     for r in rows:
         ts = int(r.get("ts") or 0)
-        if cutoff and ts and ts < cutoff: continue
+        if ts < cutoff: continue
         if (r.get("q") or "").strip(): users.append(_sanitize_user(r.get("user")))
+    from collections import Counter
     ctr = Counter(users); return ctr.most_common(3)
 
-def _render_top3_badges(top3: List[Tuple[str, int]]):
-    data = list(top3[:3])
+def _render_top3_badges():
+    if not st.session_state.get("SHOW_TOP3_STICKY"):  # 기본 숨김
+        return
+    data = list(_top3_users()[:3])
     while len(data) < 3: data.append(("…", 0))
     medals = ["🥇","🥈","🥉"]
-    parts = [f"<span class='pill pill-rank'>{medals[i]} {n} · {c}회</span>" for i,(n,c) in enumerate(data)]
     css = """
     <style>
-      .sticky-top3 { position: sticky; top: 0; z-index: 999; padding: 6px;
-                     background: rgba(255,255,255,0.9); border-bottom: 1px solid #e5e7eb; }
-      .pill-rank { margin-right:6px; padding:4px 8px; border-radius:999px; font-size:0.9rem;
-                   background:#2563eb1a; color:#1d4ed8; border:1px solid #2563eb55;}
-      .sec-title { font-weight:800; font-size:1.1rem; margin: 6px 0 2px 0;}
-      .hist-link { color:#1d4ed8; text-decoration: underline; }
-      .hist-item { padding: 2px 4px; }
-      .hist-placeholder { color:#9ca3af; padding: 2px 4px; display:block; }
+      .sticky-top3 { position: sticky; top: 0; z-index: 999; padding: 6px 8px;
+                     background: rgba(0,0,0,0.25); border-bottom: 1px solid #333; }
+      .pill { margin-right:6px; padding:4px 8px; border-radius:999px; font-size:0.9rem;
+              background: rgba(37,99,235,0.18); color:#cfe0ff; border:1px solid rgba(37,99,235,0.45); }
     </style>"""
-    st.markdown(css + f"<div class='sticky-top3'>{' '.join(parts)}</div>", unsafe_allow_html=True)
+    pills = " ".join(f"<span class='pill'>{medals[i]} {n} · {c}회</span>" for i,(n,c) in enumerate(data))
+    st.markdown(css + f"<div class='sticky-top3'>{pills}</div>", unsafe_allow_html=True)
 
 # ── [06-D] 과거 답변 캐시 ------------------------------------------------------
 def _cache_put(q: str, answer: str, refs: List[Dict[str,str]], mode_label: str):
-    _ensure_answer_cache()
+    _ensure_state()
     norm = _normalize_question(q)
     st.session_state["answer_cache"][norm] = {
         "answer": (answer or "").strip(),
@@ -798,20 +775,16 @@ def _cache_put(q: str, answer: str, refs: List[Dict[str,str]], mode_label: str):
         "mode": mode_label,
         "ts": int(time.time()),
     }
-    st.session_state["hist_selected_norm"] = norm  # 방금 본 항목으로 표시
 
 def _cache_get(norm: str) -> Dict[str, Any] | None:
-    _ensure_answer_cache()
+    _ensure_state()
     return st.session_state["answer_cache"].get(norm)
 
-def _render_cached(norm: str):
+def _render_cached_block(norm: str):
     data = _cache_get(norm)
     if not data:
-        st.warning("이 질문의 저장된 답변이 없어요. 아래 ‘다시 검색’으로 최신 답변을 받아보세요.")
-        if st.button("🔄 이 질문으로 다시 검색", key=f"rehit_{norm}", use_container_width=True):
-            st.session_state["qa_submitted"] = True
+        st.info("이 질문의 저장된 답변이 없어요. 아래 ‘다시 검색’으로 최신 답변을 받아보세요.")
         return
-    st.markdown("#### 📎 이전 답변 보기")
     st.markdown(f"**선택 모드:** `{data.get('mode','—')}`")
     with st.expander("원문 응답 보기(영문)"):
         st.write(data.get("answer","—"))
@@ -823,49 +796,24 @@ def _render_cached(norm: str):
                 url = r0.get("url") or r0.get("source_url") or ""
                 st.markdown(f"- {name}  " + (f"(<{url}>)" if url else ""))
 
-# ── [06-E] 메인 Q&A UI --------------------------------------------------------
+# ── [06-E] 메인 렌더 -----------------------------------------------------------
 def render_simple_qa():
-    _ensure_answer_cache()
+    _ensure_state()
     is_admin = st.session_state.get("is_admin", False)
 
-    # 0) URL 쿼리파라미터(histKey) → 선택 복원
-    try:
-        qp = dict(st.query_params)  # Streamlit 최신
-    except Exception:
-        qp = st.experimental_get_query_params()  # 구버전 호환
-    hist_key = None
-    if qp:
-        v = qp.get("histKey")
-        if isinstance(v, list): v = v[0] if v else None
-        hist_key = v if isinstance(v, str) and v.strip() else None
+    _render_top3_badges()  # 기본은 숨김(토글로 켜기)
 
-    if hist_key:
-        # 히스토리에서 원문 질문 찾아 입력 복구
-        rows_all = _read_history_lines(max_lines=5000)
-        for r in rows_all:
-            qtext = (r.get("q") or "").strip()
-            if not qtext: continue
-            if _normalize_question(qtext) == hist_key:
-                st.session_state["hist_selected_norm"] = hist_key
-                st.session_state["qa_q"] = qtext
-                break
-
-    if not is_admin:
-        _render_top3_badges(_top3_users())
-
-    # 🔁 헤더 문구
     st.markdown("### 💬 질문은 모든 천재들이 가장 많이 사용하는 공부 방법이다!")
 
-    # 관리자 설정 반영(안전 접근)
+    # 모드 선택
     enabled = globals().get("get_enabled_modes", lambda: {"Grammar": True, "Sentence": True, "Passage": True})()
     radio_opts: List[str] = []
     if enabled.get("Grammar", True):  radio_opts.append("문법설명(Grammar)")
     if enabled.get("Sentence", True): radio_opts.append("문장분석(Sentence)")
     if enabled.get("Passage", True):  radio_opts.append("지문분석(Passage)")
     if not radio_opts:
-        st.error("관리자에서 모든 질문 모드를 OFF로 설정했습니다. 관리자에게 문의하세요.")
+        st.error("관리자에서 모든 질문 모드를 OFF로 설정했습니다.")
         return
-
     mode_choice = st.radio("질문의 종류를 선택하세요", options=radio_opts, key="mode_radio", horizontal=True)
     if "문법" in mode_choice: mode_key, mode_label = "Grammar", "문법설명(Grammar)"
     elif "문장" in mode_choice: mode_key, mode_label = "Sentence", "문장분석(Sentence)"
@@ -875,7 +823,7 @@ def render_simple_qa():
     if not is_admin:
         st.text_input("내 이름(임시)", key="student_name", placeholder="예: 지민 / 민수 / 유나")
 
-    # 👉 폼으로 단일 제출(중복 방지)
+    # 질문 폼
     placeholder = (
         "예: 관계대명사 which 사용법을 알려줘" if mode_key == "Grammar"
         else "예: I seen the movie yesterday 문장 문제점 분석해줘" if mode_key == "Sentence"
@@ -888,11 +836,7 @@ def render_simple_qa():
     if "qa_q_form" in st.session_state:
         st.session_state["qa_q"] = st.session_state["qa_q_form"]
 
-    # (A) 히스토리에서 선택한 과거 답변 먼저 표시(있으면)
-    if st.session_state.get("hist_selected_norm"):
-        _render_cached(st.session_state["hist_selected_norm"])
-
-    # (B) 새 질문 처리 — 단일 제출 + 중복 가드
+    # 새 질문 처리(중복 가드)
     if submitted and (st.session_state.get("qa_q","").strip()):
         q = st.session_state["qa_q"].strip()
         guard_key = f"{_normalize_question(q)}|{mode_key}"
@@ -926,6 +870,7 @@ def render_simple_qa():
                                     "doc_id": (meta or {}).get("doc_id") or (meta or {}).get("file_name", ""),
                                     "url": (meta or {}).get("source") or (meta or {}).get("url", ""),
                                 })
+                        # Sentence 모드 간단 힌트
                         if mode_key == "Sentence":
                             import re as _re
                             if _re.search(r"\bI\s+seen\b", q, flags=_re.I):
@@ -950,34 +895,39 @@ def render_simple_qa():
             else:
                 st.info("아직 두뇌가 준비되지 않았어요. 상단에서 **복구/연결** 또는 **다시 최적화**를 먼저 완료해 주세요.")
 
-    # (C) 최근 질문 — 파일에서 읽고, 정규화 중복 제거 → 상위 3개 + 플레이스홀더(…)
+    # 📒 나의 질문 히스토리 — 인라인 펼치기
     rows = _read_history_lines(max_lines=5000)
-    if rows:
-        st.markdown("<div class='sec-title'>📒 나의 질문 히스토리</div>", unsafe_allow_html=True)
+    st.markdown("#### 📒 나의 질문 히스토리")
+    # 정규화 기준 유니크 3개
+    uniq: List[Dict[str, Any]] = []
+    seen = set()
+    for r in rows:
+        qtext = (r.get("q") or "").strip()
+        if not qtext: continue
+        key = _normalize_question(qtext)
+        if key in seen: continue
+        seen.add(key); uniq.append({"q": qtext, "norm": key})
+        if len(uniq) >= 3: break
 
-        # 정규화 기준으로 유니크 만들기
-        uniq: List[Dict[str, Any]] = []
-        seen = set()
-        for r in rows:
-            qtext = (r.get("q") or "").strip()
-            if not qtext: continue
-            key = _normalize_question(qtext)
-            if key in seen: continue
-            seen.add(key); uniq.append({"q": qtext, "norm": key})
-            if len(uniq) >= 3: break  # 화면에는 최근 3개만
-
-        # 3개 고정 출력(좌측 정렬 + 번호). 부족분은 … 로 채우기
-        from html import escape as _esc
-        from urllib.parse import quote as _q
+    if not uniq:
+        for i in range(1, 4):
+            st.caption(f"{i}. …")
+    else:
         for i in range(3):
             if i < len(uniq):
-                lbl_q = _esc(uniq[i]['q'])
-                href = f"?histKey={_q(uniq[i]['norm'])}"
-                st.markdown(f"<div class='hist-item'>{i+1}. <a href='{href}' class='hist-link'>{lbl_q}</a></div>", unsafe_allow_html=True)
+                title = f"{i+1}. {uniq[i]['q']}"
+                with st.expander(title, expanded=False):
+                    # 캐시 프리뷰
+                    _render_cached_block(uniq[i]["norm"])
+                    # 다시 검색 버튼
+                    if st.button("🔄 이 질문으로 다시 검색", key=f"rehit_{uniq[i]['norm']}", use_container_width=True):
+                        st.session_state["qa_q"] = uniq[i]["q"]
+                        st.rerun()
             else:
-                st.markdown(f"<span class='hist-placeholder'>{i+1}. …</span>", unsafe_allow_html=True)
+                st.caption(f"{i+1}. …")
 
 # ===== [06] END ===============================================================
+
 
 # ===== [07] MAIN =============================================================
 def main():
