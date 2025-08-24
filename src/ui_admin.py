@@ -28,8 +28,7 @@ def ensure_admin_session_keys() -> None:
 def render_admin_controls() -> None:
     """
     상단 우측 '관리자' 버튼과 PIN 인증 폼을 렌더링.
-    '🔎 진단'은 클릭 시 세션 플래그를 세팅하고 rerun 후 렌더 초기에 JS로 #diag로 스크롤.
-    (rerun 타이밍 문제를 우회하기 위해 3회 지연 실행)
+    '🔎 진단' 클릭 시 세션 플래그를 세팅하고 rerun 후, 아이프레임에서 부모 문서로 스크롤을 실행.
     """
     import streamlit as st
     try:
@@ -37,20 +36,26 @@ def render_admin_controls() -> None:
     except Exception:
         _html = None
 
-    # 클릭 직후 rerun된 다음 렌더 주기에서 스크롤 실행
+    # 클릭 직후 rerun된 다음 렌더 주기에서 스크롤 실행 (부모 문서로 접근)
     if st.session_state.pop("_goto_diag", False) and _html:
         _html(
             """
             <script>
               (function(){
                 function go(){
-                  const el = document.getElementById('diag');
-                  if (el) { el.scrollIntoView({behavior:'smooth', block:'start'}); }
-                  else { window.location.hash = 'diag'; }
+                  // 아이프레임 내에서 부모 문서 DOM을 우선 시도
+                  var doc = (window.parent && window.parent.document) ? window.parent.document : document;
+                  var el = null;
+                  try { el = doc.getElementById('diag'); } catch(e) {}
+                  if (el) { 
+                    try { el.scrollIntoView({behavior:'smooth', block:'start'}); return; } catch(e) {}
+                  }
+                  // 최후 수단: 부모 위치 해시 변경
+                  try { window.parent.location.hash = 'diag'; } catch(e) { location.hash = 'diag'; }
                 }
-                // 렌더 안정화를 위해 여러 번 시도
-                setTimeout(go, 100);
-                setTimeout(go, 400);
+                // 렌더 타이밍을 고려해 여러 번 시도
+                setTimeout(go, 50);
+                setTimeout(go, 300);
                 setTimeout(go, 800);
               })();
             </script>
@@ -78,7 +83,7 @@ def render_admin_controls() -> None:
                         st.session_state["_admin_auth_open"] = True
                         st.rerun()
 
-            # --- 진단으로 이동: 플래그 세팅 → rerun → 렌더 초기에 스크롤 ---
+            # --- 진단으로 이동: 플래그 세팅 → rerun → 부모 문서로 스크롤 ---
             with c_diag:
                 if st.button("🔎 진단", key="btn_goto_diag", use_container_width=True, help="하단 진단 섹션(#diag)으로 이동"):
                     st.session_state["_goto_diag"] = True
