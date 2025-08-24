@@ -361,15 +361,127 @@ def _auto_attach_or_restore_silently() -> bool:
 # ===== [03] SESSION & HELPERS — END ==========================================
 
 
-# ===== [04] HEADER ==========================================
+# ===== [04] HEADER — START ====================================================
+import streamlit as st
+
+# 캐시: 백업 유무를 10분(ttl=600s) 동안 보존해 드라이브 호출 비용을 최소화
+@st.cache_data(ttl=600, show_spinner=False)
+def _check_backup_presence_cached():
+    """
+    로컬/드라이브 백업 ZIP 존재 여부를 빠르게 확인한다.
+    반환 예:
+      {
+        "local": {"has": True, "dir": "/home/appuser/.maic/backup"},
+        "drive": {"has": True, "folder_id": "....", "error": None}
+      }
+    """
+    import importlib
+    from pathlib import Path
+
+    # 기본 경로
+    BACKUP_DIR = Path.home() / ".maic" / "backup"
+    drive_has = False
+    drive_folder_id = None
+    drive_err = None
+
+    # 모듈이 제공하는 경로/서비스 우선 사용
+    try:
+        m = importlib.import_module("src.rag.index_build")
+        BACKUP_DIR = getattr(m, "BACKUP_DIR", BACKUP_DIR)
+        _drive_service = getattr(m, "_drive_service", None)
+        _pick_backup_folder_id = getattr(m, "_pick_backup_folder_id", None)
+
+        if callable(_drive_service) and callable(_pick_backup_folder_id):
+            try:
+                svc = _drive_service()
+                fid = _pick_backup_folder_id(svc)
+                drive_folder_id = fid
+                if svc and fid:
+                    # 존재 여부만 확인하므로 1개만 조회
+                    resp = svc.files().list(
+                        q=f"'{fid}' in parents and trashed=false and mimeType!='application/vnd.google-apps.folder'",
+                        fields="files(id,name)",
+                        includeItemsFromAllDrives=True,
+                        supportsAllDrives=True,
+                        corpora="allDrives",
+                        pageSize=1,
+                    ).execute()
+                    files = resp.get("files", [])
+                    drive_has = len(files) > 0
+            except Exception as e:
+                drive_err = f"{type(e).__name__}"
+    except Exception:
+        pass
+
+    # 로컬 존재 여부
+    try:
+        BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+        local_has = any(list(BACKUP_DIR.glob("backup_*.zip"))) or any(list(BACKUP_DIR.glob("restored_*.zip")))
+    except Exception:
+        local_has = False
+
+    return {
+        "local": {"has": bool(local_has), "dir": str(BACKUP_DIR)},
+        "drive": {"has": bool(drive_has), "folder_id": drive_folder_id, "error": drive_err},
+    }
+
+
+def _brain_status_badge():
+    """
+    두뇌 준비 상태 배지: get_index_status() 값을 사용.
+    ready -> 🟢, pending -> 🟡, missing -> 🔴
+    """
+    try:
+        status = get_index_status()  # [03] 구획에서 정의됨
+    except Exception:
+        status = "missing"
+
+    if status == "ready":
+        return "🟢 두뇌 준비됨"
+    if status == "pending":
+        return "🟡 준비중(로컬 파일 있음)"
+    return "🔴 준비안됨"
+
+
+def _backup_badges_line():
+    """로컬/드라이브 백업 유무 배지 한 줄 생성."""
+    info = _check_backup_presence_cached()
+    l_has = info["local"]["has"]
+    l_dir = info["local"]["dir"]
+    d_has = info["drive"]["has"]
+    d_fid = info["drive"]["folder_id"]
+    d_err = info["drive"]["error"]
+
+    local_badge = f"💾 로컬 백업: {'✅ 있음' if l_has else '❌ 없음'}"
+    drive_badge = f"☁️ 드라이브 백업: {'✅ 있음' if d_has else '❌ 없음'}"
+    if d_fid:
+        drive_badge += f" (folder_id: `{d_fid}`)"
+    if d_err:
+        drive_badge += f" — 오류: {d_err}"
+
+    return local_badge, drive_badge, l_dir
+
+
 def render_header():
     """
-    헤더 UI는 [07] MAIN의 _render_title_with_status()가 전적으로 담당합니다.
-    여기서는 중복 렌더링을 막기 위해 아무 것도 출력하지 않습니다.
-    (요구사항: 'Index status: ...' 텍스트 및 중복 배지 제거)
+    상단 헤더: 기존 두뇌 상태 + 백업 유무 요약 배지.
+    (헤더 스타일/구성은 단순화하여 안정적으로 유지)
     """
-    return
-# ===== [04] END =============================================
+    brain = _brain_status_badge()
+    local_badge, drive_badge, l_dir = _backup_badges_line()
+
+    with st.container():
+        c1, c2 = st.columns([0.7, 0.3])
+        with c1:
+            st.markdown(f"### {brain}")
+            # 백업 배지 라인
+            st.markdown(f"{local_badge} · {drive_badge}")
+        with c2:
+            # 진단 패널로 안내 (동일 페이지 내 링크 스크롤은 제한되므로, 힌트 텍스트만 제공)
+            st.caption("관리자: 하단의 **진단/로그(관리자 전용)** 섹션에서 상세 상태 확인")
+
+    st.divider()
+# ===== [04] HEADER — END ======================================================
 
 # ===== [04A] MODE & ADMIN BUTTON (모듈 분리 호출) — START =====================
 from src.ui_admin import (
