@@ -922,27 +922,44 @@ def _expand_query_for_rag(q: str, mode_key: str) -> str:
             merged.append(t)
     return " ".join(merged)
 
-# ── [06-D’’’] 합성 응답: 매치 목록 → 학생용 설명 변환 ----------------------------
+# ── [06-D’’’] 합성 응답 + ★강화된 히트 텍스트 추출 ------------------------------
 def _looks_like_debug_listing(text: str) -> bool:
     t = (text or "").strip().lower()
     return (not t) or t.startswith("top matches") or "score=" in t
 
 def _extract_hit_text(h) -> str:
-    for attr in ("text", "content", "page_content"):
-        t = getattr(h, attr, None)
-        if t: return str(t)
-    node = getattr(h, "node", None)
-    if node:
-        for cand in ("get_content", "get_text"):
-            fn = getattr(node, cand, None)
-            if callable(fn):
-                try:
-                    t = fn()
-                    if t: return str(t)
-                except Exception:
-                    pass
-        t = getattr(node, "text", None)
-        if t: return str(t)
+    """여러 런타임 유형을 폭넓게 커버해서 텍스트를 최대한 뽑아낸다."""
+    try:
+        # 0) dict 형태
+        if isinstance(h, dict):
+            for k in ("text", "content", "page_content", "snippet", "chunk", "excerpt"):
+                v = h.get(k)
+                if v: return str(v)
+        # 1) top-level 속성
+        for attr in ("text", "content", "page_content", "snippet"):
+            v = getattr(h, attr, None)
+            if v: return str(v)
+        # 2) node 객체 내부
+        n = getattr(h, "node", None)
+        if n:
+            for cand in ("get_content", "get_text"):
+                fn = getattr(n, cand, None)
+                if callable(fn):
+                    v = fn()
+                    if v: return str(v)
+            for attr in ("text", "content", "page_content"):
+                v = getattr(n, attr, None)
+                if v: return str(v)
+            md = getattr(n, "metadata", None)
+            if isinstance(md, dict):
+                for k in ("text", "content", "chunk", "excerpt"):
+                    if md.get(k): return str(md[k])
+        # 3) 마지막 수단: 문자열화
+        s = str(h)
+        if s and s != repr(h):
+            return s
+    except Exception:
+        pass
     return ""
 
 def _compose_answer_from_hits(q: str, hits: Any, mode_key: str) -> str:
@@ -989,6 +1006,15 @@ def _compose_answer_from_hits(q: str, hits: Any, mode_key: str) -> str:
             except Exception:
                 pass
     return "아래 교재 발췌를 참고해서 정리해 볼래?\n\n" + context[:1200]
+
+def _ensure_nonempty_answer(q: str, mode_key: str, hits: Any, raw: str) -> str:
+    """절대 빈 문자열이 나오지 않게 보강 체인 적용."""
+    txt = (raw or "").strip()
+    if not txt or _looks_like_debug_listing(txt):
+        txt = _compose_answer_from_hits(q, hits, mode_key).strip()
+    if not txt and st.session_state.get("allow_fallback", True):
+        txt = (_fallback_general_answer(q, mode_key) or "").strip()
+    return txt or "설명을 불러오는 중 문제가 있었어요. 다시 시도해 주세요."
 
 # ── [06-E] 메인 렌더 -----------------------------------------------------------
 def render_simple_qa():
@@ -1047,11 +1073,11 @@ def render_simple_qa():
             user = _sanitize_user(st.session_state.get("student_name") if not is_admin else "admin")
             _append_history_file_only(q, user)
 
-            # 👉 답변이 나올 자리(같은 컨테이너)에 플레이스홀더를 먼저 띄움
+            # 답변 자리에 '생각중' 표시
             answer_box = st.container()
             with answer_box:
-                waiting = st.empty()
-                waiting.info("🧠 답변 생각중… 교재에서 관련 내용을 찾고 정리하고 있어요.")
+                thinking = st.empty()
+                thinking.info("🧠 답변 생각중… 교재에서 관련 내용을 찾고 정리하고 있어요.")
 
             index_ready = _is_ready_unified()
 
@@ -1084,37 +1110,40 @@ def render_simple_qa():
                             raw, hits = raw2, hits2
                         else:
                             # Fallback: 일반 지식
-                            if st.session_state.get("allow_fallback", True):
-                                fb = _fallback_general_answer(q, mode_key) or ""
-                                with answer_box:
-                                    waiting.empty()
-                                    st.write(fb.strip() or "—")
+                            final = _ensure_nonempty_answer(q, mode_key, None, "")
+                            with answer_box:
+                                thinking.empty()
+                                st.write(final)
+                                if "근거 없음" in final or "일반 지식" in final:
                                     st.caption("※ 교재 근거 없음 — 일반 지식으로 답변했어요.")
-                                _cache_put(q, fb, [], f"{mode_label} · Fallback")
-                            else:
-                                with answer_box:
-                                    waiting.empty()
-                                    st.warning("교재에서 딱 맞는 근거를 찾지 못했어요. 질문을 더 구체적으로 써 주세요.\n예: “현재완료 기본형을 예문 2개로 설명해줘”")
+                            _cache_put(q, final, [], f"{mode_label} · Fallback")
                             return
 
-                    # 합성 단계: 응답이 비었거나 디버그 목록이면 교재 기반으로 합성
-                    if _looks_like_debug_listing(raw):
-                        raw = _compose_answer_from_hits(q, hits, mode_key)
+                    # ✅ 절대 빈 문자열 방지(합성→일반 지식 순 보강)
+                    final = _ensure_nonempty_answer(q, mode_key, hits, raw)
 
-                    # ✅ 최종 출력(플레이스홀더 제거 후 같은 자리 교체)
                     with answer_box:
-                        waiting.empty()
-                        st.write((raw or "").strip() or "—")
+                        thinking.empty()
+                        st.write(final)
 
                         # 근거 자료(선택)
                         refs: List[Dict[str, str]] = []
-                        if hits:
-                            for h in hits[:2]:
-                                meta = getattr(h, "metadata", None) or getattr(h, "node", {}).get("metadata", {})
-                                refs.append({
-                                    "doc_id": (meta or {}).get("doc_id") or (meta or {}).get("file_name", ""),
-                                    "url": (meta or {}).get("source") or (meta or {}).get("url", ""),
-                                })
+                        try:
+                            if hits:
+                                for h in hits[:2]:
+                                    meta = None
+                                    # 다양한 위치에서 메타데이터 시도
+                                    if hasattr(h, "metadata") and isinstance(getattr(h, "metadata"), dict):
+                                        meta = h.metadata
+                                    elif hasattr(h, "node") and hasattr(h.node, "metadata") and isinstance(h.node.metadata, dict):
+                                        meta = h.node.metadata
+                                    meta = meta or {}
+                                    refs.append({
+                                        "doc_id": meta.get("doc_id") or meta.get("file_name") or meta.get("filename", ""),
+                                        "url": meta.get("source") or meta.get("url", ""),
+                                    })
+                        except Exception:
+                            refs = []
                         if refs:
                             with st.expander("근거 자료(상위 2개)"):
                                 for i, r0 in enumerate(refs[:2], start=1):
@@ -1122,14 +1151,15 @@ def render_simple_qa():
                                     url = r0.get("url") or r0.get("source_url") or ""
                                     st.markdown(f"- {name}  " + (f"(<{url}>)" if url else ""))
 
-                    _cache_put(q, raw, refs if locals().get("refs", None) else [], mode_label)
+                    _cache_put(q, final, refs if locals().get("refs", None) else [], mode_label)
+
                 except Exception as e:
                     with answer_box:
-                        waiting.empty()
+                        thinking.empty()
                         st.error(f"검색 실패: {type(e).__name__}: {e}")
             else:
                 with answer_box:
-                    waiting.empty()
+                    thinking.empty()
                     st.info("아직 두뇌가 준비되지 않았어요. 상단에서 **복구/연결** 또는 **다시 최적화**를 먼저 완료해 주세요.")
 
     # 📒 나의 질문 히스토리 — 인라인 펼치기(답변 직표시)
