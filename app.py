@@ -686,6 +686,18 @@ def _ensure_state():
     if "SHOW_TOP3_STICKY" not in st.session_state:
         st.session_state["SHOW_TOP3_STICKY"] = False  # 기본 숨김
 
+# ── [06-A’] 준비 상태(READY) 통일 판단 ----------------------------------------
+def _is_ready_unified() -> bool:
+    """
+    헤더와 동일 기준으로 통일:
+    - get_index_status() == 'ready' 이면 True
+    - 예외 시엔 rag_index 존재만으로 보수적 판단
+    """
+    try:
+        return (get_index_status() == "ready")
+    except Exception:
+        return bool(st.session_state.get("rag_index"))
+
 # ── [06-B] 파일 I/O (히스토리) -------------------------------------------------
 def _history_path() -> Path:
     p = Path.home() / ".maic"
@@ -749,7 +761,6 @@ def _top3_users(days: int = 7) -> List[Tuple[str, int]]:
     ctr = Counter(users); return ctr.most_common(3)
 
 def _popular_questions(top_n: int = 10, days: int = 14) -> List[Tuple[str, int]]:
-    """FAQ 토글용: 최근 N일 인기 질문 (정규화 기준, 짧은 대표문장 유지)"""
     from collections import Counter
     rows = _read_history_lines(max_lines=5000)
     if not rows: return []
@@ -762,8 +773,7 @@ def _popular_questions(top_n: int = 10, days: int = 14) -> List[Tuple[str, int]]
         if not q: continue
         key = _normalize_question(q)
         counter[key] += 1
-        if key not in exemplar or len(q) < len(exemplar[key]):
-            exemplar[key] = q
+        if key not in exemplar or len(q) < len(exemplar[key]): exemplar[key] = q
     return [(exemplar[k], c) for k, c in counter.most_common(top_n)]
 
 def _render_top3_badges():
@@ -865,11 +875,7 @@ def render_simple_qa():
             _append_history_file_only(q, user)
 
             answer_box = st.container()
-            index_ready = False
-            try:
-                index_ready = bool(globals().get("_index_ready", lambda: False)())
-            except Exception:
-                index_ready = False
+            index_ready = _is_ready_unified()  # 🔁 준비 판단을 헤더와 완전 통일
 
             if index_ready:
                 try:
@@ -956,6 +962,9 @@ def render_simple_qa():
                 st.caption(f"{i+1}. …")
 
 # ===== [06] END ===============================================================
+
+
+
 # ===== [07] MAIN — 오케스트레이터 ============================================
 import streamlit as st
 
