@@ -669,7 +669,7 @@ def render_tag_diagnostics():
     except Exception:
         pass
 
-# ===== [06] SIMPLE QA DEMO — 인라인 펼치기 + 답변 직표시 =======================
+# ===== [06] SIMPLE QA DEMO — 인라인 펼치기 + 답변 직표시 + no-hit 부드럽게 ====
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 import time
@@ -785,9 +785,7 @@ def _render_cached_block(norm: str):
     if not data:
         st.info("이 질문의 저장된 답변이 없어요. 아래 ‘다시 검색’으로 최신 답변을 받아보세요.")
         return
-    # 답변 본문 즉시 표시
     st.write(data.get("answer","—"))
-    # 근거 자료는 선택 사항
     refs = data.get("refs") or []
     if refs:
         with st.expander("근거 자료(상위 2개)"):
@@ -858,11 +856,40 @@ def render_simple_qa():
             if index_ready:
                 try:
                     with answer_box:
+                        # 1차 검색
                         qe = st.session_state["rag_index"].as_query_engine(top_k=k)
                         r = qe.query(q)
                         raw = getattr(r, "response", "") or str(r)
-                        refs: List[Dict[str, str]] = []
                         hits = getattr(r, "source_nodes", None) or getattr(r, "hits", None)
+
+                        # no-hit 판단
+                        def _is_nohit(raw_txt, hits_obj) -> bool:
+                            txt = (raw_txt or "").strip().lower()
+                            bad_phrases = ["관련 결과를 찾지 못", "no relevant", "no result", "not find"]
+                            cond_txt = (not txt) or any(p in txt for p in bad_phrases)
+                            cond_hits = (not hits_obj) or (hasattr(hits_obj, "__len__") and len(hits_obj) == 0)
+                            return cond_txt or cond_hits
+
+                        if _is_nohit(raw, hits):
+                            # 2차: 자동으로 더 넓게(top_k=10) 재검색
+                            qe_wide = st.session_state["rag_index"].as_query_engine(top_k=max(10, int(k) if isinstance(k,int) else 5))
+                            r2 = qe_wide.query(q)
+                            raw2 = getattr(r2, "response", "") or str(r2)
+                            hits2 = getattr(r2, "source_nodes", None) or getattr(r2, "hits", None)
+                            if not _is_nohit(raw2, hits2):
+                                raw, hits = raw2, hits2
+                            else:
+                                # 여전히 없으면: 거친 오류 문구 대신 친절 메시지
+                                st.warning("교재에서 딱 맞는 근거를 찾지 못했어요. 질문을 조금 더 구체적으로 써 주면 더 잘 찾아요.\n예: “현재완료 기본형을 예문 2개로 설명해줘”")
+                                if is_admin:
+                                    st.caption("관리자 팁: prepared 폴더에 관련 교재가 있는지 확인하고, ‘다시 최적화(인덱스 갱신)’를 실행해 보세요.")
+                                return
+
+                        # ✅ 답변 본문 바로 표시
+                        st.write((raw or "").strip() or "—")
+
+                        # 근거 자료(선택)
+                        refs: List[Dict[str, str]] = []
                         if hits:
                             for h in hits[:2]:
                                 meta = getattr(h, "metadata", None) or getattr(h, "node", {}).get("metadata", {})
@@ -870,15 +897,13 @@ def render_simple_qa():
                                     "doc_id": (meta or {}).get("doc_id") or (meta or {}).get("file_name", ""),
                                     "url": (meta or {}).get("source") or (meta or {}).get("url", ""),
                                 })
-                        # ✅ 답변 본문을 즉시 보여줍니다(요약/안내 제거)
-                        st.write((raw or "").strip() or "—")
-                        # 근거 자료는 선택 사항
                         if refs:
                             with st.expander("근거 자료(상위 2개)"):
                                 for i, r0 in enumerate(refs[:2], start=1):
                                     name = r0.get("doc_id") or r0.get("source") or f"ref{i}"
                                     url = r0.get("url") or r0.get("source_url") or ""
                                     st.markdown(f"- {name}  " + (f"(<{url}>)" if url else ""))
+
                         _cache_put(q, raw, refs, mode_label)
                 except Exception as e:
                     st.error(f"검색 실패: {type(e).__name__}: {e}")
