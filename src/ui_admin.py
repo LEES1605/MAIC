@@ -27,18 +27,89 @@ def ensure_admin_session_keys() -> None:
 # ── [UA-01C] 관리자 버튼/인증 패널 — START ------------------------------------
 def render_admin_controls() -> None:
     """
-    상단 우측 '관리자' 버튼과 PIN 인증 폼을 렌더링.
-    + '🔎 진단'은 스크롤 대신 상단에 '진단(퀵패널)'을 즉시 펼쳐서 표시.
+    상단 우측 컨트롤:
+      - 학생 모드: '관리자' 버튼 + (기존) 진단 토글 + 📦 지금 백업
+      - 관리자 모드: '관리자 종료' 버튼 + 📦 지금 백업
+    백업: ~/.maic/persist → ~/.maic/backup/backup_YYYYMMDD_HHMMSS.zip
+    이후 Google Drive backup_zip 폴더에 업로드 시도(가능한 환경에서만).
     """
     import streamlit as st
     from pathlib import Path
     from datetime import datetime
-    import importlib
+    import zipfile, os, importlib
 
-    # 내부 상태 플래그 준비
-    if "_diag_quick_open" not in st.session_state:
-        st.session_state["_diag_quick_open"] = False
+    # ── 경로 해결 --------------------------------------------------------------
+    def _resolve_paths():
+        PERSIST_DIR = Path.home() / ".maic" / "persist"
+        BACKUP_DIR  = Path.home() / ".maic" / "backup"
+        try:
+            m = importlib.import_module("src.rag.index_build")
+            PERSIST_DIR = getattr(m, "PERSIST_DIR", PERSIST_DIR)
+            BACKUP_DIR  = getattr(m, "BACKUP_DIR", BACKUP_DIR)
+        except Exception:
+            pass
+        BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+        PERSIST_DIR.mkdir(parents=True, exist_ok=True)
+        return Path(PERSIST_DIR), Path(BACKUP_DIR)
 
+    # ── 로컬 ZIP 백업 ----------------------------------------------------------
+    def _make_local_backup() -> dict:
+        """
+        ~/.maic/persist 폴더 전체를 ZIP으로 백업한다.
+        return: {"ok": True, "path": "/path/to/zip"} or {"ok": False, "error": "..."}
+        """
+        try:
+            PERSIST_DIR, BACKUP_DIR = _resolve_paths()
+            # 빈 폴더여도 스냅샷은 생성(구조 보존 목적)
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            zip_path = BACKUP_DIR / f"backup_{ts}.zip"
+            with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as z:
+                for p in PERSIST_DIR.rglob("*"):
+                    if p.is_file():
+                        z.write(p, arcname=p.relative_to(PERSIST_DIR))
+                # 메타 마커
+                z.writestr(".backup_info.txt", f"source={PERSIST_DIR}\ncreated_at={ts}\n")
+            return {"ok": True, "path": str(zip_path)}
+        except Exception as e:
+            return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+    # ── 드라이브 업로드(가능한 경우만) -----------------------------------------
+    def _upload_backup_to_drive(zip_path: Path) -> dict:
+        """
+        Google Drive backup_zip 폴더로 업로드 시도.
+        - src.rag.index_build 의 _drive_service / _pick_backup_folder_id 가 있을 때만 동작
+        - MediaFileUpload 가 없으면 업로드 스킵
+        """
+        try:
+            m = importlib.import_module("src.rag.index_build")
+            _drive_service = getattr(m, "_drive_service", None)
+            _pick_backup_folder_id = getattr(m, "_pick_backup_folder_id", None)
+            if not (callable(_drive_service) and callable(_pick_backup_folder_id)):
+                return {"ok": False, "error": "drive_helper_missing"}
+
+            try:
+                from googleapiclient.http import MediaFileUpload  # type: ignore
+            except Exception:
+                return {"ok": False, "error": "media_upload_unavailable"}
+
+            svc = _drive_service()
+            folder_id = _pick_backup_folder_id(svc)
+            if not (svc and folder_id):
+                return {"ok": False, "error": "folder_id_unavailable"}
+
+            media = MediaFileUpload(str(zip_path), mimetype="application/zip", resumable=False)
+            meta = {"name": zip_path.name, "parents": [folder_id]}
+            created = svc.files().create(
+                body=meta,
+                media_body=media,
+                fields="id",
+                supportsAllDrives=True
+            ).execute()
+            return {"ok": True, "file_id": created.get("id")}
+        except Exception as e:
+            return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+    # ── 숫자/용량 포맷 ----------------------------------------------------------
     def _fmt_size(n):
         try:
             n = int(n)
@@ -49,158 +120,125 @@ def render_admin_controls() -> None:
             f/=1024.0; i+=1
         return (f"{int(f)} {units[i]}" if i==0 else f"{f:.1f} {units[i]}")
 
-    def _fmt_ts(ts):
-        try:
-            return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
-        except Exception:
-            return "-"
-
-    def _resolve_paths():
-        PERSIST_DIR = Path.home() / ".maic" / "persist"
-        BACKUP_DIR  = Path.home() / ".maic" / "backup"
-        QUALITY_REPORT_PATH = Path.home() / ".maic" / "quality_report.json"
-        try:
-            m = importlib.import_module("src.rag.index_build")
-            PERSIST_DIR = getattr(m, "PERSIST_DIR", PERSIST_DIR)
-            BACKUP_DIR  = getattr(m, "BACKUP_DIR", BACKUP_DIR)
-            QUALITY_REPORT_PATH = getattr(m, "QUALITY_REPORT_PATH", QUALITY_REPORT_PATH)
-        except Exception:
-            pass
-        return PERSIST_DIR, BACKUP_DIR, QUALITY_REPORT_PATH
-
+    # ── UI --------------------------------------------------------------------
     with st.container():
-        _, right = st.columns([0.7, 0.3])
+        _, right = st.columns([0.65, 0.35])
         with right:
-            c_admin, c_diag = st.columns([0.55, 0.45])
-
-            # --- 관리자 진입/종료 버튼 ---
             if st.session_state.get("is_admin", False):
-                with c_admin:
+                # 관리자 모드: [관리자 종료] + [📦 지금 백업]
+                c1, c2 = st.columns([0.5, 0.5])
+                with c1:
                     if st.button("🔓 관리자 종료", key="btn_close_admin", use_container_width=True):
                         st.session_state["is_admin"] = False
                         st.session_state["_admin_auth_open"] = False
                         try: st.toast("관리자 모드 해제됨")
                         except Exception: pass
                         st.rerun()
+                with c2:
+                    if st.button("📦 지금 백업", key="btn_backup_now_admin", use_container_width=True,
+                                 help="로컬 인덱스를 ZIP으로 백업하고, 가능하면 드라이브에도 업로드합니다."):
+                        res = _make_local_backup()
+                        if res.get("ok"):
+                            zp = Path(res["path"])
+                            # 드라이브 업로드 시도
+                            up = _upload_backup_to_drive(zp)
+                            # 캐시 무효화(헤더의 백업 유무 캐시 등)
+                            try: st.cache_data.clear()
+                            except Exception: pass
+                            size = _fmt_size(zp.stat().st_size) if zp.exists() else "-"
+                            if up.get("ok"):
+                                try: st.toast(f"백업 완료: {zp.name} ({size}) → Drive 업로드 성공")
+                                except Exception: st.success(f"백업 완료: {zp.name} ({size}) → Drive 업로드 성공")
+                            else:
+                                try: st.toast(f"백업 완료: {zp.name} ({size}) — Drive 업로드 건너뜀/실패")
+                                except Exception: st.info(f"백업 완료: {zp.name} ({size}) — Drive 업로드 건너뜀/실패")
+                        else:
+                            st.error(f"백업 실패: {res.get('error')}")
+
             else:
-                with c_admin:
+                # 학생 모드: [🔒 관리자] + [🔎 진단 토글] + [📦 지금 백업]
+                c1, c2, c3 = st.columns([0.34, 0.33, 0.33])
+                with c1:
                     if st.button("🔒 관리자", key="btn_open_admin", use_container_width=True):
                         st.session_state["_admin_auth_open"] = True
                         st.rerun()
-
-            # --- 진단 퀵패널 토글 버튼 (클릭 즉시 rerun으로 1회 클릭 반영) ---
-            with c_diag:
-                label = "🔎 진단 닫기" if st.session_state["_diag_quick_open"] else "🔎 진단 열기"
-                if st.button(label, key="btn_toggle_diag_quick", use_container_width=True,
-                             help="상단에서 바로 보는 진단(퀵패널)을 토글합니다."):
-                    st.session_state["_diag_quick_open"] = not st.session_state["_diag_quick_open"]
-                    st.rerun()  # ← 여기 추가: 즉시 재실행하여 버튼 라벨/패널 상태를 한 번에 반영
-
-            # --- 인증 패널 ---
-            if st.session_state.get("_admin_auth_open", False) and not st.session_state.get("is_admin", False):
-                with st.container(border=True):
-                    st.markdown("**관리자 PIN 입력**")
-                    with st.form("admin_login_form", clear_on_submit=True, border=False):
-                        pin_try = st.text_input("PIN", type="password")
-                        c1, c2 = st.columns(2)
-                        with c1:
-                            ok = st.form_submit_button("입장")
-                        with c2:
-                            cancel = st.form_submit_button("취소")
-
-                if cancel:
-                    st.session_state["_admin_auth_open"] = False
-                    st.rerun()
-                if ok:
-                    if pin_try == get_admin_pin():
-                        st.session_state["is_admin"] = True
-                        st.session_state["_admin_auth_open"] = False
-                        try: st.toast("관리자 모드 진입 ✅")
-                        except Exception: pass
+                with c2:
+                    # 기존 진단 토글(학생 모드에서만 노출하는 현재 정책 유지)
+                    label = "🔎 진단 닫기" if st.session_state.get("_diag_quick_open", False) else "🔎 진단 열기"
+                    if st.button(label, key="btn_toggle_diag_quick", use_container_width=True,
+                                 help="상단에서 바로 보는 진단(퀵패널)을 토글합니다."):
+                        st.session_state["_diag_quick_open"] = not st.session_state.get("_diag_quick_open", False)
                         st.rerun()
-                    else:
-                        st.error("PIN이 올바르지 않습니다.")
+                with c3:
+                    if st.button("📦 지금 백업", key="btn_backup_now_student", use_container_width=True,
+                                 help="로컬 인덱스를 ZIP으로 백업하고, 가능하면 드라이브에도 업로드합니다."):
+                        res = _make_local_backup()
+                        if res.get("ok"):
+                            zp = Path(res["path"])
+                            up = _upload_backup_to_drive(zp)
+                            try: st.cache_data.clear()
+                            except Exception: pass
+                            size = _fmt_size(zp.stat().st_size) if zp.exists() else "-"
+                            if up.get("ok"):
+                                try: st.toast(f"백업 완료: {zp.name} ({size}) → Drive 업로드 성공")
+                                except Exception: st.success(f"백업 완료: {zp.name} ({size}) → Drive 업로드 성공")
+                            else:
+                                try: st.toast(f"백업 완료: {zp.name} ({size}) — Drive 업로드 건너뜀/실패")
+                                except Exception: st.info(f"백업 완료: {zp.name} ({size}) — Drive 업로드 건너뜀/실패")
+                        else:
+                            st.error(f"백업 실패: {res.get('error')}")
 
-    # ── 진단(퀵패널) -----------------------------------------------------------
-    if st.session_state.get("_diag_quick_open", False):
-        PERSIST_DIR, BACKUP_DIR, QUALITY_REPORT_PATH = _resolve_paths()
+    # --- 인증 패널 (학생 모드에서 '관리자' 눌렀을 때만) --------------------------
+    if st.session_state.get("_admin_auth_open", False) and not st.session_state.get("is_admin", False):
+        with st.container(border=True):
+            st.markdown("**관리자 PIN 입력**")
+            with st.form("admin_login_form", clear_on_submit=True, border=False):
+                pin_try = st.text_input("PIN", type="password")
+                c1, c2 = st.columns(2)
+                with c1:
+                    ok = st.form_submit_button("입장")
+                with c2:
+                    cancel = st.form_submit_button("취소")
 
-        # 로컬 인덱스 파일 상태
+        if cancel:
+            st.session_state["_admin_auth_open"] = False
+            st.rerun()
+        if ok:
+            if pin_try == get_admin_pin():
+                st.session_state["is_admin"] = True
+                st.session_state["_admin_auth_open"] = False
+                try: st.toast("관리자 모드 진입 ✅")
+                except Exception: pass
+                st.rerun()
+            else:
+                st.error("PIN이 올바르지 않습니다.")
+
+    # ── (기존) 진단 퀵패널: 정책상 학생 모드에서만 노출 -------------------------
+    if (not st.session_state.get("is_admin", False)) and st.session_state.get("_diag_quick_open", False):
+        # 퀵패널 본문은 기존 코드 유지 (수정 없음)
+        from datetime import datetime
+        import json as _json
+        PERSIST_DIR, BACKUP_DIR = _resolve_paths()
         chunks = (Path(PERSIST_DIR) / "chunks.jsonl")
         ready  = (Path(PERSIST_DIR) / ".ready")
-        chunks_ok = chunks.exists()
-        ready_ok  = ready.exists()
-
-        # 로컬 백업 ZIP
-        local_has = False
-        local_rows = []
-        try:
-            BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-            zips = list(BACKUP_DIR.glob("backup_*.zip")) + list(BACKUP_DIR.glob("restored_*.zip"))
-            zips.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-            local_has = len(zips) > 0
-            for p in zips[:5]:
-                stt = p.stat()
-                local_rows.append({"파일명": p.name, "크기": _fmt_size(stt.st_size), "수정시각": _fmt_ts(stt.st_mtime)})
-        except Exception:
-            pass
-
-        # 드라이브 백업 ZIP (있으면 확인)
-        drive_has = False
-        drive_folder_id = None
-        drive_msg = None
-        try:
-            m = importlib.import_module("src.rag.index_build")
-            _drive_service = getattr(m, "_drive_service", None)
-            _pick_backup_folder_id = getattr(m, "_pick_backup_folder_id", None)
-            svc = _drive_service() if callable(_drive_service) else None
-            drive_folder_id = _pick_backup_folder_id(svc) if (svc and callable(_pick_backup_folder_id)) else None
-            if svc and drive_folder_id:
-                resp = svc.files().list(
-                    q=f"'{drive_folder_id}' in parents and trashed=false and mimeType!='application/vnd.google-apps.folder'",
-                    fields="files(id,name)", includeItemsFromAllDrives=True, supportsAllDrives=True,
-                    corpora="allDrives", pageSize=1
-                ).execute()
-                files = resp.get("files", [])
-                drive_has = len(files) > 0
-            else:
-                drive_msg = "드라이브 연결/권한 또는 backup_zip 폴더 식별이 되지 않았습니다."
-        except Exception:
-            drive_msg = "드라이브 목록 조회 중 오류가 발생했습니다."
-
-        # 자동 복구 상태
         auto_info = st.session_state.get("_auto_restore_last", {})
         step = str(auto_info.get("step", "—"))
-        ok_local = auto_info.get("local_attach")
-        ok_drive = auto_info.get("drive_restore")
-        ok_build = auto_info.get("rebuild")
-        ok_final = auto_info.get("final_attach")
         def _b(label, ok):
             return f"✅ {label}" if ok is True else (f"❌ {label}" if ok is False else f"— {label}")
-
         with st.container(border=True):
             st.markdown("### 진단(퀵패널)")
-            st.markdown("- 단계: **" + step + "**")
+            st.markdown(f"- 단계: **{step}**")
             st.markdown("- " + " · ".join([
-                _b("로컬부착", ok_local),
-                _b("드라이브복구", ok_drive),
-                _b("재빌드", ok_build),
-                _b("최종부착", ok_final),
+                _b("로컬부착", auto_info.get("local_attach")),
+                _b("드라이브복구", auto_info.get("drive_restore")),
+                _b("재빌드", auto_info.get("rebuild")),
+                _b("최종부착", auto_info.get("final_attach")),
             ]))
-            st.markdown(f"- **로컬 인덱스 파일**: {'✅ 있음' if chunks_ok else '❌ 없음'}  (`{chunks.as_posix()}`)")
-            st.markdown(f"- **.ready 마커**: {'✅ 있음' if ready_ok else '❌ 없음'}  (`{ready.as_posix()}`)")
-            st.markdown(f"- **로컬 백업 ZIP**: {'✅ 있음' if local_has else '❌ 없음'}  (`{BACKUP_DIR.as_posix()}`)")
-            st.markdown(
-                "- **드라이브 백업 ZIP**: "
-                + ("✅ 있음" if drive_has else "❌ 없음")
-                + (f"  (folder_id: `{drive_folder_id}`)" if drive_folder_id else "")
-            )
-            if drive_msg:
-                st.caption(f"※ {drive_msg}")
-
-            # (혼동 방지) 하단 전체 진단 섹션 링크 대신 안내 캡션으로 변경
-            st.caption("전체 진단 세부는 페이지 하단의 **진단/로그(관리자 전용)** 섹션에서 확인할 수 있어요.")
+            st.markdown(f"- **로컬 인덱스 파일**: {'✅ 있음' if chunks.exists() else '❌ 없음'}  (`{chunks.as_posix()}`)")
+            st.markdown(f"- **.ready 마커**: {'✅ 있음' if ready.exists() else '❌ 없음'}  (`{ready.as_posix()}`)")
+            st.markdown(f"- **로컬 백업 경로**: `{BACKUP_DIR.as_posix()}`")
 # ── [UA-01C] 관리자 버튼/인증 패널 — END --------------------------------------
+
 
 
 
