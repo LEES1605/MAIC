@@ -390,6 +390,23 @@ def render_admin_settings_panel():
         else:
             st.error("모든 모드가 꺼져 있습니다. 학생 화면에서 질문 모드가 보이지 않아요.")
 # ===== [04B] END =============================================================
+# ===== [04C-call] PREPARED PROMPT CALL (ADMIN ONLY, BOOTSTRAP RESET) — START
+# 관리자 모드에서만 실행 + 세션 최초 1회 자동 리셋(프롬프트/캐시)으로 반드시 패널 노출
+if st.session_state.get("is_admin", False):
+    if not st.session_state.get("_prepared_prompt_bootstrap_done", False):
+        # 이전 세션에 남아 있던 '이미 물어봄' 플래그/캐시를 초기화
+        st.session_state["_prepared_prompt_done"] = False
+        try:
+            st.cache_data.clear()  # quick_precheck 캐시 무효화
+        except Exception:
+            pass
+        st.session_state["_prepared_prompt_bootstrap_done"] = True
+
+    try:
+        render_prepared_prompt()
+    except Exception:
+        st.session_state["_prepared_prompt_done"] = True
+# ===== [04C-call] PREPARED PROMPT CALL (ADMIN ONLY, BOOTSTRAP RESET) — END
 
 
 # ===== [05A] BRAIN PREP MAIN =======================================
