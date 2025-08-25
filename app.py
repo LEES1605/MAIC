@@ -738,6 +738,16 @@ def _is_ready_unified() -> bool:
         return bool(st.session_state.get("rag_index"))
 
 def _get_enabled_modes_unified() -> Dict[str, bool]:
+    """
+    질문 모드 표시 여부를 세션의 다양한 키에서 통합 판정한다.
+    우선순위:
+      1) dict 기반: enabled_modes / admin_modes / modes  ({"Grammar":bool,...})
+      2) list 기반: qa_modes_enabled  (["문법설명","문장구조분석","지문분석"])
+      3) bool 기반: show_mode_grammar / show_mode_structure / show_mode_passage
+      4) 훅 함수: get_enabled_modes()
+      5) 최종 기본값: 전부 True  (경고로 앱이 막히지 않도록)
+    """
+    # 1) dict 기반
     for key in ("enabled_modes", "admin_modes", "modes"):
         m = st.session_state.get(key)
         if isinstance(m, dict):
@@ -746,21 +756,44 @@ def _get_enabled_modes_unified() -> Dict[str, bool]:
                 "Sentence": bool(m.get("Sentence", False)),
                 "Passage": bool(m.get("Passage", False)),
             }
+
+    # 2) list 기반(우리 관리자 설정의 기본 저장 형식)
+    lst = st.session_state.get("qa_modes_enabled")
+    if isinstance(lst, list):
+        def has_any(*names: str) -> bool:
+            s = set(map(str, lst))
+            return any(n in s for n in names)
+        return {
+            "Grammar":  has_any("문법설명", "Grammar"),
+            "Sentence": has_any("문장구조분석", "문장분석", "Sentence"),
+            "Passage":  has_any("지문분석", "Passage"),
+        }
+
+    # 3) bool 기반(과거 호환)
+    if any(k in st.session_state for k in ("show_mode_grammar","show_mode_structure","show_mode_passage")):
+        return {
+            "Grammar":  bool(st.session_state.get("show_mode_grammar",   True)),
+            "Sentence": bool(st.session_state.get("show_mode_structure", True)),
+            "Passage":  bool(st.session_state.get("show_mode_passage",   True)),
+        }
+
+    # 4) 외부 훅 함수
     fn = globals().get("get_enabled_modes")
     if callable(fn):
         try:
             m = fn()
             if isinstance(m, dict):
                 return {
-                    "Grammar": bool(m.get("Grammar", False)),
+                    "Grammar":  bool(m.get("Grammar",  False)),
                     "Sentence": bool(m.get("Sentence", False)),
-                    "Passage": bool(m.get("Passage", False)),
+                    "Passage":  bool(m.get("Passage",  False)),
                 }
         except Exception:
             pass
-    if not st.session_state.get("is_admin", False):
-        return {"Grammar": True, "Sentence": True, "Passage": True}
-    return {"Grammar": False, "Sentence": False, "Passage": False}
+
+    # 5) 최종 기본값: 전부 True (관리자/학생 동일)
+    return {"Grammar": True, "Sentence": True, "Passage": True}
+
 
 # ── [06-B] 파일 I/O (히스토리 & 피드백 & 골든) ----------------------------------
 def _app_dir() -> Path:
