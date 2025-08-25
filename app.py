@@ -626,22 +626,22 @@ def render_brain_prep_main():
         idx_status = "missing"
     status_badge = {"ready":"🟢 답변준비 완료","pending":"🟡 로컬 파일 감지(세션 미부착)","missing":"🔴 인덱스 없음"}.get(idx_status,"❔ 상태 미상")
 
-        # ── 신규자료 점검 + 델타/사유 파싱 ─────────────────────────────────────
-        prepared_cnt = manifest_cnt = 0
-        reasons = []
-        added, modified, removed, moved, skipped = [], [], [], [], []
+    # ── 신규자료 점검 + 델타/사유 파싱 ─────────────────────────────────────
+    prepared_cnt = manifest_cnt = 0
+    reasons = []
+    added, modified, removed, moved, skipped = [], [], [], [], []
 
-        if callable(quick_precheck):
-            pre = quick_precheck(None)  # 폴더 ID는 내부 자동 탐색
-            prepared_cnt = int(pre.get("prepared_count", 0))
-            manifest_cnt = int(pre.get("manifest_count", 0))
-            reasons = list(pre.get("reasons", []))
-            delta = pre.get("delta") or {}
-            added    = list(pre.get("added",    [])) or list(delta.get("added",    []))
-            modified = list(pre.get("modified", [])) or list(delta.get("modified", []))
-            removed  = list(pre.get("removed",  [])) or list(delta.get("removed",  []))
-            moved    = list(pre.get("moved",    [])) or list(delta.get("moved",    []))
-            skipped  = list(pre.get("skipped",  [])) or list(delta.get("skipped",  []))
+    if callable(quick_precheck):
+        pre = quick_precheck(None)  # 폴더 ID는 내부 자동 탐색
+        prepared_cnt = int(pre.get("prepared_count", 0))
+        manifest_cnt = int(pre.get("manifest_count", 0))
+        reasons = list(pre.get("reasons", []))
+        delta = pre.get("delta") or {}
+        added    = list(pre.get("added",    [])) or list(delta.get("added",    []))
+        modified = list(pre.get("modified", [])) or list(delta.get("modified", []))
+        removed  = list(pre.get("removed",  [])) or list(delta.get("removed",  []))
+        moved    = list(pre.get("moved",    [])) or list(delta.get("moved",    []))
+        skipped  = list(pre.get("skipped",  [])) or list(delta.get("skipped",  []))
     except Exception as e:
         reasons = [f"precheck_failed:{type(e).__name__}"]
 
