@@ -1811,7 +1811,7 @@ def render_simple_qa():
     is_admin = st.session_state.get("is_admin", False)
 
     _render_top3_badges()
-    st.markdown("### 💬 질문은 천재들이 가장 많이 사용하는 공부 방법이다!")
+    st.markdown("### 💬 질문은 천재들이 가장 좋아하는 공부법이다!")
 
     enabled = _get_enabled_modes_unified()
     radio_opts: List[str] = []
