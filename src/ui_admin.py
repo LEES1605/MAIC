@@ -24,6 +24,7 @@ def ensure_admin_session_keys() -> None:
     if "_admin_auth_open" not in st.session_state:
         st.session_state["_admin_auth_open"] = False
 
+
 # ── [UA-01C] 관리자 버튼/인증 패널 — START ------------------------------------
 def render_admin_controls() -> None:
     """
@@ -97,8 +98,7 @@ def render_admin_controls() -> None:
         i = 0
         f = float(n)
         while f >= 1024 and i < len(u) - 1:
-            f /= 1024.0
-            i += 1
+            f /= 1024.0; i += 1
         return (f"{int(f)} {u[i]}" if i == 0 else f"{f:.1f} {u[i]}")
 
     with st.container():
@@ -123,10 +123,8 @@ def render_admin_controls() -> None:
                         if res.get("ok"):
                             zp = Path(res["path"])
                             up = _upload_backup_to_drive(zp)
-                            try:
-                                st.cache_data.clear()
-                            except Exception:
-                                pass
+                            try: st.cache_data.clear()
+                            except Exception: pass
                             size = _fmt_size(zp.stat().st_size) if zp.exists() else "-"
                             st.success(
                                 f"백업 완료: {zp.name} ({size})"
@@ -152,10 +150,8 @@ def render_admin_controls() -> None:
                         if res.get("ok"):
                             zp = Path(res["path"])
                             up = _upload_backup_to_drive(zp)
-                            try:
-                                st.cache_data.clear()
-                            except Exception:
-                                pass
+                            try: st.cache_data.clear()
+                            except Exception: pass
                             size = _fmt_size(zp.stat().st_size) if zp.exists() else "-"
                             st.success(
                                 f"백업 완료: {zp.name} ({size})"
@@ -185,14 +181,10 @@ def render_admin_controls() -> None:
                 st.session_state["is_admin"] = True
                 st.session_state["_admin_auth_open"] = False
                 st.session_state["_prepared_prompt_done"] = False   # 관리자 진입시 새자료 점검 유도
-                try:
-                    st.cache_data.clear()
-                except Exception:
-                    pass
-                try:
-                    st.toast("관리자 모드 진입 ✅ 새 자료 점검을 시작합니다")
-                except Exception:
-                    pass
+                try: st.cache_data.clear()
+                except Exception: pass
+                try: st.toast("관리자 모드 진입 ✅ 새 자료 점검을 시작합니다")
+                except Exception: pass
                 st.rerun()
             else:
                 st.error("PIN이 틀렸습니다. 다시 입력해 주세요.")
@@ -204,7 +196,6 @@ def render_admin_controls() -> None:
         except Exception as e:
             st.caption(f"진단 렌더 오류: {type(e).__name__}: {e}")
 # ── [UA-01C] 관리자 버튼/인증 패널 — END ------------------------------------
-
 
 # ── [UA-01D] 역할 캡션 --------------------------------------------------------
 def render_role_caption() -> None:
