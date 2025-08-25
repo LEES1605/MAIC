@@ -668,6 +668,98 @@ def render_tag_diagnostics():
     except Exception:
         pass
 
+# ===== [05C] PREPARED ADMIN PANEL — START ====================================
+# 관리자 섹션 안에서 직접 새 자료 감지/업데이트 여부를 물어보는 패널
+import streamlit as st
+
+def _render_prepared_admin_panel():
+    # 관리자 전용
+    if not st.session_state.get("is_admin", False):
+        return
+
+    st.subheader("📂 새 자료 감지 / 업데이트 (관리자)")
+    with st.container(border=True):
+        # 1) 빠른 감지 (2분 캐시) — [04C]에서 정의된 헬퍼 재사용
+        try:
+            chk = _prepared_quick_precheck_cached()
+        except Exception as e:
+            chk = {"ok": False, "details": {"error": f"{type(e).__name__}: {e}"}}
+
+        col1, col2, col3 = st.columns([0.45, 0.28, 0.27])
+        with col1:
+            if chk.get("ok"):
+                changed = bool(chk.get("changed"))
+                n = int(chk.get("new_count", 0))
+                st.markdown(f"**감지 결과:** {'✅ 변경 감지' if changed else '➖ 변경 없음'} · **새 파일 추정:** **{n}건**")
+            else:
+                st.markdown("**감지 결과:** ❌ 감지 실패")
+                st.caption(f"오류: {chk.get('details', {}).get('error', 'unknown')}")
+
+        with col2:
+            if st.button("🔄 다시 검사", use_container_width=True, key="prep_admin_rescan"):
+                # 캐시/플래그 리셋 후 즉시 재검
+                st.session_state["_prepared_prompt_done"] = False
+                try:
+                    st.cache_data.clear()
+                except Exception:
+                    pass
+                st.rerun()
+
+        with col3:
+            st.caption("최근 검사 결과를 갱신하려면 ‘다시 검사’를 누르세요.")
+
+        # 2) 액션 버튼 — [04C]의 빌드/복구 헬퍼 재사용
+        a1, a2 = st.columns([0.5, 0.5])
+        with a1:
+            do_update = st.button("✅ 지금 업데이트(재최적화)", use_container_width=True, key="prep_admin_update_now")
+        with a2:
+            use_backup = st.button("🕗 나중에(기존 백업 사용)", use_container_width=True, key="prep_admin_use_backup")
+
+        if do_update:
+            ok, why = _update_from_prepared_then_backup()
+            # 새로고침 전 캐시/플래그 정리
+            st.session_state["_prepared_prompt_done"] = True
+            try:
+                st.cache_data.clear()
+            except Exception:
+                pass
+            if ok:
+                try: st.toast("업데이트 및 백업 완료 — 답변 준비 완료 ✅")
+                except Exception: st.success("업데이트 및 백업 완료 — 답변 준비 완료 ✅")
+            else:
+                st.error("업데이트 실패 — 기존 백업 복구를 시도합니다.")
+                ok2, why2 = _restore_from_drive_and_attach_or_update()
+                if ok2:
+                    try: st.toast("기존 백업 복구 — 답변 준비 완료 ✅")
+                    except Exception: pass
+                else:
+                    st.warning("백업 복구도 실패했어요. ‘다시 검사’ 후 재시도하세요.")
+            st.rerun()
+
+        if use_backup:
+            ok, why = _restore_from_drive_and_attach_or_update()
+            st.session_state["_prepared_prompt_done"] = True
+            try:
+                st.cache_data.clear()
+            except Exception:
+                pass
+            if ok:
+                try: st.toast("기존 백업 복구 — 답변 준비 완료 ✅")
+                except Exception: st.success("기존 백업 복구 — 답변 준비 완료 ✅")
+            else:
+                st.info("Drive 복구가 불가하여 prepared 원본으로 재최적화를 시도합니다.")
+                ok2, why2 = _update_from_prepared_then_backup()
+                if ok2:
+                    try: st.toast("prepared 재최적화로 준비 완료 ✅")
+                    except Exception: pass
+                else:
+                    st.error("재최적화도 실패했습니다. ‘다시 검사’ 후 재시도하세요.")
+            st.rerun()
+
+# 관리자 진단 섹션에서 즉시 렌더링
+_render_prepared_admin_panel()
+# ===== [05C] PREPARED ADMIN PANEL — END ======================================
+
 # ===== [06] SIMPLE QA DEMO — 히스토리 인라인 + 답변 직표시 + 골든우선 + 규칙기반 합성기 + 피드백(라디오, 항상 유지) ==
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
