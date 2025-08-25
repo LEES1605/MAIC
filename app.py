@@ -1,24 +1,45 @@
 # ==== [HEAD] future import must be first =====================================
 from __future__ import annotations  # 반드시 파일 첫 실행문
 
-# ===== [00A-FIX] ENV BOOTSTRAP (secrets → os.environ) ========================
+# ===== [00A-FIX] ENV BOOTSTRAP (secrets → os.environ) [REPLACE] ==============
 import os
 try:
     import streamlit as st  # Streamlit Cloud에서만 존재할 수 있음
 except Exception:
     st = None
 
+def _val_from_secrets(name: str):
+    """secrets에서 안전하게 값 꺼내기 (없으면 None)"""
+    try:
+        if st is None:
+            return None
+        # st.secrets는 Mapping 유사 객체: .get이 없는 배포도 있어 인덱싱도 시도
+        if hasattr(st.secrets, "get"):
+            v = st.secrets.get(name, None)
+        else:
+            v = st.secrets[name]  # 없으면 예외
+        return str(v) if v is not None else None
+    except Exception:
+        return None
+
 def _bootstrap_env_from_secrets() -> None:
-    """Streamlit secrets 값을 환경변수로 반영."""
+    """필요한 키/모델/설정값을 환경변수로 승격"""
     if st is None:
         return
-    for key in ("MAIC_PROMPTS_DRIVE_FOLDER_ID", "MAIC_PROMPTS_PATH"):
-        try:
-            val = st.secrets.get(key, None)
-        except Exception:
-            val = None
-        if val and not os.getenv(key):
-            os.environ[key] = str(val)
+    keys = (
+        # 기존 드라이브/경로
+        "MAIC_PROMPTS_DRIVE_FOLDER_ID",
+        "MAIC_PROMPTS_PATH",
+        # ★ LLM 자격/모델도 함께 승격
+        "OPENAI_API_KEY",
+        "OPENAI_MODEL",
+        "GEMINI_API_KEY",
+        "GEMINI_MODEL",
+    )
+    for k in keys:
+        v = _val_from_secrets(k)
+        if v and not os.getenv(k):
+            os.environ[k] = v
 
 _bootstrap_env_from_secrets()
 # ===== [00A-FIX] END =========================================================
