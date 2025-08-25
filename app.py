@@ -187,13 +187,17 @@ def _attach_from_local() -> bool:
     except Exception:
         return False
 
+# ===== [PATCH-AR-01] 자동 복구 시퀀스 전체 교체 =================================
 def _auto_attach_or_restore_silently() -> bool:
     """
-    1) 로컬에서 부착 시도
-    2) 실패하면: 드라이브 최신 backup_zip → 로컬로 복구 → 다시 부착
-    3) 그래도 실패하면: 최소 옵션으로 build_index_with_checkpoint() 실행 → 다시 부착
-    (에러는 모두 삼키고 False 반환)
+    1) 로컬 부착 시도
+    2) 실패 시: 드라이브 최신 백업 ZIP 복구 → 다시 부착
+    3) 그래도 실패 시: 최소 옵션으로 인덱스 재빌드 → 다시 부착
+    (모든 예외는 삼키고, 성공 시 True/실패 시 False를 명시적으로 반환)
     """
+    import importlib
+    from pathlib import Path
+
     st.session_state["_auto_restore_last"] = {
         "step": "start",
         "local_attach": None,
@@ -209,41 +213,38 @@ def _auto_attach_or_restore_silently() -> bool:
     if _attach_from_local():
         st.session_state["_auto_restore_last"]["step"] = "attached_local"
         st.session_state["_auto_restore_last"]["local_attach"] = True
+        st.session_state["_auto_restore_last"]["final_attach"] = True
         return True
-    # 실패 시 명시적으로 False 반환
-    st.session_state["_auto_restore_last"]["final_attach"] = False
-    return False
-    
+    st.session_state["_auto_restore_last"]["local_attach"] = False
+
     # 2) 드라이브에서 복구 시도
     try:
-        import importlib
         mod = importlib.import_module("src.rag.index_build")
         restore_fn = getattr(mod, "restore_latest_backup_to_local", None)
         if callable(restore_fn):
             res = restore_fn()
-            ok = bool(isinstance(res, dict) and res.get("ok"))
-            st.session_state["_auto_restore_last"]["drive_restore"] = ok
-            if ok and _has_local_index_files():
-                if _attach_from_local():
-                    st.session_state["_auto_restore_last"]["step"] = "restored_and_attached"
-                    st.session_state["_auto_restore_last"]["final_attach"] = True
-                    return True
+            ok_restore = bool(isinstance(res, dict) and res.get("ok"))
+        else:
+            ok_restore = False
     except Exception:
-        st.session_state["_auto_restore_last"]["drive_restore"] = False
+        ok_restore = False
+    st.session_state["_auto_restore_last"]["drive_restore"] = ok_restore
+
+    if ok_restore and _has_local_index_files():
+        if _attach_from_local():
+            st.session_state["_auto_restore_last"]["step"] = "restored_and_attached"
+            st.session_state["_auto_restore_last"]["final_attach"] = True
+            return True
 
     # 3) 마지막 안전망: 인덱스 재생성(최소 옵션)
+    ok_rebuild = None
     try:
-        import importlib
-        if callable(build_index_with_checkpoint):
-            from pathlib import Path
+        mod = importlib.import_module("src.rag.index_build")
+        build_fn = getattr(mod, "build_index_with_checkpoint", None)
+        persist_dir = getattr(mod, "PERSIST_DIR", Path.home() / ".maic" / "persist")
+        if callable(build_fn):
             try:
-                mod2 = importlib.import_module("src.rag.index_build")
-                persist_dir = getattr(mod2, "PERSIST_DIR", Path.home() / ".maic" / "persist")
-            except Exception:
-                persist_dir = Path.home() / ".maic" / "persist"
-
-            try:
-                build_index_with_checkpoint(
+                build_fn(
                     update_pct=lambda *_a, **_k: None,
                     update_msg=lambda *_a, **_k: None,
                     gdrive_folder_id="",
@@ -251,14 +252,15 @@ def _auto_attach_or_restore_silently() -> bool:
                     persist_dir=str(persist_dir),
                     remote_manifest={},
                 )
-                st.session_state["_auto_restore_last"]["rebuild"] = True
             except TypeError:
-                build_index_with_checkpoint()
-                st.session_state["_auto_restore_last"]["rebuild"] = True
+                # 시그니처가 다른 구현 대응
+                build_fn()
+            ok_rebuild = True
         else:
-            st.session_state["_auto_restore_last"]["rebuild"] = False
+            ok_rebuild = False
     except Exception:
-        st.session_state["_auto_restore_last"]["rebuild"] = False
+        ok_rebuild = False
+    st.session_state["_auto_restore_last"]["rebuild"] = ok_rebuild
 
     # 재부착 최종 시도
     if _attach_from_local():
@@ -266,8 +268,10 @@ def _auto_attach_or_restore_silently() -> bool:
         st.session_state["_auto_restore_last"]["final_attach"] = True
         return True
 
-        st.session_state["_auto_restore_last"]["final_attach"] = False
-        return False
+    st.session_state["_auto_restore_last"]["final_attach"] = False
+    return False
+# ===== [PATCH-AR-01] END ======================================================
+
 # ===== [03] SESSION & HELPERS — END ========================
 
 # ===== [04] HEADER ==========================================
