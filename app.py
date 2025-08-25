@@ -441,18 +441,35 @@ def render_admin_settings_panel():
 # ===== [05A] BRAIN PREP MAIN =======================================
 def render_brain_prep_main():
     """
-    준비/최적화 패널 (항상 표시)
+    준비/최적화 패널 (관리자 전용)
     - 앱 실행 시 Drive 'prepared' 변화 감지(quick_precheck) → 결과 요약
     - 신규자료 O: [업데이트 실행] / [업데이트 건너뛰기(기존 백업 복구)]
     - 신규자료 X: [최신 백업 복구]
-    - 신규 여부와 무관: [강제 최적화 초기화] (재최적화→업로드→복구→연결)
-    - 모든 버튼은 완료 시 '답변준비 완료' 상태(세션 부착)까지 자동 진행
+    - 항상: [강제 최적화 초기화]
+    - 모든 플로우 완료 시 '답변준비 완료' 상태(세션 부착)까지 자동 진행
     """
-    import importlib
-    from pathlib import Path
+
+    # ── 역할 확인(관리자 전용) ────────────────────────────────────────────────
     import streamlit as st
 
+    def _is_admin() -> bool:
+        ss = st.session_state
+        # 프로젝트 전반에서 쓰일 수 있는 여러 키를 허용(호환성)
+        return bool(
+            ss.get("is_admin")
+            or ss.get("admin_mode")
+            or (ss.get("role") == "admin")
+            or (ss.get("mode") == "admin")
+        )
+
+    if not _is_admin():
+        # 학생 모드에선 패널을 전혀 렌더하지 않음
+        return
+
     # ── 모듈/함수 바인딩 ────────────────────────────────────────────────────────
+    import importlib
+    from pathlib import Path
+
     try:
         mod = importlib.import_module("src.rag.index_build")
     except Exception as e:
@@ -520,14 +537,21 @@ def render_brain_prep_main():
         # ── 액션 버튼 영역 ────────────────────────────────────────────────────
         if changed:
             c1, c2, c3 = st.columns([1,1,1])
-            do_update      = c1.button("🚀 업데이트 실행 (최적화→업로드→복구→연결)", use_container_width=True)
+            do_update        = c1.button("🚀 업데이트 실행 (최적화→업로드→복구→연결)", use_container_width=True)
             skip_and_restore = c2.button("⏭ 업데이트 건너뛰기 (기존 백업 복구→연결)", use_container_width=True)
-            force_rebuild  = c3.button("🛠 강제 최적화 초기화", use_container_width=True)
+            force_rebuild    = c3.button("🛠 강제 최적화 초기화", use_container_width=True)
         else:
             c1, c2 = st.columns([1,1])
             do_update = False
             skip_and_restore = c1.button("📦 최신 백업 복구 → 연결", use_container_width=True)
             force_rebuild    = c2.button("🛠 강제 최적화 초기화", use_container_width=True)
+
+        # 공통: 서버사이드 재검증
+        def _require_admin() -> bool:
+            if not _is_admin():
+                st.warning("관리자만 사용할 수 있는 기능입니다.")
+                return False
+            return True
 
         # 공통 헬퍼: 최종 연결
         def _final_attach():
@@ -543,6 +567,8 @@ def render_brain_prep_main():
 
         # ── 분기 1: 업데이트 실행(최적화→업로드→복구→연결) ───────────────────
         if do_update:
+            if not _require_admin():
+                return
             prog = st.progress(0)
             log  = st.empty()
             def _pct(v: int, msg: str | None = None):
@@ -569,7 +595,6 @@ def render_brain_prep_main():
                     st.error(f"인덱싱 오류: {type(e).__name__}: {e}")
                     return
 
-            # 업로드(Drive 백업 ZIP) + 로컬 캐시
             if callable(upload_zip_fn):
                 with st.status("백업 ZIP 업로드 중…", state="running") as s:
                     try:
@@ -581,7 +606,6 @@ def render_brain_prep_main():
                     except Exception:
                         s.update(label="업로드 실패(계속 진행) ⚠️", state="error")
 
-            # 최신 ZIP 복구 → 연결
             with st.status("최신 백업 ZIP 복구 중…", state="running") as s:
                 rr = restore_fn()
                 if not (rr and rr.get("ok")):
@@ -594,6 +618,8 @@ def render_brain_prep_main():
 
         # ── 분기 2: 업데이트 건너뛰고 기존 백업 복구 → 연결 ───────────────────
         if skip_and_restore:
+            if not _require_admin():
+                return
             with st.status("최신 백업 ZIP 복구 중…", state="running") as s:
                 rr = restore_fn()
                 if not (rr and rr.get("ok")):
@@ -605,6 +631,8 @@ def render_brain_prep_main():
 
         # ── 분기 3: 강제 최적화 초기화(재최적화→업로드→복구→연결) ─────────────
         if force_rebuild:
+            if not _require_admin():
+                return
             prog = st.progress(0)
             log  = st.empty()
             def _pct(v: int, msg: str | None = None):
