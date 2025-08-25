@@ -1,14 +1,15 @@
 # ==== [HEAD] future import must be first =====================================
 from __future__ import annotations  # 반드시 파일 첫 실행문
-# ===== [00A-FIX] ENV BOOTSTRAP (must be AFTER future-imports) =====
+
+# ===== [00A-FIX] ENV BOOTSTRAP (secrets → os.environ) ========================
 import os
 try:
-    import streamlit as st  # Streamlit secrets -> env
+    import streamlit as st  # Streamlit Cloud에서만 존재할 수 있음
 except Exception:
-    st = None  # 로컬/테스트 환경 대비
+    st = None
 
 def _bootstrap_env_from_secrets() -> None:
-    """Streamlit Cloud secrets 값을 환경변수로 반영."""
+    """Streamlit secrets 값을 환경변수로 반영."""
     if st is None:
         return
     for key in ("MAIC_PROMPTS_DRIVE_FOLDER_ID", "MAIC_PROMPTS_PATH"):
@@ -20,19 +21,16 @@ def _bootstrap_env_from_secrets() -> None:
             os.environ[key] = str(val)
 
 _bootstrap_env_from_secrets()
-# ===== [00A-FIX] END ===============================================
-
-# ==== [HEAD] END =============================================================
-
+# ===== [00A-FIX] END =========================================================
 
 # ===== [01] APP BOOT & ENV ===================================================
-from __future__ import annotations
-
-import os
+# (주의) 여기에는 'from __future__'를 다시 쓰지 않습니다.
 os.environ["STREAMLIT_SERVER_FILE_WATCHER_TYPE"] = "none"
 os.environ["STREAMLIT_RUN_ON_SAVE"] = "false"
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 os.environ["STREAMLIT_SERVER_ENABLE_WEBSOCKET_COMPRESSION"] = "false"
+
+# ===== [02] IMPORTS ==========================================================
 
 # ===== [02] IMPORTS ==========================================================
 from pathlib import Path
@@ -212,8 +210,10 @@ def _auto_attach_or_restore_silently() -> bool:
         st.session_state["_auto_restore_last"]["step"] = "attached_local"
         st.session_state["_auto_restore_last"]["local_attach"] = True
         return True
-    st.session_state["_auto_restore_last"]["local_attach"] = False
-
+    # 실패 시 명시적으로 False 반환
+    st.session_state["_auto_restore_last"]["final_attach"] = False
+    return False
+    
     # 2) 드라이브에서 복구 시도
     try:
         import importlib
