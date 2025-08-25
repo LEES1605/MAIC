@@ -668,35 +668,35 @@ def render_tag_diagnostics():
     except Exception:
         pass
 
+
 # ===== [05C] PREPARED ADMIN PANEL — START ====================================
-# 관리자 섹션 안에서 '앱실행 → 신규자료 감지/질문 → (예/아니오) → 준비 완료' 흐름을 한눈에 보여주는 패널
-# + 오류 발생 시 바로 복사/공유할 수 있는 오류 패널
-# + 👩‍🎓 학생용 질문화면(미리보기) 영역을 맨 아래에 제공
+# 의존 헬퍼가 없어도 단독 동작하도록: precheck/업데이트/복구에 "로컬 폴백" 포함
 import streamlit as st
 from pathlib import Path
 import json, traceback
 import datetime as _dt
 import streamlit.components.v1 as components
+import importlib, zipfile, inspect
+from datetime import datetime
 
-# ── 공용: 관리자 오류 로깅/표시 헬퍼 ─────────────────────────────────────────────
+# ── 오류 로깅/복사 ────────────────────────────────────────────────────────────
 def _admin_errlog() -> list:
     return st.session_state.setdefault("_admin_errors", [])
 
 def _log_admin_error(message: str, *, ctx: str = "", details: dict | None = None, exc: Exception | None = None):
+    import traceback as _tb
     item = {
         "ts": _dt.datetime.utcnow().isoformat() + "Z",
         "ctx": ctx or "unknown",
         "message": str(message),
     }
-    if details:
-        item["details"] = details
+    if details: item["details"] = details
     if exc is not None:
         item["exception"] = repr(exc)
-        item["traceback"] = traceback.format_exc()
+        item["traceback"] = _tb.format_exc()
     _admin_errlog().append(item)
 
 def _copy_button(label: str, text: str, key: str):
-    """클립보드 복사 버튼(컴포넌트). text는 JS-safe로 json.dumps로 인코딩."""
     js_text = json.dumps(text, ensure_ascii=False)
     components.html(
         f"""
@@ -713,44 +713,197 @@ def _render_error_panel():
         logs = _admin_errlog()
         if not logs:
             st.info("최근 오류가 없습니다.")
-            st.caption("오류가 발생하면 이 패널에 자동으로 기록됩니다. ‘복사’ 버튼을 눌러 그대로 붙여넣어 공유해 주세요.")
+            st.caption("오류가 발생하면 이 패널에 자동으로 기록됩니다. ‘복사’ 버튼으로 공유해 주세요.")
             return
         last = logs[-1]
         pretty = json.dumps(last, ensure_ascii=False, indent=2)
         st.code(pretty, language="json")
         _copy_button("이 오류를 복사", pretty, key="btn_copy_last_error")
-
         with st.popover("전체 오류 로그 보기"):
-            if logs:
-                st.write(f"총 {len(logs)}건")
-                st.code(json.dumps(logs, ensure_ascii=False, indent=2), language="json")
-                _copy_button("전체 로그 복사", json.dumps(logs, ensure_ascii=False, indent=2), key="btn_copy_all_errors")
+            st.write(f"총 {len(logs)}건")
+            all_txt = json.dumps(logs, ensure_ascii=False, indent=2)
+            st.code(all_txt, language="json")
+            _copy_button("전체 로그 복사", all_txt, key="btn_copy_all_errors")
+
+# ── 공용 경로/유틸 ────────────────────────────────────────────────────────────
+def _paths():
+    PERSIST_DIR = Path.home()/".maic"/"persist"
+    BACKUP_DIR  = Path.home()/".maic"/"backup"
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    PERSIST_DIR.mkdir(parents=True, exist_ok=True)
+    return PERSIST_DIR, BACKUP_DIR
+
+def _backup_local_snapshot(prefix="backup") -> str | None:
+    try:
+        PERSIST_DIR, BACKUP_DIR = _paths()
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        zip_path = BACKUP_DIR / f"{prefix}_{ts}.zip"
+        with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as z:
+            if PERSIST_DIR.exists():
+                for p in PERSIST_DIR.rglob("*"):
+                    if p.is_file():
+                        z.write(p, arcname=p.relative_to(PERSIST_DIR))
+            z.writestr(".backup_info.txt", f"created_at={ts}\n")
+        return str(zip_path)
+    except Exception as e:
+        _log_admin_error("local_backup_failed", ctx="backup", exc=e)
+        return None
+
+# ── 폴백: precheck/업데이트/복구 (04C 헬퍼 없을 때도 동작) ─────────────────────
+def _infer_new_count(out: dict) -> int:
+    total = 0
+    for k in ["new_count","added_count","created_count","prepared_count","only_in_prepared_count","to_add_count","to_update_count","to_delete_count","count"]:
+        v = out.get(k); 
+        if isinstance(v,int) and v>0: total = max(total,v)
+    for k in ["only_in_prepared","only_prepared","only_on_prepared","added","new","created","modified","updated","changed_files","to_add","to_update","to_delete"]:
+        v = out.get(k)
+        if isinstance(v,(list,tuple,set)): total += len(v)
+    for k in ["changed_summary","delta","diff","changes"]:
+        d = out.get(k)
+        if isinstance(d,dict):
+            for vv in d.values():
+                if isinstance(vv,int): total += vv
+                elif isinstance(vv,(list,tuple,set)): total += len(vv)
+    if total==0 and out.get("changed"): total = int(out.get("prepared_count") or 1)
+    return int(total)
+
+def _precheck_or_fallback() -> dict:
+    # 1) 04C 헬퍼가 있으면 사용
+    try:
+        return _prepared_quick_precheck_cached()  # type: ignore
+    except NameError:
+        pass
+    except Exception as e:
+        _log_admin_error("precheck_cached_failed", ctx="precheck_cached", exc=e)
+
+    # 2) 모듈 직접 호출
+    res = {"ok": False, "changed": False, "new_count": 0, "details": {}}
+    try:
+        mod = importlib.import_module("src.rag.index_build")
+        fn = getattr(mod, "quick_precheck", None) or getattr(mod, "precheck_build_needed", None)
+        if not callable(fn):
+            res["details"] = {"error": "quick_precheck_missing"}
+            return res
+        try:
+            out = fn()
+        except TypeError:
+            out = fn(None, None)
+        if not isinstance(out, dict):
+            out = {"changed": bool(out)}
+        res["ok"] = True
+        res["changed"] = bool(out.get("changed"))
+        res["new_count"] = _infer_new_count(out)
+        res["details"] = out
+        return res
+    except Exception as e:
+        _log_admin_error("precheck_failed", ctx="precheck_fallback", exc=e)
+        res["details"] = {"error": f"{type(e).__name__}: {e}"}
+        return res
+
+def _call_build_with_overrides(local_prepared_dir: str | None = None) -> bool:
+    try:
+        mod = importlib.import_module("src.rag.index_build")
+        build = getattr(mod, "build_index_with_checkpoint", None)
+        if not callable(build): return False
+        def _pct(v:int, msg:str|None=None):
+            st.session_state["_build_pct"] = int(v)
+            if msg: st.session_state["_build_msg"] = str(msg)
+        def _msg(s:str): st.session_state["_build_msg"] = str(s)
+        kwargs = dict(update_pct=_pct, update_msg=_msg)
+        if local_prepared_dir:
+            try:
+                sig = inspect.signature(build)
+                for k in ("prepared_dir","local_prepared_dir","source_dir"):
+                    if k in sig.parameters: kwargs[k]=local_prepared_dir; break
+            except Exception:
+                kwargs["prepared_dir"]=local_prepared_dir
+        try:
+            build(**kwargs)
+        except TypeError:
+            build()
+        return True
+    except Exception as e:
+        _log_admin_error("build_call_failed", ctx="build", exc=e)
+        return False
+
+def _update_from_prepared_then_backup_safe() -> tuple[bool,str]:
+    # 1) 04C 헬퍼 우선
+    try:
+        return _update_from_prepared_then_backup()  # type: ignore
+    except NameError:
+        pass
+    except Exception as e:
+        _log_admin_error("update_helper_failed", ctx="update_helper", exc=e)
+    # 2) 폴백: 모듈 직접 빌드 → 품질리포트 생략 가능 → attach 시도 → 로컬 백업
+    ok = _call_build_with_overrides(None)
+    if not ok: return False, "update_failed"
+    try:
+        # optional helpers (있으면 사용)
+        try: _write_quality_report(st.session_state.get("_auto_restore_last"))  # type: ignore
+        except Exception: pass
+        try: _attach_from_local()  # type: ignore
+        except Exception: pass
+    finally:
+        _backup_local_snapshot("backup_after_update")
+    return True, "updated"
+
+def _restore_from_drive_and_attach_or_update_safe() -> tuple[bool,str]:
+    # 1) 04C 헬퍼 우선
+    try:
+        return _restore_from_drive_and_attach_or_update()  # type: ignore
+    except NameError:
+        pass
+    except Exception as e:
+        _log_admin_error("restore_helper_failed", ctx="restore_helper", exc=e)
+
+    # 2) 폴백: restore_latest_backup_to_local → attach / 실패 시 prepared 업데이트
+    reason = "unknown"
+    try:
+        mod = importlib.import_module("src.rag.index_build")
+        restore = getattr(mod,"restore_latest_backup_to_local",None)
+        if callable(restore):
+            r = restore()
+            ok = bool(isinstance(r,dict) and r.get("ok"))
+            if ok:
+                try:
+                    from_here = False
+                    try: from_here = _attach_from_local()  # type: ignore
+                    except Exception: from_here = False
+                    if from_here: return True, "restored"
+                except Exception: pass
+            reason = r.get("error","no_backup_or_restore_failed") if isinstance(r,dict) else "no_backup_or_restore_failed"
+    except Exception as e:
+        reason = f"restore_exc:{type(e).__name__}"
+
+    ok2, why2 = _update_from_prepared_then_backup_safe()
+    if ok2:
+        try:
+            if _attach_from_local():  # type: ignore
+                return True, "updated_from_prepared"
+        except Exception:
+            pass
+    return False, ("drive_inaccessible" if any(x in str(reason).lower() for x in ["auth","quota","network"]) else "update_failed")
 
 # ── 관리자 패널 본체 ───────────────────────────────────────────────────────────
 def _render_prepared_admin_panel():
-    # 관리자 전용
     if not st.session_state.get("is_admin", False):
         return
 
-    # 0) 상태/요약 데이터 -------------------------------------------------------
+    # 상태/요약
     try:
-        chk = _prepared_quick_precheck_cached()   # [04C] 헬퍼: 2분 캐시
+        chk = _precheck_or_fallback()
     except Exception as e:
-        _log_admin_error("precheck_failed", ctx="precheck", exc=e)
+        _log_admin_error("precheck_total_failed", ctx="precheck_total", exc=e)
         chk = {"ok": False, "details": {"error": f"{type(e).__name__}: {e}"}}
 
     changed = bool(chk.get("changed"))
     new_n   = int(chk.get("new_count", 0))
-
-    # 로컬 백업 경로 존재 여부(요약용)
-    BACKUP_DIR = Path.home() / ".maic" / "backup"
+    BACKUP_DIR = Path.home()/".maic"/"backup"
     has_local_backup = BACKUP_DIR.exists() and any(BACKUP_DIR.glob("*.zip"))
 
-    # 1) 헤더/요약 --------------------------------------------------------------
+    # 요약/플로우
     st.subheader("📂 새 자료 감지 · 업데이트 플로우 (관리자)")
-
     with st.container(border=True):
-        # 단계표 (한눈에 보기)
         st.markdown(
             f"""
 - **앱실행 → 신규자료 검색**  ➜  {"✅ 변경 감지" if changed else ("➖ 변경 없음" if chk.get("ok") else "❌ 감지 실패")}
@@ -761,8 +914,6 @@ def _render_prepared_admin_panel():
 - **3. 강제 최적화 초기화**(변경 유/무 무관) → 다시 최적화(Drive 자동저장) + 로컬 ZIP 백업 → **답변 준비 완료**
             """.strip()
         )
-
-        # 현재 탐지 결과 요약
         c1, c2, c3 = st.columns([0.38, 0.31, 0.31])
         with c1:
             if chk.get("ok"):
@@ -774,40 +925,31 @@ def _render_prepared_admin_panel():
             st.info(f"💾 로컬 백업 ZIP: {'있음' if has_local_backup else '없음'}")
         with c3:
             if st.button("🔄 다시 검사", use_container_width=True, key="prep_admin_rescan"):
-                # 캐시/플래그 리셋 후 즉시 재검
                 st.session_state["_prepared_prompt_done"] = False
                 try: st.cache_data.clear()
-                except Exception as e:
-                    _log_admin_error("cache_clear_failed", ctx="rescan", exc=e)
+                except Exception as e: _log_admin_error("cache_clear_failed", ctx="rescan", exc=e)
                 st.rerun()
 
-    # 2) 액션 영역 --------------------------------------------------------------
+    # 액션
     with st.container(border=True):
         if changed:
             st.markdown("#### 1) 변경이 **있습니다** — 업데이트 하시겠어요?")
-            a1, a2, a3 = st.columns([0.36, 0.36, 0.28])
-            with a1:
-                do_update = st.button("✅ 지금 업데이트(재최적화)", use_container_width=True, key="prep_admin_update_yes")
-            with a2:
-                use_backup = st.button("🕗 나중에(기존 백업 사용)", use_container_width=True, key="prep_admin_update_later")
-            with a3:
-                force_rebuild = st.button("♻ 강제 최적화 초기화", use_container_width=True, key="prep_admin_force_rebuild_yes")
+            a1, a2, a3 = st.columns([0.36,0.36,0.28])
+            with a1: do_update = st.button("✅ 지금 업데이트(재최적화)", use_container_width=True, key="prep_admin_update_yes")
+            with a2: use_backup = st.button("🕗 나중에(기존 백업 사용)", use_container_width=True, key="prep_admin_update_later")
+            with a3: force_rebuild = st.button("♻ 강제 최적화 초기화", use_container_width=True, key="prep_admin_force_rebuild_yes")
         else:
             st.markdown("#### 2) 변경이 **없습니다** — 기본 권장: 기존 백업 사용")
-            b1, b2 = st.columns([0.5, 0.5])
-            with b1:
-                use_backup = st.button("🕗 기존 백업 사용(로컬 복구)", use_container_width=True, key="prep_admin_use_backup_nochange")
-            with b2:
-                force_rebuild = st.button("♻ 강제 최적화 초기화(다시 최적화)", use_container_width=True, key="prep_admin_force_rebuild_nochange")
-            do_update = False  # 이 분기에서는 직접 업데이트 버튼은 제공하지 않음
+            b1, b2 = st.columns([0.5,0.5])
+            with b1: use_backup = st.button("🕗 기존 백업 사용(로컬 복구)", use_container_width=True, key="prep_admin_use_backup_nochange")
+            with b2: force_rebuild = st.button("♻ 강제 최적화 초기화(다시 최적화)", use_container_width=True, key="prep_admin_force_rebuild_nochange")
+            do_update = False
 
-        # 3) 버튼 동작 (모두 [04C] 헬퍼 재사용) ----------------------------------
         if do_update:
             try:
-                ok, why = _update_from_prepared_then_backup()
+                ok, why = _update_from_prepared_then_backup_safe()
             except Exception as e:
-                _log_admin_error("update_from_prepared_exc", ctx="update_yes", exc=e)
-                ok = False
+                _log_admin_error("update_from_prepared_exc", ctx="update_yes", exc=e); ok=False
             st.session_state["_prepared_prompt_done"] = True
             try: st.cache_data.clear()
             except Exception as e: _log_admin_error("cache_clear_failed", ctx="update_yes", exc=e)
@@ -816,11 +958,8 @@ def _render_prepared_admin_panel():
                 except Exception: st.success("업데이트 및 백업 완료 — 답변 준비 완료 ✅")
             else:
                 st.error("업데이트 실패 — 기존 백업 복구를 시도합니다.")
-                try:
-                    ok2, _ = _restore_from_drive_and_attach_or_update()
-                except Exception as e:
-                    _log_admin_error("restore_exc", ctx="update_yes_fallback", exc=e)
-                    ok2 = False
+                try: ok2, _ = _restore_from_drive_and_attach_or_update_safe()
+                except Exception as e: _log_admin_error("restore_exc", ctx="update_yes_fallback", exc=e); ok2=False
                 if ok2:
                     try: st.toast("기존 백업 복구 — 답변 준비 완료 ✅")
                     except Exception: pass
@@ -831,10 +970,9 @@ def _render_prepared_admin_panel():
 
         if 'use_backup' in locals() and use_backup:
             try:
-                ok, why = _restore_from_drive_and_attach_or_update()
+                ok, why = _restore_from_drive_and_attach_or_update_safe()
             except Exception as e:
-                _log_admin_error("restore_exc", ctx="use_backup", exc=e)
-                ok = False
+                _log_admin_error("restore_exc", ctx="use_backup", exc=e); ok=False
             st.session_state["_prepared_prompt_done"] = True
             try: st.cache_data.clear()
             except Exception as e: _log_admin_error("cache_clear_failed", ctx="use_backup", exc=e)
@@ -843,11 +981,8 @@ def _render_prepared_admin_panel():
                 except Exception: st.success("기존 백업 복구 — 답변 준비 완료 ✅")
             else:
                 st.info("Drive 복구가 불가하여 prepared 원본으로 재최적화를 시도합니다.")
-                try:
-                    ok2, _ = _update_from_prepared_then_backup()
-                except Exception as e:
-                    _log_admin_error("update_from_prepared_exc", ctx="use_backup_fallback", exc=e)
-                    ok2 = False
+                try: ok2, _ = _update_from_prepared_then_backup_safe()
+                except Exception as e: _log_admin_error("update_from_prepared_exc", ctx="use_backup_fallback", exc=e); ok2=False
                 if ok2:
                     try: st.toast("prepared 재최적화로 준비 완료 ✅")
                     except Exception: pass
@@ -858,11 +993,8 @@ def _render_prepared_admin_panel():
 
         if 'force_rebuild' in locals() and force_rebuild:
             st.info("강제 최적화 초기화 실행 중… (변경 유무 무관하게 다시 최적화)")
-            try:
-                ok, _ = _update_from_prepared_then_backup()
-            except Exception as e:
-                _log_admin_error("update_from_prepared_exc", ctx="force_rebuild", exc=e)
-                ok = False
+            try: ok, _ = _update_from_prepared_then_backup_safe()
+            except Exception as e: _log_admin_error("update_from_prepared_exc", ctx="force_rebuild", exc=e); ok=False
             st.session_state["_prepared_prompt_done"] = True
             try: st.cache_data.clear()
             except Exception as e: _log_admin_error("cache_clear_failed", ctx="force_rebuild", exc=e)
@@ -874,34 +1006,25 @@ def _render_prepared_admin_panel():
                 st.error("강제 최적화에 실패했습니다. ‘다시 검사’ 후 재시도하세요.")
             st.rerun()
 
-    # 4) 오류 패널 --------------------------------------------------------------
+    # 오류 패널
     _render_error_panel()
 
-    # 5) 👩‍🎓 학생용 질문화면 (관리자 내 미리보기) -------------------------------
+    # 👩‍🎓 학생용 질문화면(미리보기) — 필요 시 유지
     with st.expander("👩‍🎓 학생용 질문화면 (미리보기)", expanded=False):
         try:
             renderer = None
-            # 프로젝트별 명칭이 다를 수 있으므로 후보를 순차 탐색
-            for name in [
-                "render_student_main", "render_chat_main", "render_main_chat",
-                "render_student_ui", "render_student_panel", "render_brain_prep_main"
-            ]:
+            for name in ["render_student_main","render_chat_main","render_main_chat","render_student_ui","render_student_panel","render_brain_prep_main"]:
                 func = globals().get(name)
-                if callable(func):
-                    renderer = func
-                    break
-            if renderer:
-                renderer()
-            else:
-                st.caption("학생용 질문화면 렌더러를 찾지 못했습니다. 실제 렌더 함수명을 알려주면 여기에 연결할게요.")
+                if callable(func): renderer = func; break
+            if renderer: renderer()
+            else: st.caption("학생용 렌더 함수명을 알려주면 여기에 연결할게요.")
         except Exception as e:
             _log_admin_error("student_preview_failed", ctx="student_preview", exc=e)
-            st.error("학생용 미리보기 렌더링 중 오류가 발생했습니다. 상단 오류 패널에서 복사해 공유해 주세요.")
+            st.error("학생용 미리보기 렌더링 중 오류 발생. 상단 오류 패널에서 복사해 공유해 주세요.")
 
 # 관리자 진단 섹션에서 즉시 렌더링
 _render_prepared_admin_panel()
 # ===== [05C] PREPARED ADMIN PANEL — END ======================================
-
 
 
 # ===== [06] SIMPLE QA DEMO — 히스토리 인라인 + 답변 직표시 + 골든우선 + 규칙기반 합성기 + 피드백(라디오, 항상 유지) ==
