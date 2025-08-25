@@ -60,7 +60,6 @@ def render_admin_controls() -> None:
         """
         try:
             PERSIST_DIR, BACKUP_DIR = _resolve_paths()
-            # 빈 폴더여도 스냅샷은 생성(구조 보존 목적)
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
             zip_path = BACKUP_DIR / f"backup_{ts}.zip"
             with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as z:
@@ -203,31 +202,31 @@ def render_admin_controls() -> None:
         if cancel:
             st.session_state["_admin_auth_open"] = False
             st.rerun()
+
         if ok:
-# [UA-01C-PATCH-01] PIN 인증 성공 분기 — START
-        if pin_try == get_admin_pin():
-            # 1) 관리자 전환
-            st.session_state["is_admin"] = True
-            st.session_state["_admin_auth_open"] = False
+            # ✅ 반드시 들여쓰기된 본문이 있어야 함 (이전 오류 원인)
+            if pin_try == get_admin_pin():
+                # 1) 관리자 전환
+                st.session_state["is_admin"] = True
+                st.session_state["_admin_auth_open"] = False
 
-            # 2) 관리자 전용 '신규자료 감지/업데이트 질문'이 즉시 뜨도록 리셋
-            #    (이 플래그가 True로 남아 있으면 질문 패널이 안 뜸)
-            st.session_state["_prepared_prompt_done"] = False
+                # 2) 관리자 전용 '신규자료 감지/업데이트 질문'이 즉시 뜨도록 리셋
+                st.session_state["_prepared_prompt_done"] = False
 
-            # 3) 2분 캐시(quick_precheck 캐시) 바로 무효화
-            try:
-                st.cache_data.clear()
-            except Exception:
-                pass
-        
-            # 4) 안내 + 리런
-            try:
-                st.toast("관리자 모드 진입 ✅ 새 자료 점검을 시작합니다")
-            except Exception:
-                pass
-            st.rerun()
-# [UA-01C-PATCH-01] PIN 인증 성공 분기 — END
+                # 3) 2분 캐시(quick_precheck 캐시) 바로 무효화
+                try:
+                    st.cache_data.clear()
+                except Exception:
+                    pass
 
+                # 4) 안내 + 리런
+                try:
+                    st.toast("관리자 모드 진입 ✅ 새 자료 점검을 시작합니다")
+                except Exception:
+                    pass
+                st.rerun()
+            else:
+                st.error("PIN이 틀렸습니다. 다시 입력해 주세요.")
 
     # ── (기존) 진단 퀵패널: 정책상 학생 모드에서만 노출 -------------------------
     if (not st.session_state.get("is_admin", False)) and st.session_state.get("_diag_quick_open", False):
@@ -254,6 +253,7 @@ def render_admin_controls() -> None:
             st.markdown(f"- **.ready 마커**: {'✅ 있음' if ready.exists() else '❌ 없음'}  (`{ready.as_posix()}`)")
             st.markdown(f"- **로컬 백업 경로**: `{BACKUP_DIR.as_posix()}`")
 # ── [UA-01C] 관리자 버튼/인증 패널 — END --------------------------------------
+
 
 
 
