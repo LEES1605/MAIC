@@ -390,24 +390,6 @@ def render_admin_settings_panel():
         else:
             st.error("모든 모드가 꺼져 있습니다. 학생 화면에서 질문 모드가 보이지 않아요.")
 # ===== [04B] END =============================================================
-# ===== [04C-call] PREPARED PROMPT CALL (ADMIN ONLY, BOOTSTRAP RESET) — START
-# 관리자 모드에서만 실행 + 세션 최초 1회 자동 리셋(프롬프트/캐시)으로 반드시 패널 노출
-if st.session_state.get("is_admin", False):
-    if not st.session_state.get("_prepared_prompt_bootstrap_done", False):
-        # 이전 세션에 남아 있던 '이미 물어봄' 플래그/캐시를 초기화
-        st.session_state["_prepared_prompt_done"] = False
-        try:
-            st.cache_data.clear()  # quick_precheck 캐시 무효화
-        except Exception:
-            pass
-        st.session_state["_prepared_prompt_bootstrap_done"] = True
-
-    try:
-        render_prepared_prompt()
-    except Exception:
-        st.session_state["_prepared_prompt_done"] = True
-# ===== [04C-call] PREPARED PROMPT CALL (ADMIN ONLY, BOOTSTRAP RESET) — END
-
 
 # ===== [05A] BRAIN PREP MAIN =======================================
 def render_brain_prep_main():
@@ -1535,5 +1517,34 @@ def _prepared_quick_precheck_cached():
     except Exception as e:
         res["details"] = {"error": f"{type(e).__name__}: {e}"}
         return res
+# ===== [98] PREPARED PROMPT SAFE CALL (ADMIN ONLY) — START ====================
+import streamlit as st
 
+def _ensure_admin_prepared_prompt():
+    """
+    관리자 모드에서 반드시 한 번은 '새 자료 감지/업데이트 질문' 패널이 뜨도록 보정.
+    - 세션 최초 1회 캐시/플래그 리셋 후 render_prepared_prompt() 실행
+    - render_prepared_prompt()는 [04C] 구획에서 정의되어 있어야 합니다.
+    """
+    if not st.session_state.get("is_admin", False):
+        return
 
+    # 세션 최초 1회 리셋(캐시/플래그)
+    if not st.session_state.get("_prepared_prompt_bootstrap_done", False):
+        st.session_state["_prepared_prompt_done"] = False
+        try:
+            st.cache_data.clear()  # quick_precheck 캐시 무효화
+        except Exception:
+            pass
+        st.session_state["_prepared_prompt_bootstrap_done"] = True
+
+    # 패널 호출
+    try:
+        render_prepared_prompt()
+    except Exception:
+        # 호출 실패 시에도 앱은 계속 진행
+        st.session_state["_prepared_prompt_done"] = True
+
+# 파일 로드 시점에 안전 호출(맨 아래에 존재해야 함수 정의 이후가 보장됨)
+_ensure_admin_prepared_prompt()
+# ===== [98] PREPARED PROMPT SAFE CALL (ADMIN ONLY) — END ======================
