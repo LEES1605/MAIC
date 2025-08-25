@@ -339,6 +339,7 @@ def render_brain_prep_main():
     - 상태 배지(우선순위): no_prepared → delta → no_manifest → no_change
     - 인덱싱 중: 현재 파일명(아이콘) + 처리 n/총 m + ETA 표시
     - 완료 시 요약 배지 + 세션 기록(_optimize_last) + 복구 상세 표시
+    - NEW: 복구 직후/자료없음일 때 manifest: `— (업데이트 시 생성)`로 표기
     """
     import streamlit as st
     import time, os, re, math
@@ -428,11 +429,19 @@ def render_brain_prep_main():
     with st.container(border=True):
         st.subheader("자료 최적화/백업 패널")
         st.caption("Drive의 prepared 폴더와 로컬 manifest를 비교하여 업데이트 필요 여부를 판단합니다.")
+
+        # NEW: manifest 표기 규칙(복구 직후/자료 없음 → '— (업데이트 시 생성)')
+        last = st.session_state.get("_optimize_last") or {}
+        restored_recently = (last.get("ok") and last.get("tag") == "restore")
+        show_manifest_hint = (prepared_cnt == 0) or restored_recently
+        manifest_label = ("— (업데이트 시 생성)" if (manifest_cnt == 0 and show_manifest_hint)
+                          else str(manifest_cnt))
+
         cols = st.columns([1,1,1,1])
         cols[0].write(f"**인덱스 상태:** {status_badge}")
         cols[1].write(f"**신규자료:** {kind_badge}")
         cols[2].write(f"**prepared:** {prepared_cnt}")
-        cols[3].write(f"**manifest:** {manifest_cnt}")
+        cols[3].write(f"**manifest:** {manifest_label}")
 
         # 실제 델타가 있을 때만 상세 펼침
         if status_kind == "delta":
@@ -510,7 +519,7 @@ def render_brain_prep_main():
             m, s = divmod(int(sec+0.5), 60); return f"{m}:{s:02d}" if m else f"{s}s"
         def _progress_context(total_guess: int):
             file_slot = st.empty(); ctr_slot = st.empty(); eta_slot = st.empty(); bar = st.progress(0)
-            seen = set(); current = {"name": None}; t0 = time.time()
+            seen = set(); t0 = time.time()
             def on_msg(msg: str):
                 m = path_regex.search(str(msg)); 
                 if not m: return
@@ -534,7 +543,7 @@ def render_brain_prep_main():
             if status_kind == "delta": return max(1, delta_count)
             return prepared_cnt or manifest_cnt or 0
 
-        # ── 처리 분기(핵심 동작 동일, 복구 상세 출력 추가) ────────────────────
+        # ── 처리 분기(핵심 동작 동일, 복구 상세 출력 포함) ────────────────────
         if do_update:
             t0 = time.time(); on_msg, finalized = _progress_context(_guess_total_for("update")); log = st.empty()
             def _pct(v, m=None): 
@@ -549,7 +558,6 @@ def render_brain_prep_main():
                 except Exception as e:
                     s.update(label="최적화 실패 ❌", state="error"); _record_result(False, time.time()-t0, "update"); st.error(f"인덱싱 오류: {type(e).__name__}: {e}"); return
             processed, total, _ = finalized()
-            # 업로드 → 복구
             if callable(upload_zip_fn):
                 with st.status("백업 ZIP 업로드 중…", state="running") as s:
                     try:
@@ -562,12 +570,10 @@ def render_brain_prep_main():
                 if not (rr and rr.get("ok")):
                     s.update(label="복구 실패 ❌", state="error"); _record_result(False, time.time()-t0, "update", processed, total); st.error(f"복구 실패: {rr.get('error') if rr else 'unknown'}"); return
                 s.update(label="복구 완료 ✅", state="complete")
-                # 복구 상세
                 details = []
                 for k in ("zip_name","restored_count","files"):
                     if k in (rr or {}): 
-                        v = rr[k]
-                        details.append(f"{k}:{v if not isinstance(v,list) else len(v)}")
+                        v = rr[k]; details.append(f"{k}:{v if not isinstance(v,list) else len(v)}")
                 if details: st.caption("복구 상세: " + " · ".join(details))
             _record_result(True, time.time()-t0, "update", processed, total); _final_attach()
 
@@ -578,12 +584,10 @@ def render_brain_prep_main():
                 if not (rr and rr.get("ok")):
                     s.update(label="복구 실패 ❌", state="error"); _record_result(False, time.time()-t0, "restore"); st.error(f"복구 실패: {rr.get('error') if rr else 'unknown'}"); return
                 s.update(label="복구 완료 ✅", state="complete")
-                # 복구 상세
                 details = []
                 for k in ("zip_name","restored_count","files"):
                     if k in (rr or {}):
-                        v = rr[k]
-                        details.append(f"{k}:{v if not isinstance(v,list) else len(v)}")
+                        v = rr[k]; details.append(f"{k}:{v if not isinstance(v,list) else len(v)}")
                 if details: st.caption("복구 상세: " + " · ".join(details))
             _record_result(True, time.time()-t0, "restore"); _final_attach()
 
@@ -613,12 +617,10 @@ def render_brain_prep_main():
                 if not (rr and rr.get("ok")):
                     s.update(label="복구 실패 ❌", state="error"); _record_result(False, time.time()-t0, "rebuild", processed, total); st.error(f"복구 실패: {rr.get('error') if rr else 'unknown'}"); return
                 s.update(label="복구 완료 ✅", state="complete")
-                # 복구 상세
                 details = []
                 for k in ("zip_name","restored_count","files"):
                     if k in (rr or {}):
-                        v = rr[k]
-                        details.append(f"{k}:{v if not isinstance(v,list) else len(v)}")
+                        v = rr[k]; details.append(f"{k}:{v if not isinstance(v,list) else len(v)}")
                 if details: st.caption("복구 상세: " + " · ".join(details))
             _record_result(True, time.time()-t0, "rebuild", processed, total); _final_attach()
 # ===== [05A] END ===========================================
