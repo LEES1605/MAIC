@@ -351,6 +351,79 @@ def render_admin_settings():
 # 호출
 render_admin_settings()
 # ===== [04B] END ======================================================
+# ===== [04C] 프롬프트 소스 진단 패널 =========================================
+def render_prompt_source_diag():
+    import os
+    from datetime import datetime
+    import streamlit as st
+    try:
+        from src.prompt_modes import get_overrides_path, load_overrides
+    except Exception as e:
+        with st.container(border=True):
+            st.subheader("프롬프트 소스 상태")
+            st.error(f"prompt_modes 임포트 실패: {type(e).__name__}: {e}")
+        return
+
+    with st.container(border=True):
+        st.subheader("프롬프트 소스 상태")
+        st.caption("Drive 폴더 연결 및 로컬 prompts.yaml 인식 여부를 점검합니다.")
+
+        # 1) 환경변수 / secrets 확인 (값은 마스킹)
+        folder_id = os.getenv("MAIC_PROMPTS_DRIVE_FOLDER_ID")
+        try:
+            if (not folder_id) and ("MAIC_PROMPTS_DRIVE_FOLDER_ID" in st.secrets):
+                folder_id = str(st.secrets["MAIC_PROMPTS_DRIVE_FOLDER_ID"])
+        except Exception:
+            pass
+        def _mask(v):
+            v = str(v)
+            return (v[:6] + "…" + v[-4:]) if len(v) > 12 else ("*" * len(v))
+        st.write("• Drive 폴더 ID:", _mask(folder_id) if folder_id else "— 없음")
+
+        # 2) 로컬 파일 경로/상태
+        p = get_overrides_path()
+        st.write("• 로컬 경로:", f"`{p}`")
+        exists = p.exists()
+        st.write("• 파일 존재:", "✅ 있음" if exists else "❌ 없음")
+
+        data = None
+        if exists:
+            try:
+                stat = p.stat()
+                mtime = datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+                st.write("• 크기/수정시각:", f"{stat.st_size} bytes / {mtime}")
+            except Exception:
+                pass
+            # 3) YAML 로드 시도
+            try:
+                data = load_overrides()
+                ok = isinstance(data, dict)
+                st.write("• YAML 로드:", "✅ 성공" if ok else "⚠️ 비정상(dict 아님)")
+            except Exception as e:
+                st.error(f"YAML 로드 오류: {type(e).__name__}: {e}")
+
+        # 4) modes 목록 및 핵심 블록 존재 여부
+        modes = []
+        if isinstance(data, dict):
+            modes = list((data.get("modes") or {}).keys())
+        st.write("• 포함된 모드:", " , ".join(modes) if modes else "— (미검출)")
+        if modes and ("문장구조분석" not in modes):
+            st.warning("`modes:` 아래에 `문장구조분석:` 블록이 없습니다. prompts.yaml을 확인하세요.")
+
+        # 5) 필요하면 파일 내용 미리보기(개발용)
+        col1, col2 = st.columns([1,1])
+        with col1:
+            if st.button("📄 파일 내용 미리보기", use_container_width=True, key="btn_preview_prompts_yaml"):
+                try:
+                    st.code(p.read_text(encoding="utf-8"), language="yaml")
+                except Exception as e:
+                    st.error(f"파일 읽기 실패: {type(e).__name__}: {e}")
+        with col2:
+            st.caption("힌트: 서비스계정/앱 계정에 Drive 폴더 보기 권한을 공유했는지 확인하세요.")
+
+# 호출 위치(관리자 전용 섹션 어딘가에서):
+# render_prompt_source_diag()
+# ===== [04C] END ====================================================
 
 # ===== [05A] BRAIN PREP MAIN =======================================
 def render_brain_prep_main():
