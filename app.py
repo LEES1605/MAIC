@@ -966,6 +966,85 @@ try:
 except Exception:
     st.session_state["_prepared_prompt_done"] = True
 # ===== [04C] PREPARED MONITOR & PROMPT — END =================================
+# ===== [04C-1] PREPARED QUICK PRECHECK (REPLACE) — START =====================
+import streamlit as st
+
+@st.cache_data(ttl=120, show_spinner=False)
+def _prepared_quick_precheck_cached():
+    """
+    prepared 폴더 변화 감지(2분 캐시).
+    다양한 반환 스키마를 통합해 '새 항목 수'를 보다 견고하게 추정한다.
+    반환: {"ok": bool, "changed": bool, "new_count": int, "details": dict}
+    """
+    import importlib
+
+    def _infer_new_count(out: dict) -> int:
+        total = 0
+
+        # 1) 직접적인 숫자 후보
+        numeric_keys = [
+            "new_count", "added_count", "created_count", "prepared_count",
+            "only_in_prepared_count", "to_add_count", "to_update_count", "to_delete_count",
+            "count",
+        ]
+        for k in numeric_keys:
+            v = out.get(k)
+            if isinstance(v, int) and v > 0:
+                total = max(total, v)
+
+        # 2) 리스트/셋 길이 합산
+        list_keys = [
+            "only_in_prepared", "only_prepared", "only_on_prepared",
+            "added", "new", "created", "modified", "updated",
+            "changed_files", "to_add", "to_update", "to_delete",
+        ]
+        for k in list_keys:
+            v = out.get(k)
+            if isinstance(v, (list, tuple, set)):
+                total += len(v)
+
+        # 3) 중첩 딕셔너리의 숫자/리스트 길이 합산 (summary/delta/diff 등)
+        dict_keys = ["changed_summary", "delta", "diff", "changes"]
+        for k in dict_keys:
+            d = out.get(k)
+            if isinstance(d, dict):
+                for vv in d.values():
+                    if isinstance(vv, int):
+                        total += vv
+                    elif isinstance(vv, (list, tuple, set)):
+                        total += len(vv)
+
+        # 4) 여전히 0인데 changed=True면 최소 1로 보정
+        if total == 0 and out.get("changed"):
+            total = int(out.get("prepared_count") or 1)
+
+        return int(total)
+
+    res = {"ok": False, "changed": False, "new_count": 0, "details": {}}
+    try:
+        mod = importlib.import_module("src.rag.index_build")
+        fn = getattr(mod, "quick_precheck", None) or getattr(mod, "precheck_build_needed", None)
+        if not callable(fn):
+            res["details"] = {"error": "quick_precheck_missing"}
+            return res
+
+        try:
+            out = fn()
+        except TypeError:
+            out = fn(None, None)
+
+        if not isinstance(out, dict):
+            out = {"changed": bool(out)}
+
+        res["ok"] = True
+        res["changed"] = bool(out.get("changed"))
+        res["new_count"] = _infer_new_count(out)
+        res["details"] = out
+        return res
+    except Exception as e:
+        res["details"] = {"error": f"{type(e).__name__}: {e}"}
+        return res
+# ===== [04C-1] PREPARED QUICK PRECHECK (REPLACE) — END =======================
 
 
 # ===== [05A] BRAIN PREP MAIN =======================================
