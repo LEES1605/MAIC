@@ -109,9 +109,12 @@ if precheck_build_needed is None or build_index_with_checkpoint is None:
     except Exception as e:
         _import_errors.append(f"[rag.index_build] {type(e).__name__}: {e}")
 
-# 임포트 실패 시 원인 안내
+# ===== [BOOT-WARN] set_page_config 이전 경고 누적 방식으로 교체 =============
+_BOOT_WARNINGS: List[str] = []
+
+# 임포트 실패 시 원인 안내(즉시 st.warning 호출 대신, 메시지 누적)
 if precheck_build_needed is None or build_index_with_checkpoint is None:
-    st.warning(
+    _BOOT_WARNINGS.append(
         "사전점검/빌더 임포트에 실패했습니다.\n\n"
         + "\n".join(f"• {msg}" for msg in _import_errors)
         + "\n\n확인하세요:\n"
@@ -120,6 +123,8 @@ if precheck_build_needed is None or build_index_with_checkpoint is None:
         + "3) 함수 이름: precheck_build_needed **또는** quick_precheck 중 하나가 있어야 합니다.\n"
         + "4) import 철자: index_build(언더스코어), index.build(점) 아님"
     )
+# ===== [BOOT-WARN] END =======================================================
+
 
 # ===== [03] SESSION & HELPERS — START ========================================
 st.set_page_config(page_title="AI Teacher (Clean)", layout="wide")
@@ -724,15 +729,17 @@ def render_brain_prep_main():
         # ── 버튼 가드(상태별 노출) ────────────────────────────────────────────
         show_update = (status_kind == "delta") or (status_kind == "no_manifest" and prepared_cnt > 0)
         if show_update:
-            c1, c2, c3 = st.columns([1,1,1])
+            c1, c2, c3, c4 = st.columns([1,1,1,1])
             do_update        = c1.button("🚀 업데이트 실행 (최적화→업로드→복구→연결)", use_container_width=True)
             skip_and_restore = c2.button("⏭ 업데이트 건너뛰기 (기존 백업 복구→연결)", use_container_width=True)
             force_rebuild    = c3.button("🛠 강제 최적화 초기화", use_container_width=True)
+            force_attach_now = c4.button("🧠 두뇌 연결(강제)", use_container_width=True)
         else:
-            c1, c2 = st.columns([1,1])
-            do_update = False
+            c1, c2, c3 = st.columns([1,1,1])
+            do_update        = False
             skip_and_restore = c1.button("📦 최신 백업 복구 → 연결", use_container_width=True)
             force_rebuild    = c2.button("🛠 강제 최적화 초기화", use_container_width=True)
+            force_attach_now = c3.button("🧠 두뇌 연결(강제)", use_container_width=True)
 
         # ── 공통 헬퍼 ─────────────────────────────────────────────────────────
         def _final_attach():
@@ -865,6 +872,41 @@ def render_brain_prep_main():
                         v = rr[k]; details.append(f"{k}:{v if not isinstance(v,list) else len(v)}")
                 if details: st.caption("복구 상세: " + " · ".join(details))
             _record_result(True, time.time()-t0, "rebuild", processed, total); _final_attach()
+
+        # ── 두뇌 강제 연결(attach) 액션 ───────────────────────────────────────
+        if force_attach_now:
+            import importlib
+            from pathlib import Path
+            with st.status("두뇌 연결 중…", state="running") as s:
+                # 경로 확인
+                try:
+                    m = importlib.import_module("src.rag.index_build")
+                    persist_dir = getattr(m, "PERSIST_DIR", Path.home() / ".maic" / "persist")
+                except Exception:
+                    persist_dir = Path.home() / ".maic" / "persist"
+                st.caption(f"persist_dir: `{persist_dir}`")
+
+                # 파일 신호 유무( .ready / chunks.jsonl ) 체크
+                if not _has_local_index_files():
+                    s.update(label="두뇌 연결 실패 ❌", state="error")
+                    st.error("로컬 인덱스 파일 신호를 찾지 못했습니다. '최신 백업 복구' 또는 '업데이트' 후 다시 시도하세요.")
+                else:
+                    ok = False
+                    try:
+                        ok = _attach_from_local()
+                    except Exception as e:
+                        s.update(label="두뇌 연결 실패 ❌", state="error")
+                        st.error(f"예외: {type(e).__name__}: {e}")
+                    if ok:
+                        st.session_state["brain_attached"] = True
+                        s.update(label="두뇌 연결 완료 ✅", state="complete")
+                        st.toast("🟢 답변준비 완료")
+                        st.rerun()
+                    else:
+                        s.update(label="두뇌 연결 실패 ❌", state="error")
+                        # 힌트
+                        st.info("힌트: persist_dir 경로가 일치하는지와 파일 권한을 확인하세요. 필요 시 강제 최적화 또는 복구를 먼저 수행하세요.")
+
 # ===== [05A] END ===========================================
 
 
