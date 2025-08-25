@@ -474,7 +474,7 @@ def _render_admin_diagnostics_section():
         st.caption("       폴더 안 파일명은 반드시 'prompts.yaml' 이어야 합니다(소문자, 확장자 .yaml).")
 
 # 즉시 호출
-._render_admin_diagnostics_section()
+_render_admin_diagnostics_section()
 # ===== [04C-CALL] END ========================================================
 
 
