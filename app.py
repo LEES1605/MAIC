@@ -670,7 +670,8 @@ def render_tag_diagnostics():
 
 # ===== [05C] PREPARED ADMIN PANEL — START ====================================
 # 관리자 섹션 안에서 '앱실행 → 신규자료 감지/질문 → (예/아니오) → 준비 완료' 흐름을 한눈에 보여주는 패널
-# + 오류 발생 시 바로 복사/공유할 수 있는 오류 패널 포함
+# + 오류 발생 시 바로 복사/공유할 수 있는 오류 패널
+# + 👩‍🎓 학생용 질문화면(미리보기) 영역을 맨 아래에 제공
 import streamlit as st
 from pathlib import Path
 import json, traceback
@@ -876,9 +877,31 @@ def _render_prepared_admin_panel():
     # 4) 오류 패널 --------------------------------------------------------------
     _render_error_panel()
 
+    # 5) 👩‍🎓 학생용 질문화면 (관리자 내 미리보기) -------------------------------
+    with st.expander("👩‍🎓 학생용 질문화면 (미리보기)", expanded=False):
+        try:
+            renderer = None
+            # 프로젝트별 명칭이 다를 수 있으므로 후보를 순차 탐색
+            for name in [
+                "render_student_main", "render_chat_main", "render_main_chat",
+                "render_student_ui", "render_student_panel", "render_brain_prep_main"
+            ]:
+                func = globals().get(name)
+                if callable(func):
+                    renderer = func
+                    break
+            if renderer:
+                renderer()
+            else:
+                st.caption("학생용 질문화면 렌더러를 찾지 못했습니다. 실제 렌더 함수명을 알려주면 여기에 연결할게요.")
+        except Exception as e:
+            _log_admin_error("student_preview_failed", ctx="student_preview", exc=e)
+            st.error("학생용 미리보기 렌더링 중 오류가 발생했습니다. 상단 오류 패널에서 복사해 공유해 주세요.")
+
 # 관리자 진단 섹션에서 즉시 렌더링
 _render_prepared_admin_panel()
 # ===== [05C] PREPARED ADMIN PANEL — END ======================================
+
 
 
 # ===== [06] SIMPLE QA DEMO — 히스토리 인라인 + 답변 직표시 + 골든우선 + 규칙기반 합성기 + 피드백(라디오, 항상 유지) ==
