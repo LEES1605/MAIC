@@ -670,9 +670,62 @@ def render_tag_diagnostics():
 
 # ===== [05C] PREPARED ADMIN PANEL — START ====================================
 # 관리자 섹션 안에서 '앱실행 → 신규자료 감지/질문 → (예/아니오) → 준비 완료' 흐름을 한눈에 보여주는 패널
+# + 오류 발생 시 바로 복사/공유할 수 있는 오류 패널 포함
 import streamlit as st
 from pathlib import Path
+import json, traceback
+import datetime as _dt
+import streamlit.components.v1 as components
 
+# ── 공용: 관리자 오류 로깅/표시 헬퍼 ─────────────────────────────────────────────
+def _admin_errlog() -> list:
+    return st.session_state.setdefault("_admin_errors", [])
+
+def _log_admin_error(message: str, *, ctx: str = "", details: dict | None = None, exc: Exception | None = None):
+    item = {
+        "ts": _dt.datetime.utcnow().isoformat() + "Z",
+        "ctx": ctx or "unknown",
+        "message": str(message),
+    }
+    if details:
+        item["details"] = details
+    if exc is not None:
+        item["exception"] = repr(exc)
+        item["traceback"] = traceback.format_exc()
+    _admin_errlog().append(item)
+
+def _copy_button(label: str, text: str, key: str):
+    """클립보드 복사 버튼(컴포넌트). text는 JS-safe로 json.dumps로 인코딩."""
+    js_text = json.dumps(text, ensure_ascii=False)
+    components.html(
+        f"""
+        <button onclick="navigator.clipboard.writeText({js_text});"
+                style="padding:8px 12px;border:1px solid #444;border-radius:8px;background:#1f2937;color:#fff;cursor:pointer">
+            {label}
+        </button>
+        """,
+        height=46,
+    )
+
+def _render_error_panel():
+    with st.expander("🚨 오류 메시지 (복사 가능)", expanded=False):
+        logs = _admin_errlog()
+        if not logs:
+            st.info("최근 오류가 없습니다.")
+            st.caption("오류가 발생하면 이 패널에 자동으로 기록됩니다. ‘복사’ 버튼을 눌러 그대로 붙여넣어 공유해 주세요.")
+            return
+        last = logs[-1]
+        pretty = json.dumps(last, ensure_ascii=False, indent=2)
+        st.code(pretty, language="json")
+        _copy_button("이 오류를 복사", pretty, key="btn_copy_last_error")
+
+        with st.popover("전체 오류 로그 보기"):
+            if logs:
+                st.write(f"총 {len(logs)}건")
+                st.code(json.dumps(logs, ensure_ascii=False, indent=2), language="json")
+                _copy_button("전체 로그 복사", json.dumps(logs, ensure_ascii=False, indent=2), key="btn_copy_all_errors")
+
+# ── 관리자 패널 본체 ───────────────────────────────────────────────────────────
 def _render_prepared_admin_panel():
     # 관리자 전용
     if not st.session_state.get("is_admin", False):
@@ -682,6 +735,7 @@ def _render_prepared_admin_panel():
     try:
         chk = _prepared_quick_precheck_cached()   # [04C] 헬퍼: 2분 캐시
     except Exception as e:
+        _log_admin_error("precheck_failed", ctx="precheck", exc=e)
         chk = {"ok": False, "details": {"error": f"{type(e).__name__}: {e}"}}
 
     changed = bool(chk.get("changed"))
@@ -722,7 +776,8 @@ def _render_prepared_admin_panel():
                 # 캐시/플래그 리셋 후 즉시 재검
                 st.session_state["_prepared_prompt_done"] = False
                 try: st.cache_data.clear()
-                except Exception: pass
+                except Exception as e:
+                    _log_admin_error("cache_clear_failed", ctx="rescan", exc=e)
                 st.rerun()
 
     # 2) 액션 영역 --------------------------------------------------------------
@@ -747,53 +802,79 @@ def _render_prepared_admin_panel():
 
         # 3) 버튼 동작 (모두 [04C] 헬퍼 재사용) ----------------------------------
         if do_update:
-            ok, why = _update_from_prepared_then_backup()
+            try:
+                ok, why = _update_from_prepared_then_backup()
+            except Exception as e:
+                _log_admin_error("update_from_prepared_exc", ctx="update_yes", exc=e)
+                ok = False
             st.session_state["_prepared_prompt_done"] = True
             try: st.cache_data.clear()
-            except Exception: pass
+            except Exception as e: _log_admin_error("cache_clear_failed", ctx="update_yes", exc=e)
             if ok:
                 try: st.toast("업데이트 및 백업 완료 — 답변 준비 완료 ✅")
                 except Exception: st.success("업데이트 및 백업 완료 — 답변 준비 완료 ✅")
             else:
                 st.error("업데이트 실패 — 기존 백업 복구를 시도합니다.")
-                ok2, _ = _restore_from_drive_and_attach_or_update()
+                try:
+                    ok2, _ = _restore_from_drive_and_attach_or_update()
+                except Exception as e:
+                    _log_admin_error("restore_exc", ctx="update_yes_fallback", exc=e)
+                    ok2 = False
                 if ok2:
                     try: st.toast("기존 백업 복구 — 답변 준비 완료 ✅")
                     except Exception: pass
                 else:
+                    _log_admin_error("restore_failed", ctx="update_yes_fallback")
                     st.warning("백업 복구도 실패했어요. ‘다시 검사’ 후 재시도하세요.")
             st.rerun()
 
         if 'use_backup' in locals() and use_backup:
-            ok, why = _restore_from_drive_and_attach_or_update()
+            try:
+                ok, why = _restore_from_drive_and_attach_or_update()
+            except Exception as e:
+                _log_admin_error("restore_exc", ctx="use_backup", exc=e)
+                ok = False
             st.session_state["_prepared_prompt_done"] = True
             try: st.cache_data.clear()
-            except Exception: pass
+            except Exception as e: _log_admin_error("cache_clear_failed", ctx="use_backup", exc=e)
             if ok:
                 try: st.toast("기존 백업 복구 — 답변 준비 완료 ✅")
                 except Exception: st.success("기존 백업 복구 — 답변 준비 완료 ✅")
             else:
                 st.info("Drive 복구가 불가하여 prepared 원본으로 재최적화를 시도합니다.")
-                ok2, _ = _update_from_prepared_then_backup()
+                try:
+                    ok2, _ = _update_from_prepared_then_backup()
+                except Exception as e:
+                    _log_admin_error("update_from_prepared_exc", ctx="use_backup_fallback", exc=e)
+                    ok2 = False
                 if ok2:
                     try: st.toast("prepared 재최적화로 준비 완료 ✅")
                     except Exception: pass
                 else:
+                    _log_admin_error("update_failed", ctx="use_backup_fallback")
                     st.error("재최적화도 실패했습니다. ‘다시 검사’ 후 재시도하세요.")
             st.rerun()
 
         if 'force_rebuild' in locals() and force_rebuild:
             st.info("강제 최적화 초기화 실행 중… (변경 유무 무관하게 다시 최적화)")
-            ok, _ = _update_from_prepared_then_backup()
+            try:
+                ok, _ = _update_from_prepared_then_backup()
+            except Exception as e:
+                _log_admin_error("update_from_prepared_exc", ctx="force_rebuild", exc=e)
+                ok = False
             st.session_state["_prepared_prompt_done"] = True
             try: st.cache_data.clear()
-            except Exception: pass
+            except Exception as e: _log_admin_error("cache_clear_failed", ctx="force_rebuild", exc=e)
             if ok:
                 try: st.toast("강제 최적화 완료 — 답변 준비 완료 ✅")
                 except Exception: st.success("강제 최적화 완료 — 답변 준비 완료 ✅")
             else:
+                _log_admin_error("force_rebuild_failed", ctx="force_rebuild")
                 st.error("강제 최적화에 실패했습니다. ‘다시 검사’ 후 재시도하세요.")
             st.rerun()
+
+    # 4) 오류 패널 --------------------------------------------------------------
+    _render_error_panel()
 
 # 관리자 진단 섹션에서 즉시 렌더링
 _render_prepared_admin_panel()
