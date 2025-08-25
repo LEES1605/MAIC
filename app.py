@@ -255,7 +255,8 @@ def render_header():
     return
 # ===== [04] END =============================================
 
-# ===== [04A] MODE & ADMIN BUTTON (모듈 분리 호출) — START =====================
+# ===== [04A] MODE & ADMIN BUTTON (모듈 분리 호출) — START ==================
+
 from src.ui_admin import (
     ensure_admin_session_keys,
     render_admin_controls,
