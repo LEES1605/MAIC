@@ -1,0 +1,5 @@
+# ===== [REQ-LANGMODEL] LLM & YAML deps =====
+openai>=1.0.0
+google-generativeai>=0.7.2
+PyYAML>=6.0.1
+# ===== [REQ-LANGMODEL] END =====
