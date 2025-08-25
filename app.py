@@ -75,8 +75,7 @@ if precheck_build_needed is None or build_index_with_checkpoint is None:
         + "4) import 철자: index_build(언더스코어), index.build(점) 아님"
     )
 
-
-# ===== [03] SESSION & HELPERS — START ========================================
+# ===== [03] SESSION & HELPERS ================================================
 st.set_page_config(page_title="AI Teacher (Clean)", layout="wide")
 
 # 인덱스 상태
@@ -88,39 +87,6 @@ if "mode" not in st.session_state:
     st.session_state["mode"] = "Grammar"  # Grammar | Sentence | Passage
 if "qa_submitted" not in st.session_state:
     st.session_state["qa_submitted"] = False
-
-def _force_persist_dir() -> str:
-    """내부 모듈들이 다른 경로를 보더라도 ~/.maic/persist 로 강제 통일."""
-    import importlib, os
-    from pathlib import Path
-    target = Path.home() / ".maic" / "persist"
-    try: target.mkdir(parents=True, exist_ok=True)
-    except Exception: pass
-    for modname in ("src.rag.index_build", "rag.index_build"):
-        try:
-            m = importlib.import_module(modname)
-            try: setattr(m, "PERSIST_DIR", target)
-            except Exception: pass
-        except Exception:
-            continue
-    os.environ["MAIC_PERSIST_DIR"] = str(target)
-    return str(target)
-
-def _resolve_paths():
-    """모듈에 정의된 경로 우선으로 PERSIST_DIR / BACKUP_DIR / QUALITY_REPORT_PATH 반환."""
-    import importlib
-    from pathlib import Path
-    PERSIST_DIR = Path.home() / ".maic" / "persist"
-    BACKUP_DIR  = Path.home() / ".maic" / "backup"
-    QUALITY_REPORT_PATH = Path.home() / ".maic" / "quality_report.json"
-    try:
-        m = importlib.import_module("src.rag.index_build")
-        PERSIST_DIR = getattr(m, "PERSIST_DIR", PERSIST_DIR)
-        BACKUP_DIR  = getattr(m, "BACKUP_DIR", BACKUP_DIR)
-        QUALITY_REPORT_PATH = getattr(m, "QUALITY_REPORT_PATH", QUALITY_REPORT_PATH)
-    except Exception:
-        pass
-    return PERSIST_DIR, BACKUP_DIR, QUALITY_REPORT_PATH
 
 def _is_attached_session() -> bool:
     """세션에 실제로 두뇌가 붙었는지(여러 키 중 하나라도 있으면 True)."""
@@ -135,10 +101,15 @@ def _is_attached_session() -> bool:
 
 def _has_local_index_files() -> bool:
     """로컬 PERSIST_DIR 안에 .ready 또는 chunks.jsonl 이 있는지 신호만 확인."""
+    import importlib
     from pathlib import Path as _P
-    PERSIST_DIR, _, _ = _resolve_paths()
-    chunks_ok = (_P(PERSIST_DIR) / "chunks.jsonl").exists()
-    ready_ok  = (_P(PERSIST_DIR) / ".ready").exists()
+    try:
+        _mod = importlib.import_module("src.rag.index_build")
+        _PERSIST_DIR = getattr(_mod, "PERSIST_DIR", _P.home() / ".maic" / "persist")
+    except Exception:
+        _PERSIST_DIR = _P.home() / ".maic" / "persist"
+    chunks_ok = (_PERSIST_DIR / "chunks.jsonl").exists()
+    ready_ok  = (_PERSIST_DIR / ".ready").exists()
     return bool(chunks_ok or ready_ok)
 
 def get_index_status() -> str:
@@ -155,8 +126,6 @@ def get_index_status() -> str:
     return "missing"
 
 def _attach_from_local() -> bool:
-    """현재 PERSIST_DIR 기준으로 인덱스 부착."""
-    _force_persist_dir()
     if get_or_build_index is None:
         return False
     try:
@@ -168,350 +137,97 @@ def _attach_from_local() -> bool:
     except Exception:
         return False
 
-# ── NEW: 품질 리포트 작성 ------------------------------------------------------
-def _write_quality_report(auto_info: dict | None = None) -> None:
-    """
-    품질 리포트(JSON)를 ~/.maic/quality_report.json (또는 모듈 지정 경로)에 기록.
-    - persist_dir, chunks.jsonl 유무/라인수/크기/mtime
-    - .ready 유무
-    - 최신 백업 ZIP(backup_* or restored_*) 정보
-    - 마지막 자동복구 시도 요약(auto_info)
-    """
-    import json, os
-    from pathlib import Path
-    from datetime import datetime
-
-    PERSIST_DIR, BACKUP_DIR, QUALITY_REPORT_PATH = _resolve_paths()
-    PERSIST_DIR = Path(PERSIST_DIR)
-    BACKUP_DIR  = Path(BACKUP_DIR)
-    QUALITY_REPORT_PATH = Path(QUALITY_REPORT_PATH)
-    try:
-        QUALITY_REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    except Exception:
-        pass
-
-    chunks_path = PERSIST_DIR / "chunks.jsonl"
-    ready_path  = PERSIST_DIR / ".ready"
-    chunks_exists = chunks_path.exists()
-    chunks_size = chunks_path.stat().st_size if chunks_exists else 0
-    chunks_mtime = chunks_path.stat().st_mtime if chunks_exists else None
-
-    # 안전/가벼운 라인수 계산 (최대 500만 라인까지 순회)
-    chunks_lines = None
-    if chunks_exists:
-        try:
-            cnt = 0
-            with chunks_path.open("r", encoding="utf-8", errors="ignore") as f:
-                for _ in f:
-                    cnt += 1
-                    if cnt > 5_000_000:
-                        break
-            chunks_lines = cnt
-        except Exception:
-            chunks_lines = None
-
-    # 최신 백업 ZIP
-    latest_backup = None
-    try:
-        cand = list(BACKUP_DIR.glob("backup_*.zip")) + list(BACKUP_DIR.glob("restored_*.zip"))
-        if cand:
-            cand.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-            p = cand[0]
-            stt = p.stat()
-            latest_backup = {
-                "name": p.name,
-                "size": stt.st_size,
-                "mtime": stt.st_mtime,
-            }
-    except Exception:
-        latest_backup = None
-
-    report = {
-        "version": 1,
-        "generated_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
-        "persist_dir": str(PERSIST_DIR),
-        "chunks": {
-            "exists": chunks_exists,
-            "lines": chunks_lines,
-            "size": chunks_size,
-            "mtime": chunks_mtime,
-        },
-        "ready_marker": {
-            "exists": ready_path.exists(),
-            "mtime": (ready_path.stat().st_mtime if ready_path.exists() else None),
-        },
-        "latest_backup": latest_backup,
-        "auto_restore": auto_info or st.session_state.get("_auto_restore_last", {}),
-        "env": {
-            "MAIC_PERSIST_DIR": os.environ.get("MAIC_PERSIST_DIR"),
-        },
-    }
-
-    try:
-        with QUALITY_REPORT_PATH.open("w", encoding="utf-8") as f:
-            json.dump(report, f, ensure_ascii=False, indent=2)
-    except Exception:
-        # 리포트 실패는 앱 동작에 영향 없음
-        pass
-
 def _auto_attach_or_restore_silently() -> bool:
-    """
-    파일 유무를 기준으로 자동화:
-      (A) 로컬 파일이 있으면 → attach 시도(실패 시 드라이브 복구→재부착)
-      (B) 로컬 파일이 없으면 → 드라이브 복구 → (여전히 없으면 재빌드) → 부착
-    최종 부착 성공 시 품질 리포트 생성.
-    모든 에러는 삼키고 False 반환.
-    """
-    _force_persist_dir()
-    st.session_state["_auto_restore_last"] = {
-        "step": "start",
-        "has_files_before": _has_local_index_files(),
-        "local_attach": None,
-        "drive_restore": None,
-        "rebuild": None,
-        "final_attach": None,
-    }
-
-    # ── 공통: 드라이브 복구 함수/재빌드 함수 준비
-    import importlib
-    restore_fn = None
-    try:
-        mod = importlib.import_module("src.rag.index_build")
-        restore_fn = getattr(mod, "restore_latest_backup_to_local", None)
-    except Exception:
-        restore_fn = None
-
-    def _try_restore_from_drive() -> bool:
-        ok = False
-        try:
-            if callable(restore_fn):
-                res = restore_fn()
-                ok = bool(isinstance(res, dict) and res.get("ok"))
-        except Exception:
-            ok = False
-        st.session_state["_auto_restore_last"]["drive_restore"] = ok
-        return ok
-
-    def _try_rebuild_minimal() -> bool:
-        ok = False
-        try:
-            if callable(build_index_with_checkpoint):
-                from pathlib import Path as _P
-                try:
-                    mod2 = importlib.import_module("src.rag.index_build")
-                    persist_dir = getattr(mod2, "PERSIST_DIR", _P.home() / ".maic" / "persist")
-                except Exception:
-                    persist_dir = _P.home() / ".maic" / "persist"
-                try:
-                    build_index_with_checkpoint(
-                        update_pct=lambda *_a, **_k: None,
-                        update_msg=lambda *_a, **_k: None,
-                        gdrive_folder_id="",
-                        gcp_creds={},
-                        persist_dir=str(persist_dir),
-                        remote_manifest={},
-                    )
-                    ok = True
-                except TypeError:
-                    build_index_with_checkpoint(); ok = True
-        except Exception:
-            ok = False
-        st.session_state["_auto_restore_last"]["rebuild"] = ok
-        return ok
-
-    # (A) 로컬 파일이 있는 경우: 우선 부착 시도
-    if st.session_state["_auto_restore_last"]["has_files_before"]:
-        if _attach_from_local():
-            st.session_state["_auto_restore_last"]["step"] = "attached_local"
-            st.session_state["_auto_restore_last"]["local_attach"] = True
-            st.session_state["_auto_restore_last"]["final_attach"] = True
-            _write_quality_report(st.session_state["_auto_restore_last"])
-            return True
-        # 파일은 있는데 부착 실패 → 드라이브 복구 후 재부착 시도
-        st.session_state["_auto_restore_last"]["local_attach"] = False
-        _try_restore_from_drive()
-        if _attach_from_local():
-            st.session_state["_auto_restore_last"]["step"] = "restored_and_attached"
-            st.session_state["_auto_restore_last"]["final_attach"] = True
-            _write_quality_report(st.session_state["_auto_restore_last"])
-            return True
-
-    # (B) 로컬 파일이 없는 경우: 복구 → 재빌드 → 부착
-    if not st.session_state["_auto_restore_last"]["has_files_before"]:
-        restored = _try_restore_from_drive()
-        # 복구 후에도 파일이 없으면 재빌드
-        if not _has_local_index_files():
-            rebuilt = _try_rebuild_minimal()
-            st.session_state["_auto_restore_last"]["has_files_after_rebuild"] = _has_local_index_files()
-            if not rebuilt and not st.session_state["_auto_restore_last"]["has_files_after_rebuild"]:
-                st.session_state["_auto_restore_last"]["step"] = "no_files_could_be_prepared"
-                st.session_state["_auto_restore_last"]["final_attach"] = False
-                return False
-
-    # 최종 부착
-    if _attach_from_local():
-        st.session_state["_auto_restore_last"]["step"] = "final_attached"
-        st.session_state["_auto_restore_last"]["final_attach"] = True
-        _write_quality_report(st.session_state["_auto_restore_last"])
-        return True
-
-    st.session_state["_auto_restore_last"]["step"] = "attach_failed"
-    st.session_state["_auto_restore_last"]["final_attach"] = False
-    return False
-# ===== [03] SESSION & HELPERS — END ==========================================
-
-# ===== [04] HEADER — START ====================================================
-import streamlit as st
-import streamlit.components.v1 as components  # ← 추가: 스크롤용 JS 삽입
-
-# 캐시: 백업 유무를 10분(ttl=600s) 동안 보존해 드라이브 호출 비용을 최소화
-@st.cache_data(ttl=600, show_spinner=False)
-def _check_backup_presence_cached():
-    """
-    로컬/드라이브 백업 ZIP 존재 여부를 빠르게 확인한다.
-    반환 예:
-      {
-        "local": {"has": True, "dir": "/home/appuser/.maic/backup"},
-        "drive": {"has": True, "folder_id": "....", "error": None}
-      }
-    """
-    import importlib
-    from pathlib import Path
-
-    BACKUP_DIR = Path.home() / ".maic" / "backup"
-    drive_has = False
-    drive_folder_id = None
-    drive_err = None
-
-    try:
-        m = importlib.import_module("src.rag.index_build")
-        BACKUP_DIR = getattr(m, "BACKUP_DIR", BACKUP_DIR)
-        _drive_service = getattr(m, "_drive_service", None)
-        _pick_backup_folder_id = getattr(m, "_pick_backup_folder_id", None)
-
-        if callable(_drive_service) and callable(_pick_backup_folder_id):
-            try:
-                svc = _drive_service()
-                fid = _pick_backup_folder_id(svc)
-                drive_folder_id = fid
-                if svc and fid:
-                    resp = svc.files().list(
-                        q=f"'{fid}' in parents and trashed=false and mimeType!='application/vnd.google-apps.folder'",
-                        fields="files(id,name)",
-                        includeItemsFromAllDrives=True,
-                        supportsAllDrives=True,
-                        corpora="allDrives",
-                        pageSize=1,
-                    ).execute()
-                    files = resp.get("files", [])
-                    drive_has = len(files) > 0
-            except Exception as e:
-                drive_err = f"{type(e).__name__}"
-    except Exception:
-        pass
-
-    try:
-        BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-        local_has = any(list(BACKUP_DIR.glob("backup_*.zip"))) or any(list(BACKUP_DIR.glob("restored_*.zip")))
-    except Exception:
-        local_has = False
-
-    return {
-        "local": {"has": bool(local_has), "dir": str(BACKUP_DIR)},
-        "drive": {"has": bool(drive_has), "folder_id": drive_folder_id, "error": drive_err},
-    }
+    return _attach_from_local()
 
 
-def _brain_status_badge():
-    """두뇌 준비 상태 배지: get_index_status() 값을 사용. ready→🟢, pending→🟡, missing→🔴"""
-    try:
-        status = get_index_status()  # [03] 구획에서 정의됨
-    except Exception:
-        status = "missing"
-
-    if status == "ready":
-        return "🟢 두뇌 준비됨"
-    if status == "pending":
-        return "🟡 준비중(로컬 파일 있음)"
-    return "🔴 준비안됨"
-
-
-def _backup_badges_line():
-    """로컬/드라이브 백업 유무 배지 한 줄 생성."""
-    info = _check_backup_presence_cached()
-    l_has = info["local"]["has"]
-    l_dir = info["local"]["dir"]
-    d_has = info["drive"]["has"]
-    d_fid = info["drive"]["folder_id"]
-    d_err = info["drive"]["error"]
-
-    local_badge = f"💾 로컬 백업: {'✅ 있음' if l_has else '❌ 없음'}"
-    drive_badge = f"☁️ 드라이브 백업: {'✅ 있음' if d_has else '❌ 없음'}"
-    if d_fid:
-        drive_badge += f" (folder_id: `{d_fid}`)"
-    if d_err:
-        drive_badge += f" — 오류: {d_err}"
-
-    return local_badge, drive_badge, l_dir
-
-
+# ===== [04] HEADER ==========================================
 def render_header():
     """
-    상단 헤더: 기존 두뇌 상태 + 백업 유무 요약 배지 + [진단으로 이동] 버튼(JS 스크롤).
+    헤더 UI는 [07] MAIN의 _render_title_with_status()가 전적으로 담당합니다.
+    여기서는 중복 렌더링을 막기 위해 아무 것도 출력하지 않습니다.
+    (요구사항: 'Index status: ...' 텍스트 및 중복 배지 제거)
     """
-    brain = _brain_status_badge()
-    local_badge, drive_badge, _ = _backup_badges_line()
+    return
+# ===== [04] END =============================================
 
-    with st.container():
-        c1, c2 = st.columns([0.7, 0.3])
-        with c1:
-            st.markdown(f"### {brain}")
-            st.markdown(f"{local_badge} · {drive_badge}")
-        with c2:
-            # 클릭 즉시 #diag 요소로 스무스 스크롤 (rerun에도 안전)
-            if st.button("🔎 진단으로 이동", use_container_width=True, help="페이지 하단 진단 섹션(#diag)으로 이동"):
-                components.html(
-                    """
-                    <script>
-                      (function(){
-                        function go(){
-                          const el = document.getElementById('diag');
-                          if(el){ el.scrollIntoView({behavior:'smooth', block:'start'}); }
-                          else { window.location.hash = 'diag'; }
-                        }
-                        // 렌더 안정화를 위해 약간 지연 후 실행
-                        setTimeout(go, 150);
-                      })();
-                    </script>
-                    """,
-                    height=0, width=0
-                )
-                try: st.toast("진단으로 이동합니다…")
-                except Exception: pass
-
-    st.divider()
-# ===== [04] HEADER — END ======================================================
-
-
-# ===== [04A] MODE & ADMIN BUTTON (모듈 분리 호출) — START =====================
-from src.ui_admin import (
-    ensure_admin_session_keys,
-    render_admin_controls,
-    render_role_caption,
-)
+# ===== [04A] MODE & ADMIN BUTTON (콜백 제거: 즉시 갱신용 rerun) ================
+import os as _os
 import streamlit as st
 
-# 1) 세션 키 보증
-ensure_admin_session_keys()
+# ── [04A-1] PIN 가져오기 ------------------------------------------------------
+def _get_admin_pin() -> str:
+    try:
+        pin = st.secrets.get("ADMIN_PIN", None)  # type: ignore[attr-defined]
+    except Exception:
+        pin = None
+    return str(pin or _os.environ.get("ADMIN_PIN") or "0000")
+# ===== [04A-1] END ============================================================
 
-# 2) 우측 상단 관리자 버튼/인증 패널 렌더 (내부에서 st.rerun 처리)
-render_admin_controls()
 
-# 3) 역할 캡션 + 구분선
-render_role_caption()
+# ── [04A-2] 세션키 초기화 ------------------------------------------------------
+if "is_admin" not in st.session_state:
+    st.session_state["is_admin"] = False
+if "_admin_auth_open" not in st.session_state:
+    st.session_state["_admin_auth_open"] = False
+# ===== [04A-2] END ============================================================
+
+
+# ── [04A-3] 상단 우측 관리자 버튼 & 인증 패널 (콜백 미사용) ----------------------
+with st.container():
+    _, right = st.columns([0.7, 0.3])
+    with right:
+        btn_slot = st.empty()
+
+        if st.session_state["is_admin"]:
+            # 관리자 모드일 때: 종료 버튼이 바로 보여야 함
+            if btn_slot.button("🔓 관리자 종료", key="btn_close_admin", use_container_width=True):
+                st.session_state["is_admin"] = False
+                st.session_state["_admin_auth_open"] = False
+                try: st.toast("관리자 모드 해제됨")
+                except Exception: pass
+                st.rerun()  # ← 콜백이 아닌 본문에서 rerun: 즉시 라벨 갱신
+        else:
+            # 학생 모드일 때: 관리자 버튼
+            if btn_slot.button("🔒 관리자", key="btn_open_admin", use_container_width=True):
+                st.session_state["_admin_auth_open"] = True
+                st.rerun()  # 인증 패널을 즉시 표시
+
+        # 인증 패널: 열림 상태이면 표시
+        if st.session_state["_admin_auth_open"] and not st.session_state["is_admin"]:
+            with st.container(border=True):
+                st.markdown("**관리자 PIN 입력**")
+                with st.form("admin_login_form", clear_on_submit=True, border=False):
+                    pin_try = st.text_input("PIN", type="password")
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        ok = st.form_submit_button("입장")
+                    with c2:
+                        cancel = st.form_submit_button("취소")
+
+                if cancel:
+                    st.session_state["_admin_auth_open"] = False
+                    st.rerun()
+                if ok:
+                    if pin_try == _get_admin_pin():
+                        st.session_state["is_admin"] = True
+                        st.session_state["_admin_auth_open"] = False
+                        try: st.toast("관리자 모드 진입 ✅")
+                        except Exception: pass
+                        st.rerun()  # 입장 직후 즉시 라벨 "관리자 종료"로
+                    else:
+                        st.error("PIN이 올바르지 않습니다.")
+# ===== [04A-3] END ============================================================
+
+
+# ── [04A-4] 역할 캡션 ---------------------------------------------------------
+if st.session_state.get("is_admin", False):
+    st.caption("역할: **관리자** — 상단 버튼으로 종료 가능")
+else:
+    st.caption("역할: **학생** — 질문/답변에 집중할 수 있게 단순화했어요.")
+
 st.divider()
-# ===== [04A] MODE & ADMIN BUTTON (모듈 분리 호출) — END =======================
-
+# ===== [04A] END =============================================================
 # ===== [04B] 관리자 설정 — 이유문법 + 모드별 ON/OFF (라디오·세로배치) ==========
 import json as _json
 from pathlib import Path as _Path
@@ -675,377 +391,6 @@ def render_admin_settings_panel():
             st.error("모든 모드가 꺼져 있습니다. 학생 화면에서 질문 모드가 보이지 않아요.")
 # ===== [04B] END =============================================================
 
-# ===== [04C] PREPARED MONITOR & PROMPT — START ===============================
-import streamlit as st
-
-@st.cache_data(ttl=120, show_spinner=False)
-def _prepared_quick_precheck_cached():
-    """
-    prepared 폴더 변화 감지(2분 캐시).
-    반환: {"ok": bool, "changed": bool, "new_count": int, "details": dict}
-    """
-    import importlib
-    res = {"ok": False, "changed": False, "new_count": 0, "details": {}}
-    try:
-        mod = importlib.import_module("src.rag.index_build")
-        fn = getattr(mod, "quick_precheck", None) or getattr(mod, "precheck_build_needed", None)
-        if not callable(fn):
-            res["details"] = {"error": "quick_precheck_missing"}
-            return res
-        try:
-            out = fn()
-        except TypeError:
-            out = fn(None, None)
-        if not isinstance(out, dict):
-            out = {"changed": bool(out)}
-        res["ok"] = True
-        res["changed"] = bool(out.get("changed"))
-        # 새 파일 수 추정
-        new_count = 0
-        for k in ("new_count", "only_in_prepared", "only_prepared", "only_on_prepared"):
-            v = out.get(k)
-            if isinstance(v, int): new_count = v; break
-            if isinstance(v, (list, tuple)): new_count = len(v); break
-        res["new_count"] = new_count
-        res["details"] = out
-        return res
-    except Exception as e:
-        res["details"] = {"error": f"{type(e).__name__}: {e}"}
-        return res
-
-def _restore_from_drive_and_attach_or_update() -> tuple[bool, str]:
-    """
-    규칙 #1 반영:
-    - 최신 Drive 백업 복구 시도 → 성공하면 attach
-    - 실패(백업 없음 포함)면 Drive prepared 원본으로 재최적화(업데이트) 실행
-    - Drive 자체 접근 불가 추정 시 (False, "drive_inaccessible")
-    """
-    import importlib
-    reason = "unknown"
-    # (1) 백업 복구 시도
-    try:
-        mod = importlib.import_module("src.rag.index_build")
-        restore = getattr(mod, "restore_latest_backup_to_local", None)
-        if callable(restore):
-            r = restore()
-            ok = bool(isinstance(r, dict) and r.get("ok"))
-            if ok:
-                try:
-                    if _attach_from_local():
-                        return True, "restored"
-                except Exception:
-                    pass
-            reason = r.get("error", "no_backup_or_restore_failed") if isinstance(r, dict) else "no_backup_or_restore_failed"
-    except Exception as e:
-        reason = f"restore_exc:{type(e).__name__}"
-
-    # (2) 백업이 없거나 복구 실패 → prepared 원본으로 업데이트
-    ok_update, why = _update_from_prepared_then_backup()
-    if ok_update:
-        try:
-            if _attach_from_local():
-                return True, "updated_from_prepared"
-        except Exception:
-            pass
-
-    # (3) 여기까지 안 되면 Drive 자체 접근 문제일 가능성 높음
-    return False, ("drive_inaccessible" if ("auth" in str(reason).lower() or "quota" in str(reason).lower() or "network" in str(reason).lower()) else "update_failed")
-
-def _backup_local_snapshot(zip_name_prefix="backup") -> str | None:
-    """현재 ~/.maic/persist를 ZIP으로 보관(로컬 백업). 실패해도 앱은 계속."""
-    import zipfile
-    from pathlib import Path
-    from datetime import datetime
-    try:
-        PERSIST_DIR = Path.home() / ".maic" / "persist"
-        BACKUP_DIR  = Path.home() / ".maic" / "backup"
-        BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        zip_path = BACKUP_DIR / f"{zip_name_prefix}_{ts}.zip"
-        with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as z:
-            if PERSIST_DIR.exists():
-                for p in PERSIST_DIR.rglob("*"):
-                    if p.is_file():
-                        z.write(p, arcname=p.relative_to(PERSIST_DIR))
-            z.writestr(".backup_info.txt", f"created_at={ts}\n")
-        return str(zip_path)
-    except Exception:
-        return None
-
-def _call_build_with_overrides(local_prepared_dir: str | None = None) -> bool:
-    """
-    index_build.build_index_with_checkpoint 호출.
-    - local_prepared_dir 주어지면 가능한 kw 인자(prepared_dir/local_prepared_dir/source_dir)로 주입 시도
-    """
-    import importlib, inspect
-    try:
-        mod = importlib.import_module("src.rag.index_build")
-        build = getattr(mod, "build_index_with_checkpoint", None)
-        if not callable(build):
-            return False
-
-        def _pct(v: int, msg: str | None = None):
-            try: st.session_state["_build_pct"] = int(v)
-            except Exception: pass
-            if msg: st.session_state["_build_msg"] = str(msg)
-        def _msg(s: str): st.session_state["_build_msg"] = str(s)
-
-        kwargs = dict(update_pct=_pct, update_msg=_msg)
-        if local_prepared_dir:
-            try:
-                sig = inspect.signature(build)
-                for k in ("prepared_dir", "local_prepared_dir", "source_dir"):
-                    if k in sig.parameters:
-                        kwargs[k] = local_prepared_dir
-                        break
-            except Exception:
-                kwargs["prepared_dir"] = local_prepared_dir
-
-        try:
-            build(**kwargs)
-        except TypeError:
-            build()
-        return True
-    except Exception:
-        return False
-
-def _update_from_prepared_then_backup() -> tuple[bool, str]:
-    """
-    규칙 #1: Drive prepared 원본으로 재최적화 → 품질리포트 → attach → 로컬 ZIP 백업
-    반환 (ok, reason)
-    """
-    try:
-        with st.status("prepared 원본으로 다시 최적화 중…", state="running") as s:
-            ok = _call_build_with_overrides(local_prepared_dir=None)
-            s.update(label=("최적화 완료 ✅" if ok else "최적화 실패 ❌"), state=("complete" if ok else "error"))
-        if not ok:
-            return False, "update_failed"
-
-        try: _write_quality_report(st.session_state.get("_auto_restore_last"))
-        except Exception: pass
-        try: _attach_from_local()
-        except Exception: pass
-        _backup_local_snapshot("backup_after_update")
-        return True, "updated"
-    except Exception:
-        return False, "update_exc"
-
-def _render_local_fallback_panel():
-    """
-    규칙 #2: Drive 접근 불가 시 — 로컬 폴더(또는 ZIP)로 다시 최적화하여 로컬에 저장.
-    """
-    import tempfile, zipfile
-    from pathlib import Path
-    st.warning("Google Drive 접근이 불가하여 **로컬 자료로 다시 최적화**가 필요합니다.", icon="⚠️")
-    with st.container(border=True):
-        st.markdown("**로컬 폴더로 다시 최적화**")
-        col1, col2 = st.columns([0.55, 0.45])
-        with col1:
-            local_dir = st.text_input("로컬 폴더 경로 (서버 기준)", value=str((Path.home()/".maic"/"prepared_local")))
-        with c2:
-            go1 = st.button("📁 이 폴더로 최적화", use_container_width=True, key="btn_local_dir_build")
-
-        st.caption("또는 ZIP 업로드로 폴더를 대체할 수 있어요.")
-        up = st.file_uploader("폴더 ZIP 업로드(원자료)", type=["zip"], accept_multiple_files=False, key="up_zip_prepared")
-        go2 = st.button("🗜️ 업로드 ZIP으로 최적화", use_container_width=True, key="btn_local_zip_build")
-
-    def _build_from_dir(src_dir: str) -> bool:
-        src = Path(src_dir)
-        if not src.exists():
-            st.error("경로가 존재하지 않습니다.")
-            return False
-        ok = _call_build_with_overrides(local_prepared_dir=str(src))
-        if ok:
-            try: _write_quality_report({"source": "local_dir"})
-            except Exception: pass
-            try: _attach_from_local()
-            except Exception: pass
-            _backup_local_snapshot("backup_local_build")
-            try: st.toast("로컬 폴더로 최적화 완료 — 답변 준비 완료 ✅")
-            except Exception: st.success("로컬 폴더로 최적화 완료 — 답변 준비 완료 ✅")
-            st.rerun()
-        else:
-            st.error("로컬 폴더로 최적화가 지원되지 않는 빌더 버전입니다.")
-        return ok
-
-    if go1 and local_dir:
-        _build_from_dir(local_dir)
-
-    if go2 and up is not None:
-        with tempfile.TemporaryDirectory() as td:
-            tmp = Path(td) / "prepared_upload"
-            tmp.mkdir(parents=True, exist_ok=True)
-            zpath = tmp / "upload.zip"
-            with open(zpath, "wb") as f:
-                f.write(up.read())
-            with zipfile.ZipFile(zpath, "r") as z:
-                z.extractall(tmp)
-            # ZIP 최상위 디렉터리 추정
-            candidates = [p for p in tmp.iterdir() if p.is_dir()]
-            src_dir = str(candidates[0] if candidates else tmp)
-            _build_from_dir(src_dir)
-
-def render_prepared_prompt():
-    """
-    앱 실행 시 1회:
-      1) prepared 변화가 있으면 질문 → Yes: 업데이트(Drive 저장 포함) / No: 기존 Drive 백업 복구
-         - 복구 실패 또는 백업 없음 → 규칙 #1에 따라 prepared 원본으로 재최적화
-      2) 변화가 없으면 → 기존 Drive 백업을 로컬에 보장(복구)
-         - 백업이 없거나 Drive 복구 실패 → 규칙 #1에 따라 prepared 원본으로 재최적화
-      3) 어떤 경우든 Drive 접근 자체가 불가하면 → 규칙 #2 로컬 대체 패널 노출
-    """
-    if st.session_state.get("_prepared_prompt_done"):
-        return
-
-    chk = _prepared_quick_precheck_cached()
-    # precheck 실패면 최소 복구 루트로 진입
-    if not chk.get("ok"):
-        ok, why = _restore_from_drive_and_attach_or_update()
-        st.session_state["_prepared_prompt_done"] = True
-        if not ok and why == "drive_inaccessible":
-            _render_local_fallback_panel()
-        return
-
-    if chk.get("changed"):
-        with st.container(border=True):
-            n = chk.get("new_count", 0)
-            st.markdown(f"### 📂 새 자료 감지: **{n}건**")
-            st.caption("prepared 폴더에서 변경을 감지했습니다. 지금 인덱스를 업데이트할까요?")
-            c1, c2 = st.columns([0.25, 0.75])
-            with c1:
-                go = st.button("✅ 지금 업데이트", key="btn_prep_yes", use_container_width=True)
-            with c2:
-                later = st.button("🕗 나중에(기존 백업 사용)", key="btn_prep_no", use_container_width=True)
-
-        if go:
-            ok, why = _update_from_prepared_then_backup()
-            try: st.cache_data.clear()
-            except Exception: pass
-            st.session_state["_prepared_prompt_done"] = True
-            if ok:
-                try: st.toast("업데이트 및 백업 완료 — 답변 준비 완료 ✅")
-                except Exception: st.success("업데이트 및 백업 완료 — 답변 준비 완료 ✅")
-                st.rerun()
-            else:
-                st.error("업데이트에 실패했습니다. 기존 백업으로 복구를 시도합니다.")
-                ok2, why2 = _restore_from_drive_and_attach_or_update()
-                if not ok2 and why2 == "drive_inaccessible":
-                    _render_local_fallback_panel()
-                else:
-                    try: st.toast("기존 백업으로 준비 완료(또는 prepared에서 복구) ✅")
-                    except Exception: pass
-                    st.rerun()
-
-        elif later:
-            ok, why = _restore_from_drive_and_attach_or_update()
-            _backup_local_snapshot("backup_use_existing")
-            try: st.cache_data.clear()
-            except Exception: pass
-            st.session_state["_prepared_prompt_done"] = True
-            if not ok and why == "drive_inaccessible":
-                _render_local_fallback_panel()
-            else:
-                try: st.toast("기존 백업 복구(또는 prepared 재최적화) — 답변 준비 완료 ✅")
-                except Exception: pass
-                st.rerun()
-
-    else:
-        # 변화 없음: 기존 백업 보장 / 없거나 실패면 prepared로 업데이트
-        ok, why = _restore_from_drive_and_attach_or_update()
-        _backup_local_snapshot("backup_no_change")
-        st.session_state["_prepared_prompt_done"] = True
-        if not ok and why == "drive_inaccessible":
-            _render_local_fallback_panel()
-        else:
-            try: st.toast("변경 없음 — 최신 상태 보장 완료 ✅")
-            except Exception: pass
-
-# 앱 상단에서 한 번 호출
-try:
-    render_prepared_prompt()
-except Exception:
-    st.session_state["_prepared_prompt_done"] = True
-# ===== [04C] PREPARED MONITOR & PROMPT — END =================================
-# ===== [04C-1] PREPARED QUICK PRECHECK (REPLACE) — START =====================
-import streamlit as st
-
-@st.cache_data(ttl=120, show_spinner=False)
-def _prepared_quick_precheck_cached():
-    """
-    prepared 폴더 변화 감지(2분 캐시).
-    다양한 반환 스키마를 통합해 '새 항목 수'를 보다 견고하게 추정한다.
-    반환: {"ok": bool, "changed": bool, "new_count": int, "details": dict}
-    """
-    import importlib
-
-    def _infer_new_count(out: dict) -> int:
-        total = 0
-
-        # 1) 직접적인 숫자 후보
-        numeric_keys = [
-            "new_count", "added_count", "created_count", "prepared_count",
-            "only_in_prepared_count", "to_add_count", "to_update_count", "to_delete_count",
-            "count",
-        ]
-        for k in numeric_keys:
-            v = out.get(k)
-            if isinstance(v, int) and v > 0:
-                total = max(total, v)
-
-        # 2) 리스트/셋 길이 합산
-        list_keys = [
-            "only_in_prepared", "only_prepared", "only_on_prepared",
-            "added", "new", "created", "modified", "updated",
-            "changed_files", "to_add", "to_update", "to_delete",
-        ]
-        for k in list_keys:
-            v = out.get(k)
-            if isinstance(v, (list, tuple, set)):
-                total += len(v)
-
-        # 3) 중첩 딕셔너리의 숫자/리스트 길이 합산 (summary/delta/diff 등)
-        dict_keys = ["changed_summary", "delta", "diff", "changes"]
-        for k in dict_keys:
-            d = out.get(k)
-            if isinstance(d, dict):
-                for vv in d.values():
-                    if isinstance(vv, int):
-                        total += vv
-                    elif isinstance(vv, (list, tuple, set)):
-                        total += len(vv)
-
-        # 4) 여전히 0인데 changed=True면 최소 1로 보정
-        if total == 0 and out.get("changed"):
-            total = int(out.get("prepared_count") or 1)
-
-        return int(total)
-
-    res = {"ok": False, "changed": False, "new_count": 0, "details": {}}
-    try:
-        mod = importlib.import_module("src.rag.index_build")
-        fn = getattr(mod, "quick_precheck", None) or getattr(mod, "precheck_build_needed", None)
-        if not callable(fn):
-            res["details"] = {"error": "quick_precheck_missing"}
-            return res
-
-        try:
-            out = fn()
-        except TypeError:
-            out = fn(None, None)
-
-        if not isinstance(out, dict):
-            out = {"changed": bool(out)}
-
-        res["ok"] = True
-        res["changed"] = bool(out.get("changed"))
-        res["new_count"] = _infer_new_count(out)
-        res["details"] = out
-        return res
-    except Exception as e:
-        res["details"] = {"error": f"{type(e).__name__}: {e}"}
-        return res
-# ===== [04C-1] PREPARED QUICK PRECHECK (REPLACE) — END =======================
-
 
 # ===== [05A] BRAIN PREP MAIN =======================================
 def render_brain_prep_main():
@@ -1200,58 +545,48 @@ def render_brain_prep_main():
 # ===== [05A] END ===========================================
 
 
-# ===== [05B] TAG DIAGNOSTICS (BACKUP PRESENCE RESTORE) — START ==============
+# ===== [05B] TAG DIAGNOSTICS (NEW) ==========================================
 def render_tag_diagnostics():
     """
     태그/인덱스 진단 패널
-    - 자동 복구 상태(_auto_restore_last) 표시
-    - rag_index persist 경로 추정(가능한 경우)
-    - 백업 파일 유무(로컬/드라이브) 배지 ✅/❌
-    - 품질 리포트 존재 여부
-    - 로컬/드라이브 ZIP 목록(최신 5개)
-    - 로컬 인덱스 파일(.ready, chunks.jsonl) 상태
+    - quality_report.json 유무
+    - 로컬 ZIP: backup_*.zip + restored_*.zip (최신 5개)
+    - 드라이브 ZIP: backup_zip 폴더의 ZIP (최신 5개)
+    - 로컬 인덱스 파일(.ready, chunks.jsonl) 표시
     """
-    import importlib
+    import importlib, traceback
     from pathlib import Path
     from datetime import datetime
-    import json as _json
     import streamlit as st
 
-    # ▶▶ 앵커 요소(필수) + 부드러운 스크롤 CSS
-    st.markdown(
-        """
-        <span id="diag"></span>
-        <style>
-          html { scroll-behavior: smooth; }
-          /* 헤더가 가릴 수 있으니 약간의 여유를 둡니다 */
-          #diag { scroll-margin-top: 80px; }
-        </style>
-        """,
-        unsafe_allow_html=True
-    )
-
-    # ── 기본 경로(모듈 값 우선) ────────────────────────────────────────────────
+    # 기본 경로
     PERSIST_DIR = Path.home() / ".maic" / "persist"
-    BACKUP_DIR  = Path.home() / ".maic" / "backup"
+    BACKUP_DIR = Path.home() / ".maic" / "backup"
     QUALITY_REPORT_PATH = Path.home() / ".maic" / "quality_report.json"
-    _m = None
+
+    # src.rag.index_build 값 우선
     try:
         _m = importlib.import_module("src.rag.index_build")
         PERSIST_DIR = getattr(_m, "PERSIST_DIR", PERSIST_DIR)
-        BACKUP_DIR  = getattr(_m, "BACKUP_DIR", BACKUP_DIR)
+        BACKUP_DIR = getattr(_m, "BACKUP_DIR", BACKUP_DIR)
         QUALITY_REPORT_PATH = getattr(_m, "QUALITY_REPORT_PATH", QUALITY_REPORT_PATH)
     except Exception:
-        pass
+        _m = None
 
     def _fmt_size(n):
         try:
             n = int(n)
         except Exception:
             return "-"
-        units = ["B","KB","MB","GB","TB"]; i=0; f=float(n)
-        while f>=1024 and i<len(units)-1:
-            f/=1024.0; i+=1
-        return (f"{int(f)} {units[i]}" if i==0 else f"{f:.1f} {units[i]}")
+        units = ["B", "KB", "MB", "GB", "TB"]
+        i = 0
+        f = float(n)
+        while f >= 1024 and i < len(units) - 1:
+            f /= 1024.0
+            i += 1
+        if i == 0:
+            return f"{int(f)} {units[i]}"
+        return f"{f:.1f} {units[i]}"
 
     def _fmt_ts(ts):
         try:
@@ -1261,34 +596,13 @@ def render_tag_diagnostics():
 
     st.subheader("진단(간단)", anchor=False)
 
-    # ── 자동 복구 상태 ────────────────────────────────────────────────────────
-    auto_info = st.session_state.get("_auto_restore_last")
-    with st.container(border=True):
-        st.markdown("### 자동 복구 상태")
-        if not auto_info:
-            st.caption("아직 자동 복구 시도 기록이 없습니다. (앱 시작 시 자동 시도)")
-        else:
-            st.code(_json.dumps(auto_info, ensure_ascii=False, indent=2), language="json")
+    # ── 품질 리포트 존재 ─────────────────────────────────────────────────────────
+    qr_exists = QUALITY_REPORT_PATH.exists()
+    qr_badge = "✅ 있음" if qr_exists else "❌ 없음"
+    st.markdown(f"- **품질 리포트(quality_report.json)**: {qr_badge}  (`{QUALITY_REPORT_PATH.as_posix()}`)")
 
-    # ── rag_index persist 경로 추정 ───────────────────────────────────────────
-    with st.container(border=True):
-        st.markdown("### rag_index Persist 경로 추정")
-        rag = st.session_state.get("rag_index")
-        found = None
-        if rag is not None:
-            for attr in ("persist_dir", "storage_context", "vector_store", "index_struct"):
-                try:
-                    val = getattr(rag, attr, None)
-                    if val:
-                        found = str(val); break
-                except Exception:
-                    pass
-        st.write("🔍 rag_index 내부 persist_dir/유사 속성:",
-                 found or "(발견되지 않음)")
-
-    # ── 백업 파일 유무 배지 ──────────────────────────────────────────────────
+    # ── 로컬 ZIP 목록: backup_* + restored_* (최신 5) ───────────────────────────
     local_rows = []
-    local_has = False
     try:
         BACKUP_DIR.mkdir(parents=True, exist_ok=True)
         zips = list(BACKUP_DIR.glob("backup_*.zip")) + list(BACKUP_DIR.glob("restored_*.zip"))
@@ -1296,59 +610,39 @@ def render_tag_diagnostics():
         for p in zips[:5]:
             stt = p.stat()
             local_rows.append({"파일명": p.name, "크기": _fmt_size(stt.st_size), "수정시각": _fmt_ts(stt.st_mtime)})
-        local_has = len(zips) > 0
     except Exception:
-        local_rows = []
-        local_has = False
+        pass
 
+    # ── 드라이브 ZIP 목록(top5) ─────────────────────────────────────────────────
     drive_rows = []
-    drive_has = False
     drive_msg = None
-    drive_folder_id = None
     try:
         _drive_service = getattr(_m, "_drive_service", None) if _m else None
         _pick_backup_folder_id = getattr(_m, "_pick_backup_folder_id", None) if _m else None
         svc = _drive_service() if callable(_drive_service) else None
-        drive_folder_id = _pick_backup_folder_id(svc) if (svc and callable(_pick_backup_folder_id)) else None
-        if svc and drive_folder_id:
+        fid = _pick_backup_folder_id(svc) if callable(_pick_backup_folder_id) else None
+        if svc and fid:
             resp = svc.files().list(
-                q=f"'{drive_folder_id}' in parents and trashed=false and mimeType!='application/vnd.google-apps.folder'",
+                q=f"'{fid}' in parents and trashed=false and mimeType!='application/vnd.google-apps.folder'",
                 fields="files(id,name,modifiedTime,size,mimeType)",
-                includeItemsFromAllDrives=True, supportsAllDrives=True, corpora="allDrives", pageSize=200
+                includeItemsFromAllDrives=True, supportsAllDrives=True, corpora="allDrives", pageSize=1000
             ).execute()
             files = [f for f in resp.get("files", []) if (f.get("name","").lower().endswith(".zip"))]
             files.sort(key=lambda x: x.get("modifiedTime") or "", reverse=True)
-            drive_rows = [{
-                "파일명": f.get("name",""),
-                "크기": _fmt_size(f.get("size") or 0),
-                "수정시각(UTC)": (f.get("modifiedTime","")[:16].replace("T"," ") if f.get("modifiedTime") else "-"),
-            } for f in files[:5]]
-            drive_has = len(files) > 0
+            for f in files[:5]:
+                drive_rows.append({
+                    "파일명": f.get("name",""),
+                    "크기": _fmt_size(f.get("size") or 0),
+                    "수정시각(UTC)": (f.get("modifiedTime","")[:16].replace("T"," ") if f.get("modifiedTime") else "-"),
+                })
         else:
-            drive_msg = "드라이브 연결/권한 또는 backup_zip 폴더 식별이 되지 않았습니다."
+            drive_msg = "드라이브 연결/권한 또는 백업 폴더 ID가 없습니다."
     except Exception:
         drive_msg = "드라이브 목록 조회 중 오류가 발생했습니다."
 
+    # ── 렌더링 ──────────────────────────────────────────────────────────────────
     with st.container(border=True):
-        st.markdown("### 백업 파일 유무 (요약)")
-        st.markdown(f"- **로컬 백업 ZIP**: {'✅ 있음' if local_has else '❌ 없음'}  (`{BACKUP_DIR.as_posix()}`)")
-        st.markdown(
-            "- **드라이브 백업 ZIP**: "
-            + ("✅ 있음" if drive_has else "❌ 없음")
-            + (f"  (folder_id: `{drive_folder_id}`)" if drive_folder_id else "")
-        )
-        if drive_msg:
-            st.caption(f"※ {drive_msg}")
-
-    # ── 품질 리포트 존재 ───────────────────────────────────────────────────────
-    qr_exists = QUALITY_REPORT_PATH.exists()
-    st.markdown(f"- **품질 리포트(quality_report.json)**: "
-                + ("✅ 있음" if qr_exists else "❌ 없음")
-                + f"  (`{QUALITY_REPORT_PATH.as_posix()}`)")
-
-    # ── 백업 ZIP 목록(로컬/드라이브) ───────────────────────────────────────────
-    with st.container(border=True):
-        st.markdown("### 백업 ZIP 현황")
+        st.markdown("### 백업 ZIP 현황", unsafe_allow_html=True)
         c1, c2 = st.columns(2)
         with c1:
             st.caption("로컬 백업 (최신 5)")
@@ -1356,7 +650,7 @@ def render_tag_diagnostics():
                 st.dataframe(local_rows, use_container_width=True, hide_index=True)
             else:
                 st.markdown("— 표시할 로컬 ZIP이 없습니다.")
-                st.caption("※ 복구가 로컬 ZIP 없이 직접 진행되었을 수도 있습니다.")
+                st.caption("※ 복구가 로컬 ZIP로 진행된 경우에는 `restored_*` 캐시가 남지 않을 수 있습니다.")
         with c2:
             st.caption("드라이브 backup_zip (최신 5)")
             if drive_rows:
@@ -1366,21 +660,14 @@ def render_tag_diagnostics():
                 if drive_msg:
                     st.caption(f"※ {drive_msg}")
 
-    # ── 로컬 인덱스 파일 상태 ────────────────────────────────────────────────
+    # ── 로컬 인덱스 파일 상태 ───────────────────────────────────────────────────
     try:
         chunks = (Path(PERSIST_DIR) / "chunks.jsonl")
-        ready  = (Path(PERSIST_DIR) / ".ready")
-        st.markdown("- **로컬 인덱스 파일**: " + ("✅ 있음" if chunks.exists() else "❌ 없음")
-                    + f" (`{chunks.as_posix()}`)")
-        st.markdown("- **.ready 마커**: " + ("✅ 있음" if ready.exists() else "❌ 없음")
-                    + f" (`{ready.as_posix()}`)")
+        ready = (Path(PERSIST_DIR) / ".ready")
+        st.markdown("- **로컬 인덱스 파일**: " + ("✅ 있음" if chunks.exists() else "❌ 없음") + f" (`{chunks.as_posix()}`)")
+        st.markdown("- **.ready 마커**: " + ("✅ 있음" if ready.exists() else "❌ 없음") + f" (`{ready.as_posix()}`)")
     except Exception:
         pass
-# ===== [05B] TAG DIAGNOSTICS (BACKUP PRESENCE RESTORE) — END =================
-
-
-
-
 
 # ===== [06] SIMPLE QA DEMO — 히스토리 인라인 + 답변 직표시 + 골든우선 + 규칙기반 합성기 + 피드백(라디오, 항상 유지) ==
 from pathlib import Path
@@ -1890,7 +1177,7 @@ def render_simple_qa():
     is_admin = st.session_state.get("is_admin", False)
 
     _render_top3_badges()
-    st.markdown("### 💬 질문은 천재들이 가장 좋아하는 공부법이다!")
+    st.markdown("### 💬 질문은 모든 천재들이 가장 많이 사용하는 공부 방법이다!")
 
     enabled = _get_enabled_modes_unified()
     radio_opts: List[str] = []
@@ -2055,8 +1342,8 @@ import streamlit as st
 def _render_title_with_status():
     """
     상단 헤더: 제목 + 상태배지 + 우측 FAQ 토글
-    - 학생: 🟢 답변준비 완료
-    - 관리자: 🟢 앱실행 준비됨
+    - 학생: 🟢 LEES AI 선생님이 답변준비 완료
+    - 관리자: 🟢 두뇌 준비됨
     """
     try:
         status = get_index_status()  # 'ready' | 'pending' | 'missing'
@@ -2068,9 +1355,9 @@ def _render_title_with_status():
     # 상태 배지 문구(학생/관리자 분리)
     if status == "ready":
         badge_html = (
-            "<span class='ui-pill ui-pill-green'>🟢 답변 준비됨</span>"
+            "<span class='ui-pill ui-pill-green'>🟢 두뇌 준비됨</span>"
             if is_admin else
-            "<span class='ui-pill ui-pill-green'>🟢 답변준비 완료</span>"
+            "<span class='ui-pill ui-pill-green'>🟢 LEES AI 선생님이 답변준비 완료</span>"
         )
     elif status == "pending":
         badge_html = "<span class='ui-pill'>🟡 연결 대기</span>"
@@ -2164,4 +1451,72 @@ def main():
 
 if __name__ == "__main__":
     main()
-# ===== [07] END ===============================================================
+# ===== [07] END ===============================================================@st.cache_data(ttl=120, show_spinner=False)
+def _prepared_quick_precheck_cached():
+    """
+    prepared 폴더 변화 감지(2분 캐시).
+    다양한 반환 스키마를 통합해 '새 항목 수'를 보다 견고하게 추정한다.
+    반환: {"ok": bool, "changed": bool, "new_count": int, "details": dict}
+    """
+    import importlib
+
+    def _infer_new_count(out: dict) -> int:
+        total = 0
+        # 1) 숫자형 후보
+        numeric_keys = [
+            "new_count", "added_count", "created_count", "prepared_count",
+            "only_in_prepared_count", "to_add_count", "to_update_count", "to_delete_count",
+            "count",
+        ]
+        for k in numeric_keys:
+            v = out.get(k)
+            if isinstance(v, int) and v > 0:
+                total = max(total, v)
+        # 2) 리스트/셋 길이 합산
+        list_keys = [
+            "only_in_prepared", "only_prepared", "only_on_prepared",
+            "added", "new", "created", "modified", "updated",
+            "changed_files", "to_add", "to_update", "to_delete",
+        ]
+        for k in list_keys:
+            v = out.get(k)
+            if isinstance(v, (list, tuple, set)):
+                total += len(v)
+        # 3) 중첩 딕셔너리 요약 합산
+        dict_keys = ["changed_summary", "delta", "diff", "changes"]
+        for k in dict_keys:
+            d = out.get(k)
+            if isinstance(d, dict):
+                for vv in d.values():
+                    if isinstance(vv, int):
+                        total += vv
+                    elif isinstance(vv, (list, tuple, set)):
+                        total += len(vv)
+        # 4) 보정: changed=True인데 0이면 최소 1
+        if total == 0 and out.get("changed"):
+            total = int(out.get("prepared_count") or 1)
+        return int(total)
+
+    res = {"ok": False, "changed": False, "new_count": 0, "details": {}}
+    try:
+        mod = importlib.import_module("src.rag.index_build")
+        fn = getattr(mod, "quick_precheck", None) or getattr(mod, "precheck_build_needed", None)
+        if not callable(fn):
+            res["details"] = {"error": "quick_precheck_missing"}
+            return res
+        try:
+            out = fn()
+        except TypeError:
+            out = fn(None, None)
+        if not isinstance(out, dict):
+            out = {"changed": bool(out)}
+        res["ok"] = True
+        res["changed"] = bool(out.get("changed"))
+        res["new_count"] = _infer_new_count(out)
+        res["details"] = out
+        return res
+    except Exception as e:
+        res["details"] = {"error": f"{type(e).__name__}: {e}"}
+        return res
+
+
