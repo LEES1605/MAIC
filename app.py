@@ -442,32 +442,26 @@ def render_brain_prep_main():
     준비/최적화 패널 (관리자 전용)
     - Drive 'prepared' 변화 감지(quick_precheck) → 결과 요약(+파일 목록)
     - 상태 배지 정밀화: delta / no_manifest / no_prepared / no_change
-    - 신규자료 O(delta): [업데이트 실행] / [업데이트 건너뛰기(기존 백업 복구)]
-    - 신규자료 X: [최신 백업 복구] + [강제 최적화 초기화](항상)
-    - 인덱싱 중 현재 처리 파일명을 실시간 표시
+    - 인덱싱 중: 현재 파일명(아이콘) + 처리 n/총 m + ETA 표시
     - 완료 시 요약 배지 + 세션 기록(_optimize_last)
     """
+    import streamlit as st
+    import time, os, re, math
+    import importlib
+    from pathlib import Path
 
     # ── 역할 확인(관리자 전용) ────────────────────────────────────────────────
-    import streamlit as st
-    import time, os, re
-
     def _is_admin() -> bool:
         ss = st.session_state
         return bool(
-            ss.get("is_admin")
-            or ss.get("admin_mode")
-            or (ss.get("role") == "admin")
-            or (ss.get("mode") == "admin")
+            ss.get("is_admin") or ss.get("admin_mode")
+            or (ss.get("role") == "admin") or (ss.get("mode") == "admin")
         )
 
     if not _is_admin():
         return  # 학생 모드에서는 전혀 렌더하지 않음
 
     # ── 모듈/함수 바인딩 ────────────────────────────────────────────────────────
-    import importlib
-    from pathlib import Path
-
     try:
         mod = importlib.import_module("src.rag.index_build")
     except Exception as e:
@@ -481,11 +475,9 @@ def render_brain_prep_main():
     persist_dir    = getattr(mod, "PERSIST_DIR", Path.home() / ".maic" / "persist")
 
     if not callable(restore_fn):
-        st.error("restore_latest_backup_to_local()를 찾지 못했습니다.")
-        return
+        st.error("restore_latest_backup_to_local()를 찾지 못했습니다."); return
     if not callable(build_fn):
-        st.error("build_index_with_checkpoint()를 찾지 못했습니다.")
-        return
+        st.error("build_index_with_checkpoint()를 찾지 못했습니다."); return
 
     # ── 인덱스 상태 ───────────────────────────────────────────────────────────
     try:
@@ -493,20 +485,16 @@ def render_brain_prep_main():
     except Exception:
         idx_status = "missing"
 
-    status_badge = {
-        "ready":   "🟢 답변준비 완료",
-        "pending": "🟡 로컬 파일 감지(세션 미부착)",
-        "missing": "🔴 인덱스 없음",
-    }.get(idx_status, "❔ 상태 미상")
+    status_badge = {"ready":"🟢 답변준비 완료","pending":"🟡 로컬 파일 감지(세션 미부착)","missing":"🔴 인덱스 없음"}.get(idx_status,"❔ 상태 미상")
 
     # ── 신규자료 점검 + 델타/사유 파싱 ─────────────────────────────────────────
-    changed = False   # 원자료 신호(호환용)
+    changed = False
     prepared_cnt = manifest_cnt = 0
     reasons = []
     added = modified = removed = moved = skipped = []
     try:
         if callable(quick_precheck):
-            pre = quick_precheck(None)  # 폴더 ID는 모듈 내부에서 자동 탐색
+            pre = quick_precheck(None)  # 폴더 ID는 내부 자동 탐색
             changed = bool(pre.get("changed"))
             prepared_cnt = int(pre.get("prepared_count", 0))
             manifest_cnt = int(pre.get("manifest_count", 0))
@@ -525,13 +513,13 @@ def render_brain_prep_main():
     delta_count = len(added) + len(modified) + len(removed) + len(moved)
     has_no_manifest_reason = any("no_local_manifest" in str(r) for r in reasons)
     if delta_count > 0:
-        status_kind = "delta"           # 실제 파일 증감 있음 → 녹색불
+        status_kind = "delta"       # 실제 파일 증감 있음 → 녹색불
     elif has_no_manifest_reason or (manifest_cnt == 0 and prepared_cnt > 0):
-        status_kind = "no_manifest"     # 매니페스트 없음/유실
+        status_kind = "no_manifest" # 매니페스트 없음/유실
     elif prepared_cnt == 0:
-        status_kind = "no_prepared"     # 자료 폴더가 비어있음
+        status_kind = "no_prepared" # 자료 폴더가 비어있음
     else:
-        status_kind = "no_change"       # 변경 없음
+        status_kind = "no_change"   # 변경 없음
 
     kind_badge = {
         "delta":       "🟢 신규자료 감지",
@@ -539,6 +527,21 @@ def render_brain_prep_main():
         "no_prepared": "⚪ 자료 없음",
         "no_change":   "✅ 변경 없음",
     }[status_kind]
+
+    # ── 아이콘 맵(확장자별) ───────────────────────────────────────────────────
+    ICONS = {
+        # docs
+        ".pdf":"📕",".doc": "📝",".docx":"📝",".txt":"🗒️",".md":"🗒️",
+        ".ppt":"📊",".pptx":"📊",".xls":"📈",".xlsx":"📈",".csv":"📑",
+        ".json":"🧩",".html":"🌐",
+        # images
+        ".jpg":"🖼️",".jpeg":"🖼️",".png":"🖼️",".gif":"🖼️",".webp":"🖼️",".svg":"🖼️",
+        # audio/video/code (가끔 있을 수 있음)
+        ".mp3":"🔊",".wav":"🔊",".mp4":"🎞️",".mkv":"🎞️",".py":"🐍",".ipynb":"📓",
+    }
+    def _icon_for(path: str) -> str:
+        ext = os.path.splitext(path.lower())[1]
+        return ICONS.get(ext, "📄")
 
     # ── 패널 렌더 ─────────────────────────────────────────────────────────────
     with st.container(border=True):
@@ -567,7 +570,8 @@ def render_brain_prep_main():
                             st.caption("— 없음")
                         else:
                             for x in rows[:limit]:
-                                st.write("•", str(x))
+                                ico = _icon_for(str(x))
+                                st.write(f"{ico} {x}")
                             if len(rows) > limit:
                                 st.caption(f"… 외 {len(rows)-limit}개")
                 _render_list(c1, "추가됨", added)
@@ -596,8 +600,7 @@ def render_brain_prep_main():
         # ── 공통 헬퍼들 ────────────────────────────────────────────────────────
         def _require_admin() -> bool:
             if not _is_admin():
-                st.warning("관리자만 사용할 수 있는 기능입니다.")
-                return False
+                st.warning("관리자만 사용할 수 있는 기능입니다."); return False
             return True
 
         def _final_attach():
@@ -605,13 +608,12 @@ def render_brain_prep_main():
                 ok = _auto_attach_or_restore_silently()
                 if ok:
                     s2.update(label="두뇌 연결 완료 ✅", state="complete")
-                    st.toast("🟢 답변준비 완료")
-                    st.rerun()
+                    st.toast("🟢 답변준비 완료"); st.rerun()
                 else:
                     s2.update(label="두뇌 연결 실패 ❌", state="error")
                     st.error("세션 부착 실패")
 
-        def _record_result(ok: bool, took_s: float, tag: str):
+        def _record_result(ok: bool, took_s: float, tag: str, processed:int|None=None, total:int|None=None):
             st.session_state["_optimize_last"] = {
                 "ok": bool(ok),
                 "took_sec": round(float(took_s), 1),
@@ -620,65 +622,112 @@ def render_brain_prep_main():
                     "added": len(added), "modified": len(modified),
                     "removed": len(removed), "moved": len(moved), "skipped": len(skipped),
                 },
+                "processed": processed, "total": total,
                 "tag": tag,  # "update" | "restore" | "rebuild"
             }
             if ok:
-                st.success(
-                    f"✅ 완료: {tag} · 소요 {took_s:.1f}s · "
-                    f"추가 {len(added)}, 수정 {len(modified)}, 삭제 {len(removed)}"
-                )
+                extra = (f" · 처리 {processed}/{total}" if (processed and total) else "")
+                st.success(f"✅ 완료: {tag} · 소요 {took_s:.1f}s{extra}")
             else:
                 st.error(f"❌ 실패: {tag} · 소요 {took_s:.1f}s")
 
-        # 파일명 추출 유틸(로그/메시지에서 경로 감지)
+        # ── 파일 진행률 표시 유틸 ──────────────────────────────────────────────
         path_regex = re.compile(r'([A-Za-z]:\\[^:*?"<>|\n]+|/[^ \n]+?\.[A-Za-z0-9]{1,8})')
-        def _maybe_show_current_file(msg: str, slot):
-            try:
+        def _fmt_eta(sec: float) -> str:
+            if sec <= 0 or math.isinf(sec) or math.isnan(sec): return "—"
+            m, s = divmod(int(sec+0.5), 60)
+            return f"{m}:{s:02d}" if m else f"{s}s"
+
+        def _progress_context(total_guess: int):
+            """컬러/카운터/ETA/현재 파일 슬롯을 생성하고 콜백에서 갱신할 수 있는 클로저 반환"""
+            file_slot = st.empty()
+            ctr_slot  = st.empty()
+            eta_slot  = st.empty()
+            bar       = st.progress(0)
+            seen = set()
+            current_name = {"v": None}
+            t0 = time.time()
+
+            def on_msg(msg: str):
                 m = path_regex.search(str(msg))
-                if not m:
-                    return
+                if not m: 
+                    return  # 파일 경로가 없는 로그는 무시
                 path = m.group(1).replace("\\", "/")
                 fname = os.path.basename(path)
-                slot.markdown(f"🔄 현재 인덱싱 파일: **`{fname}`**")
-            except Exception:
-                pass
+                if fname != current_name["v"]:
+                    current_name["v"] = fname
+                    # 새 파일로 간주(동일 파일 반복 로그는 중복 카운트 방지)
+                    if fname not in seen:
+                        seen.add(fname)
+                processed = len(seen)
+                total = max(total_guess, processed) if total_guess else processed
+                # 진행률(퍼센트) & ETA
+                pct = int(min(100, (processed / total) * 100)) if total else 0
+                took = time.time() - t0
+                eta  = _fmt_eta((took/processed)*(total-processed)) if processed else "—"
 
-        # ── 처리 분기(핵심 동작은 기존과 동일) ─────────────────────────────────
+                icon = _icon_for(fname)
+                file_slot.markdown(f"{icon} 현재 인덱싱 파일: **`{fname}`**")
+                ctr_slot.markdown(f"진행: **{processed} / {total}**")
+                eta_slot.caption(f"예상 남은 시간: {eta}")
+                try: bar.progress(pct)
+                except Exception: pass
+                # 반환값(최종 요약용)
+                return processed, total, took
+
+            def finalize():
+                # 인덱싱 단계 완료 시 호출
+                file_slot.markdown("✅ 인덱싱 단계 완료")
+                ctr_slot.empty(); eta_slot.empty()
+                try: bar.progress(100)
+                except Exception: pass
+                return len(seen), max(total_guess, len(seen)) if total_guess else len(seen), time.time()-t0
+
+            return on_msg, finalize
+
+        # 총 대상 추정(인덱싱 대상 m 계산)
+        def _guess_total_for(tag: str) -> int:
+            # tag: "update"/"rebuild"
+            if status_kind == "delta":
+                return max(1, delta_count)
+            # 재최적화 등은 전체 prepared를 대상(없으면 manifest 카운트 대체)
+            return prepared_cnt or manifest_cnt or 0
+
+        # ── 처리 분기(핵심 동작은 동일, 진행률 UI만 강화) ───────────────────────
         if do_update:
             if not _require_admin(): return
             t0 = time.time()
-            file_now = st.empty()   # ← 여기서 현재 파일명을 표시
-            prog = st.progress(0); log = st.empty()
+            total_guess = _guess_total_for("update")
+            on_msg, finalized = _progress_context(total_guess)
+            log = st.empty()
 
             def _pct(v, m=None):
-                try: prog.progress(max(0, min(int(v), 100)))
-                except Exception: pass
+                # 퍼센트는 bar로도 움직이지만, 파일 카운트 기반 진행률이 주가 됨
                 if m: 
                     log.info(str(m))
-                    _maybe_show_current_file(m, file_now)
+                    on_msg(m)
 
             def _msg(s):
                 log.write(f"• {s}")
-                _maybe_show_current_file(s, file_now)
+                on_msg(s)
 
             with st.status("최적화(인덱싱) 실행 중…", state="running") as s:
                 try:
                     build_fn(update_pct=_pct, update_msg=_msg,
                              gdrive_folder_id="", gcp_creds={},
                              persist_dir=str(persist_dir), remote_manifest={})
-                    prog.progress(100)
                     s.update(label="최적화 완료 ✅", state="complete")
-                    file_now.markdown("✅ 인덱싱 단계 완료")
                 except TypeError:
                     build_fn(_pct, _msg, "", {}, str(persist_dir), {})
-                    prog.progress(100)
                     s.update(label="최적화 완료 ✅", state="complete")
-                    file_now.markdown("✅ 인덱싱 단계 완료")
                 except Exception as e:
                     s.update(label="최적화 실패 ❌", state="error")
+                    # finalize는 호출하지 않음(실패)
                     _record_result(False, time.time()-t0, "update")
                     st.error(f"인덱싱 오류: {type(e).__name__}: {e}")
                     return
+
+            processed, total, _took = finalized()
 
             if callable(upload_zip_fn):
                 with st.status("백업 ZIP 업로드 중…", state="running") as s:
@@ -695,12 +744,12 @@ def render_brain_prep_main():
                 rr = restore_fn()
                 if not (rr and rr.get("ok")):
                     s.update(label="복구 실패 ❌", state="error")
-                    _record_result(False, time.time()-t0, "update")
+                    _record_result(False, time.time()-t0, "update", processed, total)
                     st.error(f"복구 실패: {rr.get('error') if rr else 'unknown'}")
                     return
                 s.update(label="복구 완료 ✅", state="complete")
 
-            _record_result(True, time.time()-t0, "update")
+            _record_result(True, time.time()-t0, "update", processed, total)
             _final_attach()
 
         if skip_and_restore:
@@ -720,38 +769,35 @@ def render_brain_prep_main():
         if force_rebuild:
             if not _require_admin(): return
             t0 = time.time()
-            file_now = st.empty()   # ← 여기서 현재 파일명을 표시
-            prog = st.progress(0); log = st.empty()
+            total_guess = _guess_total_for("rebuild")
+            on_msg, finalized = _progress_context(total_guess)
+            log = st.empty()
 
             def _pct(v, m=None):
-                try: prog.progress(max(0, min(int(v), 100)))
-                except Exception: pass
                 if m: 
                     log.info(str(m))
-                    _maybe_show_current_file(m, file_now)
+                    on_msg(m)
 
             def _msg(s):
                 log.write(f"• {s}")
-                _maybe_show_current_file(s, file_now)
+                on_msg(s)
 
             with st.status("다시 최적화 실행 중…", state="running") as s:
                 try:
                     build_fn(update_pct=_pct, update_msg=_msg,
                              gdrive_folder_id="", gcp_creds={},
                              persist_dir=str(persist_dir), remote_manifest={})
-                    prog.progress(100)
                     s.update(label="다시 최적화 완료 ✅", state="complete")
-                    file_now.markdown("✅ 인덱싱 단계 완료")
                 except TypeError:
                     build_fn(_pct, _msg, "", {}, str(persist_dir), {})
-                    prog.progress(100)
                     s.update(label="다시 최적화 완료 ✅", state="complete")
-                    file_now.markdown("✅ 인덱싱 단계 완료")
                 except Exception as e:
                     s.update(label="다시 최적화 실패 ❌", state="error")
                     _record_result(False, time.time()-t0, "rebuild")
                     st.error(f"재최적화 오류: {type(e).__name__}: {e}")
                     return
+
+            processed, total, _took = finalized()
 
             if callable(upload_zip_fn):
                 with st.status("백업 ZIP 업로드 중…", state="running") as s:
@@ -768,12 +814,12 @@ def render_brain_prep_main():
                 rr = restore_fn()
                 if not (rr and rr.get("ok")):
                     s.update(label="복구 실패 ❌", state="error")
-                    _record_result(False, time.time()-t0, "rebuild")
+                    _record_result(False, time.time()-t0, "rebuild", processed, total)
                     st.error(f"복구 실패: {rr.get('error') if rr else 'unknown'}")
                     return
                 s.update(label="복구 완료 ✅", state="complete")
 
-            _record_result(True, time.time()-t0, "rebuild")
+            _record_result(True, time.time()-t0, "rebuild", processed, total)
             _final_attach()
 # ===== [05A] END ===========================================
 
