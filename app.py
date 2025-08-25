@@ -1149,7 +1149,7 @@ def main():
 
     # 4) 학생 질문 패널
     try:
-        render_simple_qa()
+        render_qa_panel()
     except Exception as e:
         st.error(f"질문 패널 렌더 중 오류: {type(e).__name__}: {e}")
 
