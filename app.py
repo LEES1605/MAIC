@@ -1,3 +1,18 @@
+# ===== [00A] ENV BOOTSTRAP (secrets → os.environ) ==================
+def _bootstrap_env_from_secrets():
+    try:
+        import os
+        import streamlit as st
+        for key in ("MAIC_PROMPTS_DRIVE_FOLDER_ID", "MAIC_PROMPTS_PATH"):
+            if key in st.secrets and not os.getenv(key):
+                os.environ[key] = str(st.secrets[key])
+    except Exception:
+        # secrets가 없거나 로컬 실행일 수 있음 → 조용히 패스
+        pass
+
+_bootstrap_env_from_secrets()
+# ===== [00A] END ====================================================
+
 # ===== [01] APP BOOT & ENV ===================================================
 from __future__ import annotations
 
