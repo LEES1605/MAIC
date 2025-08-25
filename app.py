@@ -949,6 +949,26 @@ def render_tag_diagnostics():
     # (나머지 ZIP/로컬 인덱스 체크 로직은 기존과 동일) …
 # ===== [05B] TAG DIAGNOSTICS (NEW) — END ====================================
 
+# ===== [PATCH-BRAIN-HELPER] 두뇌(인덱스) 연결 여부 감지 =======================
+def _is_brain_ready() -> bool:
+    """
+    세션에 저장된 여러 플래그를 종합해 RAG 인덱스가 '부착됨' 상태인지 추정.
+    기존/미래 키와 호환되도록 넓게 본다.
+    """
+    import streamlit as st
+    ss = st.session_state
+    last = ss.get("_auto_restore_last") or {}
+    flags = (
+        ss.get("rag_attached"),
+        ss.get("rag_index_ready"),
+        ss.get("rag_index_attached"),
+        ss.get("index_attached"),
+        ss.get("attached_local"),
+        ss.get("rag_index"),
+        last.get("final_attach"),
+    )
+    return any(bool(x) for x in flags)
+# ===== [PATCH-BRAIN-HELPER] END ==============================================
 
 # ===== [06] 질문/답변 패널 — 프롬프트 모듈 연동(안전가드 강화) ================
 def render_qa_panel():
@@ -979,6 +999,15 @@ def render_qa_panel():
 
     with st.container(border=True):
         st.subheader("질문/답변")
+
+        # ── 🧠 두뇌 상태 배지 ------------------------------------------------
+        rag_ready = _is_brain_ready()
+        if rag_ready:
+            st.caption("🧠 두뇌 상태: **연결됨** · 업로드 자료(RAG) 사용 가능")
+        else:
+            st.caption("🧠 두뇌 상태: **미연결** · 현재 응답은 **LLM-only(자료 미참조)** 입니다")
+
+        # ── 입력 UI ----------------------------------------------------------
         colm, colq = st.columns([1,3])
         with colm:
             sel_mode = st.radio("모드", options=labels, horizontal=True, key="qa_mode_radio")
