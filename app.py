@@ -675,6 +675,298 @@ def render_admin_settings_panel():
             st.error("모든 모드가 꺼져 있습니다. 학생 화면에서 질문 모드가 보이지 않아요.")
 # ===== [04B] END =============================================================
 
+# ===== [04C] PREPARED MONITOR & PROMPT — START ===============================
+import streamlit as st
+
+@st.cache_data(ttl=120, show_spinner=False)
+def _prepared_quick_precheck_cached():
+    """
+    prepared 폴더 변화 감지(2분 캐시).
+    반환: {"ok": bool, "changed": bool, "new_count": int, "details": dict}
+    """
+    import importlib
+    res = {"ok": False, "changed": False, "new_count": 0, "details": {}}
+    try:
+        mod = importlib.import_module("src.rag.index_build")
+        fn = getattr(mod, "quick_precheck", None) or getattr(mod, "precheck_build_needed", None)
+        if not callable(fn):
+            res["details"] = {"error": "quick_precheck_missing"}
+            return res
+        try:
+            out = fn()
+        except TypeError:
+            out = fn(None, None)
+        if not isinstance(out, dict):
+            out = {"changed": bool(out)}
+        res["ok"] = True
+        res["changed"] = bool(out.get("changed"))
+        # 새 파일 수 추정
+        new_count = 0
+        for k in ("new_count", "only_in_prepared", "only_prepared", "only_on_prepared"):
+            v = out.get(k)
+            if isinstance(v, int): new_count = v; break
+            if isinstance(v, (list, tuple)): new_count = len(v); break
+        res["new_count"] = new_count
+        res["details"] = out
+        return res
+    except Exception as e:
+        res["details"] = {"error": f"{type(e).__name__}: {e}"}
+        return res
+
+def _restore_from_drive_and_attach_or_update() -> tuple[bool, str]:
+    """
+    규칙 #1 반영:
+    - 최신 Drive 백업 복구 시도 → 성공하면 attach
+    - 실패(백업 없음 포함)면 Drive prepared 원본으로 재최적화(업데이트) 실행
+    - Drive 자체 접근 불가 추정 시 (False, "drive_inaccessible")
+    """
+    import importlib
+    reason = "unknown"
+    # (1) 백업 복구 시도
+    try:
+        mod = importlib.import_module("src.rag.index_build")
+        restore = getattr(mod, "restore_latest_backup_to_local", None)
+        if callable(restore):
+            r = restore()
+            ok = bool(isinstance(r, dict) and r.get("ok"))
+            if ok:
+                try:
+                    if _attach_from_local():
+                        return True, "restored"
+                except Exception:
+                    pass
+            reason = r.get("error", "no_backup_or_restore_failed") if isinstance(r, dict) else "no_backup_or_restore_failed"
+    except Exception as e:
+        reason = f"restore_exc:{type(e).__name__}"
+
+    # (2) 백업이 없거나 복구 실패 → prepared 원본으로 업데이트
+    ok_update, why = _update_from_prepared_then_backup()
+    if ok_update:
+        try:
+            if _attach_from_local():
+                return True, "updated_from_prepared"
+        except Exception:
+            pass
+
+    # (3) 여기까지 안 되면 Drive 자체 접근 문제일 가능성 높음
+    return False, ("drive_inaccessible" if ("auth" in str(reason).lower() or "quota" in str(reason).lower() or "network" in str(reason).lower()) else "update_failed")
+
+def _backup_local_snapshot(zip_name_prefix="backup") -> str | None:
+    """현재 ~/.maic/persist를 ZIP으로 보관(로컬 백업). 실패해도 앱은 계속."""
+    import zipfile
+    from pathlib import Path
+    from datetime import datetime
+    try:
+        PERSIST_DIR = Path.home() / ".maic" / "persist"
+        BACKUP_DIR  = Path.home() / ".maic" / "backup"
+        BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        zip_path = BACKUP_DIR / f"{zip_name_prefix}_{ts}.zip"
+        with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as z:
+            if PERSIST_DIR.exists():
+                for p in PERSIST_DIR.rglob("*"):
+                    if p.is_file():
+                        z.write(p, arcname=p.relative_to(PERSIST_DIR))
+            z.writestr(".backup_info.txt", f"created_at={ts}\n")
+        return str(zip_path)
+    except Exception:
+        return None
+
+def _call_build_with_overrides(local_prepared_dir: str | None = None) -> bool:
+    """
+    index_build.build_index_with_checkpoint 호출.
+    - local_prepared_dir 주어지면 가능한 kw 인자(prepared_dir/local_prepared_dir/source_dir)로 주입 시도
+    """
+    import importlib, inspect
+    try:
+        mod = importlib.import_module("src.rag.index_build")
+        build = getattr(mod, "build_index_with_checkpoint", None)
+        if not callable(build):
+            return False
+
+        def _pct(v: int, msg: str | None = None):
+            try: st.session_state["_build_pct"] = int(v)
+            except Exception: pass
+            if msg: st.session_state["_build_msg"] = str(msg)
+        def _msg(s: str): st.session_state["_build_msg"] = str(s)
+
+        kwargs = dict(update_pct=_pct, update_msg=_msg)
+        if local_prepared_dir:
+            try:
+                sig = inspect.signature(build)
+                for k in ("prepared_dir", "local_prepared_dir", "source_dir"):
+                    if k in sig.parameters:
+                        kwargs[k] = local_prepared_dir
+                        break
+            except Exception:
+                kwargs["prepared_dir"] = local_prepared_dir
+
+        try:
+            build(**kwargs)
+        except TypeError:
+            build()
+        return True
+    except Exception:
+        return False
+
+def _update_from_prepared_then_backup() -> tuple[bool, str]:
+    """
+    규칙 #1: Drive prepared 원본으로 재최적화 → 품질리포트 → attach → 로컬 ZIP 백업
+    반환 (ok, reason)
+    """
+    try:
+        with st.status("prepared 원본으로 다시 최적화 중…", state="running") as s:
+            ok = _call_build_with_overrides(local_prepared_dir=None)
+            s.update(label=("최적화 완료 ✅" if ok else "최적화 실패 ❌"), state=("complete" if ok else "error"))
+        if not ok:
+            return False, "update_failed"
+
+        try: _write_quality_report(st.session_state.get("_auto_restore_last"))
+        except Exception: pass
+        try: _attach_from_local()
+        except Exception: pass
+        _backup_local_snapshot("backup_after_update")
+        return True, "updated"
+    except Exception:
+        return False, "update_exc"
+
+def _render_local_fallback_panel():
+    """
+    규칙 #2: Drive 접근 불가 시 — 로컬 폴더(또는 ZIP)로 다시 최적화하여 로컬에 저장.
+    """
+    import tempfile, zipfile
+    from pathlib import Path
+    st.warning("Google Drive 접근이 불가하여 **로컬 자료로 다시 최적화**가 필요합니다.", icon="⚠️")
+    with st.container(border=True):
+        st.markdown("**로컬 폴더로 다시 최적화**")
+        col1, col2 = st.columns([0.55, 0.45])
+        with col1:
+            local_dir = st.text_input("로컬 폴더 경로 (서버 기준)", value=str((Path.home()/".maic"/"prepared_local")))
+        with c2:
+            go1 = st.button("📁 이 폴더로 최적화", use_container_width=True, key="btn_local_dir_build")
+
+        st.caption("또는 ZIP 업로드로 폴더를 대체할 수 있어요.")
+        up = st.file_uploader("폴더 ZIP 업로드(원자료)", type=["zip"], accept_multiple_files=False, key="up_zip_prepared")
+        go2 = st.button("🗜️ 업로드 ZIP으로 최적화", use_container_width=True, key="btn_local_zip_build")
+
+    def _build_from_dir(src_dir: str) -> bool:
+        src = Path(src_dir)
+        if not src.exists():
+            st.error("경로가 존재하지 않습니다.")
+            return False
+        ok = _call_build_with_overrides(local_prepared_dir=str(src))
+        if ok:
+            try: _write_quality_report({"source": "local_dir"})
+            except Exception: pass
+            try: _attach_from_local()
+            except Exception: pass
+            _backup_local_snapshot("backup_local_build")
+            try: st.toast("로컬 폴더로 최적화 완료 — 답변 준비 완료 ✅")
+            except Exception: st.success("로컬 폴더로 최적화 완료 — 답변 준비 완료 ✅")
+            st.rerun()
+        else:
+            st.error("로컬 폴더로 최적화가 지원되지 않는 빌더 버전입니다.")
+        return ok
+
+    if go1 and local_dir:
+        _build_from_dir(local_dir)
+
+    if go2 and up is not None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td) / "prepared_upload"
+            tmp.mkdir(parents=True, exist_ok=True)
+            zpath = tmp / "upload.zip"
+            with open(zpath, "wb") as f:
+                f.write(up.read())
+            with zipfile.ZipFile(zpath, "r") as z:
+                z.extractall(tmp)
+            # ZIP 최상위 디렉터리 추정
+            candidates = [p for p in tmp.iterdir() if p.is_dir()]
+            src_dir = str(candidates[0] if candidates else tmp)
+            _build_from_dir(src_dir)
+
+def render_prepared_prompt():
+    """
+    앱 실행 시 1회:
+      1) prepared 변화가 있으면 질문 → Yes: 업데이트(Drive 저장 포함) / No: 기존 Drive 백업 복구
+         - 복구 실패 또는 백업 없음 → 규칙 #1에 따라 prepared 원본으로 재최적화
+      2) 변화가 없으면 → 기존 Drive 백업을 로컬에 보장(복구)
+         - 백업이 없거나 Drive 복구 실패 → 규칙 #1에 따라 prepared 원본으로 재최적화
+      3) 어떤 경우든 Drive 접근 자체가 불가하면 → 규칙 #2 로컬 대체 패널 노출
+    """
+    if st.session_state.get("_prepared_prompt_done"):
+        return
+
+    chk = _prepared_quick_precheck_cached()
+    # precheck 실패면 최소 복구 루트로 진입
+    if not chk.get("ok"):
+        ok, why = _restore_from_drive_and_attach_or_update()
+        st.session_state["_prepared_prompt_done"] = True
+        if not ok and why == "drive_inaccessible":
+            _render_local_fallback_panel()
+        return
+
+    if chk.get("changed"):
+        with st.container(border=True):
+            n = chk.get("new_count", 0)
+            st.markdown(f"### 📂 새 자료 감지: **{n}건**")
+            st.caption("prepared 폴더에서 변경을 감지했습니다. 지금 인덱스를 업데이트할까요?")
+            c1, c2 = st.columns([0.25, 0.75])
+            with c1:
+                go = st.button("✅ 지금 업데이트", key="btn_prep_yes", use_container_width=True)
+            with c2:
+                later = st.button("🕗 나중에(기존 백업 사용)", key="btn_prep_no", use_container_width=True)
+
+        if go:
+            ok, why = _update_from_prepared_then_backup()
+            try: st.cache_data.clear()
+            except Exception: pass
+            st.session_state["_prepared_prompt_done"] = True
+            if ok:
+                try: st.toast("업데이트 및 백업 완료 — 답변 준비 완료 ✅")
+                except Exception: st.success("업데이트 및 백업 완료 — 답변 준비 완료 ✅")
+                st.rerun()
+            else:
+                st.error("업데이트에 실패했습니다. 기존 백업으로 복구를 시도합니다.")
+                ok2, why2 = _restore_from_drive_and_attach_or_update()
+                if not ok2 and why2 == "drive_inaccessible":
+                    _render_local_fallback_panel()
+                else:
+                    try: st.toast("기존 백업으로 준비 완료(또는 prepared에서 복구) ✅")
+                    except Exception: pass
+                    st.rerun()
+
+        elif later:
+            ok, why = _restore_from_drive_and_attach_or_update()
+            _backup_local_snapshot("backup_use_existing")
+            try: st.cache_data.clear()
+            except Exception: pass
+            st.session_state["_prepared_prompt_done"] = True
+            if not ok and why == "drive_inaccessible":
+                _render_local_fallback_panel()
+            else:
+                try: st.toast("기존 백업 복구(또는 prepared 재최적화) — 답변 준비 완료 ✅")
+                except Exception: pass
+                st.rerun()
+
+    else:
+        # 변화 없음: 기존 백업 보장 / 없거나 실패면 prepared로 업데이트
+        ok, why = _restore_from_drive_and_attach_or_update()
+        _backup_local_snapshot("backup_no_change")
+        st.session_state["_prepared_prompt_done"] = True
+        if not ok and why == "drive_inaccessible":
+            _render_local_fallback_panel()
+        else:
+            try: st.toast("변경 없음 — 최신 상태 보장 완료 ✅")
+            except Exception: pass
+
+# 앱 상단에서 한 번 호출
+try:
+    render_prepared_prompt()
+except Exception:
+    st.session_state["_prepared_prompt_done"] = True
+# ===== [04C] PREPARED MONITOR & PROMPT — END =================================
+
 
 # ===== [05A] BRAIN PREP MAIN =======================================
 def render_brain_prep_main():
