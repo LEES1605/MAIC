@@ -893,39 +893,46 @@ with st.status("최적화(인덱싱) 실행 중…", state="running") as s:
                 if details: st.caption("복구 상세: " + " · ".join(details))
             _record_result(True, time.time()-t0, "rebuild", processed, total); _final_attach()
 
-        # ── 두뇌 강제 연결(attach) 액션 ───────────────────────────────────────
+# ===== [FIX-SYNTAX-645] 두뇌 강제 연결(attach) 액션 — 안정형 ==================
         if force_attach_now:
-            import importlib
             from pathlib import Path
-            with st.status("두뇌 연결 중…", state="running") as s:
-                # 경로 확인
-                try:
-                    m = importlib.import_module("src.rag.index_build")
-                    persist_dir = getattr(m, "PERSIST_DIR", Path.home() / ".maic" / "persist")
-                except Exception:
+            import importlib
+            try:
+                with st.status("두뇌 연결 중…", state="running") as s:
+                    # 1) persist 경로 확인
                     persist_dir = Path.home() / ".maic" / "persist"
-                st.caption(f"persist_dir: `{persist_dir}`")
-
-                # 파일 신호 유무( .ready / chunks.jsonl ) 체크
-                if not _has_local_index_files():
-                    s.update(label="두뇌 연결 실패 ❌", state="error")
-                    st.error("로컬 인덱스 파일 신호를 찾지 못했습니다. '최신 백업 복구' 또는 '업데이트' 후 다시 시도하세요.")
-                else:
-                    ok = False
                     try:
-                        ok = _attach_from_local()
-                    except Exception as e:
+                        m = importlib.import_module("src.rag.index_build")
+                        persist_dir = getattr(m, "PERSIST_DIR", persist_dir)
+                    except Exception:
+                        # 모듈/속성 불러오기 실패해도 기본 경로로 진행
+                        pass
+                    st.caption(f"persist_dir: `{persist_dir}`")
+
+                    # 2) 로컬 인덱스 파일 신호 확인(.ready 등)
+                    if not _has_local_index_files():
                         s.update(label="두뇌 연결 실패 ❌", state="error")
-                        st.error(f"예외: {type(e).__name__}: {e}")
-                    if ok:
-                        st.session_state["brain_attached"] = True
-                        s.update(label="두뇌 연결 완료 ✅", state="complete")
-                        st.toast("🟢 답변준비 완료")
-                        st.rerun()
+                        st.error("로컬 인덱스 파일을 찾지 못했습니다. '최신 백업 복구' 또는 '업데이트' 후 재시도하세요.")
                     else:
-                        s.update(label="두뇌 연결 실패 ❌", state="error")
-                        # 힌트
-                        st.info("힌트: persist_dir 경로가 일치하는지와 파일 권한을 확인하세요. 필요 시 강제 최적화 또는 복구를 먼저 수행하세요.")
+                        # 3) 실제 attach 시도
+                        ok = False
+                        try:
+                            ok = _attach_from_local()
+                        except Exception as e:
+                            s.update(label="두뇌 연결 실패 ❌", state="error")
+                            st.error(f"예외: {type(e).__name__}: {e}")
+                        if ok:
+                            st.session_state["brain_attached"] = True
+                            s.update(label="두뇌 연결 완료 ✅", state="complete")
+                            st.toast("🟢 답변준비 완료")
+                            st.rerun()
+                        else:
+                            s.update(label="두뇌 연결 실패 ❌", state="error")
+                            st.info("힌트: persist_dir 경로/권한과 파일 유무를 확인하세요. 필요 시 '업데이트' 또는 '최신 백업 복구' 후 다시 시도.")
+            except Exception as e:
+                # 바깥 가드(렌더링/위젯 단계 예외 보호)
+                st.error(f"두뇌 연결 처리 중 예외: {type(e).__name__}: {e}")
+# ===== [FIX-SYNTAX-645] END ==================================================
 
 # ===== [05A] END ===========================================
 
