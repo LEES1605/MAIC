@@ -361,11 +361,15 @@ def render_admin_settings():
 # (호환용 별칭: 과거 코드에서 이 이름을 호출해도 동작)
 def render_admin_settings_panel(*args, **kwargs):
     return render_admin_settings(*args, **kwargs)
-# ===== [04B] END =============================================================
-# ===== [04C-CALL] 관리자 진단 섹션 호출(관리자 전용) ==========================
+# ===== [04B] END ===========================================================
+
+# ===== [04C-CALL] 관리자 진단 섹션 호출(견고 버전) ==========================
 def _render_admin_diagnostics_section():
-    """프롬프트 소스/환경 상태를 관리자 전용으로 표시"""
+    """프롬프트 소스/환경 상태를 관리자 전용으로 표시 (내장 폴백 포함)"""
+    import os
+    from datetime import datetime
     import streamlit as st
+
     # 관리자 가드
     if not (st.session_state.get("is_admin")
             or st.session_state.get("admin_mode")
@@ -373,16 +377,83 @@ def _render_admin_diagnostics_section():
             or st.session_state.get("mode") == "admin"):
         return
 
-    # render_prompt_source_diag 가 정의되어 있으면 호출, 없으면 안내
+    # 1) 진단 함수 해상도: 우선 app.py 글로벌 → 그 다음 폴백 정의
     fn = globals().get("render_prompt_source_diag")
-    with st.expander("🛠 진단 · 프롬프트 소스 상태", expanded=False):
-        if callable(fn):
-            fn()
-        else:
-            st.info("진단 패널 함수(render_prompt_source_diag)가 아직 등록되지 않았습니다. "
-                    "이전 턴에 드린 [04C] 구획을 먼저 추가해 주세요.")
 
-# 즉시 호출(레이아웃 상 관리자 설정 카드 바로 아래에 배치)
+    if not callable(fn):
+        # ── 폴백 진단 함수(간략 버전) 정의 ───────────────────────────────────
+        def render_prompt_source_diag():
+            try:
+                from src.prompt_modes import get_overrides_path, load_overrides
+            except Exception as e:
+                st.error(f"prompt_modes 임포트 실패: {type(e).__name__}: {e}")
+                return
+
+            st.caption("Drive 폴더 연결 및 로컬 prompts.yaml 인식 여부를 점검합니다.")
+
+            # 환경변수 / secrets (마스킹)
+            folder_id = os.getenv("MAIC_PROMPTS_DRIVE_FOLDER_ID")
+            try:
+                if (not folder_id) and ("MAIC_PROMPTS_DRIVE_FOLDER_ID" in st.secrets):
+                    folder_id = str(st.secrets["MAIC_PROMPTS_DRIVE_FOLDER_ID"])
+            except Exception:
+                pass
+            def _mask(v):
+                if not v: return "— 없음"
+                v = str(v);  return (v[:6] + "…" + v[-4:]) if len(v) > 12 else ("*" * len(v))
+            st.write("• Drive 폴더 ID:", _mask(folder_id))
+
+            # 로컬 파일 경로/상태
+            p = get_overrides_path()
+            st.write("• 로컬 경로:", f"`{p}`")
+            exists = p.exists()
+            st.write("• 파일 존재:", "✅ 있음" if exists else "❌ 없음")
+
+            data = None
+            if exists:
+                try:
+                    stat = p.stat()
+                    mtime = datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+                    st.write("• 크기/수정시각:", f"{stat.st_size} bytes / {mtime}")
+                except Exception:
+                    pass
+                try:
+                    data = load_overrides()
+                    ok = isinstance(data, dict)
+                    st.write("• YAML 로드:", "✅ 성공" if ok else "⚠️ 비정상(dict 아님)")
+                except Exception as e:
+                    st.error(f"YAML 로드 오류: {type(e).__name__}: {e}")
+
+            modes = []
+            if isinstance(data, dict):
+                modes = list((data.get("modes") or {}).keys())
+            st.write("• 포함된 모드:", " , ".join(modes) if modes else "— (미검출)")
+            if modes and ("문장구조분석" not in modes):
+                st.warning("`modes:` 아래에 `문장구조분석:` 블록이 없습니다. prompts.yaml을 확인하세요.")
+
+            # 미리보기 버튼
+            col1, col2 = st.columns([1,1])
+            with col1:
+                if exists and st.button("📄 파일 내용 미리보기", use_container_width=True, key="btn_preview_prompts_yaml_inline"):
+                    try:
+                        st.code(p.read_text(encoding="utf-8"), language="yaml")
+                    except Exception as e:
+                        st.error(f"파일 읽기 실패: {type(e).__name__}: {e}")
+            with col2:
+                st.caption("힌트: 서비스계정/앱 계정에 Drive 폴더 보기 권한 공유가 되어 있어야 합니다.")
+
+        # 폴백 함수를 글로벌 등록(다음 런에서도 사용 가능)
+        globals()["render_prompt_source_diag"] = render_prompt_source_diag
+        fn = render_prompt_source_diag
+
+    # 2) UI 렌더
+    with st.expander("🛠 진단 · 프롬프트 소스 상태", expanded=False):
+        try:
+            fn()  # 사용자가 정의했으면 그것을, 없으면 폴백을 호출
+        except Exception as e:
+            st.error(f"진단 패널 실행 오류: {type(e).__name__}: {e}")
+
+# 즉시 호출(관리자 설정 카드 바로 아래에 배치)
 _render_admin_diagnostics_section()
 # ===== [04C-CALL] END ========================================================
 
