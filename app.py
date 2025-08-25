@@ -30,7 +30,7 @@ os.environ["STREAMLIT_RUN_ON_SAVE"] = "false"
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 os.environ["STREAMLIT_SERVER_ENABLE_WEBSOCKET_COMPRESSION"] = "false"
 
-# ===== [02] IMPORTS ==========================================================
+# ===== [01] APP BOOT & ENV END ==============================================
 
 # ===== [02] IMPORTS ==========================================================
 from pathlib import Path
@@ -362,6 +362,29 @@ def render_admin_settings():
 def render_admin_settings_panel(*args, **kwargs):
     return render_admin_settings(*args, **kwargs)
 # ===== [04B] END =============================================================
+# ===== [04C-CALL] 관리자 진단 섹션 호출(관리자 전용) ==========================
+def _render_admin_diagnostics_section():
+    """프롬프트 소스/환경 상태를 관리자 전용으로 표시"""
+    import streamlit as st
+    # 관리자 가드
+    if not (st.session_state.get("is_admin")
+            or st.session_state.get("admin_mode")
+            or st.session_state.get("role") == "admin"
+            or st.session_state.get("mode") == "admin"):
+        return
+
+    # render_prompt_source_diag 가 정의되어 있으면 호출, 없으면 안내
+    fn = globals().get("render_prompt_source_diag")
+    with st.expander("🛠 진단 · 프롬프트 소스 상태", expanded=False):
+        if callable(fn):
+            fn()
+        else:
+            st.info("진단 패널 함수(render_prompt_source_diag)가 아직 등록되지 않았습니다. "
+                    "이전 턴에 드린 [04C] 구획을 먼저 추가해 주세요.")
+
+# 즉시 호출(레이아웃 상 관리자 설정 카드 바로 아래에 배치)
+_render_admin_diagnostics_section()
+# ===== [04C-CALL] END ========================================================
 
 # ===== [04C] 프롬프트 소스 진단 패널 =========================================
 def render_prompt_source_diag():
