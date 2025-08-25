@@ -204,14 +204,30 @@ def render_admin_controls() -> None:
             st.session_state["_admin_auth_open"] = False
             st.rerun()
         if ok:
-            if pin_try == get_admin_pin():
-                st.session_state["is_admin"] = True
-                st.session_state["_admin_auth_open"] = False
-                try: st.toast("관리자 모드 진입 ✅")
-                except Exception: pass
-                st.rerun()
-            else:
-                st.error("PIN이 올바르지 않습니다.")
+# [UA-01C-PATCH-01] PIN 인증 성공 분기 — START
+        if pin_try == get_admin_pin():
+            # 1) 관리자 전환
+            st.session_state["is_admin"] = True
+            st.session_state["_admin_auth_open"] = False
+
+            # 2) 관리자 전용 '신규자료 감지/업데이트 질문'이 즉시 뜨도록 리셋
+            #    (이 플래그가 True로 남아 있으면 질문 패널이 안 뜸)
+            st.session_state["_prepared_prompt_done"] = False
+
+            # 3) 2분 캐시(quick_precheck 캐시) 바로 무효화
+            try:
+                st.cache_data.clear()
+            except Exception:
+                pass
+        
+            # 4) 안내 + 리런
+            try:
+                st.toast("관리자 모드 진입 ✅ 새 자료 점검을 시작합니다")
+            except Exception:
+                pass
+            st.rerun()
+# [UA-01C-PATCH-01] PIN 인증 성공 분기 — END
+
 
     # ── (기존) 진단 퀵패널: 정책상 학생 모드에서만 노출 -------------------------
     if (not st.session_state.get("is_admin", False)) and st.session_state.get("_diag_quick_open", False):
