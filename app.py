@@ -243,8 +243,6 @@ def _auto_attach_or_restore_silently() -> bool:
     return False
 # ===== [03] SESSION & HELPERS — END ==========================================
 
-
-
 # ===== [04] HEADER ==========================================
 def render_header():
     """
