@@ -331,16 +331,14 @@ def render_admin_settings():
 render_admin_settings()
 # ===== [04B] END ======================================================
 
-
 # ===== [05A] BRAIN PREP MAIN =======================================
 def render_brain_prep_main():
     """
     준비/최적화 패널 (관리자 전용)
     - Drive 'prepared' 변화 감지(quick_precheck) → 결과 요약(+파일 목록)
-    - 상태 배지 정밀화: delta / no_manifest / no_prepared / no_change
+    - 상태 배지(우선순위): no_prepared → delta → no_manifest → no_change
     - 인덱싱 중: 현재 파일명(아이콘) + 처리 n/총 m + ETA 표시
-    - 상태별 권장 동작 배지 + 버튼 가드(자료 없음일 때 '업데이트' 숨김)
-    - 완료 시 요약 배지 + 세션 기록(_optimize_last)
+    - 완료 시 요약 배지 + 세션 기록(_optimize_last) + 복구 상세 표시
     """
     import streamlit as st
     import time, os, re, math
@@ -381,14 +379,12 @@ def render_brain_prep_main():
     status_badge = {"ready":"🟢 답변준비 완료","pending":"🟡 로컬 파일 감지(세션 미부착)","missing":"🔴 인덱스 없음"}.get(idx_status,"❔ 상태 미상")
 
     # ── 신규자료 점검 + 델타/사유 파싱 ─────────────────────────────────────────
-    changed = False
     prepared_cnt = manifest_cnt = 0
     reasons = []
     added = modified = removed = moved = skipped = []
     try:
         if callable(quick_precheck):
             pre = quick_precheck(None)  # 폴더 ID는 내부 자동 탐색
-            changed = bool(pre.get("changed"))
             prepared_cnt = int(pre.get("prepared_count", 0))
             manifest_cnt = int(pre.get("manifest_count", 0))
             reasons = list(pre.get("reasons", []))
@@ -401,17 +397,17 @@ def render_brain_prep_main():
     except Exception as e:
         reasons = [f"precheck_failed:{type(e).__name__}"]
 
-    # ── 상태 분류(정밀) ───────────────────────────────────────────────────────
+    # ── 상태 분류(우선순위 고정) ──────────────────────────────────────────────
     delta_count = len(added) + len(modified) + len(removed) + len(moved)
-    has_no_manifest_reason = any("no_local_manifest" in str(r) for r in reasons)
-    if delta_count > 0:
-        status_kind = "delta"       # 실제 파일 증감 있음 → 녹색불
-    elif has_no_manifest_reason or (manifest_cnt == 0 and prepared_cnt > 0):
-        status_kind = "no_manifest" # 매니페스트 없음/유실
-    elif prepared_cnt == 0:
-        status_kind = "no_prepared" # 자료 폴더가 비어있음
+    if prepared_cnt == 0:
+        status_kind = "no_prepared"         # 최우선: 자료 자체가 없음
+    elif delta_count > 0:
+        status_kind = "delta"               # 실제 파일 증감 있음
+    elif manifest_cnt == 0:
+        status_kind = "no_manifest"         # 매니페스트 없음/유실
     else:
-        status_kind = "no_change"   # 변경 없음
+        status_kind = "no_change"           # 변경 없음
+
     kind_badge = {
         "delta":       "🟢 신규자료 감지",
         "no_manifest": "🟡 초기화 필요(매니페스트 없음)",
@@ -420,11 +416,12 @@ def render_brain_prep_main():
     }[status_kind]
 
     # ── 아이콘 맵(확장자별) ───────────────────────────────────────────────────
-    ICONS = {".pdf":"📕",".doc":"📝",".docx":"📝",".txt":"🗒️",".md":"🗒️",".ppt":"📊",".pptx":"📊",".xls":"📈",".xlsx":"📈",".csv":"📑",
-             ".json":"🧩",".html":"🌐",".jpg":"🖼️",".jpeg":"🖼️",".png":"🖼️",".gif":"🖼️",".webp":"🖼️",".svg":"🖼️",".mp3":"🔊",".wav":"🔊",".mp4":"🎞️",".mkv":"🎞️",".py":"🐍",".ipynb":"📓"}
+    ICONS = {".pdf":"📕",".doc":"📝",".docx":"📝",".txt":"🗒️",".md":"🗒️",".ppt":"📊",".pptx":"📊",
+             ".xls":"📈",".xlsx":"📈",".csv":"📑",".json":"🧩",".html":"🌐",
+             ".jpg":"🖼️",".jpeg":"🖼️",".png":"🖼️",".gif":"🖼️",".webp":"🖼️",".svg":"🖼️",
+             ".mp3":"🔊",".wav":"🔊",".mp4":"🎞️",".mkv":"🎞️",".py":"🐍",".ipynb":"📓"}
     def _icon_for(path: str) -> str:
-        import os as _os
-        ext = _os.path.splitext(path.lower())[1]
+        ext = os.path.splitext(str(path).lower())[1]
         return ICONS.get(ext, "📄")
 
     # ── 패널 렌더 ─────────────────────────────────────────────────────────────
@@ -453,8 +450,9 @@ def render_brain_prep_main():
                             st.caption("— 없음")
                         else:
                             for x in rows[:limit]:
-                                ico = _icon_for(str(x)); st.write(f"{ico} {x}")
-                            if len(rows) > limit: st.caption(f"… 외 {len(rows)-limit}개")
+                                st.write(f"{_icon_for(x)} {x}")
+                            if len(rows) > limit:
+                                st.caption(f"… 외 {len(rows)-limit}개")
                 _render_list(c1, "추가됨", added); _render_list(c2, "수정됨", modified); _render_list(c3, "삭제됨", removed)
 
         if reasons and status_kind != "delta":
@@ -486,14 +484,12 @@ def render_brain_prep_main():
             force_rebuild    = c2.button("🛠 강제 최적화 초기화", use_container_width=True)
 
         # ── 공통 헬퍼 ─────────────────────────────────────────────────────────
-        def _require_admin() -> bool:
-            if not _is_admin(): st.warning("관리자만 사용할 수 있는 기능입니다."); return False
-            return True
         def _final_attach():
             with st.status("두뇌 연결 중…", state="running") as s2:
                 ok = _auto_attach_or_restore_silently()
                 if ok: s2.update(label="두뇌 연결 완료 ✅", state="complete"); st.toast("🟢 답변준비 완료"); st.rerun()
                 else:  s2.update(label="두뇌 연결 실패 ❌", state="error"); st.error("세션 부착 실패")
+
         def _record_result(ok: bool, took_s: float, tag: str, processed:int|None=None, total:int|None=None):
             st.session_state["_optimize_last"] = {
                 "ok": bool(ok), "took_sec": round(float(took_s), 1),
@@ -507,7 +503,7 @@ def render_brain_prep_main():
             else:
                 st.error(f"❌ 실패: {tag} · 소요 {took_s:.1f}s")
 
-        # ── 인덱싱 진행 표시 유틸(파일명 + n/m + ETA) ─────────────────────────
+        # 진행표시 유틸 (파일명 + n/m + ETA) ---------------------------------
         path_regex = re.compile(r'([A-Za-z]:\\[^:*?"<>|\n]+|/[^ \n]+?\.[A-Za-z0-9]{1,8})')
         def _fmt_eta(sec: float) -> str:
             if sec <= 0 or math.isinf(sec) or math.isnan(sec): return "—"
@@ -519,7 +515,6 @@ def render_brain_prep_main():
                 m = path_regex.search(str(msg)); 
                 if not m: return
                 path = m.group(1).replace("\\","/"); fname = os.path.basename(path)
-                if fname != current["name"]: current["name"] = fname
                 if fname not in seen: seen.add(fname)
                 processed = len(seen); total = max(total_guess, processed) if total_guess else processed
                 pct = int(min(100, (processed/total)*100)) if total else 0
@@ -539,10 +534,9 @@ def render_brain_prep_main():
             if status_kind == "delta": return max(1, delta_count)
             return prepared_cnt or manifest_cnt or 0
 
-        # ── 처리 분기(핵심 동작은 동일, 진행률 UI 포함) ─────────────────────────
+        # ── 처리 분기(핵심 동작 동일, 복구 상세 출력 추가) ────────────────────
         if do_update:
-            if not _require_admin(): return
-            t0 = time.time(); total_guess = _guess_total_for("update"); on_msg, finalized = _progress_context(total_guess); log = st.empty()
+            t0 = time.time(); on_msg, finalized = _progress_context(_guess_total_for("update")); log = st.empty()
             def _pct(v, m=None): 
                 if m: log.info(str(m)); on_msg(m)
             def _msg(s): log.write(f"• {s}"); on_msg(s)
@@ -554,7 +548,8 @@ def render_brain_prep_main():
                     build_fn(_pct, _msg, "", {}, str(persist_dir), {}); s.update(label="최적화 완료 ✅", state="complete")
                 except Exception as e:
                     s.update(label="최적화 실패 ❌", state="error"); _record_result(False, time.time()-t0, "update"); st.error(f"인덱싱 오류: {type(e).__name__}: {e}"); return
-            processed, total, _took = finalized()
+            processed, total, _ = finalized()
+            # 업로드 → 복구
             if callable(upload_zip_fn):
                 with st.status("백업 ZIP 업로드 중…", state="running") as s:
                     try:
@@ -564,22 +559,36 @@ def render_brain_prep_main():
                     except Exception:                    s.update(label="업로드 실패(계속 진행) ⚠️", state="error")
             with st.status("최신 백업 ZIP 복구 중…", state="running") as s:
                 rr = restore_fn()
-                if not (rr and rr.get("ok")): s.update(label="복구 실패 ❌", state="error"); _record_result(False, time.time()-t0, "update", processed, total); st.error(f"복구 실패: {rr.get('error') if rr else 'unknown'}"); return
+                if not (rr and rr.get("ok")):
+                    s.update(label="복구 실패 ❌", state="error"); _record_result(False, time.time()-t0, "update", processed, total); st.error(f"복구 실패: {rr.get('error') if rr else 'unknown'}"); return
                 s.update(label="복구 완료 ✅", state="complete")
+                # 복구 상세
+                details = []
+                for k in ("zip_name","restored_count","files"):
+                    if k in (rr or {}): 
+                        v = rr[k]
+                        details.append(f"{k}:{v if not isinstance(v,list) else len(v)}")
+                if details: st.caption("복구 상세: " + " · ".join(details))
             _record_result(True, time.time()-t0, "update", processed, total); _final_attach()
 
         if skip_and_restore:
-            if not _require_admin(): return
             t0 = time.time()
             with st.status("최신 백업 ZIP 복구 중…", state="running") as s:
                 rr = restore_fn()
-                if not (rr and rr.get("ok")): s.update(label="복구 실패 ❌", state="error"); _record_result(False, time.time()-t0, "restore"); st.error(f"복구 실패: {rr.get('error') if rr else 'unknown'}"); return
+                if not (rr and rr.get("ok")):
+                    s.update(label="복구 실패 ❌", state="error"); _record_result(False, time.time()-t0, "restore"); st.error(f"복구 실패: {rr.get('error') if rr else 'unknown'}"); return
                 s.update(label="복구 완료 ✅", state="complete")
+                # 복구 상세
+                details = []
+                for k in ("zip_name","restored_count","files"):
+                    if k in (rr or {}):
+                        v = rr[k]
+                        details.append(f"{k}:{v if not isinstance(v,list) else len(v)}")
+                if details: st.caption("복구 상세: " + " · ".join(details))
             _record_result(True, time.time()-t0, "restore"); _final_attach()
 
         if force_rebuild:
-            if not _require_admin(): return
-            t0 = time.time(); total_guess = _guess_total_for("rebuild"); on_msg, finalized = _progress_context(total_guess); log = st.empty()
+            t0 = time.time(); on_msg, finalized = _progress_context(_guess_total_for("rebuild")); log = st.empty()
             def _pct(v, m=None): 
                 if m: log.info(str(m)); on_msg(m)
             def _msg(s): log.write(f"• {s}"); on_msg(s)
@@ -591,7 +600,7 @@ def render_brain_prep_main():
                     build_fn(_pct, _msg, "", {}, str(persist_dir), {}); s.update(label="다시 최적화 완료 ✅", state="complete")
                 except Exception as e:
                     s.update(label="다시 최적화 실패 ❌", state="error"); _record_result(False, time.time()-t0, "rebuild"); st.error(f"재최적화 오류: {type(e).__name__}: {e}"); return
-            processed, total, _took = finalized()
+            processed, total, _ = finalized()
             if callable(upload_zip_fn):
                 with st.status("백업 ZIP 업로드 중…", state="running") as s:
                     try:
@@ -601,8 +610,16 @@ def render_brain_prep_main():
                     except Exception:                    s.update(label="업로드 실패(계속 진행) ⚠️", state="error")
             with st.status("최신 백업 ZIP 복구 중…", state="running") as s:
                 rr = restore_fn()
-                if not (rr and rr.get("ok")): s.update(label="복구 실패 ❌", state="error"); _record_result(False, time.time()-t0, "rebuild", processed, total); st.error(f"복구 실패: {rr.get('error') if rr else 'unknown'}"); return
+                if not (rr and rr.get("ok")):
+                    s.update(label="복구 실패 ❌", state="error"); _record_result(False, time.time()-t0, "rebuild", processed, total); st.error(f"복구 실패: {rr.get('error') if rr else 'unknown'}"); return
                 s.update(label="복구 완료 ✅", state="complete")
+                # 복구 상세
+                details = []
+                for k in ("zip_name","restored_count","files"):
+                    if k in (rr or {}):
+                        v = rr[k]
+                        details.append(f"{k}:{v if not isinstance(v,list) else len(v)}")
+                if details: st.caption("복구 상세: " + " · ".join(details))
             _record_result(True, time.time()-t0, "rebuild", processed, total); _final_attach()
 # ===== [05A] END ===========================================
 
