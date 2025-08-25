@@ -626,11 +626,11 @@ def render_brain_prep_main():
         idx_status = "missing"
     status_badge = {"ready":"🟢 답변준비 완료","pending":"🟡 로컬 파일 감지(세션 미부착)","missing":"🔴 인덱스 없음"}.get(idx_status,"❔ 상태 미상")
 
-    # ── 신규자료 점검 + 델타/사유 파싱 ─────────────────────────────────────────
-    prepared_cnt = manifest_cnt = 0
-    reasons = []
-    added = modified = removed = moved = skipped = []
-    try:
+        # ── 신규자료 점검 + 델타/사유 파싱 ─────────────────────────────────────
+        prepared_cnt = manifest_cnt = 0
+        reasons = []
+        added, modified, removed, moved, skipped = [], [], [], [], []
+
         if callable(quick_precheck):
             pre = quick_precheck(None)  # 폴더 ID는 내부 자동 탐색
             prepared_cnt = int(pre.get("prepared_count", 0))
@@ -1230,6 +1230,10 @@ def main():
         _render_title_with_status()
     except Exception:
         pass
+
+    # 부트 경고 출력(있을 때만)
+    for _msg in globals().get("_BOOT_WARNINGS", []):
+        st.warning(_msg)
 
     # 1) 자동 연결/복구
     try:
