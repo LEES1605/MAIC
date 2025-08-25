@@ -89,11 +89,17 @@ def render_admin_controls() -> None:
             return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
     def _fmt_size(n):
-        try: n = int(n)
-        except Exception: return "-"
-        u=["B","KB","MB","GB","TB"]; i=0; f=float(n)
-        while f>=1024 and i<len(u)-1: f/=1024.0; i+=1
-        return (f"{int(f)} {u[i]}" if i==0 else f"{f:.1f} {u[i]}")
+        try:
+            n = int(n)
+        except Exception:
+            return "-"
+        u = ["B", "KB", "MB", "GB", "TB"]
+        i = 0
+        f = float(n)
+        while f >= 1024 and i < len(u) - 1:
+            f /= 1024.0
+            i += 1
+        return (f"{int(f)} {u[i]}" if i == 0 else f"{f:.1f} {u[i]}")
 
     with st.container():
         _, right = st.columns([0.65, 0.35])
@@ -117,10 +123,15 @@ def render_admin_controls() -> None:
                         if res.get("ok"):
                             zp = Path(res["path"])
                             up = _upload_backup_to_drive(zp)
-                            try: st.cache_data.clear()
-                            except Exception: pass
+                            try:
+                                st.cache_data.clear()
+                            except Exception:
+                                pass
                             size = _fmt_size(zp.stat().st_size) if zp.exists() else "-"
-                            st.success(f"백업 완료: {zp.name} ({size})" + (" → Drive 업로드 성공" if up.get("ok") else " — Drive 업로드 건너뜀/실패"))
+                            st.success(
+                                f"백업 완료: {zp.name} ({size})"
+                                + (" → Drive 업로드 성공" if up.get("ok") else " — Drive 업로드 건너뜀/실패")
+                            )
                         else:
                             st.error(f"백업 실패: {res.get('error')}")
             else:
@@ -141,10 +152,15 @@ def render_admin_controls() -> None:
                         if res.get("ok"):
                             zp = Path(res["path"])
                             up = _upload_backup_to_drive(zp)
-                            try: st.cache_data.clear()
-                            except Exception: pass
+                            try:
+                                st.cache_data.clear()
+                            except Exception:
+                                pass
                             size = _fmt_size(zp.stat().st_size) if zp.exists() else "-"
-                            st.success(f"백업 완료: {zp.name} ({size})" + (" → Drive 업로드 성공" if up.get("ok") else " — Drive 업로드 건너뜀/실패"))
+                            st.success(
+                                f"백업 완료: {zp.name} ({size})"
+                                + (" → Drive 업로드 성공" if up.get("ok") else " — Drive 업로드 건너뜀/실패")
+                            )
                         else:
                             st.error(f"백업 실패: {res.get('error')}")
 
@@ -155,8 +171,10 @@ def render_admin_controls() -> None:
             with st.form("admin_login_form", clear_on_submit=True, border=False):
                 pin_try = st.text_input("PIN", type="password")
                 c1, c2 = st.columns(2)
-                with c1: ok = st.form_submit_button("입장")
-                with c2: cancel = st.form_submit_button("취소")
+                with c1:
+                    ok = st.form_submit_button("입장")
+                with c2:
+                    cancel = st.form_submit_button("취소")
 
         if cancel:
             st.session_state["_admin_auth_open"] = False
@@ -167,10 +185,14 @@ def render_admin_controls() -> None:
                 st.session_state["is_admin"] = True
                 st.session_state["_admin_auth_open"] = False
                 st.session_state["_prepared_prompt_done"] = False   # 관리자 진입시 새자료 점검 유도
-                try: st.cache_data.clear()
-                except Exception: pass
-                try: st.toast("관리자 모드 진입 ✅ 새 자료 점검을 시작합니다")
-                except Exception: pass
+                try:
+                    st.cache_data.clear()
+                except Exception:
+                    pass
+                try:
+                    st.toast("관리자 모드 진입 ✅ 새 자료 점검을 시작합니다")
+                except Exception:
+                    pass
                 st.rerun()
             else:
                 st.error("PIN이 틀렸습니다. 다시 입력해 주세요.")
@@ -181,7 +203,9 @@ def render_admin_controls() -> None:
             render_quick_diagnostics_anyrole()
         except Exception as e:
             st.caption(f"진단 렌더 오류: {type(e).__name__}: {e}")
-# ── [UA-01C] 관리자 버튼/인증 패널 — END --------------------------------------
+# ── [UA-01C] 관리자 버튼/인증 패널 — END ------------------------------------
+
+
 # ── [UA-01D] 역할 캡션 --------------------------------------------------------
 def render_role_caption() -> None:
     """
