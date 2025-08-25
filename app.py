@@ -444,12 +444,13 @@ def render_brain_prep_main():
     - 상태 배지 정밀화: delta / no_manifest / no_prepared / no_change
     - 신규자료 O(delta): [업데이트 실행] / [업데이트 건너뛰기(기존 백업 복구)]
     - 신규자료 X: [최신 백업 복구] + [강제 최적화 초기화](항상)
+    - 인덱싱 중 현재 처리 파일명을 실시간 표시
     - 완료 시 요약 배지 + 세션 기록(_optimize_last)
     """
 
     # ── 역할 확인(관리자 전용) ────────────────────────────────────────────────
     import streamlit as st
-    import time
+    import time, os, re
 
     def _is_admin() -> bool:
         ss = st.session_state
@@ -581,7 +582,6 @@ def render_brain_prep_main():
         st.divider()
 
         # ── 액션 버튼(표시는 기존 로직 유지) ───────────────────────────────────
-        # 버튼 구성은 'changed' 신호를 유지해, 초기화/매니페스트 없음 케이스에도 업데이트 유도
         if changed or status_kind == "delta":
             c1, c2, c3 = st.columns([1,1,1])
             do_update        = c1.button("🚀 업데이트 실행 (최적화→업로드→복구→연결)", use_container_width=True)
@@ -630,16 +630,36 @@ def render_brain_prep_main():
             else:
                 st.error(f"❌ 실패: {tag} · 소요 {took_s:.1f}s")
 
+        # 파일명 추출 유틸(로그/메시지에서 경로 감지)
+        path_regex = re.compile(r'([A-Za-z]:\\[^:*?"<>|\n]+|/[^ \n]+?\.[A-Za-z0-9]{1,8})')
+        def _maybe_show_current_file(msg: str, slot):
+            try:
+                m = path_regex.search(str(msg))
+                if not m:
+                    return
+                path = m.group(1).replace("\\", "/")
+                fname = os.path.basename(path)
+                slot.markdown(f"🔄 현재 인덱싱 파일: **`{fname}`**")
+            except Exception:
+                pass
+
         # ── 처리 분기(핵심 동작은 기존과 동일) ─────────────────────────────────
         if do_update:
             if not _require_admin(): return
             t0 = time.time()
+            file_now = st.empty()   # ← 여기서 현재 파일명을 표시
             prog = st.progress(0); log = st.empty()
+
             def _pct(v, m=None):
                 try: prog.progress(max(0, min(int(v), 100)))
                 except Exception: pass
-                if m: log.info(str(m))
-            def _msg(s): log.write(f"• {s}")
+                if m: 
+                    log.info(str(m))
+                    _maybe_show_current_file(m, file_now)
+
+            def _msg(s):
+                log.write(f"• {s}")
+                _maybe_show_current_file(s, file_now)
 
             with st.status("최적화(인덱싱) 실행 중…", state="running") as s:
                 try:
@@ -648,10 +668,12 @@ def render_brain_prep_main():
                              persist_dir=str(persist_dir), remote_manifest={})
                     prog.progress(100)
                     s.update(label="최적화 완료 ✅", state="complete")
+                    file_now.markdown("✅ 인덱싱 단계 완료")
                 except TypeError:
                     build_fn(_pct, _msg, "", {}, str(persist_dir), {})
                     prog.progress(100)
                     s.update(label="최적화 완료 ✅", state="complete")
+                    file_now.markdown("✅ 인덱싱 단계 완료")
                 except Exception as e:
                     s.update(label="최적화 실패 ❌", state="error")
                     _record_result(False, time.time()-t0, "update")
@@ -698,12 +720,19 @@ def render_brain_prep_main():
         if force_rebuild:
             if not _require_admin(): return
             t0 = time.time()
+            file_now = st.empty()   # ← 여기서 현재 파일명을 표시
             prog = st.progress(0); log = st.empty()
+
             def _pct(v, m=None):
                 try: prog.progress(max(0, min(int(v), 100)))
                 except Exception: pass
-                if m: log.info(str(m))
-            def _msg(s): log.write(f"• {s}")
+                if m: 
+                    log.info(str(m))
+                    _maybe_show_current_file(m, file_now)
+
+            def _msg(s):
+                log.write(f"• {s}")
+                _maybe_show_current_file(s, file_now)
 
             with st.status("다시 최적화 실행 중…", state="running") as s:
                 try:
@@ -712,10 +741,12 @@ def render_brain_prep_main():
                              persist_dir=str(persist_dir), remote_manifest={})
                     prog.progress(100)
                     s.update(label="다시 최적화 완료 ✅", state="complete")
+                    file_now.markdown("✅ 인덱싱 단계 완료")
                 except TypeError:
                     build_fn(_pct, _msg, "", {}, str(persist_dir), {})
                     prog.progress(100)
                     s.update(label="다시 최적화 완료 ✅", state="complete")
+                    file_now.markdown("✅ 인덱싱 단계 완료")
                 except Exception as e:
                     s.update(label="다시 최적화 실패 ❌", state="error")
                     _record_result(False, time.time()-t0, "rebuild")
@@ -745,7 +776,6 @@ def render_brain_prep_main():
             _record_result(True, time.time()-t0, "rebuild")
             _final_attach()
 # ===== [05A] END ===========================================
-
 
 
 # ===== [05B] TAG DIAGNOSTICS (NEW) — START ==================================
