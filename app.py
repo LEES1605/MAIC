@@ -1519,7 +1519,7 @@ def render_simple_qa():
     is_admin = st.session_state.get("is_admin", False)
 
     _render_top3_badges()
-    st.markdown("### 💬 질문은 모든 천재들이 가장 많이 사용하는 공부 방법이다!")
+    st.markdown("### 💬 질문은 천재들이 가장 많이 사용하는 공부 방법이다!")
 
     enabled = _get_enabled_modes_unified()
     radio_opts: List[str] = []
@@ -1684,8 +1684,8 @@ import streamlit as st
 def _render_title_with_status():
     """
     상단 헤더: 제목 + 상태배지 + 우측 FAQ 토글
-    - 학생: 🟢 LEES AI 선생님이 답변준비 완료
-    - 관리자: 🟢 두뇌 준비됨
+    - 학생: 🟢 답변준비 완료
+    - 관리자: 🟢 앱실행 준비됨
     """
     try:
         status = get_index_status()  # 'ready' | 'pending' | 'missing'
@@ -1697,9 +1697,9 @@ def _render_title_with_status():
     # 상태 배지 문구(학생/관리자 분리)
     if status == "ready":
         badge_html = (
-            "<span class='ui-pill ui-pill-green'>🟢 두뇌 준비됨</span>"
+            "<span class='ui-pill ui-pill-green'>🟢 답변 준비됨</span>"
             if is_admin else
-            "<span class='ui-pill ui-pill-green'>🟢 LEES AI 선생님이 답변준비 완료</span>"
+            "<span class='ui-pill ui-pill-green'>🟢 답변준비 완료</span>"
         )
     elif status == "pending":
         badge_html = "<span class='ui-pill'>🟡 연결 대기</span>"
