@@ -798,14 +798,34 @@ def render_brain_prep_main():
             def _pct(v, m=None): 
                 if m: log.info(str(m)); on_msg(m)
             def _msg(s): log.write(f"• {s}"); on_msg(s)
-            with st.status("최적화(인덱싱) 실행 중…", state="running") as s:
-                try:
-                    build_fn(update_pct=_pct, update_msg=_msg, gdrive_folder_id="", gcp_creds={}, persist_dir=str(persist_dir), remote_manifest={})
-                    s.update(label="최적화 완료 ✅", state="complete")
-                except TypeError:
-                    build_fn(_pct, _msg, "", {}, str(persist_dir), {}); s.update(label="최적화 완료 ✅", state="complete")
-                except Exception as e:
-                    s.update(label="최적화 실패 ❌", state="error"); _record_result(False, time.time()-t0, "update"); st.error(f"인덱싱 오류: {type(e).__name__}: {e}"); return
+# ===== [HOTFIX-645] do_update 인덱싱 실행 블록 교체 ==========================
+with st.status("최적화(인덱싱) 실행 중…", state="running") as s:
+    try:
+        # 표준 시그니처(신규)
+        # build_index_with_checkpoint(
+        #     update_pct, update_msg, gdrive_folder_id, gcp_creds, persist_dir, remote_manifest
+        # )
+        build_fn(
+            update_pct=_pct,
+            update_msg=_msg,
+            gdrive_folder_id="",
+            gcp_creds={},
+            persist_dir=str(persist_dir),
+            remote_manifest={},
+        )
+        s.update(label="최적화 완료 ✅", state="complete")
+
+    except TypeError:
+        # 구버전 시그니처 대응(tuple식 위치인자)
+        build_fn(_pct, _msg, "", {}, str(persist_dir), {})
+        s.update(label="최적화 완료 ✅", state="complete")
+
+    except Exception as e:
+        s.update(label="최적화 실패 ❌", state="error")
+        st.error(f"인덱싱 오류: {type(e).__name__}: {e}")
+        return
+# ===== [HOTFIX-645] END ======================================================
+
             processed, total, _ = finalized()
             if callable(upload_zip_fn):
                 with st.status("백업 ZIP 업로드 중…", state="running") as s:
