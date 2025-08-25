@@ -929,704 +929,115 @@ def render_tag_diagnostics():
 # ===== [05B] TAG DIAGNOSTICS (NEW) — END ====================================
 
 
-# ===== [06] SIMPLE QA DEMO — 히스토리 인라인 + 답변 직표시 + 골든우선 + 규칙기반 합성기 + 피드백(라디오, 항상 유지) ==
-from pathlib import Path
-from typing import Any, Dict, List, Tuple
-import time
-import streamlit as st
-
-# ── [06-A] 세션/캐시/상태 준비 ---------------------------------------------------
-def _ensure_state():
-    if "answer_cache" not in st.session_state:
-        st.session_state["answer_cache"] = {}  # norm -> {"answer","refs","mode","ts","source"}
-    if "last_submit_key" not in st.session_state:
-        st.session_state["last_submit_key"] = None
-    if "last_submit_ts" not in st.session_state:
-        st.session_state["last_submit_ts"] = 0
-    if "SHOW_TOP3_STICKY" not in st.session_state:
-        st.session_state["SHOW_TOP3_STICKY"] = False
-    if "allow_fallback" not in st.session_state:
-        st.session_state["allow_fallback"] = True
-    if "rating_values" not in st.session_state:
-        st.session_state["rating_values"] = {}   # guard_key -> 1~5 (UI 유지용)
-    if "active_result" not in st.session_state:
-        # {"q","q_norm","mode_key","user","origin"}
-        st.session_state["active_result"] = None
-
-# ── [06-A’] 준비/토글 통일 판단 -------------------------------------------------
-def _is_ready_unified() -> bool:
-    try:
-        return (get_index_status() == "ready")
-    except Exception:
-        return bool(st.session_state.get("rag_index"))
-
-def _get_enabled_modes_unified() -> Dict[str, bool]:
+# ===== [06] 질문/답변 패널 — 프롬프트 모듈 연동 ==============================
+def render_qa_panel():
     """
-    질문 모드 표시 여부를 세션의 다양한 키에서 통합 판정한다.
-    우선순위:
-      1) dict 기반: enabled_modes / admin_modes / modes  ({"Grammar":bool,...})
-      2) list 기반: qa_modes_enabled  (["문법설명","문장구조분석","지문분석"])
-      3) bool 기반: show_mode_grammar / show_mode_structure / show_mode_passage
-      4) 훅 함수: get_enabled_modes()
-      5) 최종 기본값: 전부 True  (경고로 앱이 막히지 않도록)
+    학생 질문 → (모드) → 프롬프트 빌드 → LLM 호출(OpenAI/Gemini) → 답변 표시
+    - 관리자에서 켠 모드만 라디오에 노출
+    - 실패해도 앱이 죽지 않고 원인 안내
     """
-    # 1) dict 기반
-    for key in ("enabled_modes", "admin_modes", "modes"):
-        m = st.session_state.get(key)
-        if isinstance(m, dict):
-            return {
-                "Grammar": bool(m.get("Grammar", False)),
-                "Sentence": bool(m.get("Sentence", False)),
-                "Passage": bool(m.get("Passage", False)),
-            }
+    import os, traceback
+    import streamlit as st
 
-    # 2) list 기반(우리 관리자 설정의 기본 저장 형식)
-    lst = st.session_state.get("qa_modes_enabled")
-    if isinstance(lst, list):
-        def has_any(*names: str) -> bool:
-            s = set(map(str, lst))
-            return any(n in s for n in names)
-        return {
-            "Grammar":  has_any("문법설명", "Grammar"),
-            "Sentence": has_any("문장구조분석", "문장분석", "Sentence"),
-            "Passage":  has_any("지문분석", "Passage"),
-        }
-
-    # 3) bool 기반(과거 호환)
-    if any(k in st.session_state for k in ("show_mode_grammar","show_mode_structure","show_mode_passage")):
-        return {
-            "Grammar":  bool(st.session_state.get("show_mode_grammar",   True)),
-            "Sentence": bool(st.session_state.get("show_mode_structure", True)),
-            "Passage":  bool(st.session_state.get("show_mode_passage",   True)),
-        }
-
-    # 4) 외부 훅 함수
-    fn = globals().get("get_enabled_modes")
-    if callable(fn):
-        try:
-            m = fn()
-            if isinstance(m, dict):
-                return {
-                    "Grammar":  bool(m.get("Grammar",  False)),
-                    "Sentence": bool(m.get("Sentence", False)),
-                    "Passage":  bool(m.get("Passage",  False)),
-                }
-        except Exception:
-            pass
-
-    # 5) 최종 기본값: 전부 True (관리자/학생 동일)
-    return {"Grammar": True, "Sentence": True, "Passage": True}
-
-
-# ── [06-B] 파일 I/O (히스토리 & 피드백 & 골든) ----------------------------------
-def _app_dir() -> Path:
-    p = Path.home() / ".maic"
-    try: p.mkdir(parents=True, exist_ok=True)
-    except Exception: pass
-    return p
-
-def _history_path() -> Path: return _app_dir() / "qa_history.jsonl"
-def _feedback_path() -> Path: return _app_dir() / "feedback.jsonl"
-def _golden_path() -> Path: return _app_dir() / "golden_explanations.jsonl"
-
-def _append_jsonl(path: Path, obj: Dict[str, Any]):
+    # 보여줄 모드 집합(관리자 설정 반영)
     try:
-        import json as _json
-        with path.open("a", encoding="utf-8") as f:
-            f.write(_json.dumps(obj, ensure_ascii=False) + "\n")
+        modes_enabled = _get_enabled_modes_unified()
     except Exception:
-        pass
+        modes_enabled = {"Grammar": True, "Sentence": True, "Passage": True}
 
-def _sanitize_user(name: str | None) -> str:
-    import re as _re
-    s = (name or "").strip()
-    s = _re.sub(r"\s+", " ", s)[:40]
-    return s or "guest"
-
-def _append_history_file_only(q: str, user: str | None = None):
-    try:
-        q = (q or "").strip()
-        if not q: return
-        user = _sanitize_user(user)
-        import json as _json
-        with _history_path().open("a", encoding="utf-8") as f:
-            f.write(_json.dumps({"ts": int(time.time()), "q": q, "user": user}, ensure_ascii=False) + "\n")
-    except Exception:
-        pass
-
-def _read_history_lines(max_lines: int = 5000) -> List[Dict[str, Any]]:
-    import json as _json
-    hp = _history_path()
-    if not hp.exists(): return []
-    rows: List[Dict[str, Any]] = []
-    try:
-        with hp.open("r", encoding="utf-8") as f:
-            lines = f.readlines()[-max_lines:]
-        for ln in lines:
-            try:
-                r = _json.loads(ln); r.setdefault("user","guest"); rows.append(r)
-            except Exception: continue
-    except Exception:
-        return []
-    rows.reverse()
-    return rows
-
-def _normalize_question(s: str) -> str:
-    import re as _re
-    s = (s or "").strip().lower()
-    s = _re.sub(r"[!?。．！?]+$", "", s)
-    s = _re.sub(r"[^\w\sㄱ-ㅎ가-힣]", " ", s)
-    s = _re.sub(r"\s+", " ", s).strip()
-    return s
-
-# ── [06-C] 인기/Top3(파일 기준) ------------------------------------------------
-def _top3_users(days: int = 7) -> List[Tuple[str, int]]:
-    from collections import Counter
-    rows = _read_history_lines(max_lines=5000)
-    if not rows: return []
-    cutoff = int(time.time()) - days * 86400
-    users: List[str] = []
-    for r in rows:
-        ts = int(r.get("ts") or 0)
-        if ts < cutoff: continue
-        if (r.get("q") or "").strip(): users.append(_sanitize_user(r.get("user")))
-    ctr = Counter(users); return ctr.most_common(3)
-
-def _render_top3_badges():
-    if not st.session_state.get("SHOW_TOP3_STICKY"): return
-    data = list(_top3_users()[:3])
-    while len(data) < 3: data.append(("…", 0))
-    medals = ["🥇","🥈","🥉"]
-    css = """
-    <style>
-      .sticky-top3 { position: sticky; top: 0; z-index: 999; padding: 6px 8px;
-                     background: rgba(0,0,0,0.25); border-bottom: 1px solid #333; }
-      .pill { margin-right:6px; padding:4px 8px; border-radius:999px; font-size:0.9rem;
-              background: rgba(37,99,235,0.18); color:#cfe0ff; border:1px solid rgba(37,99,235,0.45); }
-    </style>"""
-    pills = " ".join(f"<span class='pill'>{medals[i]} {n} · {c}회</span>" for i,(n,c) in enumerate(data))
-    st.markdown(css + f"<div class='sticky-top3'>{pills}</div>", unsafe_allow_html=True)
-
-# ── [06-D] 캐시 + 저장 ----------------------------------------------------------
-def _cache_put(q: str, answer: str, refs: List[Dict[str,str]], mode_label: str, source: str):
-    _ensure_state()
-    norm = _normalize_question(q)
-    st.session_state["answer_cache"][norm] = {
-        "answer": (answer or "").strip(),
-        "refs": refs or [],
-        "mode": mode_label,
-        "source": source,
-        "ts": int(time.time()),
-    }
-
-def _cache_get(norm: str) -> Dict[str, Any] | None:
-    _ensure_state()
-    return st.session_state["answer_cache"].get(norm)
-
-def _render_cached_block(norm: str):
-    data = _cache_get(norm)
-    if not data:
-        st.info("이 질문의 저장된 답변이 없어요. 아래 ‘다시 검색’으로 최신 답변을 받아보세요.")
+    label_order = [("문법설명","Grammar"), ("문장구조분석","Sentence"), ("지문분석","Passage")]
+    labels = [ko for ko,_ in label_order if (
+        (ko == "문법설명"      and modes_enabled.get("Grammar",  True)) or
+        (ko == "문장구조분석"  and modes_enabled.get("Sentence", True)) or
+        (ko == "지문분석"      and modes_enabled.get("Passage",  True))
+    )]
+    if not labels:
+        st.info("표시할 질문 모드가 없습니다. 관리자에서 한 개 이상 켜 주세요.")
         return
-    # 골든 배지
-    if data.get("source") == "golden":
-        st.markdown("**⭐ 친구들이 이해 잘한 설명**")
-    st.write(data.get("answer","—"))
-    refs = data.get("refs") or []
-    if refs:
-        with st.expander("근거 자료(상위 2개)"):
-            for i, r0 in enumerate(refs[:2], start=1):
-                name = r0.get("doc_id") or r0.get("source") or f"ref{i}"
-                url = r0.get("url") or r0.get("source_url") or ""
-                st.markdown(f"- {name}  " + (f"(<{url}>)" if url else ""))
 
-# ── [06-D’] 피드백 저장/조회 -----------------------------------------------------
-def _get_last_rating(q_norm: str, user: str, mode_key: str) -> int | None:
-    import json as _json
-    p = _feedback_path()
-    if not p.exists(): return None
-    last = None
+    with st.container(border=True):
+        st.subheader("질문/답변")
+        colm, colq = st.columns([1,3])
+        with colm:
+            sel_mode = st.radio("모드", options=labels, horizontal=True, key="qa_mode_radio")
+        with colq:
+            question = st.text_area("질문을 입력하세요", height=96, placeholder="예: I had my bike repaired.")
+        colA, colB = st.columns([1,1])
+        go = colA.button("답변 생성", use_container_width=True)
+        show_prompt = colB.toggle("프롬프트 미리보기", value=False)
+
+    if not go:
+        return
+
+    # 프롬프트 빌드
     try:
-        with p.open("r", encoding="utf-8") as f:
-            for ln in f:
-                try:
-                    o = _json.loads(ln)
-                    if o.get("q_norm")==q_norm and o.get("user")==user and o.get("mode")==mode_key:
-                        r = int(o.get("rating",0))
-                        if 1 <= r <= 5: last = r
-                except Exception:
-                    continue
-    except Exception:
-        pass
-    return last
-
-def _save_feedback(q: str, answer: str, rating: int, mode_key: str, source: str, user: str):
-    q_norm = _normalize_question(q)
-    ts = int(time.time())
-    _append_jsonl(_feedback_path(), {
-        "ts": ts, "user": user, "mode": mode_key, "q_norm": q_norm,
-        "rating": int(rating), "source": source
-    })
-    if int(rating) >= 4:
-        _append_jsonl(_golden_path(), {
-            "ts": ts, "user": user, "mode": mode_key, "q_norm": q_norm,
-            "question": q, "answer": answer, "source": source
+        from src.prompt_modes import build_prompt, to_openai, to_gemini
+        parts = build_prompt(sel_mode, question or "", lang="ko", extras={
+            "level":  st.session_state.get("student_level"),
+            "tone":   "encouraging",
         })
-
-# ── [06-D’’] 일반 지식 Fallback(문구용) -----------------------------------------
-def _fallback_general_answer(q: str, mode_key: str) -> str | None:
-    return ("일반 지식 모드가 비활성화되어 있어요. "
-            "관리자에서 일반 지식 LLM 연결을 켜면 교재에 없더라도 기본 설명을 제공할 수 있어요.")
-
-# ── [06-D’’’] 한국어→영어 용어 확장 --------------------------------------------
-def _expand_query_for_rag(q: str, mode_key: str) -> str:
-    q0 = (q or "").strip()
-    if not q0: return q0
-    ko_en = {
-        "관계대명사": "relative pronoun|relative pronouns|relative clause",
-        "관계절": "relative clause",
-        "관계부사": "relative adverb|relative adverbs",
-        "현재완료": "present perfect",
-        "과거완료": "past perfect",
-        "진행형": "progressive|continuous",
-        "수동태": "passive voice",
-        "가정법": "subjunctive|conditional",
-        "조건문": "conditional|if-clause",
-        "비교급": "comparative",
-        "최상급": "superlative",
-        "to부정사": "to-infinitive|infinitive",
-        "부정사": "infinitive",
-        "동명사": "gerund",
-        "분사구문": "participial construction|participial phrase",
-        "명사절": "noun clause",
-        "형용사절": "adjective clause|relative clause",
-        "부사절": "adverbial clause",
-        "간접화법": "reported speech|indirect speech",
-        "시제": "tenses|tense",
-        "조동사": "modal verb|modal verbs",
-        "가주어": "expletive there/it|dummy subject",
-        "도치": "inversion",
-        "대동사": "do-support|pro-verb do",
-        "강조구문": "cleft sentence|it-cleft|wh-cleft",
-    }
-    extras = []
-    for ko, en in ko_en.items():
-        if ko in q0:
-            extras.extend([en, f'"{en}"'])
-    if mode_key == "Grammar":
-        extras += ["grammar explanation", "ESL", "examples", "usage"]
-    merged = []
-    for t in [q0] + extras:
-        if t and t not in merged:
-            merged.append(t)
-    return " ".join(merged)
-
-# ── [06-D⁴] 규칙기반 합성기(간략) -----------------------------------------------
-def _extract_hit_text(h) -> str:
-    try:
-        if isinstance(h, dict):
-            for k in ("text", "content", "page_content", "snippet", "chunk", "excerpt"):
-                v = h.get(k)
-                if v: return str(v)
-        for attr in ("text", "content", "page_content", "snippet"):
-            v = getattr(h, attr, None)
-            if v: return str(v)
-        n = getattr(h, "node", None)
-        if n:
-            for cand in ("get_content", "get_text"):
-                fn = getattr(n, cand, None)
-                if callable(fn):
-                    v = fn()
-                    if v: return str(v)
-            for attr in ("text", "content", "page_content"):
-                v = getattr(n, attr, None)
-                if v: return str(v)
-        s = str(h)
-        if s and s != repr(h): return s
-    except Exception:
-        pass
-    return ""
-
-def _gather_context(hits: Any, max_chars: int = 1500) -> str:
-    parts: List[str] = []
-    if hits:
-        for h in list(hits)[:4]:
-            t = _extract_hit_text(h)
-            if not t: continue
-            t = t.replace("\n", " ").strip()
-            if t:
-                parts.append(t)
-            if sum(len(x) for x in parts) > max_chars:
-                break
-    return " ".join(parts)[:max_chars].strip()
-
-def _detect_topic(q: str, ctx: str) -> str:
-    ql = (q or "").lower()
-    cl = (ctx or "").lower()
-    topics = {
-        "relative_pronoun": ["관계대명사","relative pronoun","relative clause"," who "," which "," that "],
-        "present_perfect": ["현재완료","present perfect"],
-        "past_perfect": ["과거완료","대과거","past perfect"],
-        "passive": ["수동태","passive"],
-        "gerund": ["동명사","gerund"],
-        "infinitive": ["to부정사","부정사","infinitive"],
-        # (다른 항목 추가 예정)
-    }
-    for name, kws in topics.items():
-        if any(k in ql for k in kws) or any(k in cl for k in kws):
-            return name
-    return "generic"
-
-def _compose_answer_rule_based(topic: str) -> str:
-    if topic == "relative_pronoun":
-        return (
-            "① **관계대명사(Relative Pronoun)** 는 앞에 있는 명사를 이어 받아 **형용사절(관계절)** 을 이끌며 "
-            "사람·사물에 대해 **추가 정보를 덧붙이는** 역할을 합니다. 주로 **who/which/that** 을 쓰고, "
-            "관계대명사가 절에서 **주어/목적어** 자리에 올 수 있어요.\n\n"
-            "② **형식**: 선행사 + 관계대명사 + (주어) + 동사 …\n"
-            "③ **예문**\n"
-            "- The book **that** I bought is interesting. → 내가 산 그 책은 흥미롭다.\n"
-            "- She is the girl **who** won the prize. → 상을 받은 그 소녀가 그녀야.\n"
-            "④ **요령**: 선행사와 관계대명사의 **수 일치**와, **목적격**일 땐 구어에서 종종 생략된다는 점을 기억!"
-        )
-    if topic == "present_perfect":
-        return (
-            "① **현재완료(Present Perfect)** 는 과거에 한 일이 **현재와 연결된 결과/경험/계속** 을 나타낼 때 씁니다. "
-            "**have/has + p.p.** 형태예요.\n\n"
-            "② **주요 쓰임**\n"
-            "- 경험(ever/never), 완료·결과(now), 계속(since/for)\n"
-            "③ **예문**\n"
-            "- I **have visited** Jeju **twice**.\n"
-            "- She **has lived** here **for** three years.\n"
-            "④ **요령**: **어제/ago** 같은 과거시점 표현과는 함께 쓰지 않아요."
-        )
-    if topic == "past_perfect":
-        return (
-            "① **과거완료(Past Perfect)** 는 과거의 한 시점보다 **더 이전**에 끝난 일을 말할 때 씁니다. "
-            "**had + p.p.** 형태.\n\n"
-            "② **예문**\n"
-            "- By the time I arrived, the movie **had started**.\n"
-            "- He **had finished** homework before dinner.\n"
-            "③ **요령**: 과거 두 사건의 **선후관계**를 분명히!"
-        )
-    if topic == "passive":
-        return (
-            "① **수동태(Passive Voice)** : **be동사 + p.p.** 로 대상(피동)을 강조.\n"
-            "② **예문**\n- The window **was broken** yesterday.\n- English **is spoken** worldwide.\n"
-            "③ **요령**: 필요할 때만 **by + 행위자**."
-        )
-    if topic == "gerund":
-        return (
-            "① **동명사(Gerund)** : 동사에 **-ing** 를 붙여 **명사처럼** 사용.\n"
-            "② **예문**\n- **Swimming** is fun.\n- I enjoy **reading**.\n"
-            "③ **요령**: 전치사 뒤에는 동명사."
-        )
-    if topic == "infinitive":
-        return (
-            "① **부정사(Infinitive)** : **to + 동사원형** — 명/형/부 역할.\n"
-            "② **예문**\n- I want **to learn** Spanish.\n- This book is easy **to read**.\n"
-            "③ **요령**: 목적·의도 표현에 자주 사용."
-        )
-    return (
-        "이 단원은 질문과 관련된 문법 항목을 설명합니다. 핵심 개념을 정리하면 다음과 같아요.\n"
-        "① 정의/형식 ② 쓰임 ③ 예문 2개 ④ 한 줄 요령"
-    )
-
-def _ensure_nonempty_answer_rule_based(q: str, mode_key: str, hits: Any, raw: str) -> Tuple[str, str]:
-    ctx = _gather_context(hits)
-    topic = _detect_topic(q, ctx)
-    ans = (_compose_answer_rule_based(topic) or "").strip()
-    if ans:
-        return ans, ("kb_rule" if hits else "rule_based")
-    if st.session_state.get("allow_fallback", True):
-        fb = (_fallback_general_answer(q, mode_key) or "").strip()
-        if fb:
-            return fb, "fallback_info"
-    return "설명을 불러오는 중 문제가 있었어요. 질문을 조금 더 구체적으로 써 주세요.", "error"
-
-# ── [06-D⁵] 골든 해설 우선 검색 -------------------------------------------------
-_GOLDEN_MIN_SCORE = 0.52  # 필요시 0.45~0.6 사이로 조정
-
-def _read_golden_rows(max_lines: int = 20000) -> List[Dict[str, Any]]:
-    import json as _json
-    p = _golden_path()
-    if not p.exists(): return []
-    rows: List[Dict[str, Any]] = []
-    try:
-        with p.open("r", encoding="utf-8") as f:
-            for ln in f.readlines()[-max_lines:]:
-                try:
-                    o = _json.loads(ln)
-                    # 기대 필드: ts, user, mode, q_norm, question, answer, source
-                    if o.get("answer"):
-                        rows.append(o)
-                except Exception:
-                    continue
-    except Exception:
-        return []
-    rows.reverse()
-    return rows
-
-def _tokenize_for_sim(s: str) -> set[str]:
-    import re as _re
-    s = (s or "").lower()
-    s = _re.sub(r"[^\w\sㄱ-ㅎ가-힣]", " ", s)
-    toks = [t for t in s.split() if len(t) >= 2]
-    # 간단 불용어
-    stop = {"the","a","an","to","of","and","or","in","on","for","is","are","was","were","be","been","being"}
-    return set(t for t in toks if t not in stop)
-
-def _jaccard(a: set[str], b: set[str]) -> float:
-    if not a or not b: return 0.0
-    inter = a & b
-    union = a | b
-    return float(len(inter)) / float(len(union))
-
-def _search_golden_best(q: str, mode_key: str) -> Tuple[str, float] | None:
-    q_norm = _normalize_question(q)
-    rows = _read_golden_rows()
-    # 1) 동일 정규질문 우선
-    same = [r for r in rows if r.get("q_norm") == q_norm and r.get("mode") == mode_key and r.get("answer")]
-    if same:
-        # 최신 ts 우선
-        same.sort(key=lambda r: int(r.get("ts") or 0), reverse=True)
-        return (same[0]["answer"], 1.0)
-
-    # 2) 유사도 기반(간단 자카드)
-    q_expanded = _expand_query_for_rag(q, mode_key)
-    qset = _tokenize_for_sim(q_expanded)
-    best_ans, best_score = None, 0.0
-    for r in rows:
-        if r.get("mode") != mode_key: 
-            continue
-        cand_q = (r.get("question") or r.get("q_norm") or "")
-        cset = _tokenize_for_sim(str(cand_q))
-        s = _jaccard(qset, cset)
-        if s > best_score:
-            best_score = s
-            best_ans = r.get("answer")
-    if best_ans and best_score >= _GOLDEN_MIN_SCORE:
-        return (best_ans, best_score)
-    return None
-
-# ✅ 항상 보이는 결과 패널 (컨테이너에 그릴 수도 있음)
-def _render_active_result_panel(container=None):
-    target = container or st
-    ar = st.session_state.get("active_result")
-    if not ar: 
-        return
-    norm = ar.get("q_norm"); mode_key = ar.get("mode_key"); user = ar.get("user") or "guest"
-    data = _cache_get(norm)
-    if not data:
+    except Exception as e:
+        st.error(f"프롬프트 생성 실패: {type(e).__name__}: {e}")
+        st.code(traceback.format_exc(), language="python")
         return
 
-    # 골든 배지
-    if (ar.get("origin") == "golden") or (data.get("source") == "golden"):
-        target.markdown("**⭐ 친구들이 이해 잘한 설명**")
+    if show_prompt:
+        with st.expander("프롬프트(미리보기)", expanded=True):
+            st.markdown("**System:**")
+            st.code(parts.system, language="markdown")
+            st.markdown("**User:**")
+            st.code(parts.user, language="markdown")
+            if parts.provider_kwargs:
+                st.caption(f"provider_kwargs: {parts.provider_kwargs}")
 
-    target.write(data.get("answer","—"))
-    refs = data.get("refs") or []
-    if refs:
-        with target.expander("근거 자료(상위 2개)"):
-            for i, r0 in enumerate(refs[:2], start=1):
-                name = r0.get("doc_id") or r0.get("source") or f"ref{i}"
-                url = r0.get("url") or r0.get("source_url") or ""
-                target.markdown(f"- {name}  " + (f"(<{url}>)" if url else ""))
+    # LLM 호출 (OpenAI → Gemini 순으로 시도)
+    def _call_openai_try(p):
+        try:
+            from openai import OpenAI
+            client = OpenAI()
+            payload = to_openai(p)
+            model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+            resp = client.chat.completions.create(model=model, **payload)
+            return True, resp.choices[0].message.content
+        except Exception as e:
+            return False, f"{type(e).__name__}: {e}"
 
-    # 라디오(유지형) + 저장
-    guard_key = f"{norm}|{mode_key}"
-    saved = _get_last_rating(norm, user, mode_key)
-    default_rating = saved if saved in (1,2,3,4,5) else 3
-    rv_key = f"rating_value_{guard_key}"
-    if rv_key not in st.session_state:
-        st.session_state[rv_key] = default_rating
+    def _call_gemini_try(p):
+        try:
+            import google.generativeai as genai
+            api_key = os.getenv("GEMINI_API_KEY") or (
+                st.secrets.get("GEMINI_API_KEY") if hasattr(st, "secrets") else None
+            )
+            if not api_key:
+                return False, "GEMINI_API_KEY 미설정"
+            genai.configure(api_key=api_key)
+            payload = to_gemini(p)  # {"contents":[...], ...}
+            model_name = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+            model = genai.GenerativeModel(model_name=model_name)
+            resp = model.generate_content(payload["contents"])
+            text = getattr(resp, "text", "")
+            if not text and getattr(resp, "candidates", None):
+                text = resp.candidates[0].content.parts[0].text
+            return True, text
+        except Exception as e:
+            return False, f"{type(e).__name__}: {e}"
 
-    emoji = {1:"😕 1", 2:"🙁 2", 3:"😐 3", 4:"🙂 4", 5:"😄 5"}
-    sel = target.radio(
-        "해설 만족도",
-        options=[1,2,3,4,5],
-        index=st.session_state[rv_key]-1,
-        format_func=lambda n: emoji.get(n, str(n)),
-        horizontal=True,
-        key=f"rating_radio_{guard_key}"
-    )
-    st.session_state[rv_key] = sel
+    with st.status("답변 생성 중…", state="running") as s:
+        ok, out = _call_openai_try(parts)
+        provider = "OpenAI"
+        if not ok:
+            ok, out = _call_gemini_try(parts)
+            provider = "Gemini" if ok else "N/A"
 
-    c1, c2 = target.columns([1,4])
-    with c1:
-        if target.button("💾 저장", key=f"save_{guard_key}"):
-            try:
-                _save_feedback(ar["q"], data.get("answer",""), int(st.session_state[rv_key]), mode_key, data.get("source",""), user)
-                try: st.toast("✅ 저장 완료!", icon="✅")
-                except Exception: target.success("저장 완료!")
-            except Exception as _e:
-                target.warning(f"저장에 실패했어요: {_e}")
-    with c2:
-        target.caption(f"현재 저장된 값: {saved if saved else '—'} (라디오 선택 후 ‘저장’ 클릭)")
-
-# ── [06-E] 메인 렌더 -----------------------------------------------------------
-def render_simple_qa():
-    _ensure_state()
-    is_admin = st.session_state.get("is_admin", False)
-
-    _render_top3_badges()
-    st.markdown("### 💬 질문은 모든 천재들이 가장 많이 사용하는 공부 방법이다!")
-
-    enabled = _get_enabled_modes_unified()
-    radio_opts: List[str] = []
-    if enabled.get("Grammar", False):  radio_opts.append("문법설명(Grammar)")
-    if enabled.get("Sentence", False): radio_opts.append("문장분석(Sentence)")
-    if enabled.get("Passage", False):  radio_opts.append("지문분석(Passage)")
-    if not radio_opts:
-        st.error("관리자에서 모든 질문 모드를 OFF로 설정했습니다. 관리자에게 문의하세요.")
-        return
-
-    mode_choice = st.radio("질문의 종류를 선택하세요", options=radio_opts, key="mode_radio", horizontal=True)
-    if "문법" in mode_choice: mode_key, mode_label = "Grammar", "문법설명(Grammar)"
-    elif "문장" in mode_choice: mode_key, mode_label = "Sentence", "문장분석(Sentence)"
-    else: mode_key, mode_label = "Passage", "지문분석(Passage)"
-    st.session_state["mode"] = mode_key
-
-    if not is_admin:
-        st.text_input("내 이름(임시)", key="student_name", placeholder="예: 지민 / 민수 / 유나")
-
-    placeholder = (
-        "예: 관계대명사 which 사용법을 알려줘" if mode_key == "Grammar"
-        else "예: I seen the movie yesterday 문장 문제점 분석해줘" if mode_key == "Sentence"
-        else "예: 이 지문 핵심 요약과 제목 3개, 주제 1개 제안해줘"
-    )
-    with st.form("qa_form", clear_on_submit=False):
-        q = st.text_input("질문 입력", value=st.session_state.get("qa_q",""), placeholder=placeholder, key="qa_q_form")
-        k = st.slider("검색 결과 개수(top_k)", 1, 10, 5, key="qa_k") if is_admin else 5
-        submitted = st.form_submit_button("🧑‍🏫 쌤에게 물어보기")
-    if "qa_q_form" in st.session_state:
-        st.session_state["qa_q"] = st.session_state["qa_q_form"]
-
-    if submitted and not enabled.get(mode_key, False):
-        st.warning("이 질문 유형은 지금 관리자에서 꺼져 있어요. 다른 유형을 선택해 주세요.")
-        return
-
-    # ▶ 제출 시: ① 골든 우선 → ② RAG → ③ 룰기반/폴백
-    if submitted and (st.session_state.get("qa_q","").strip()):
-        q = st.session_state["qa_q"].strip()
-        guard_key = f"{_normalize_question(q)}|{mode_key}"
-        now = time.time()
-        if not (st.session_state.get("last_submit_key") == guard_key and (now - st.session_state.get("last_submit_ts",0) < 1.5)):
-            st.session_state["last_submit_key"] = guard_key
-            st.session_state["last_submit_ts"] = now
-
-            user = _sanitize_user(st.session_state.get("student_name") if not is_admin else "admin")
-            _append_history_file_only(q, user)
-
-            area = st.container()
-            with area:
-                thinking = st.empty()
-                thinking.info("🧠 답변 생각중… 베스트 해설과 교재를 차례로 확인하고 있어요.")
-
-            final, origin = "", "unknown"
-            refs: List[Dict[str, str]] = []
-
-            # ① 골든 우선
-            golden = _search_golden_best(q, mode_key)
-            if golden:
-                final, _score = golden
-                origin = "golden"
-
-            # ② RAG (골든이 없거나 불충분할 때만)
-            if not final:
-                index_ready = _is_ready_unified()
-                if index_ready:
-                    try:
-                        q_expanded = _expand_query_for_rag(q, mode_key)
-                        qe = st.session_state["rag_index"].as_query_engine(top_k=k)
-                        r = qe.query(q_expanded)
-                        raw = getattr(r, "response", "") or ""
-                        hits = getattr(r, "source_nodes", None) or getattr(r, "hits", None)
-
-                        def _is_nohit(raw_txt, hits_obj) -> bool:
-                            txt = (raw_txt or "").strip().lower()
-                            bad_phrases = ["관련 결과를 찾지 못", "no relevant", "no result", "not find"]
-                            cond_txt = (not txt) or any(p in txt for p in bad_phrases)
-                            cond_hits = (not hits_obj) or (hasattr(hits_obj, "__len__") and len(hits_obj) == 0)
-                            return cond_txt or cond_hits
-
-                        if _is_nohit(raw, hits):
-                            qe_wide = st.session_state["rag_index"].as_query_engine(top_k=max(10, int(k) if isinstance(k,int) else 5))
-                            r2 = qe_wide.query(q_expanded)
-                            raw2 = getattr(r2, "response", "") or ""
-                            hits2 = getattr(r2, "source_nodes", None) or getattr(r2, "hits", None)
-                            if not _is_nohit(raw2, hits2):
-                                raw, hits = raw2, hits2
-
-                        final, origin = _ensure_nonempty_answer_rule_based(q, mode_key, hits, raw)
-
-                        try:
-                            if hits:
-                                for h in hits[:2]:
-                                    meta = None
-                                    if hasattr(h, "metadata") and isinstance(getattr(h, "metadata"), dict):
-                                        meta = h.metadata
-                                    elif hasattr(h, "node") and hasattr(h.node, "metadata") and isinstance(h.node.metadata, dict):
-                                        meta = h.node.metadata
-                                    meta = meta or {}
-                                    refs.append({
-                                        "doc_id": meta.get("doc_id") or meta.get("file_name") or meta.get("filename", ""),
-                                        "url": meta.get("source") or meta.get("url", ""),
-                                    })
-                        except Exception:
-                            refs = []
-
-                    except Exception as e:
-                        with area:
-                            thinking.empty()
-                            st.error(f"검색 실패: {type(e).__name__}: {e}")
-                            final, origin = "설명을 불러오는 중 문제가 있었어요. 다시 시도해 주세요.", "error"
-                else:
-                    # ③ 룰기반/폴백(두뇌 미준비)
-                    final, origin = _ensure_nonempty_answer_rule_based(q, mode_key, hits=None, raw="")
-
-            # 캐시 + 활성 결과 저장
-            _cache_put(q, final, refs, {"Grammar":"문법설명(Grammar)","Sentence":"문장분석(Sentence)","Passage":"지문분석(Passage)"}[mode_key], origin or "unknown")
-            st.session_state["active_result"] = {
-                "q": q, "q_norm": _normalize_question(q),
-                "mode_key": mode_key, "user": user, "origin": origin or "unknown"
-            }
-
-            # 제출 직후, 같은 컨테이너에 즉시 결과 패널 렌더
-            with area:
-                thinking.empty()
-                _render_active_result_panel(container=area)
-
-    # 제출 여부와 무관하게, 항상 마지막 결과 패널을 렌더(라디오 클릭 재실행 대비)
-    _render_active_result_panel()
-
-    # 📒 나의 질문 히스토리 — 인라인 펼치기
-    rows = _read_history_lines(max_lines=5000)
-    st.markdown("#### 📒 나의 질문 히스토리")
-    uniq: List[Dict[str, Any]] = []
-    seen = set()
-    for r in rows:
-        qtext = (r.get("q") or "").strip()
-        if not qtext: continue
-        key = _normalize_question(qtext)
-        if key in seen: continue
-        seen.add(key); uniq.append({"q": qtext, "norm": key})
-        if len(uniq) >= 3: break
-
-    if not uniq:
-        for i in range(1, 4):
-            st.caption(f"{i}. …")
-    else:
-        for i in range(3):
-            if i < len(uniq):
-                title = f"{i+1}. {uniq[i]['q']}"
-                with st.expander(title, expanded=False):
-                    _render_cached_block(uniq[i]["norm"])
-                    if st.button("🔄 이 질문으로 다시 검색", key=f"rehit_{uniq[i]['norm']}", use_container_width=True):
-                        st.session_state["qa_q"] = uniq[i]["q"]
-                        st.rerun()
-
-# ===== [06] END ===============================================================
+        if ok and out:
+            s.update(label=f"{provider} 응답 수신 ✅", state="complete")
+            st.markdown(out)
+        else:
+            s.update(label="LLM 호출 실패 ❌", state="error")
+            st.error("LLM 호출에 실패했습니다.")
+            st.caption(f"원인: {out or '원인 불명'}")
+            st.info("프롬프트 미리보기 토글을 켜고 내용을 확인해 주세요.")
+# ===== [06] END ==============================================================
 
 
 # ===== [07] MAIN — 오케스트레이터 ============================================
