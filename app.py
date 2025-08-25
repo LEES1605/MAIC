@@ -929,14 +929,15 @@ def render_tag_diagnostics():
 # ===== [05B] TAG DIAGNOSTICS (NEW) — END ====================================
 
 
-# ===== [06] 질문/답변 패널 — 프롬프트 모듈 연동 ==============================
+# ===== [06] 질문/답변 패널 — 프롬프트 모듈 연동(안전가드 강화) ================
 def render_qa_panel():
     """
     학생 질문 → (모드) → 프롬프트 빌드 → LLM 호출(OpenAI/Gemini) → 답변 표시
     - 관리자에서 켠 모드만 라디오에 노출
-    - 실패해도 앱이 죽지 않고 원인 안내
+    - 라이브러리/키 상태에 따라 안전하게 폴백
+    - 실패 시 원인/해결 힌트를 구체적으로 안내
     """
-    import os, traceback
+    import os, traceback, importlib.util
     import streamlit as st
 
     # 보여줄 모드 집합(관리자 설정 반영)
@@ -990,11 +991,17 @@ def render_qa_panel():
             if parts.provider_kwargs:
                 st.caption(f"provider_kwargs: {parts.provider_kwargs}")
 
-    # LLM 호출 (OpenAI → Gemini 순으로 시도)
+    # ==== 라이브러리/키 상태 점검 --------------------------------------------
+    have_openai_lib  = importlib.util.find_spec("openai") is not None
+    have_gemini_lib  = importlib.util.find_spec("google.generativeai") is not None
+    has_openai_key   = bool(os.getenv("OPENAI_API_KEY") or getattr(st, "secrets", {}).get("OPENAI_API_KEY"))
+    has_gemini_key   = bool(os.getenv("GEMINI_API_KEY") or getattr(st, "secrets", {}).get("GEMINI_API_KEY"))
+
+    # LLM 호출 (OpenAI → Gemini 순으로 시도; 사용 가능할 때만)
     def _call_openai_try(p):
         try:
             from openai import OpenAI
-            client = OpenAI()
+            client = OpenAI()  # 키는 환경/secrets에서 자동 감지
             payload = to_openai(p)
             model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
             resp = client.chat.completions.create(model=model, **payload)
@@ -1005,9 +1012,7 @@ def render_qa_panel():
     def _call_gemini_try(p):
         try:
             import google.generativeai as genai
-            api_key = os.getenv("GEMINI_API_KEY") or (
-                st.secrets.get("GEMINI_API_KEY") if hasattr(st, "secrets") else None
-            )
+            api_key = os.getenv("GEMINI_API_KEY") or getattr(st, "secrets", {}).get("GEMINI_API_KEY")
             if not api_key:
                 return False, "GEMINI_API_KEY 미설정"
             genai.configure(api_key=api_key)
@@ -1023,9 +1028,15 @@ def render_qa_panel():
             return False, f"{type(e).__name__}: {e}"
 
     with st.status("답변 생성 중…", state="running") as s:
-        ok, out = _call_openai_try(parts)
-        provider = "OpenAI"
-        if not ok:
+        ok, out, provider = False, "", "N/A"
+
+        # 1) OpenAI 시도(라이브러리+키가 있을 때)
+        if have_openai_lib and has_openai_key:
+            ok, out = _call_openai_try(parts)
+            provider = "OpenAI"
+
+        # 2) 실패 시 Gemini 시도(라이브러리+키가 있을 때)
+        if (not ok) and have_gemini_lib and has_gemini_key:
             ok, out = _call_gemini_try(parts)
             provider = "Gemini" if ok else "N/A"
 
@@ -1035,7 +1046,21 @@ def render_qa_panel():
         else:
             s.update(label="LLM 호출 실패 ❌", state="error")
             st.error("LLM 호출에 실패했습니다.")
-            st.caption(f"원인: {out or '원인 불명'}")
+            # 구체적 힌트 제공
+            hints = []
+            if not have_openai_lib and not have_gemini_lib:
+                hints.append("requirements.txt 에 `openai`, `google-generativeai`를 추가하세요.")
+            if have_openai_lib and not has_openai_key:
+                hints.append("`OPENAI_API_KEY`를 secrets 또는 환경변수에 설정하세요.")
+            if have_gemini_lib and not has_gemini_key:
+                hints.append("`GEMINI_API_KEY`를 secrets 또는 환경변수에 설정하세요.")
+            if not have_gemini_lib:
+                hints.append("Gemini를 쓰려면 `google-generativeai` 설치가 필요합니다.")
+            if not have_openai_lib:
+                hints.append("OpenAI를 쓰려면 `openai` 패키지가 필요합니다.")
+            if hints:
+                st.info(" · ".join(hints))
+            st.caption(f"원인(마지막 시도): {out or '원인 불명'}")
             st.info("프롬프트 미리보기 토글을 켜고 내용을 확인해 주세요.")
 # ===== [06] END ==============================================================
 
