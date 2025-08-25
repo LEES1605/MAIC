@@ -440,19 +440,19 @@ def render_admin_settings_panel():
 def render_brain_prep_main():
     """
     준비/최적화 패널 (관리자 전용)
-    - 앱 실행 시 Drive 'prepared' 변화 감지(quick_precheck) → 결과 요약
+    - Drive 'prepared' 변화 감지(quick_precheck) → 결과 요약(+파일 목록)
     - 신규자료 O: [업데이트 실행] / [업데이트 건너뛰기(기존 백업 복구)]
     - 신규자료 X: [최신 백업 복구]
     - 항상: [강제 최적화 초기화]
-    - 모든 플로우 완료 시 '답변준비 완료' 상태(세션 부착)까지 자동 진행
+    - 완료 시 요약 배지(소요시간/개수) + 세션 기록(_optimize_last)
     """
 
     # ── 역할 확인(관리자 전용) ────────────────────────────────────────────────
     import streamlit as st
+    import time
 
     def _is_admin() -> bool:
         ss = st.session_state
-        # 프로젝트 전반에서 쓰일 수 있는 여러 키를 허용(호환성)
         return bool(
             ss.get("is_admin")
             or ss.get("admin_mode")
@@ -461,8 +461,7 @@ def render_brain_prep_main():
         )
 
     if not _is_admin():
-        # 학생 모드에선 패널을 전혀 렌더하지 않음
-        return
+        return  # 학생 모드에서는 전혀 렌더하지 않음
 
     # ── 모듈/함수 바인딩 ────────────────────────────────────────────────────────
     import importlib
@@ -474,7 +473,7 @@ def render_brain_prep_main():
         st.error(f"인덱스 모듈 임포트 실패: {type(e).__name__}: {e}")
         return
 
-    quick_precheck = getattr(mod, "quick_precheck", None)
+    quick_precheck = getattr(mod, "quick_precheck", None) or getattr(mod, "precheck_build_needed", None)
     build_fn       = getattr(mod, "build_index_with_checkpoint", None)
     restore_fn     = getattr(mod, "restore_latest_backup_to_local", None)
     upload_zip_fn  = getattr(mod, "_make_and_upload_backup_zip", None)
@@ -499,33 +498,76 @@ def render_brain_prep_main():
         "missing": "🔴 인덱스 없음",
     }.get(idx_status, "❔ 상태 미상")
 
-    # ── 신규자료 점검(Drive prepared vs manifest) ─────────────────────────────
+    # ── 신규자료 점검(Drive prepared vs manifest) + 델타 추출 ──────────────────
     changed = False
     prepared_cnt = manifest_cnt = 0
     reasons = []
-    if callable(quick_precheck):
-        try:
+    added = modified = removed = moved = skipped = []
+    try:
+        if callable(quick_precheck):
             pre = quick_precheck(None)  # 폴더 ID는 모듈 내부에서 자동 탐색
             changed = bool(pre.get("changed"))
             prepared_cnt = int(pre.get("prepared_count", 0))
             manifest_cnt = int(pre.get("manifest_count", 0))
             reasons = list(pre.get("reasons", []))
-        except Exception as e:
-            reasons = [f"precheck_failed:{type(e).__name__}"]
+
+            # delta 호환 처리(키가 상이해도 최대한 매핑)
+            delta = pre.get("delta") or {}
+            added    = list(pre.get("added",    [])) or list(delta.get("added",    []))
+            modified = list(pre.get("modified", [])) or list(delta.get("modified", []))
+            removed  = list(pre.get("removed",  [])) or list(delta.get("removed",  []))
+            moved    = list(pre.get("moved",    [])) or list(delta.get("moved",    []))
+            skipped  = list(pre.get("skipped",  [])) or list(delta.get("skipped",  []))
+    except Exception as e:
+        reasons = [f"precheck_failed:{type(e).__name__}"]
 
     changed_badge = "🆕 신규 자료 감지" if changed else "✅ 변경 없음"
 
     # ── 패널 렌더 ─────────────────────────────────────────────────────────────
     with st.container(border=True):
         st.subheader("자료 최적화/백업 패널")
-        st.caption("앱이 Drive의 prepared 폴더를 점검해 업데이트가 필요한지 판단합니다.")
+        st.caption("앱이 Drive의 prepared 폴더를 점검해 업데이트 필요 여부를 판단합니다.")
 
         cols = st.columns([1,1,1,1])
         cols[0].write(f"**인덱스 상태:** {status_badge}")
         cols[1].write(f"**신규자료:** {changed_badge}")
         cols[2].write(f"**prepared:** {prepared_cnt}")
         cols[3].write(f"**manifest:** {manifest_cnt}")
-        if reasons:
+
+        if changed:
+            # 신규자료 상세(추가/수정/삭제 요약 + 목록)
+            with st.expander("🔎 신규자료 상세(추가/수정/삭제 내역 보기)", expanded=True):
+                st.caption(
+                    f"추가 {len(added)} · 수정 {len(modified)} · 삭제 {len(removed)}"
+                    + (f" · 이동 {len(moved)}" if moved else "")
+                    + (f" · 제외 {len(skipped)}" if skipped else "")
+                )
+                c1, c2, c3 = st.columns(3)
+                def _render_list(col, title, rows):
+                    with col:
+                        st.markdown(f"**{title}**")
+                        if not rows:
+                            st.caption("— 없음")
+                        else:
+                            for x in rows[:20]:
+                                st.write("•", str(x))
+                            if len(rows) > 20:
+                                st.caption(f"… 외 {len(rows)-20}개")
+                _render_list(c1, "추가됨", added)
+                _render_list(c2, "수정됨", modified)
+                _render_list(c3, "삭제됨", removed)
+                if moved or skipped:
+                    with st.expander("기타(이동/제외)"):
+                        if moved:
+                            st.markdown("**이동됨**")
+                            for x in moved[:30]: st.write("•", str(x))
+                            if len(moved) > 30: st.caption(f"… 외 {len(moved)-30}개")
+                        if skipped:
+                            st.markdown("**제외됨**")
+                            for x in skipped[:30]: st.write("•", str(x))
+                            if len(skipped) > 30: st.caption(f"… 외 {len(skipped)-30}개")
+
+        if reasons and not changed:
             with st.expander("세부 사유 보기", expanded=False):
                 for r in reasons:
                     st.write("•", str(r))
@@ -551,7 +593,7 @@ def render_brain_prep_main():
                 return False
             return True
 
-        # 공통 헬퍼: 최종 연결
+        # 공통: 최종 연결
         def _final_attach():
             with st.status("두뇌 연결 중…", state="running") as s2:
                 ok = _auto_attach_or_restore_silently()
@@ -563,10 +605,31 @@ def render_brain_prep_main():
                     s2.update(label="두뇌 연결 실패 ❌", state="error")
                     st.error("세션 부착 실패")
 
+        # 공통: 결과 요약 기록/표시
+        def _record_result(ok: bool, took_s: float, tag: str):
+            st.session_state["_optimize_last"] = {
+                "ok": bool(ok),
+                "took_sec": round(float(took_s), 1),
+                "changed": bool(changed),
+                "counts": {
+                    "added": len(added), "modified": len(modified),
+                    "removed": len(removed), "moved": len(moved), "skipped": len(skipped),
+                },
+                "tag": tag,  # "update" | "restore" | "rebuild"
+            }
+            if ok:
+                st.success(
+                    f"✅ 완료: {tag} · 소요 {took_s:.1f}s · "
+                    f"추가 {len(added)}, 수정 {len(modified)}, 삭제 {len(removed)}"
+                )
+            else:
+                st.error(f"❌ 실패: {tag} · 소요 {took_s:.1f}s")
+
         # ── 분기 1: 업데이트 실행(최적화→업로드→복구→연결) ───────────────────
         if do_update:
             if not _require_admin():
                 return
+            t0 = time.time()
             prog = st.progress(0)
             log  = st.empty()
             def _pct(v: int, msg: str | None = None):
@@ -577,7 +640,7 @@ def render_brain_prep_main():
 
             with st.status("최적화(인덱싱) 실행 중…", state="running") as s:
                 try:
-                    res = build_fn(
+                    build_fn(
                         update_pct=_pct, update_msg=_msg,
                         gdrive_folder_id="", gcp_creds={},
                         persist_dir=str(persist_dir), remote_manifest={}
@@ -585,11 +648,12 @@ def render_brain_prep_main():
                     prog.progress(100)
                     s.update(label="최적화 완료 ✅", state="complete")
                 except TypeError:
-                    res = build_fn(_pct, _msg, "", {}, str(persist_dir), {})
+                    build_fn(_pct, _msg, "", {}, str(persist_dir), {})
                     prog.progress(100)
                     s.update(label="최적화 완료 ✅", state="complete")
                 except Exception as e:
                     s.update(label="최적화 실패 ❌", state="error")
+                    _record_result(False, time.time()-t0, "update")
                     st.error(f"인덱싱 오류: {type(e).__name__}: {e}")
                     return
 
@@ -608,29 +672,35 @@ def render_brain_prep_main():
                 rr = restore_fn()
                 if not (rr and rr.get("ok")):
                     s.update(label="복구 실패 ❌", state="error")
+                    _record_result(False, time.time()-t0, "update")
                     st.error(f"복구 실패: {rr.get('error') if rr else 'unknown'}")
                     return
                 s.update(label="복구 완료 ✅", state="complete")
 
+            _record_result(True, time.time()-t0, "update")
             _final_attach()
 
         # ── 분기 2: 업데이트 건너뛰고 기존 백업 복구 → 연결 ───────────────────
         if skip_and_restore:
             if not _require_admin():
                 return
+            t0 = time.time()
             with st.status("최신 백업 ZIP 복구 중…", state="running") as s:
                 rr = restore_fn()
                 if not (rr and rr.get("ok")):
                     s.update(label="복구 실패 ❌", state="error")
+                    _record_result(False, time.time()-t0, "restore")
                     st.error(f"복구 실패: {rr.get('error') if rr else 'unknown'}")
                     return
                 s.update(label="복구 완료 ✅", state="complete")
+            _record_result(True, time.time()-t0, "restore")
             _final_attach()
 
         # ── 분기 3: 강제 최적화 초기화(재최적화→업로드→복구→연결) ─────────────
         if force_rebuild:
             if not _require_admin():
                 return
+            t0 = time.time()
             prog = st.progress(0)
             log  = st.empty()
             def _pct(v: int, msg: str | None = None):
@@ -641,7 +711,7 @@ def render_brain_prep_main():
 
             with st.status("다시 최적화 실행 중…", state="running") as s:
                 try:
-                    res = build_fn(
+                    build_fn(
                         update_pct=_pct, update_msg=_msg,
                         gdrive_folder_id="", gcp_creds={},
                         persist_dir=str(persist_dir), remote_manifest={}
@@ -649,11 +719,12 @@ def render_brain_prep_main():
                     prog.progress(100)
                     s.update(label="다시 최적화 완료 ✅", state="complete")
                 except TypeError:
-                    res = build_fn(_pct, _msg, "", {}, str(persist_dir), {})
+                    build_fn(_pct, _msg, "", {}, str(persist_dir), {})
                     prog.progress(100)
                     s.update(label="다시 최적화 완료 ✅", state="complete")
                 except Exception as e:
                     s.update(label="다시 최적화 실패 ❌", state="error")
+                    _record_result(False, time.time()-t0, "rebuild")
                     st.error(f"재최적화 오류: {type(e).__name__}: {e}")
                     return
 
@@ -672,10 +743,12 @@ def render_brain_prep_main():
                 rr = restore_fn()
                 if not (rr and rr.get("ok")):
                     s.update(label="복구 실패 ❌", state="error")
+                    _record_result(False, time.time()-t0, "rebuild")
                     st.error(f"복구 실패: {rr.get('error') if rr else 'unknown'}")
                     return
                 s.update(label="복구 완료 ✅", state="complete")
 
+            _record_result(True, time.time()-t0, "rebuild")
             _final_attach()
 # ===== [05A] END ===========================================
 
