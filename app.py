@@ -273,168 +273,64 @@ render_role_caption()
 st.divider()
 # ===== [04A] MODE & ADMIN BUTTON (모듈 분리 호출) — END =======================
 
-# ===== [04B] 관리자 설정 — 이유문법 + 모드별 ON/OFF (라디오·세로배치) ==========
-import json as _json
-from pathlib import Path as _Path
-import streamlit as st
+# ===== [04B] 관리자 설정 — 질문 모드 표시 여부 ===============================
+def render_admin_settings():
+    import streamlit as st
 
-# ── [04B-1] 설정 파일 경로/기본값 ---------------------------------------------
-def _config_path() -> _Path:
-    base = _Path.home() / ".maic"
-    try: base.mkdir(parents=True, exist_ok=True)
-    except Exception: pass
-    return base / "config.json"
-
-_DEFAULT_CFG = {
-    "reason_grammar_enabled": False,  # 출시 기본: OFF
-    "mode_enabled": {
-        "Grammar":  True,   # 문법설명
-        "Sentence": True,   # 문장분석
-        "Passage":  True,   # 지문분석
-    },
-}
-
-# ── [04B-2] 설정 로드/저장 -----------------------------------------------------
-def _load_cfg() -> dict:
-    cfg_file = _config_path()
-    if not cfg_file.exists():
-        return _DEFAULT_CFG.copy()
-    try:
-        data = _json.loads(cfg_file.read_text(encoding="utf-8"))
-    except Exception:
-        data = {}
-    # 누락 키 보정
-    merged = _DEFAULT_CFG.copy()
-    me = (data or {}).get("mode_enabled", {})
-    if isinstance(me, dict):
-        merged["mode_enabled"].update(me)
-    if "reason_grammar_enabled" in (data or {}):
-        merged["reason_grammar_enabled"] = bool(data["reason_grammar_enabled"])
-    return merged
-
-def _save_cfg(data: dict) -> None:
-    cfg_file = _config_path()
-    # 스키마 정규화 후 저장
-    norm = _DEFAULT_CFG.copy()
-    try:
-        me = (data or {}).get("mode_enabled", {})
-        if isinstance(me, dict):
-            norm["mode_enabled"].update({k: bool(v) for k, v in me.items()})
-    except Exception:
-        pass
-    norm["reason_grammar_enabled"] = bool((data or {}).get("reason_grammar_enabled", False))
-    try:
-        cfg_file.write_text(_json.dumps(norm, ensure_ascii=False, indent=2), encoding="utf-8")
-    except Exception as e:
-        st.warning(f"설정 저장 실패: {type(e).__name__}: {e}")
-
-# ── [04B-3] 세션/전역 접근자 ---------------------------------------------------
-def _cfg_cache() -> dict:
-    st.session_state.setdefault("_app_cfg_cache", _load_cfg())
-    return st.session_state["_app_cfg_cache"]
-
-def _cfg_get(key: str, default=None):
-    return _cfg_cache().get(key, default)
-
-def _cfg_set(key: str, value) -> None:
-    _cfg_cache()[key] = value
-    _save_cfg(st.session_state["_app_cfg_cache"])
-
-def is_reason_grammar_enabled() -> bool:
-    return bool(_cfg_get("reason_grammar_enabled", False))
-
-def get_enabled_modes() -> dict:
-    merged = _DEFAULT_CFG["mode_enabled"].copy()
-    me = _cfg_get("mode_enabled", {})
-    if isinstance(me, dict):
-        merged.update({k: bool(v) for k, v in me.items()})
-    return merged
-
-# ── [04B-4] 관리자 UI(라디오형·세로배치·컴팩트) -------------------------------
-def render_admin_settings_panel():
-    """관리자용 설정 카드: 이유문법 + 모드별 ON/OFF (라디오·세로배치)"""
-    if not st.session_state.get("is_admin", False):
+    # 관리자만 보이도록 가드
+    if not (st.session_state.get("is_admin")
+            or st.session_state.get("admin_mode")
+            or st.session_state.get("role") == "admin"
+            or st.session_state.get("mode") == "admin"):
         return
 
-    # 라디오 간격을 조금 줄여 모바일에서도 컴팩트하게
-    st.markdown("""
-    <style>
-      .stRadio > div { row-gap: 0.25rem; }
-      .st-emotion-cache-10trblm p { margin-bottom: 0.35rem; }
-    </style>
-    """, unsafe_allow_html=True)
-
     with st.container(border=True):
-        st.subheader("관리자 설정")
-        st.caption("동그란 선택지에서 ‘켜기/끄기’를 고르면 바로 반영됩니다. (자동 저장·자동 새로고침)")
+        st.markdown("**관리자 설정**")
+        st.caption("질문 모드 표시 여부를 선택하세요.")
 
-        # 현재 설정 로드
-        current_rg = is_reason_grammar_enabled()
-        me = get_enabled_modes()
+        # ── 기본값 및 기존 키 호환 ──────────────────────────────────────────
+        defaults = {"문법설명": True, "문장구조분석": True, "지문분석": True}
 
-        # (A) 이유문법 — 라디오(끄기/켜기)
-        st.markdown("**이유문법 설명(Reason Grammar)**")
-        rg_choice = st.radio(
-            label="이유문법 설명",
-            options=["끄기", "켜기"],
-            index=(1 if current_rg else 0),
-            horizontal=True,
-            key="rg_radio",
-        )
+        # 우선순위: qa_modes_enabled 리스트 → 과거 불리언 키 → defaults
+        vis_list = st.session_state.get("qa_modes_enabled")
+        if not isinstance(vis_list, list):
+            vis_list = []
+            if st.session_state.get("show_mode_grammar",  defaults["문법설명"]):   vis_list.append("문법설명")
+            if st.session_state.get("show_mode_structure",defaults["문장구조분석"]): vis_list.append("문장구조분석")
+            if st.session_state.get("show_mode_passage",  defaults["지문분석"]):   vis_list.append("지문분석")
+            if not vis_list:
+                vis_list = [k for k, v in defaults.items() if v]
 
-        # (B) 모드별 — 세로로 각 라디오
-        st.markdown("### 질문 모드 표시 여부")
-        g_choice = st.radio(
-            label="문법설명 (Grammar)",
-            options=["끄기", "켜기"],
-            index=(1 if me.get("Grammar", True) else 0),
-            horizontal=True,
-            key="mode_g_radio",
-        )
-        s_choice = st.radio(
-            label="문장분석 (Sentence)",
-            options=["끄기", "켜기"],
-            index=(1 if me.get("Sentence", True) else 0),
-            horizontal=True,
-            key="mode_s_radio",
-        )
-        p_choice = st.radio(
-            label="지문분석 (Passage)",
-            options=["끄기", "켜기"],
-            index=(1 if me.get("Passage", True) else 0),
-            horizontal=True,
-            key="mode_p_radio",
-        )
+        enabled = set(vis_list)
 
-        # 값 변환
-        new_rg = (rg_choice == "켜기")
-        new_me = {
-            "Grammar":  (g_choice == "켜기"),
-            "Sentence": (s_choice == "켜기"),
-            "Passage":  (p_choice == "켜기"),
-        }
+        # ── 가로 3열 배치 ──────────────────────────────────────────────────
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            opt_grammar = st.checkbox("문법설명", value=("문법설명" in enabled), key="cfg_show_mode_grammar")
+        with col2:
+            opt_structure = st.checkbox("문장구조분석", value=("문장구조분석" in enabled), key="cfg_show_mode_structure")
+        with col3:
+            opt_passage = st.checkbox("지문분석", value=("지문분석" in enabled), key="cfg_show_mode_passage")
 
-        # 변경 감지 → 저장 (Streamlit이 자동 rerun 하므로 st.rerun() 불필요)
-        changed = (new_rg != current_rg) or any(new_me.get(k) != me.get(k) for k in ("Grammar","Sentence","Passage"))
-        if changed:
-            _cfg_set("reason_grammar_enabled", bool(new_rg))
-            # 기존 값에 덮어쓰기 형식으로 저장
-            merged = get_enabled_modes()
-            merged.update(new_me)
-            _cfg_set("mode_enabled", merged)
-            try:
-                on_list = [k for k, v in merged.items() if v]
-                st.toast("저장됨 · 켜진 모드: " + (", ".join(on_list) if on_list else "없음"))
-            except Exception:
-                pass
+        # 선택 결과 집계
+        selected = []
+        if opt_grammar:   selected.append("문법설명")
+        if opt_structure: selected.append("문장구조분석")
+        if opt_passage:   selected.append("지문분석")
 
-        # (미리보기) 학생에게 보이는 모드 안내
-        enabled_list = [name for name, on in get_enabled_modes().items() if on]
-        if enabled_list:
-            st.info("학생에게 표시되는 모드: " + ", ".join(enabled_list))
-        else:
-            st.error("모든 모드가 꺼져 있습니다. 학생 화면에서 질문 모드가 보이지 않아요.")
-# ===== [04B] END =============================================================
+        # ── 세션 상태 갱신(신/구 키 모두) ───────────────────────────────────
+        st.session_state["qa_modes_enabled"]  = selected
+        st.session_state["show_mode_grammar"] = opt_grammar
+        st.session_state["show_mode_structure"] = opt_structure
+        st.session_state["show_mode_passage"] = opt_passage
+
+        # 요약 표시
+        st.caption("표시 중: " + (" · ".join(selected) if selected else "없음"))
+
+# 호출
+render_admin_settings()
+# ===== [04B] END ======================================================
+
 
 # ===== [05A] BRAIN PREP MAIN =======================================
 def render_brain_prep_main():
