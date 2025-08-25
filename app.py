@@ -334,7 +334,7 @@ def render_admin_settings():
 
         enabled = set(vis_list)
 
-        # ── 가로 3열 배치 ──────────────────────────────────────────────────
+        # ── 가로 3열 배치(문법설명 · 문장구조분석 · 지문분석) ───────────────────
         col1, col2, col3 = st.columns(3)
         with col1:
             opt_grammar = st.checkbox("문법설명", value=("문법설명" in enabled), key="cfg_show_mode_grammar")
@@ -350,17 +350,19 @@ def render_admin_settings():
         if opt_passage:   selected.append("지문분석")
 
         # ── 세션 상태 갱신(신/구 키 모두) ───────────────────────────────────
-        st.session_state["qa_modes_enabled"]  = selected
-        st.session_state["show_mode_grammar"] = opt_grammar
+        st.session_state["qa_modes_enabled"]    = selected
+        st.session_state["show_mode_grammar"]   = opt_grammar
         st.session_state["show_mode_structure"] = opt_structure
-        st.session_state["show_mode_passage"] = opt_passage
+        st.session_state["show_mode_passage"]   = opt_passage
 
         # 요약 표시
         st.caption("표시 중: " + (" · ".join(selected) if selected else "없음"))
 
-# 호출
-render_admin_settings()
-# ===== [04B] END ======================================================
+# (호환용 별칭: 과거 코드에서 이 이름을 호출해도 동작)
+def render_admin_settings_panel(*args, **kwargs):
+    return render_admin_settings(*args, **kwargs)
+# ===== [04B] END =============================================================
+
 # ===== [04C] 프롬프트 소스 진단 패널 =========================================
 def render_prompt_source_diag():
     import os
