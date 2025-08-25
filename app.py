@@ -1,21 +1,27 @@
 # ==== [HEAD] future import must be first =====================================
 from __future__ import annotations  # 반드시 파일 첫 실행문
-
+# ===== [00A-FIX] ENV BOOTSTRAP (must be AFTER future-imports) =====
 import os
-import streamlit as st
+try:
+    import streamlit as st  # Streamlit secrets -> env
+except Exception:
+    st = None  # 로컬/테스트 환경 대비
 
-# [00A] ENV BOOTSTRAP (secrets → os.environ)
-def _bootstrap_env_from_secrets():
-    try:
-        # Streamlit secrets 값을 환경변수로 반영
-        for key in ("MAIC_PROMPTS_DRIVE_FOLDER_ID", "MAIC_PROMPTS_PATH"):
-            if key in st.secrets and not os.getenv(key):
-                os.environ[key] = str(st.secrets[key])
-    except Exception:
-        # 로컬 실행 등으로 secrets 미존재 시 조용히 패스
-        pass
+def _bootstrap_env_from_secrets() -> None:
+    """Streamlit Cloud secrets 값을 환경변수로 반영."""
+    if st is None:
+        return
+    for key in ("MAIC_PROMPTS_DRIVE_FOLDER_ID", "MAIC_PROMPTS_PATH"):
+        try:
+            val = st.secrets.get(key, None)
+        except Exception:
+            val = None
+        if val and not os.getenv(key):
+            os.environ[key] = str(val)
 
 _bootstrap_env_from_secrets()
+# ===== [00A-FIX] END ===============================================
+
 # ==== [HEAD] END =============================================================
 
 
