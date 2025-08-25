@@ -441,10 +441,10 @@ def render_brain_prep_main():
     """
     준비/최적화 패널 (관리자 전용)
     - Drive 'prepared' 변화 감지(quick_precheck) → 결과 요약(+파일 목록)
-    - 신규자료 O: [업데이트 실행] / [업데이트 건너뛰기(기존 백업 복구)]
-    - 신규자료 X: [최신 백업 복구]
-    - 항상: [강제 최적화 초기화]
-    - 완료 시 요약 배지(소요시간/개수) + 세션 기록(_optimize_last)
+    - 상태 배지 정밀화: delta / no_manifest / no_prepared / no_change
+    - 신규자료 O(delta): [업데이트 실행] / [업데이트 건너뛰기(기존 백업 복구)]
+    - 신규자료 X: [최신 백업 복구] + [강제 최적화 초기화](항상)
+    - 완료 시 요약 배지 + 세션 기록(_optimize_last)
     """
 
     # ── 역할 확인(관리자 전용) ────────────────────────────────────────────────
@@ -486,7 +486,7 @@ def render_brain_prep_main():
         st.error("build_index_with_checkpoint()를 찾지 못했습니다.")
         return
 
-    # ── 상태 파악 ──────────────────────────────────────────────────────────────
+    # ── 인덱스 상태 ───────────────────────────────────────────────────────────
     try:
         idx_status = get_index_status()   # 'ready' | 'pending' | 'missing'
     except Exception:
@@ -498,8 +498,8 @@ def render_brain_prep_main():
         "missing": "🔴 인덱스 없음",
     }.get(idx_status, "❔ 상태 미상")
 
-    # ── 신규자료 점검(Drive prepared vs manifest) + 델타 추출 ──────────────────
-    changed = False
+    # ── 신규자료 점검 + 델타/사유 파싱 ─────────────────────────────────────────
+    changed = False   # 원자료 신호(호환용)
     prepared_cnt = manifest_cnt = 0
     reasons = []
     added = modified = removed = moved = skipped = []
@@ -511,7 +511,6 @@ def render_brain_prep_main():
             manifest_cnt = int(pre.get("manifest_count", 0))
             reasons = list(pre.get("reasons", []))
 
-            # delta 호환 처리(키가 상이해도 최대한 매핑)
             delta = pre.get("delta") or {}
             added    = list(pre.get("added",    [])) or list(delta.get("added",    []))
             modified = list(pre.get("modified", [])) or list(delta.get("modified", []))
@@ -521,61 +520,69 @@ def render_brain_prep_main():
     except Exception as e:
         reasons = [f"precheck_failed:{type(e).__name__}"]
 
-    changed_badge = "🆕 신규 자료 감지" if changed else "✅ 변경 없음"
+    # ── 상태 분류(정밀) ───────────────────────────────────────────────────────
+    delta_count = len(added) + len(modified) + len(removed) + len(moved)
+    has_no_manifest_reason = any("no_local_manifest" in str(r) for r in reasons)
+    if delta_count > 0:
+        status_kind = "delta"           # 실제 파일 증감 있음 → 녹색불
+    elif has_no_manifest_reason or (manifest_cnt == 0 and prepared_cnt > 0):
+        status_kind = "no_manifest"     # 매니페스트 없음/유실
+    elif prepared_cnt == 0:
+        status_kind = "no_prepared"     # 자료 폴더가 비어있음
+    else:
+        status_kind = "no_change"       # 변경 없음
+
+    kind_badge = {
+        "delta":       "🟢 신규자료 감지",
+        "no_manifest": "🟡 초기화 필요(매니페스트 없음)",
+        "no_prepared": "⚪ 자료 없음",
+        "no_change":   "✅ 변경 없음",
+    }[status_kind]
 
     # ── 패널 렌더 ─────────────────────────────────────────────────────────────
     with st.container(border=True):
         st.subheader("자료 최적화/백업 패널")
-        st.caption("앱이 Drive의 prepared 폴더를 점검해 업데이트 필요 여부를 판단합니다.")
+        st.caption("Drive의 prepared 폴더와 로컬 manifest를 비교하여 업데이트 필요 여부를 판단합니다.")
 
         cols = st.columns([1,1,1,1])
         cols[0].write(f"**인덱스 상태:** {status_badge}")
-        cols[1].write(f"**신규자료:** {changed_badge}")
+        cols[1].write(f"**신규자료:** {kind_badge}")
         cols[2].write(f"**prepared:** {prepared_cnt}")
         cols[3].write(f"**manifest:** {manifest_cnt}")
 
-        if changed:
-            # 신규자료 상세(추가/수정/삭제 요약 + 목록)
-            with st.expander("🔎 신규자료 상세(추가/수정/삭제 내역 보기)", expanded=True):
+        # 실제 델타가 있을 때만 상세 펼침
+        if status_kind == "delta":
+            with st.expander("🔎 신규자료 상세(추가/수정/삭제 내역)", expanded=True):
                 st.caption(
                     f"추가 {len(added)} · 수정 {len(modified)} · 삭제 {len(removed)}"
                     + (f" · 이동 {len(moved)}" if moved else "")
                     + (f" · 제외 {len(skipped)}" if skipped else "")
                 )
                 c1, c2, c3 = st.columns(3)
-                def _render_list(col, title, rows):
+                def _render_list(col, title, rows, limit=20):
                     with col:
                         st.markdown(f"**{title}**")
                         if not rows:
                             st.caption("— 없음")
                         else:
-                            for x in rows[:20]:
+                            for x in rows[:limit]:
                                 st.write("•", str(x))
-                            if len(rows) > 20:
-                                st.caption(f"… 외 {len(rows)-20}개")
+                            if len(rows) > limit:
+                                st.caption(f"… 외 {len(rows)-limit}개")
                 _render_list(c1, "추가됨", added)
                 _render_list(c2, "수정됨", modified)
                 _render_list(c3, "삭제됨", removed)
-                if moved or skipped:
-                    with st.expander("기타(이동/제외)"):
-                        if moved:
-                            st.markdown("**이동됨**")
-                            for x in moved[:30]: st.write("•", str(x))
-                            if len(moved) > 30: st.caption(f"… 외 {len(moved)-30}개")
-                        if skipped:
-                            st.markdown("**제외됨**")
-                            for x in skipped[:30]: st.write("•", str(x))
-                            if len(skipped) > 30: st.caption(f"… 외 {len(skipped)-30}개")
 
-        if reasons and not changed:
+        if reasons and status_kind != "delta":
             with st.expander("세부 사유 보기", expanded=False):
                 for r in reasons:
                     st.write("•", str(r))
 
         st.divider()
 
-        # ── 액션 버튼 영역 ────────────────────────────────────────────────────
-        if changed:
+        # ── 액션 버튼(표시는 기존 로직 유지) ───────────────────────────────────
+        # 버튼 구성은 'changed' 신호를 유지해, 초기화/매니페스트 없음 케이스에도 업데이트 유도
+        if changed or status_kind == "delta":
             c1, c2, c3 = st.columns([1,1,1])
             do_update        = c1.button("🚀 업데이트 실행 (최적화→업로드→복구→연결)", use_container_width=True)
             skip_and_restore = c2.button("⏭ 업데이트 건너뛰기 (기존 백업 복구→연결)", use_container_width=True)
@@ -586,14 +593,13 @@ def render_brain_prep_main():
             skip_and_restore = c1.button("📦 최신 백업 복구 → 연결", use_container_width=True)
             force_rebuild    = c2.button("🛠 강제 최적화 초기화", use_container_width=True)
 
-        # 공통: 서버사이드 재검증
+        # ── 공통 헬퍼들 ────────────────────────────────────────────────────────
         def _require_admin() -> bool:
             if not _is_admin():
                 st.warning("관리자만 사용할 수 있는 기능입니다.")
                 return False
             return True
 
-        # 공통: 최종 연결
         def _final_attach():
             with st.status("두뇌 연결 중…", state="running") as s2:
                 ok = _auto_attach_or_restore_silently()
@@ -605,12 +611,11 @@ def render_brain_prep_main():
                     s2.update(label="두뇌 연결 실패 ❌", state="error")
                     st.error("세션 부착 실패")
 
-        # 공통: 결과 요약 기록/표시
         def _record_result(ok: bool, took_s: float, tag: str):
             st.session_state["_optimize_last"] = {
                 "ok": bool(ok),
                 "took_sec": round(float(took_s), 1),
-                "changed": bool(changed),
+                "status_kind": status_kind,
                 "counts": {
                     "added": len(added), "modified": len(modified),
                     "removed": len(removed), "moved": len(moved), "skipped": len(skipped),
@@ -625,26 +630,22 @@ def render_brain_prep_main():
             else:
                 st.error(f"❌ 실패: {tag} · 소요 {took_s:.1f}s")
 
-        # ── 분기 1: 업데이트 실행(최적화→업로드→복구→연결) ───────────────────
+        # ── 처리 분기(핵심 동작은 기존과 동일) ─────────────────────────────────
         if do_update:
-            if not _require_admin():
-                return
+            if not _require_admin(): return
             t0 = time.time()
-            prog = st.progress(0)
-            log  = st.empty()
-            def _pct(v: int, msg: str | None = None):
+            prog = st.progress(0); log = st.empty()
+            def _pct(v, m=None):
                 try: prog.progress(max(0, min(int(v), 100)))
                 except Exception: pass
-                if msg: log.info(str(msg))
-            def _msg(s: str): log.write(f"• {s}")
+                if m: log.info(str(m))
+            def _msg(s): log.write(f"• {s}")
 
             with st.status("최적화(인덱싱) 실행 중…", state="running") as s:
                 try:
-                    build_fn(
-                        update_pct=_pct, update_msg=_msg,
-                        gdrive_folder_id="", gcp_creds={},
-                        persist_dir=str(persist_dir), remote_manifest={}
-                    )
+                    build_fn(update_pct=_pct, update_msg=_msg,
+                             gdrive_folder_id="", gcp_creds={},
+                             persist_dir=str(persist_dir), remote_manifest={})
                     prog.progress(100)
                     s.update(label="최적화 완료 ✅", state="complete")
                 except TypeError:
@@ -680,10 +681,8 @@ def render_brain_prep_main():
             _record_result(True, time.time()-t0, "update")
             _final_attach()
 
-        # ── 분기 2: 업데이트 건너뛰고 기존 백업 복구 → 연결 ───────────────────
         if skip_and_restore:
-            if not _require_admin():
-                return
+            if not _require_admin(): return
             t0 = time.time()
             with st.status("최신 백업 ZIP 복구 중…", state="running") as s:
                 rr = restore_fn()
@@ -696,26 +695,21 @@ def render_brain_prep_main():
             _record_result(True, time.time()-t0, "restore")
             _final_attach()
 
-        # ── 분기 3: 강제 최적화 초기화(재최적화→업로드→복구→연결) ─────────────
         if force_rebuild:
-            if not _require_admin():
-                return
+            if not _require_admin(): return
             t0 = time.time()
-            prog = st.progress(0)
-            log  = st.empty()
-            def _pct(v: int, msg: str | None = None):
+            prog = st.progress(0); log = st.empty()
+            def _pct(v, m=None):
                 try: prog.progress(max(0, min(int(v), 100)))
                 except Exception: pass
-                if msg: log.info(str(msg))
-            def _msg(s: str): log.write(f"• {s}")
+                if m: log.info(str(m))
+            def _msg(s): log.write(f"• {s}")
 
             with st.status("다시 최적화 실행 중…", state="running") as s:
                 try:
-                    build_fn(
-                        update_pct=_pct, update_msg=_msg,
-                        gdrive_folder_id="", gcp_creds={},
-                        persist_dir=str(persist_dir), remote_manifest={}
-                    )
+                    build_fn(update_pct=_pct, update_msg=_msg,
+                             gdrive_folder_id="", gcp_creds={},
+                             persist_dir=str(persist_dir), remote_manifest={})
                     prog.progress(100)
                     s.update(label="다시 최적화 완료 ✅", state="complete")
                 except TypeError:
@@ -751,6 +745,7 @@ def render_brain_prep_main():
             _record_result(True, time.time()-t0, "rebuild")
             _final_attach()
 # ===== [05A] END ===========================================
+
 
 
 # ===== [05B] TAG DIAGNOSTICS (NEW) — START ==================================
