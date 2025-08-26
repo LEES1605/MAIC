@@ -845,7 +845,7 @@ def render_brain_prep_main():
 
 # ===== [05B] 간단 진단 패널(선택) ===========================================
 def render_tag_diagnostics():
-    """자동 복구 상태, rag_index 경로, 리포트/ZIP 목록 등 간단 요약."""
+    """자동 복구 상태, rag_index 경로, 리포트/ZIP 목록 등 간단 요약 + ✅ attach 로그 뷰어."""
     import importlib, json as _json
     from datetime import datetime
 
@@ -865,6 +865,27 @@ def render_tag_diagnostics():
 
     st.subheader("진단(간단)", anchor=False)
 
+    # ✅ 0) attach/restore 타임라인 로그
+    with st.container(border=True):
+        st.markdown("### Attach/Restore 타임라인")
+        logs = st.session_state.get("_attach_log") or []
+        colL, colR = st.columns([0.85, 0.15])
+        with colR:
+            if st.button("🧹 로그 비우기", use_container_width=True):
+                st.session_state["_attach_log"] = []
+                st.toast("로그를 비웠습니다.")
+                st.experimental_rerun()
+        if not logs:
+            st.caption("아직 기록된 로그가 없습니다. 자동 연결 또는 복구를 수행하면 여기에 단계별 로그가 표시됩니다.")
+        else:
+            # 최신 우선으로 표시
+            for item in reversed(logs[-100:]):
+                ts = item.get("ts")
+                step = item.get("step")
+                rest = {k:v for k,v in item.items() if k not in ("ts","step")}
+                st.write(f"• **{ts}** — `{step}`", (f" · `{_json.dumps(rest, ensure_ascii=False)}`" if rest else ""))
+
+    # 1) 자동 복구 상태
     auto_info = st.session_state.get("_auto_restore_last")
     with st.container(border=True):
         st.markdown("### 자동 복구 상태")
@@ -873,6 +894,7 @@ def render_tag_diagnostics():
         else:
             st.code(_json.dumps(auto_info, ensure_ascii=False, indent=2), language="json")
 
+    # 2) rag_index Persist 경로 추정
     with st.container(border=True):
         st.markdown("### rag_index Persist 경로 추정")
         rag = st.session_state.get("rag_index")
@@ -890,10 +912,12 @@ def render_tag_diagnostics():
                     continue
             st.write("🔍 rag_index 내부 persist_dir/유사 속성:", cand or "(발견되지 않음)")
 
+    # 3) 품질 리포트 존재 여부
     qr_exists = QUALITY_REPORT_PATH.exists()
     qr_badge = "✅ 있음" if qr_exists else "❌ 없음"
     st.markdown(f"- **품질 리포트(quality_report.json)**: {qr_badge}  (`{QUALITY_REPORT_PATH.as_posix()}`)")
-# ===== [05B] END ==============================================================
+# ===== [05B] END ===========================================================
+
 
 # ===== [PATCH-BRAIN-HELPER] 두뇌(인덱스) 연결 여부 감지 =======================
 def _is_brain_ready() -> bool:
