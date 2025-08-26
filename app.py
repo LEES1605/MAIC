@@ -1064,19 +1064,21 @@ def _is_brain_ready() -> bool:
     )
     return any(bool(x) for x in flags)
 # ===== [PATCH-BRAIN-HELPER] END ==============================================
-
 # ===== [06] 질문/답변 패널 — 프롬프트 연동 & LLM 호출 ========================
 def render_qa_panel():
     """
     학생 질문 → (모드) → 프롬프트 빌드 → LLM 호출(OpenAI/Gemini) → 답변 표시
     - 관리자에서 켠 모드만 라디오에 노출
     - 라이브러리/키 상태에 따라 안전하게 폴백
-    - ✅ 스트리밍 출력 + 세션 캐싱 + Gemini 모델 선택(관리자)
-    - ✅ (NEW) 관리자용 생성 설정: temperature / max_tokens 슬라이더 적용
+    - 스트리밍 출력 + 세션 캐싱 + Gemini 모델 선택(관리자) + 생성 설정 슬라이더
+    - (NEW) 출처 표기 규칙/디클레이머 금지 규칙을 System에 주입
+      · RAG 근거 발견: 문서명/소단원명/페이지 등 구체 표기
+      · RAG 근거 미발견 또는 RAG 미사용: 'AI지식 활용'으로 표기
     """
+    import os
     import traceback, importlib.util
 
-    # 보여줄 모드 집합(관리자 설정 반영)
+    # 0) 표시할 모드 집합(관리자 설정 반영)
     try:
         modes_enabled = _get_enabled_modes_unified()
     except Exception:
@@ -1094,6 +1096,7 @@ def render_qa_panel():
 
     with st.container(border=True):
         st.subheader("질문/답변")
+
         # 두뇌 상태 배지
         rag_ready = _is_brain_ready()
         if rag_ready:
@@ -1105,13 +1108,15 @@ def render_qa_panel():
         with colm:
             sel_mode = st.radio("모드", options=labels, horizontal=True, key="qa_mode_radio")
 
-            # ✅ 관리자 전용: Gemini 모델 선택 + 생성 설정 슬라이더
+            # 관리자 가드
             is_admin = (
                 st.session_state.get("is_admin")
                 or st.session_state.get("admin_mode")
                 or st.session_state.get("role") == "admin"
                 or st.session_state.get("mode") == "admin"
             )
+
+            # Gemini 모델 선택(관리자)
             if is_admin:
                 st.markdown("---")
                 st.caption("Gemini 모델 선택(관리자)")
@@ -1122,19 +1127,23 @@ def render_qa_panel():
                     index=0 if str(default_model).endswith("flash") else 1, key="gemini_model_radio"
                 )
 
+                # 생성 설정(temperature / max_tokens)
                 st.markdown("---")
                 st.caption("생성 설정(관리자)")
-                # 기본값: 안정적 톤과 과도한 장문 방지
                 st.session_state.setdefault("gen_temperature", 0.3)
                 st.session_state.setdefault("gen_max_tokens", 700)
                 st.session_state["gen_temperature"] = st.slider(
-                    "Temperature (창의성)", min_value=0.0, max_value=1.0, value=float(st.session_state["gen_temperature"]), step=0.1
+                    "Temperature (창의성)", min_value=0.0, max_value=1.0,
+                    value=float(st.session_state["gen_temperature"]), step=0.1
                 )
                 st.session_state["gen_max_tokens"] = st.slider(
-                    "Max Tokens (응답 길이 상한)", min_value=100, max_value=2000, value=int(st.session_state["gen_max_tokens"]), step=50
+                    "Max Tokens (응답 길이 상한)", min_value=100, max_value=2000,
+                    value=int(st.session_state["gen_max_tokens"]), step=50
                 )
+
         with colq:
             question = st.text_area("질문을 입력하세요", height=96, placeholder="예: I had my bike repaired.")
+
         colA, colB = st.columns([1,1])
         go = colA.button("답변 생성", use_container_width=True)
         show_prompt = colB.toggle("프롬프트 미리보기", value=False)
@@ -1142,13 +1151,40 @@ def render_qa_panel():
     if not go:
         return
 
-    # 프롬프트 빌드
+    # 1) 프롬프트 빌드 (+ 규칙 주입)
     try:
         from src.prompt_modes import build_prompt, to_openai, to_gemini
         parts = build_prompt(sel_mode, question or "", lang="ko", extras={
             "level":  st.session_state.get("student_level"),
             "tone":   "encouraging",
         })
+
+        # (NEW) 출처 표기 규칙/디클레이머 금지 규칙
+        rules = []
+        if rag_ready:
+            # RAG 연결: 근거 찾으면 구체 출처, 못 찾으면 'AI지식 활용'
+            rules.append(
+                "출처 표기 규칙: 업로드 자료에서 근거를 찾으면 문서명/소단원명/페이지 등 구체적으로 표기합니다. "
+                "근거를 찾지 못했다면 'AI지식 활용'이라고만 간단히 표기합니다."
+            )
+        else:
+            # RAG 미사용: 항상 'AI지식 활용'
+            rules.append(
+                "출처 표기 규칙: 현재 업로드 자료(RAG)를 사용하지 못하므로, 답변 맨 끝에 'AI지식 활용'이라고만 표기합니다."
+            )
+        # 표기 형태를 단 한 줄로 제한
+        rules.append(
+            "출처/근거 표기는 답변 맨 끝에 '근거/출처: '로 시작하는 **한 줄**로만 작성하십시오. "
+            "여러 개면 세미콜론(;)으로 구분합니다."
+        )
+        # 디클레이머 금지
+        rules.append(
+            "금지: '일반적인 지식/일반 학습자료' 등에 기반했다는 포괄적 디클레이머를 출력하지 마십시오."
+        )
+
+        if parts and getattr(parts, "system", None):
+            parts.system = parts.system + "\n\n" + "\n".join(rules)
+
     except Exception as e:
         st.error(f"프롬프트 생성 실패: {type(e).__name__}: {e}")
         st.code(traceback.format_exc(), language="python")
@@ -1160,14 +1196,135 @@ def render_qa_panel():
             st.code(parts.system, language="markdown")
             st.markdown("**User:**")
             st.code(parts.user, language="markdown")
-            if parts.provider_kwargs:
+            if getattr(parts, "provider_kwargs", None):
                 st.caption(f"provider_kwargs: {parts.provider_kwargs}")
 
-    # 라이브러리/키 상태 점검
+    # 2) 라이브러리/키 상태
     have_openai_lib  = importlib.util.find_spec("openai") is not None
     have_gemini_lib  = importlib.util.find_spec("google.generativeai") is not None
     has_openai_key   = bool(os.getenv("OPENAI_API_KEY") or getattr(st, "secrets", {}).get("OPENAI_API_KEY"))
     has_gemini_key   = bool(os.getenv("GEMINI_API_KEY") or getattr(st, "secrets", {}).get("GEMINI_API_KEY"))
+
+    # 3) 세션 캐시
+    st.session_state.setdefault("_openai_client_cache", None)
+    st.session_state.setdefault("_gemini_model_cache", {})  # {model_name: genai.GenerativeModel}
+
+    def _get_openai_client():
+        if st.session_state["_openai_client_cache"] is None:
+            from openai import OpenAI
+            st.session_state["_openai_client_cache"] = OpenAI()
+        return st.session_state["_openai_client_cache"]
+
+    def _get_gemini_model(model_name: str):
+        cache = st.session_state["_gemini_model_cache"]
+        if model_name in cache:
+            return cache[model_name]
+        import google.generativeai as genai
+        api_key = os.getenv("GEMINI_API_KEY") or getattr(st, "secrets", {}).get("GEMINI_API_KEY")
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel(model_name=model_name)
+        cache[model_name] = model
+        return model
+
+    # 4) 관리자 설정값 읽기
+    temp = float(st.session_state.get("gen_temperature", 0.3))
+    max_toks = int(st.session_state.get("gen_max_tokens", 700))
+    if not (0.0 <= temp <= 1.0): temp = 0.3
+    if not (100 <= max_toks <= 2000): max_toks = 700
+
+    # 5) 스트리밍 출력 슬롯
+    out_box = st.empty()
+
+    # 6) LLM 호출 구현
+    def _call_openai_stream(p):
+        try:
+            client = _get_openai_client()
+            payload = to_openai(p)  # {"messages":[...], ...}
+            model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+            stream = client.chat.completions.create(
+                model=model, stream=True, temperature=temp, max_tokens=max_toks, **payload
+            )
+            buf = []
+            for event in stream:
+                delta = getattr(event.choices[0], "delta", None)
+                if delta and getattr(delta, "content", None):
+                    buf.append(delta.content)
+                    out_box.markdown("".join(buf))
+            text = "".join(buf).strip()
+            return True, (text if text else None)
+        except Exception as e:
+            return False, f"{type(e).__name__}: {e}"
+
+    def _call_gemini_stream(p):
+        try:
+            import google.generativeai as genai
+            api_key = os.getenv("GEMINI_API_KEY") or getattr(st, "secrets", {}).get("GEMINI_API_KEY")
+            if not api_key:
+                return False, "GEMINI_API_KEY 미설정"
+            model_name = st.session_state.get("gemini_model_selection") or os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+            model = _get_gemini_model(model_name)
+            payload = to_gemini(p)  # {"contents":[...], ...}
+            gen_cfg = {"temperature": temp, "max_output_tokens": max_toks}
+
+            stream = model.generate_content(payload["contents"], generation_config=gen_cfg, stream=True)
+            buf = []
+            for chunk in stream:
+                if getattr(chunk, "text", None):
+                    buf.append(chunk.text)
+                    out_box.markdown("".join(buf))
+            text = "".join(buf).strip()
+            if not text:
+                # 비스트림 백업
+                resp = model.generate_content(payload["contents"], generation_config=gen_cfg)
+                text = getattr(resp, "text", "") or (
+                    resp.candidates[0].content.parts[0].text
+                    if getattr(resp, "candidates", None) else ""
+                )
+            return True, (text if text else None)
+        except Exception as e:
+            return False, f"{type(e).__name__}: {e}"
+
+    # 7) 실행(우선 OpenAI → 실패 시 Gemini 폴백)
+    with st.status("답변 생성 중…", state="running") as s:
+        ok, out, provider = False, None, "N/A"
+        if have_openai_lib and has_openai_key:
+            ok, out = _call_openai_stream(parts); provider = "OpenAI"
+        if (not ok) and have_gemini_lib and has_gemini_key:
+            ok, out = _call_gemini_stream(parts); provider = "Gemini" if ok else "N/A"
+
+        if ok and (out is not None):
+            s.update(label=f"{provider} 응답 수신 ✅", state="complete")
+            st.caption(f"모델: {provider} · temperature={temp} · max_tokens={max_toks}")
+        else:
+            s.update(label="LLM 호출 실패 ❌", state="error")
+            st.error("LLM 호출에 실패했습니다.")
+            hints = []
+            if not have_openai_lib and not have_gemini_lib:
+                hints.append("requirements.txt 에 `openai`, `google-generativeai`를 추가하세요.")
+            if have_openai_lib and not has_openai_key:
+                hints.append("`OPENAI_API_KEY`를 secrets 또는 환경변수에 설정하세요.")
+            if have_gemini_lib and not has_gemini_key:
+                hints.append("`GEMINI_API_KEY`를 secrets 또는 환경변수에 설정하세요.")
+            if not have_gemini_lib:
+                hints.append("Gemini를 쓰려면 `google-generativeai` 설치가 필요합니다.")
+            if not have_openai_lib:
+                hints.append("OpenAI를 쓰려면 `openai` 패키지가 필요합니다.")
+            if (
+                st.session_state.get("is_admin")
+                or st.session_state.get("admin_mode")
+                or st.session_state.get("role") == "admin"
+                or st.session_state.get("mode") == "admin"
+            ):
+                hints.append("Gemini 실패 시 모델을 Flash ↔ Pro로 바꿔 재시도해 보세요.")
+                hints.append("응답이 길면 max_tokens를 500~800 사이로 낮추면 속도가 빨라집니다.")
+            if hints:
+                st.info(" · ".join(hints))
+            st.caption(f"원인(마지막 시도): {out or '원인 불명'}")
+            st.info("프롬프트 미리보기 토글을 켜고 내용을 확인해 주세요.")
+# ===== [06] END ==============================================================
+
+
+
 
     # ✅ 세션 캐싱 준비
     st.session_state.setdefault("_openai_client_cache", None)
