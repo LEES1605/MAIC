@@ -923,7 +923,7 @@ def render_tag_diagnostics():
                 if st.button("🧹 로그 비우기", use_container_width=True):
                     st.session_state["_attach_log"] = []
                     st.toast("로그를 비웠습니다.")
-                    st.experimental_rerun()
+                    st.rerun()  # ← 변경: experimental_rerun → rerun
 
             if not logs:
                 st.caption("아직 기록된 로그가 없습니다. 자동 연결 또는 복구를 수행하면 여기에 단계별 로그가 표시됩니다.")
@@ -978,6 +978,7 @@ def render_tag_diagnostics():
 
         # F) 품질 리포트
         with st.expander("품질 리포트 존재 여부", expanded=_expand_all):
+            QUALITY_REPORT_PATH = QUALITY_REPORT_PATH  # keep reference
             qr_exists = QUALITY_REPORT_PATH.exists()
             qr_badge = "✅ 있음" if qr_exists else "❌ 없음"
             st.markdown(f"- **품질 리포트(quality_report.json)**: {qr_badge}  (`{QUALITY_REPORT_PATH.as_posix()}`)")
@@ -1049,7 +1050,8 @@ def render_qa_panel():
         st.subheader("질문/답변")
 
         # 두뇌 상태 배지
-        rag_ready = _is_attached_session() if " _is_attached_session" in globals() else _is_brain_ready()
+        rag_ready = (globals().get("_is_attached_session")() if "_is_attached_session" in globals()
+                     else _is_brain_ready())
         if rag_ready:
             st.caption("🧠 두뇌 상태: **연결됨** · 업로드 자료(RAG) 사용 가능")
         else:
@@ -1132,7 +1134,7 @@ def render_qa_panel():
                           "_secondary_requested","_qa_last_question",
                           "_qa_provider_used"]:
                     st.session_state.pop(k, None)
-                st.experimental_rerun()
+                st.rerun()  # ← 변경: experimental_rerun → rerun
 
     # 1) 프롬프트 빌드 도우미(+ 규칙 주입)
     def _build_parts(mode_label: str, q_text: str, use_rag: bool):
@@ -1330,7 +1332,7 @@ def render_qa_panel():
             if not auto_dual:
                 if st.button(f"💬 {other}로 보충 설명 보기", use_container_width=True, key="btn_secondary"):
                     st.session_state["_secondary_requested"] = True
-                    st.experimental_rerun()
+                    st.rerun()  # ← 변경: experimental_rerun → rerun
         with colS2:
             if auto_dual:
                 st.info("관리자 설정: 두 모델 모두 자동 생성 모드입니다.")
