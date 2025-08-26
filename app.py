@@ -51,57 +51,48 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 os.environ["STREAMLIT_SERVER_ENABLE_WEBSOCKET_COMPRESSION"] = "false"
 # ===== [01] END ===============================================================
 
-# ===== [02] IMPORTS & RAG BINDINGS ==========================================
+# ===== [02] IMPORTS & RAG 바인딩(예외 내성) ================================
+from __future__ import annotations
 from pathlib import Path
-from typing import Any, Optional, Callable, List, Dict, Tuple
+import os, sys
 
-import re
-import time
-import importlib
-import math
-import streamlit as st
+# 전역 바인딩 기본값(안전장치)
+get_or_build_index = None
+LocalIndexMissing = None
 
-# RAG 엔진이 없어도 앱이 죽지 않게 try/except로 감쌈
+# 1) 우선 경로: src.rag.index_build
 try:
-    from src.rag_engine import get_or_build_index, LocalIndexMissing
+    from src.rag.index_build import get_or_build_index as _gobi1  # type: ignore
+    from src.rag.index_build import LocalIndexMissing as _lim1     # type: ignore
+    get_or_build_index = _gobi1
+    LocalIndexMissing  = _lim1
 except Exception:
-    get_or_build_index = None  # type: ignore
-    class LocalIndexMissing(Exception):  # 안전 가드
+    pass
+
+# 2) 대체 경로: rag.index_build (패키지 루트가 다른 배포 환경용)
+if get_or_build_index is None or LocalIndexMissing is None:
+    try:
+        from rag.index_build import get_or_build_index as _gobi2    # type: ignore
+        from rag.index_build import LocalIndexMissing as _lim2       # type: ignore
+        get_or_build_index = _gobi2
+        LocalIndexMissing  = _lim2
+    except Exception:
+        pass
+
+# 3) 최종 안전망: LocalIndexMissing이 없으면 대체 예외 정의
+if LocalIndexMissing is None:
+    class LocalIndexMissing(Exception):
+        """로컬 인덱스가 없거나 읽을 수 없음을 나타내는 예외(대체 정의)."""
         ...
 
-# 인덱스 빌더/사전점검 (PREPARED→청크→리포트→ZIP 업로드)
-precheck_build_needed: Optional[Callable[..., Any]] = None
-build_index_with_checkpoint: Optional[Callable[..., Any]] = None
-_import_errors: List[str] = []
+# 4) 디버그 힌트(관리자만 보는 로그에 쓰이도록 환경 변수로 남김)
+#    - 이 값은 [03]의 _log_attach()가 기록하는 메타 정보 등과 함께 관리자 패널에서 간접 확인 가능
+os.environ.setdefault("MAIC_IMPORT_INDEX_BUILD_RESOLVE",
+    "src" if "src" in sys.modules else ("rag" if "rag" in sys.modules else "fallback"))
 
-def _bind_precheck(mod) -> Optional[Callable[..., Any]]:
-    """precheck_build_needed | quick_precheck 어느 쪽이든 호출 가능 래퍼."""
-    fn = getattr(mod, "precheck_build_needed", None) or getattr(mod, "quick_precheck", None)
-    if fn is None:
-        return None
-    def _call(*args, **kwargs):
-        try:
-            return fn(*args, **kwargs)
-        except TypeError:
-            return fn()
-    return _call
-
-# 1차 경로: src.rag.index_build
-try:
-    _mod = importlib.import_module("src.rag.index_build")
-    precheck_build_needed = _bind_precheck(_mod)
-    build_index_with_checkpoint = getattr(_mod, "build_index_with_checkpoint", None)
-except Exception as e:
-    _import_errors.append(f"[src.rag.index_build] {type(e).__name__}: {e}")
-
-# 2차 경로: rag.index_build (프로젝트 루트가 src일 때)
-if precheck_build_needed is None or build_index_with_checkpoint is None:
-    try:
-        _mod2 = importlib.import_module("rag.index_build")
-        precheck_build_needed = precheck_build_needed or _bind_precheck(_mod2)
-        build_index_with_checkpoint = build_index_with_checkpoint or getattr(_mod2, "build_index_with_checkpoint", None)
-    except Exception as e:
-        _import_errors.append(f"[rag.index_build] {type(e).__name__}: {e}")
+# (참고) PERSIST_DIR은 [03]의 _force_persist_dir()에서 강제 통일하므로
+# 여기서는 별도 경로 주입을 하지 않습니다. 모듈 내 PERSIST_DIR은 런타임에 [03]에서 덮어씌워집니다.
+# ===== [02] END ==============================================================
 
 # ===== [BOOT-WARN] set_page_config 이전 경고 누적 ============================
 _BOOT_WARNINGS: List[str] = []
