@@ -1004,13 +1004,14 @@ def _is_brain_ready() -> bool:
     return any(bool(x) for x in flags)
 # ===== [PATCH-BRAIN-HELPER] END ==============================================
 
-# ===== [06] 질문/답변 패널 — 프롬프트 연동 & LLM 호출(선두→보충) ===============
+# ===== [06] 질문/답변 패널 — 선두→보충 + 세션상태 보강 + 인라인 전송 UI =======
 def render_qa_panel():
     """
     학생 질문 → (선두 모델) 1차 답변 스트리밍 → [보충 설명] 버튼으로 2차 모델 호출
     - 선두 모델: 기본 Gemini, 관리자에서 OpenAI로 변경 가능
     - '두 모델 모두 자동 생성' 토글: 켜면 1차 후 2차도 자동 호출
-    - 스트리밍 출력 + 세션 캐시 + Gemini 모델 선택(관리자) + 생성 설정 슬라이더 유지
+    - 세션 상태 보강: 재실행(rerun) 후에도 1차/2차 답변과 버튼이 유지됨
+    - 질문 입력칸 오른쪽에 '검색하기' 버튼(폼 제출) + Enter 전송
     - 출처 규칙:
         · 근거 발견: 문서명/소단원/페이지 등 구체 표기
         · 근거 미발견 또는 RAG 미사용: 'AI지식 활용' 한 줄
@@ -1018,6 +1019,15 @@ def render_qa_panel():
     """
     import os
     import traceback, importlib.util
+
+    # ── 세션 키 기본값 ────────────────────────────────────────────────────────
+    st.session_state.setdefault("_qa_has_primary", False)
+    st.session_state.setdefault("_answer_primary", None)
+    st.session_state.setdefault("_answer_secondary", None)
+    st.session_state.setdefault("_secondary_requested", False)
+    st.session_state.setdefault("_qa_last_question", "")
+    st.session_state.setdefault("_qa_lead_provider", None)
+    st.session_state.setdefault("_qa_provider_used", None)
 
     # 0) 표시할 모드 집합(관리자 설정 반영)
     try:
@@ -1039,14 +1049,16 @@ def render_qa_panel():
         st.subheader("질문/답변")
 
         # 두뇌 상태 배지
-        rag_ready = _is_attached_session()
+        rag_ready = _is_attached_session() if " _is_attached_session" in globals() else _is_brain_ready()
         if rag_ready:
             st.caption("🧠 두뇌 상태: **연결됨** · 업로드 자료(RAG) 사용 가능")
         else:
             st.caption("🧠 두뇌 상태: **미연결** · 현재 응답은 **LLM-only(자료 미참조)** 입니다")
 
-        colm, colq = st.columns([1,3])
-        with colm:
+        # ── 좌측: 모드/전략 설정 · 우측: 질문 입력/전송 ─────────────────────────
+        colL, colR = st.columns([1,3], vertical_alignment="top")
+
+        with colL:
             sel_mode = st.radio("모드", options=labels, horizontal=True, key="qa_mode_radio")
 
             # 관리자 가드
@@ -1073,8 +1085,7 @@ def render_qa_panel():
                     help="켜면 선두 모델 스트리밍 후 다른 모델도 자동으로 생성합니다."
                 )
 
-            # ── Gemini 모델 선택(관리자) ───────────────────────────────────────
-            if is_admin:
+                # Gemini 모델 선택
                 st.markdown("---")
                 st.caption("Gemini 모델 선택(관리자)")
                 default_model = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
@@ -1084,8 +1095,7 @@ def render_qa_panel():
                     index=0 if str(default_model).endswith("flash") else 1, key="gemini_model_radio"
                 )
 
-            # ── 생성 설정(temperature / max_tokens) ────────────────────────────
-            if is_admin:
+                # 생성 설정
                 st.markdown("---")
                 st.caption("생성 설정(관리자)")
                 st.session_state.setdefault("gen_temperature", 0.3)
@@ -1099,27 +1109,40 @@ def render_qa_panel():
                     value=int(st.session_state["gen_max_tokens"]), step=50
                 )
 
-        with colq:
-            question = st.text_area("질문을 입력하세요", height=96, placeholder="예: I had my bike repaired.")
+            # 프롬프트 미리보기 토글
+            show_prompt = st.toggle("프롬프트 미리보기", value=False)
 
-        colA, colB = st.columns([1,1])
-        go = colA.button("답변 생성", use_container_width=True)
-        show_prompt = colB.toggle("프롬프트 미리보기", value=False)
+        with colR:
+            # ── 인라인 전송 UI: 질문칸 + 오른쪽 '검색하기' 버튼(Enter로도 전송) ──
+            with st.form("qa_form", clear_on_submit=False):
+                c1, c2 = st.columns([0.85, 0.15])
+                with c1:
+                    st.session_state.setdefault("qa_question", "")
+                    question = st.text_area(
+                        "질문을 입력하세요", key="qa_question", height=96,
+                        placeholder="예: I had my bike repaired."
+                    )
+                    st.caption("Enter로 전송 · 줄바꿈은 Shift+Enter")
+                with c2:
+                    submitted = st.form_submit_button("검색하기", use_container_width=True)
+            # 별도 초기화 버튼(선택)
+            col_reset, _ = st.columns([1,3])
+            if col_reset.button("🧹 새 질문으로 초기화", use_container_width=True):
+                for k in ["_qa_has_primary","_answer_primary","_answer_secondary",
+                          "_secondary_requested","_qa_last_question",
+                          "_qa_provider_used"]:
+                    st.session_state.pop(k, None)
+                st.experimental_rerun()
 
-    if not go:
-        return
-
-    # 1) 프롬프트 빌드 (+ 규칙 주입)
-    try:
-        from src.prompt_modes import build_prompt, to_openai, to_gemini
-        parts = build_prompt(sel_mode, question or "", lang="ko", extras={
+    # 1) 프롬프트 빌드 도우미(+ 규칙 주입)
+    def _build_parts(mode_label: str, q_text: str, use_rag: bool):
+        from src.prompt_modes import build_prompt
+        parts = build_prompt(mode_label, q_text or "", lang="ko", extras={
             "level":  st.session_state.get("student_level"),
             "tone":   "encouraging",
         })
-
-        # (NEW) 출처 규칙/디클레이머 금지
         rules = []
-        if rag_ready:
+        if use_rag:
             rules.append(
                 "출처 표기 규칙: 업로드 자료에서 근거를 찾으면 문서명/소단원명/페이지 등 구체적으로 표기합니다. "
                 "근거를 찾지 못했다면 'AI지식 활용'이라고만 간단히 표기합니다."
@@ -1134,20 +1157,7 @@ def render_qa_panel():
         rules.append("금지: '일반적인 지식/일반 학습자료' 등에 기반했다는 포괄적 디클레이머를 출력하지 마십시오.")
         if parts and getattr(parts, "system", None):
             parts.system = parts.system + "\n\n" + "\n".join(rules)
-
-    except Exception as e:
-        st.error(f"프롬프트 생성 실패: {type(e).__name__}: {e}")
-        st.code(traceback.format_exc(), language="python")
-        return
-
-    if show_prompt:
-        with st.expander("프롬프트(미리보기)", expanded=True):
-            st.markdown("**System:**")
-            st.code(parts.system, language="markdown")
-            st.markdown("**User:**")
-            st.code(parts.user, language="markdown")
-            if getattr(parts, "provider_kwargs", None):
-                st.caption(f"provider_kwargs: {parts.provider_kwargs}")
+        return parts
 
     # 2) 라이브러리/키 상태
     have_openai_lib  = importlib.util.find_spec("openai") is not None
@@ -1158,8 +1168,6 @@ def render_qa_panel():
     # 3) 세션 캐시
     st.session_state.setdefault("_openai_client_cache", None)
     st.session_state.setdefault("_gemini_model_cache", {})  # {model_name: genai.GenerativeModel}
-    st.session_state.setdefault("_answer_primary", None)
-    st.session_state.setdefault("_answer_secondary", None)
 
     def _get_openai_client():
         if st.session_state["_openai_client_cache"] is None:
@@ -1184,15 +1192,19 @@ def render_qa_panel():
     if not (0.0 <= temp <= 1.0): temp = 0.3
     if not (100 <= max_toks <= 2000): max_toks = 700
 
-    # 5) 스트리밍 출력 슬롯
-    st.markdown("#### 1차 답변")
-    primary_out = st.empty()
+    # 5) LLM 호출(스트리밍) 유틸
+    def _to_openai_payload(parts):
+        from src.prompt_modes import to_openai
+        return to_openai(parts)
 
-    # 6) LLM 호출 구현(스트리밍)
-    def _call_openai_stream(p, out_slot):
+    def _to_gemini_payload(parts):
+        from src.prompt_modes import to_gemini
+        return to_gemini(parts)
+
+    def _call_openai_stream(parts, out_slot):
         try:
             client = _get_openai_client()
-            payload = to_openai(p)  # {"messages":[...], ...}
+            payload = _to_openai_payload(parts)  # {"messages":[...], ...}
             model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
             stream = client.chat.completions.create(
                 model=model, stream=True, temperature=temp, max_tokens=max_toks, **payload
@@ -1208,7 +1220,7 @@ def render_qa_panel():
         except Exception as e:
             return False, f"{type(e).__name__}: {e}"
 
-    def _call_gemini_stream(p, out_slot):
+    def _call_gemini_stream(parts, out_slot):
         try:
             import google.generativeai as genai
             api_key = os.getenv("GEMINI_API_KEY") or getattr(st, "secrets", {}).get("GEMINI_API_KEY")
@@ -1216,7 +1228,7 @@ def render_qa_panel():
                 return False, "GEMINI_API_KEY 미설정"
             model_name = st.session_state.get("gemini_model_selection") or os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
             model = _get_gemini_model(model_name)
-            payload = to_gemini(p)  # {"contents":[...], ...}
+            payload = _to_gemini_payload(parts)  # {"contents":[...], ...}
             gen_cfg = {"temperature": temp, "max_output_tokens": max_toks}
             stream = model.generate_content(payload["contents"], generation_config=gen_cfg, stream=True)
             buf = []
@@ -1235,96 +1247,142 @@ def render_qa_panel():
         except Exception as e:
             return False, f"{type(e).__name__}: {e}"
 
-    # 7) 선두 모델 실행
-    lead = st.session_state["lead_provider"]
-    with st.status(f"{lead}로 1차 답변 생성 중…", state="running") as s1:
-        ok1, out1, provider1 = False, None, lead
-        if lead == "Gemini":
-            if have_gemini_lib and has_gemini_key:
-                ok1, out1 = _call_gemini_stream(parts, primary_out)
-            elif have_openai_lib and has_openai_key:
-                # 키/라이브러리 부족 시 OpenAI로 자동 대체
-                provider1 = "OpenAI"
-                ok1, out1 = _call_openai_stream(parts, primary_out)
-            else:
-                ok1, out1 = False, "Gemini/OpenAI 사용 불가(패키지 또는 키 누락)"
-        else:  # lead == "OpenAI"
-            if have_openai_lib and has_openai_key:
-                ok1, out1 = _call_openai_stream(parts, primary_out)
-            elif have_gemini_lib and has_gemini_key:
-                provider1 = "Gemini"
-                ok1, out1 = _call_gemini_stream(parts, primary_out)
-            else:
-                ok1, out1 = False, "OpenAI/Gemini 사용 불가(패키지 또는 키 누락)"
+    # ── 6) 제출/재실행 흐름 제어 ───────────────────────────────────────────────
+    lead = st.session_state.get("lead_provider", "Gemini")
+    # 새 제출이면 1차 생성부터 수행
+    if submitted:
+        # 상태 초기화
+        st.session_state["_qa_has_primary"] = False
+        st.session_state["_answer_primary"] = None
+        st.session_state["_answer_secondary"] = None
+        st.session_state["_secondary_requested"] = False
+        st.session_state["_qa_last_question"] = question
+        st.session_state["_qa_lead_provider"] = lead
+        st.session_state["_qa_provider_used"] = None
 
-        if ok1 and (out1 is not None):
-            s1.update(label=f"{provider1} 1차 응답 수신 ✅", state="complete")
-        else:
-            s1.update(label="1차 모델 호출 실패 ❌", state="error")
-            st.error(f"1차 모델 실패: {out1 or '원인 불명'}")
+        # 프롬프트 빌드
+        try:
+            parts = _build_parts(sel_mode, question, rag_ready)
+        except Exception as e:
+            st.error(f"프롬프트 생성 실패: {type(e).__name__}: {e}")
+            st.code(traceback.format_exc(), language="python")
             return
 
-    st.session_state["_answer_primary"] = out1
+        # 프롬프트 미리보기
+        if show_prompt:
+            with st.expander("프롬프트(미리보기)", expanded=True):
+                st.markdown("**System:**")
+                st.code(parts.system, language="markdown")
+                st.markdown("**User:**")
+                st.code(parts.user, language="markdown")
+                if getattr(parts, "provider_kwargs", None):
+                    st.caption(f"provider_kwargs: {parts.provider_kwargs}")
 
-    # 8) 보충 설명(2차) — 버튼/자동 토글
-    other = "OpenAI" if provider1 == "Gemini" else "Gemini"
-    st.markdown("---")
-    st.markdown("#### 보충 설명")
-    colS1, colS2 = st.columns([1,1])
-    auto_dual = bool(st.session_state.get("dual_generate", False))
-    run_secondary = False
-    with colS1:
-        if not auto_dual:
-            run_secondary = st.button(f"💬 {other}로 보충 설명 보기", use_container_width=True)
-    with colS2:
-        if auto_dual:
-            st.info("관리자 설정: 두 모델 모두 자동 생성 모드입니다.")
-            run_secondary = True
-
-    # 9) 2차 호출을 위한 보조 프롬프트(요약/차이점 지시 추가)
-    def _make_secondary_parts(primary_text: str):
-        # 같은 parts를 복사해 '보충 설명' 지시를 사용자 프롬프트에 덧붙입니다.
-        import copy
-        p2 = copy.deepcopy(parts)
-        # 지시: 요점 3줄 + 상세 + 차이점 3개 이내, 동일 출처 규칙 준수
-        extra = (
-            "\n\n[보충 설명 지시]\n"
-            "학생이 이해하기 쉽게 다음 형식으로 응답하세요:\n"
-            "1) 요점 3줄 정리\n"
-            "2) 상세 설명\n"
-            "3) 앞선 답변과의 차이점/추가 포인트 (최대 3개)\n"
-            "출처 규칙은 동일하게 따르십시오.\n"
-        )
-        # 앞선 1차 응답의 일부를 힌트로 제공(너무 길면 절단)
-        prim = (primary_text or "")[:3000]
-        p2.user = f"{p2.user}\n\n[참고: 앞선 1차 응답 요지]\n{prim}\n"
-        p2.user = p2.user + extra
-        return p2
-
-    # 10) 2차 호출 실행 및 출력
-    if run_secondary:
-        with st.expander(f"{other} 보충 설명", expanded=True):
-            secondary_out = st.empty()
-            p2 = _make_secondary_parts(st.session_state["_answer_primary"] or "")
-            with st.status(f"{other}로 보충 설명 생성 중…", state="running") as s2:
-                ok2, out2 = False, None
-                if other == "OpenAI":
-                    if have_openai_lib and has_openai_key:
-                        ok2, out2 = _call_openai_stream(p2, secondary_out)
-                    else:
-                        ok2, out2 = False, "OpenAI 사용 불가(패키지 또는 키 누락)"
-                else:  # other == "Gemini"
-                    if have_gemini_lib and has_gemini_key:
-                        ok2, out2 = _call_gemini_stream(p2, secondary_out)
-                    else:
-                        ok2, out2 = False, "Gemini 사용 불가(패키지 또는 키 누락)"
-
-                if ok2 and (out2 is not None):
-                    s2.update(label=f"{other} 보충 응답 수신 ✅", state="complete")
+        # 1차 실행
+        st.markdown("#### 1차 답변")
+        primary_out = st.empty()
+        with st.status(f"{lead}로 1차 답변 생성 중…", state="running") as s1:
+            ok1, out1, provider1 = False, None, lead
+            if lead == "Gemini":
+                if have_gemini_lib and has_gemini_key:
+                    ok1, out1 = _call_gemini_stream(parts, primary_out)
+                elif have_openai_lib and has_openai_key:
+                    provider1 = "OpenAI"
+                    ok1, out1 = _call_openai_stream(parts, primary_out)
                 else:
-                    s2.update(label="보충 설명 실패 ❌", state="error")
-                    st.error(f"보충 설명 실패: {out2 or '원인 불명'}")
-            st.session_state["_answer_secondary"] = out2
+                    ok1, out1 = False, "Gemini/OpenAI 사용 불가(패키지 또는 키 누락)"
+            else:  # lead == "OpenAI"
+                if have_openai_lib and has_openai_key:
+                    ok1, out1 = _call_openai_stream(parts, primary_out)
+                elif have_gemini_lib and has_gemini_key:
+                    provider1 = "Gemini"
+                    ok1, out1 = _call_gemini_stream(parts, primary_out)
+                else:
+                    ok1, out1 = False, "OpenAI/Gemini 사용 불가(패키지 또는 키 누락)"
+
+            if ok1 and (out1 is not None):
+                s1.update(label=f"{provider1} 1차 응답 수신 ✅", state="complete")
+                st.session_state["_qa_has_primary"] = True
+                st.session_state["_answer_primary"] = out1
+                st.session_state["_qa_provider_used"] = provider1
+                # 자동 듀얼이면 2차 예약
+                if bool(st.session_state.get("dual_generate", False)):
+                    st.session_state["_secondary_requested"] = True
+            else:
+                s1.update(label="1차 모델 호출 실패 ❌", state="error")
+                st.error(f"1차 모델 실패: {out1 or '원인 불명'}")
+                return
+
+    # ── 7) 1차 답변 표시(세션 기반, 재실행에도 유지) ───────────────────────────
+    if st.session_state["_qa_has_primary"]:
+        st.markdown("#### 1차 답변")
+        st.markdown(st.session_state["_answer_primary"] or "")
+
+    # ── 8) 보충 설명(2차) 버튼/자동 ────────────────────────────────────────────
+    if st.session_state["_qa_has_primary"]:
+        other = "OpenAI" if st.session_state.get("_qa_provider_used") == "Gemini" else "Gemini"
+
+        st.markdown("---")
+        st.markdown("#### 보충 설명")
+        colS1, colS2 = st.columns([1,1])
+        auto_dual = bool(st.session_state.get("dual_generate", False))
+        with colS1:
+            if not auto_dual:
+                if st.button(f"💬 {other}로 보충 설명 보기", use_container_width=True, key="btn_secondary"):
+                    st.session_state["_secondary_requested"] = True
+                    st.experimental_rerun()
+        with colS2:
+            if auto_dual:
+                st.info("관리자 설정: 두 모델 모두 자동 생성 모드입니다.")
+
+        # 2차 호출용 parts(1차 요지 포함)
+        def _make_secondary_parts(primary_text: str):
+            import copy
+            base_question = st.session_state.get("_qa_last_question","")
+            p2 = _build_parts(sel_mode, base_question, rag_ready)
+            # 지시: 요점/상세/차이점, 동일 출처 규칙
+            extra = (
+                "\n\n[보충 설명 지시]\n"
+                "학생이 이해하기 쉽게 다음 형식으로 응답하세요:\n"
+                "1) 요점 3줄 정리\n"
+                "2) 상세 설명\n"
+                "3) 앞선 답변과의 차이점/추가 포인트 (최대 3개)\n"
+                "출처 규칙은 동일하게 따르십시오.\n"
+            )
+            prim = (primary_text or "")[:3000]
+            p2.user = f"{p2.user}\n\n[참고: 앞선 1차 응답 요지]\n{prim}\n{extra}"
+            return p2
+
+        # 보충 설명 실행(요청되었을 때만)
+        if st.session_state["_secondary_requested"] and not st.session_state.get("_answer_secondary"):
+            with st.expander(f"{other} 보충 설명", expanded=True):
+                secondary_out = st.empty()
+                p2 = _make_secondary_parts(st.session_state["_answer_primary"] or "")
+                with st.status(f"{other}로 보충 설명 생성 중…", state="running") as s2:
+                    ok2, out2 = False, None
+                    if other == "OpenAI":
+                        if have_openai_lib and has_openai_key:
+                            ok2, out2 = _call_openai_stream(p2, secondary_out)
+                        else:
+                            ok2, out2 = False, "OpenAI 사용 불가(패키지 또는 키 누락)"
+                    else:  # other == "Gemini"
+                        if have_gemini_lib and has_gemini_key:
+                            ok2, out2 = _call_gemini_stream(p2, secondary_out)
+                        else:
+                            ok2, out2 = False, "Gemini 사용 불가(패키지 또는 키 누락)"
+                    if ok2 and (out2 is not None):
+                        s2.update(label=f"{other} 보충 응답 수신 ✅", state="complete")
+                        st.session_state["_answer_secondary"] = out2
+                    else:
+                        s2.update(label="보충 설명 실패 ❌", state="error")
+                        st.error(f"보충 설명 실패: {out2 or '원인 불명'}")
+                # 예약 해제
+                st.session_state["_secondary_requested"] = False
+
+        # 2차 답변이 이미 있으면 그대로 표시(재실행 유지)
+        if st.session_state.get("_answer_secondary"):
+            with st.expander(f"{other} 보충 설명", expanded=True):
+                st.markdown(st.session_state["_answer_secondary"] or "")
 # ===== [06] END ===============================================================
 
 
