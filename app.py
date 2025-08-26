@@ -191,6 +191,9 @@ def _attach_from_local() -> bool:
     try:
         idx = get_or_build_index()
         st.session_state["rag_index"] = idx
+        # ✅ 성공 시 세션 플래그를 확실하게 찍어 UI 혼선을 방지
+        st.session_state["brain_attached"] = True
+        st.session_state["rag_index_attached"] = True
         return True
     except LocalIndexMissing:
         return False
@@ -900,6 +903,7 @@ def render_qa_panel():
     학생 질문 → (모드) → 프롬프트 빌드 → LLM 호출(OpenAI/Gemini) → 답변 표시
     - 관리자에서 켠 모드만 라디오에 노출
     - 라이브러리/키 상태에 따라 안전하게 폴백
+    - ✅ 이번 변경: 스트리밍 출력 + 세션 캐싱 + Gemini 모델 선택(관리자)
     """
     import traceback, importlib.util
 
@@ -931,6 +935,19 @@ def render_qa_panel():
         colm, colq = st.columns([1,3])
         with colm:
             sel_mode = st.radio("모드", options=labels, horizontal=True, key="qa_mode_radio")
+            # ✅ 관리자 전용: Gemini 모델 선택 라디오(Flash/Pro)
+            if (st.session_state.get("is_admin")
+                or st.session_state.get("admin_mode")
+                or st.session_state.get("role") == "admin"
+                or st.session_state.get("mode") == "admin"):
+                st.markdown("---")
+                st.caption("Gemini 모델 선택(관리자)")
+                default_model = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+                st.session_state.setdefault("gemini_model_selection", default_model)
+                st.session_state["gemini_model_selection"] = st.radio(
+                    "Gemini 모델", options=["gemini-1.5-flash", "gemini-1.5-pro"],
+                    index=0 if default_model.endswith("flash") else 1, key="gemini_model_radio"
+                )
         with colq:
             question = st.text_area("질문을 입력하세요", height=96, placeholder="예: I had my bike repaired.")
         colA, colB = st.columns([1,1])
@@ -967,46 +984,90 @@ def render_qa_panel():
     has_openai_key   = bool(os.getenv("OPENAI_API_KEY") or getattr(st, "secrets", {}).get("OPENAI_API_KEY"))
     has_gemini_key   = bool(os.getenv("GEMINI_API_KEY") or getattr(st, "secrets", {}).get("GEMINI_API_KEY"))
 
-    # LLM 호출 (OpenAI → Gemini)
-    def _call_openai_try(p):
-        try:
+    # ✅ 세션 캐싱 준비
+    st.session_state.setdefault("_openai_client_cache", None)
+    st.session_state.setdefault("_gemini_model_cache", {})  # {model_name: genai.GenerativeModel}
+
+    def _get_openai_client():
+        if st.session_state["_openai_client_cache"] is None:
             from openai import OpenAI
-            client = OpenAI()
-            payload = to_openai(p)
+            st.session_state["_openai_client_cache"] = OpenAI()
+        return st.session_state["_openai_client_cache"]
+
+    def _get_gemini_model(model_name: str):
+        cache = st.session_state["_gemini_model_cache"]
+        if model_name in cache:
+            return cache[model_name]
+        import google.generativeai as genai
+        api_key = os.getenv("GEMINI_API_KEY") or getattr(st, "secrets", {}).get("GEMINI_API_KEY")
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel(model_name=model_name)
+        cache[model_name] = model
+        return model
+
+    # ✅ 스트리밍 출력용 슬롯
+    out_box = st.empty()
+
+    # LLM 호출 (OpenAI → Gemini)
+    def _call_openai_stream(p):
+        try:
+            client = _get_openai_client()
+            payload = to_openai(p)  # {"messages":[...], ...}
             model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-            resp = client.chat.completions.create(model=model, **payload)
-            return True, resp.choices[0].message.content
+            # ✅ 스트리밍
+            stream = client.chat.completions.create(model=model, stream=True, **payload)
+            buf = []
+            for event in stream:
+                delta = getattr(event.choices[0], "delta", None)
+                if delta and getattr(delta, "content", None):
+                    buf.append(delta.content)
+                    out_box.markdown("".join(buf))
+            text = "".join(buf).strip()
+            return True, (text if text else None)
         except Exception as e:
             return False, f"{type(e).__name__}: {e}"
 
-    def _call_gemini_try(p):
+    def _call_gemini_stream(p):
         try:
             import google.generativeai as genai
             api_key = os.getenv("GEMINI_API_KEY") or getattr(st, "secrets", {}).get("GEMINI_API_KEY")
             if not api_key:
                 return False, "GEMINI_API_KEY 미설정"
-            genai.configure(api_key=api_key)
+            # ✅ 관리자 선택 모델 우선
+            model_name = st.session_state.get("gemini_model_selection") or os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+            model = _get_gemini_model(model_name)
             payload = to_gemini(p)  # {"contents":[...], ...}
-            model_name = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
-            model = genai.GenerativeModel(model_name=model_name)
-            resp = model.generate_content(payload["contents"])
-            text = getattr(resp, "text", "")
-            if not text and getattr(resp, "candidates", None):
-                text = resp.candidates[0].content.parts[0].text
-            return True, text
+            # ✅ 스트리밍
+            stream = model.generate_content(payload["contents"], stream=True)
+            buf = []
+            for chunk in stream:
+                # chunk.text가 누적 제공됨
+                if getattr(chunk, "text", None):
+                    buf.append(chunk.text)
+                    out_box.markdown("".join(buf))
+            text = "".join(buf).strip()
+            if not text:
+                # 후보군이 있는 경우 첫 파트 텍스트 시도
+                resp = model.generate_content(payload["contents"])
+                text = getattr(resp, "text", "") or (
+                    resp.candidates[0].content.parts[0].text
+                    if getattr(resp, "candidates", None) else ""
+                )
+            return True, (text if text else None)
         except Exception as e:
             return False, f"{type(e).__name__}: {e}"
 
     with st.status("답변 생성 중…", state="running") as s:
-        ok, out, provider = False, "", "N/A"
+        ok, out, provider = False, None, "N/A"
         if have_openai_lib and has_openai_key:
-            ok, out = _call_openai_try(parts); provider = "OpenAI"
+            ok, out = _call_openai_stream(parts); provider = "OpenAI"
         if (not ok) and have_gemini_lib and has_gemini_key:
-            ok, out = _call_gemini_try(parts); provider = "Gemini" if ok else "N/A"
+            ok, out = _call_gemini_stream(parts); provider = "Gemini" if ok else "N/A"
 
-        if ok and out:
+        if ok and (out is not None):
             s.update(label=f"{provider} 응답 수신 ✅", state="complete")
-            st.markdown(out)
+            # 스트리밍 동안 이미 out_box에 출력됨. 마지막으로 정리 표기만.
+            st.caption(f"모델: {provider}")
         else:
             s.update(label="LLM 호출 실패 ❌", state="error")
             st.error("LLM 호출에 실패했습니다.")
@@ -1021,6 +1082,12 @@ def render_qa_panel():
                 hints.append("Gemini를 쓰려면 `google-generativeai` 설치가 필요합니다.")
             if not have_openai_lib:
                 hints.append("OpenAI를 쓰려면 `openai` 패키지가 필요합니다.")
+            # ✅ 관리자용 추가 힌트
+            if (st.session_state.get("is_admin")
+                or st.session_state.get("admin_mode")
+                or st.session_state.get("role") == "admin"
+                or st.session_state.get("mode") == "admin"):
+                hints.append("Gemini 실패 시 모델을 Flash ↔ Pro로 바꿔 재시도해 보세요.")
             if hints:
                 st.info(" · ".join(hints))
             st.caption(f"원인(마지막 시도): {out or '원인 불명'}")
