@@ -58,7 +58,7 @@ os.environ["STREAMLIT_SERVER_ENABLE_WEBSOCKET_COMPRESSION"] = "false"
 # ===== [02] IMPORTS & RAG 바인딩(예외 내성) ================================
 from pathlib import Path
 import os, sys
-from typing import List
+from typing import List, Any
 
 # 전역 바인딩 기본값(안전장치)
 get_or_build_index = None
@@ -71,7 +71,7 @@ build_index_with_checkpoint = None
 restore_latest_backup_to_local = None
 _make_and_upload_backup_zip = None
 
-# 임포트 오류 모음(BOOT-WARN에서 표시)
+# 임포트 오류 모음(BOOT-WARN/진단에서 표시)
 _import_errors: List[str] = []
 
 def _try_bind_from(modname: str) -> bool:
@@ -99,7 +99,6 @@ def _try_bind_from(modname: str) -> bool:
             restore_latest_backup_to_local = m.restore_latest_backup_to_local
         if getattr(m, "_make_and_upload_backup_zip", None):
             _make_and_upload_backup_zip = m._make_and_upload_backup_zip
-        # PERSIST_DIR 등 경로 상수는 [03]의 _force_persist_dir()이 런타임에 강제 통일
         return True
     except Exception as e:
         _import_errors.append(f"{modname} bind: {type(e).__name__}: {e}")
@@ -116,13 +115,26 @@ if LocalIndexMissing is None:
         """로컬 인덱스가 없거나 읽을 수 없음을 나타내는 예외(대체 정의)."""
         ...
 
-# 4) 디버그 힌트(관리자만 확인 가능)
-#    - 어떤 경로가 실제로 로드되었는지 유추(단순 표기)
-os.environ.setdefault(
-    "MAIC_IMPORT_INDEX_BUILD_RESOLVE",
-    "src" if "src.rag.index_build" in _import_errors and "rag.index_build" not in _import_errors else
-    ("rag" if "rag.index_build" in _import_errors else "unknown")
-)
+# 4) 최종 안전망: get_or_build_index 폴백 래퍼
+#    - 실제 엔진이 없어도 세션 부착을 가능하게 하는 경량 객체를 반환
+if get_or_build_index is None:
+    def get_or_build_index() -> Any:  # type: ignore[override]
+        base = Path.home() / ".maic" / "persist"
+        chunks = base / "chunks.jsonl"
+        ready  = base / ".ready"
+        if chunks.exists() or ready.exists():
+            class _LiteIndex:
+                def __init__(self, persist_dir: Path):
+                    self.persist_dir = str(persist_dir)
+                def __repr__(self) -> str:
+                    return f"<LiteRAGIndex persist_dir='{self.persist_dir}'>"
+            return _LiteIndex(base)
+        # 파일 신호도 없으면 진짜로 로컬 인덱스 없음
+        raise LocalIndexMissing("No local index signals (.ready/chunks.jsonl)")
+
+# 5) 디버그 힌트(관리자만 확인 가능)
+os.environ.setdefault("MAIC_IMPORT_INDEX_BUILD_RESOLVE",
+    "resolved" if resolved else "fallback_or_partial")
 # ===== [02] END ===============================================================
 
 # ===== [BOOT-WARN] set_page_config 이전 경고 누적 ============================
