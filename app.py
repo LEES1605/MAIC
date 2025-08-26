@@ -451,12 +451,23 @@ def render_admin_settings_panel(*args, **kwargs):
     return render_admin_settings(*args, **kwargs)
 # ===== [04B] END ==============================================================
 
-# ===== [04C] 프롬프트 소스/드라이브 진단 패널(강화) ==========================
+# ===== [04C] 프롬프트 소스/드라이브 진단 패널(고급) ==========================
 def _render_admin_diagnostics_section():
-    """프롬프트 소스/환경 상태 점검 + 드라이브 강제 동기화 버튼"""
+    """프롬프트 소스/환경 상태 점검 + 드라이브 강제 동기화 + Δ(차이) 요약 + 로그 연계"""
     import os
-    import importlib
+    import importlib  # ✅ NameError 방지: 함수 내부 임포트
     from datetime import datetime
+    from pathlib import Path as _P
+    import json as _json
+
+    def _log(step: str, **kw):
+        """[05B] 타임라인에 기록(있으면), 없으면 무시."""
+        try:
+            _lf = globals().get("_log_attach")
+            if callable(_lf):
+                _lf(step, **kw)
+        except Exception:
+            pass
 
     # 관리자 가드
     if not (st.session_state.get("is_admin")
@@ -465,13 +476,18 @@ def _render_admin_diagnostics_section():
             or st.session_state.get("mode") == "admin"):
         return
 
-    with st.expander("🛠 진단 · 프롬프트 소스 상태", expanded=True):
+    with st.expander("🛠 진단 · 프롬프트 소스 상태(고급)", expanded=True):
         # 0) 모듈 로드
         try:
             pm = importlib.import_module("src.prompt_modes")
         except Exception as e:
             st.error(f"prompt_modes 임포트 실패: {type(e).__name__}: {e}")
+            _log("prompts_import_fail", error=f"{type(e).__name__}: {e}")
             return
+
+        # 인덱스 모듈 로드 경로 힌트 배지
+        st.write("• 인덱스 로드 경로 힌트:",
+                 f"`{os.getenv('MAIC_IMPORT_INDEX_BUILD_RESOLVE', 'unknown')}`")
 
         # 1) 환경/secrets (마스킹)
         folder_id = os.getenv("MAIC_PROMPTS_DRIVE_FOLDER_ID")
@@ -480,31 +496,44 @@ def _render_admin_diagnostics_section():
                 folder_id = str(st.secrets["MAIC_PROMPTS_DRIVE_FOLDER_ID"])
         except Exception:
             pass
+
         def _mask(v):
             if not v: return "— 없음"
-            v = str(v);  return (v[:6] + "…" + v[-4:]) if len(v) > 12 else ("*" * len(v))
+            s = str(v)
+            return (s[:6] + "…" + s[-4:]) if len(s) > 12 else ("*" * len(s))
+
         st.write("• Drive 폴더 ID:", _mask(folder_id))
 
         # 2) Drive 연결 및 계정 이메일
-        drive_ok, drive_email = False, None
+        drive_ok, drive_email, drive_err = False, None, None
         try:
             im = importlib.import_module("src.rag.index_build")
-            svc = getattr(im, "_drive_service", None)() if hasattr(im, "_drive_service") else None
+            svc_factory = getattr(im, "_drive_service", None)
+            svc = svc_factory() if callable(svc_factory) else None
             if svc:
                 drive_ok = True
                 try:
                     about = svc.about().get(fields="user").execute()
                     drive_email = (about or {}).get("user", {}).get("emailAddress")
-                except Exception:
-                    drive_email = None
-        except Exception:
-            pass
+                except Exception as e:
+                    drive_err = f"{type(e).__name__}: {e}"
+        except Exception as e:
+            drive_err = f"{type(e).__name__}: {e}"
         st.write("• Drive 연결:", "✅ 연결됨" if drive_ok else "❌ 없음")
         if drive_email:
             st.write("• 연결 계정:", f"`{drive_email}`")
+        if drive_err and not drive_ok:
+            st.info(f"Drive 서비스 감지 실패: {drive_err}")
 
         # 3) 로컬 파일 경로/상태
-        p = pm.get_overrides_path()
+        try:
+            p = pm.get_overrides_path()
+            p = _P(p) if not isinstance(p, _P) else p
+        except Exception as e:
+            st.error(f"get_overrides_path 실패: {type(e).__name__}: {e}")
+            _log("prompts_path_fail", error=f"{type(e).__name__}: {e}")
+            return
+
         st.write("• 로컬 경로:", f"`{p}`")
         exists = p.exists()
         st.write("• 파일 존재:", "✅ 있음" if exists else "❌ 없음")
@@ -516,41 +545,144 @@ def _render_admin_diagnostics_section():
             except Exception:
                 pass
 
-        # 4) 강제 동기화
-        colA, colB = st.columns([1,1])
+        # 4) 마지막 동기화 메타
+        st.session_state.setdefault("prompts_sync_meta", {"last": None, "result": None})
+        meta = st.session_state["prompts_sync_meta"]
+        st.caption(f"마지막 동기화: {meta.get('last') or '—'} / 결과: {meta.get('result') or '—'}")
+
+        # 5) 강제 동기화 + 미리보기/다운로드 + Δ(차이) 요약
+        colA, colB, colC = st.columns([1,1,1])
+
         with colA:
-            if st.button("🔄 드라이브에서 prompts.yaml 당겨오기(강제)", use_container_width=True, key="btn_force_pull_prompts"):
-                try:
-                    if hasattr(pm, "_REMOTE_PULL_ONCE_FLAG"):
-                        pm._REMOTE_PULL_ONCE_FLAG["done"] = False
+            if st.button("🔄 드라이브에서 prompts.yaml 당겨오기(강제)",
+                         use_container_width=True, key="btn_force_pull_prompts"):
+                _log("prompts_pull_start")
+                with st.status("드라이브 동기화 중…", state="running") as stt:
                     pulled = None
-                    if hasattr(pm, "_pull_remote_overrides_if_newer"):
-                        pulled = pm._pull_remote_overrides_if_newer()
-                    else:
-                        _ = pm.load_overrides()
-                        pulled = "loaded"
-                    st.success(f"동기화 결과: {pulled}" if pulled else "동기화 결과: 변경 없음")
-                except Exception as e:
-                    st.error(f"동기화 실패: {type(e).__name__}: {e}")
+                    try:
+                        # 5-1) 강제 새로고침 플래그
+                        if hasattr(pm, "_REMOTE_PULL_ONCE_FLAG"):
+                            pm._REMOTE_PULL_ONCE_FLAG["done"] = False
+                        # 5-2) 가능한 경우: 최신본만 당김
+                        if hasattr(pm, "_pull_remote_overrides_if_newer"):
+                            pulled = pm._pull_remote_overrides_if_newer()
+                        else:
+                            # 5-3) 폴백: 로컬 로드(로드하며 내부적으로 드라이브가 갱신될 수도 있음)
+                            _ = pm.load_overrides()
+                            pulled = "loaded"
+                        # 5-4) 메타 기록
+                        meta["last"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        meta["result"] = pulled or "nochange"
+                        st.session_state["prompts_sync_meta"] = meta
+                        stt.update(label=f"동기화 완료: {pulled or '변경 없음'}", state="complete")
+                        st.success(f"동기화 결과: {pulled}" if pulled else "동기화 결과: 변경 없음")
+                        _log("prompts_pull_done", result=(pulled or "nochange"))
+                    except Exception as e:
+                        meta["last"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        meta["result"] = f"fail:{type(e).__name__}"
+                        st.session_state["prompts_sync_meta"] = meta
+                        stt.update(label="동기화 실패", state="error")
+                        st.error(f"동기화 실패: {type(e).__name__}: {e}")
+                        _log("prompts_pull_fail", error=f"{type(e).__name__}: {e}")
+
         with colB:
-            if exists and st.button("📄 로컬 파일 내용 미리보기", use_container_width=True, key="btn_preview_prompts_yaml"):
+            if exists and st.button("📄 로컬 파일 내용 미리보기",
+                                    use_container_width=True, key="btn_preview_prompts_yaml"):
                 try:
                     st.code(p.read_text(encoding="utf-8"), language="yaml")
                 except Exception as e:
                     st.error(f"파일 읽기 실패: {type(e).__name__}: {e}")
 
-        # 5) YAML 파싱 확인
-        modes = []
+        with colC:
+            if exists:
+                try:
+                    st.download_button(
+                        "⬇ 로컬 prompts.yaml 다운로드",
+                        data=p.read_bytes(),
+                        file_name="prompts.yaml",
+                        mime="text/yaml",
+                        use_container_width=True,
+                        key="btn_download_prompts_yaml",
+                    )
+                except Exception as e:
+                    st.error(f"다운로드 준비 실패: {type(e).__name__}: {e}")
+
+        st.markdown("---")
+
+        # 6) Δ(차이) 요약: 이전 스냅샷 vs 현재 로드
+        st.caption("Δ(차이) 요약: 이전 스냅샷 ↔ 현재 로드된 overrides 비교")
+        st.session_state.setdefault("prompts_last_loaded", None)
+
+        prev = st.session_state.get("prompts_last_loaded")
+        curr = None
+        load_err = None
         try:
-            data = pm.load_overrides()
-            if isinstance(data, dict):
-                modes = list((data.get("modes") or {}).keys())
+            curr = pm.load_overrides()
         except Exception as e:
-            st.error(f"YAML 로드 오류: {type(e).__name__}: {e}")
-        st.write("• 포함된 모드:", " , ".join(modes) if modes else "— (미검출)")
+            load_err = f"{type(e).__name__}: {e}"
+            st.error(f"YAML 로드 오류: {load_err}")
+            _log("prompts_yaml_load_fail", error=load_err)
+
+        if curr is not None:
+            # 이전 스냅샷 없으면 현재를 저장만
+            if prev is None:
+                st.session_state["prompts_last_loaded"] = curr
+
+            # modes 키 목록 비교
+            modes_prev = set(((prev or {}).get("modes") or {}).keys())
+            modes_curr = set(((curr or {}).get("modes") or {}).keys())
+            added = sorted(list(modes_curr - modes_prev))
+            removed = sorted(list(modes_prev - modes_curr))
+            common = sorted(list(modes_curr & modes_prev))
+
+            col1, col2 = st.columns(2)
+            with col1:
+                st.write("➕ 추가된 모드:", ", ".join(added) if added else "— 없음")
+            with col2:
+                st.write("➖ 제거된 모드:", ", ".join(removed) if removed else "— 없음")
+
+            # 공통 모드의 주요 키 변경 감지(얕은 비교)
+            changed_summary = []
+            for m in common:
+                a = (prev or {}).get("modes", {}).get(m, {})
+                b = (curr or {}).get("modes", {}).get(m, {})
+                changes = []
+                for k in sorted(set(a.keys()) | set(b.keys())):
+                    if a.get(k) != b.get(k):
+                        try:
+                            va = _json.dumps(a.get(k), ensure_ascii=False)[:120]
+                            vb = _json.dumps(b.get(k), ensure_ascii=False)[:120]
+                        except Exception:
+                            va, vb = str(a.get(k)), str(b.get(k))
+                        changes.append(f"{k}: {va} → {vb}")
+                if changes:
+                    changed_summary.append((m, changes[:8]))  # 너무 길면 상위 8개만
+
+            if changed_summary:
+                with st.expander("📝 변경된 모드 상세 (상위 일부)", expanded=False):
+                    for m, chs in changed_summary:
+                        st.markdown(f"- **{m}**")
+                        for line in chs:
+                            st.write("  • ", line)
+            else:
+                st.caption("모드 구성 값 변경 없음(얕은 비교 기준).")
+
+            # 스냅샷 업데이트 버튼
+            if st.button("📌 현재 구성을 기준 스냅샷으로 저장", use_container_width=True, key="btn_save_prompts_snapshot"):
+                st.session_state["prompts_last_loaded"] = curr
+                st.success("현재 로드된 overrides를 스냅샷으로 저장했습니다.")
+                _log("prompts_snapshot_saved")
+
+        # 7) 포함된 모드 목록(현재)
+        try:
+            modes = list(((curr or {}).get("modes") or {}).keys())
+        except Exception:
+            modes = []
+        st.write("• 현재 포함된 모드:", " , ".join(modes) if modes else "— (미검출)")
 
 _render_admin_diagnostics_section()
 # ===== [04C] END ==============================================================
+
 
 # ===== [05A] 자료 최적화/백업 패널 (관리자 전용) =============================
 def render_brain_prep_main():
