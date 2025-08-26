@@ -924,6 +924,7 @@ def render_tag_diagnostics():
     자동 복구 상태, rag_index 경로, 품질 리포트 등 간단 요약 +
     ✅ attach/restore 타임라인, ✅ BOOT-WARN 경고, ✅ 임포트 오류(_import_errors)까지
     한 화면에서 확인하는 진단 패널.
+    + ✅ 로그 복사/다운로드(텍스트 병합본)
     """
     import importlib, json as _json
     from datetime import datetime
@@ -944,10 +945,15 @@ def render_tag_diagnostics():
 
     st.subheader("진단(간단)", anchor=False)
 
+    # 수집 데이터
+    boot_warns = globals().get("_BOOT_WARNINGS") or []
+    import_errs = globals().get("_import_errors") or []
+    logs = st.session_state.get("_attach_log") or []
+    auto_info = st.session_state.get("_auto_restore_last")
+
     # ✅ A) BOOT-WARN 경고 묶음
     with st.container(border=True):
         st.markdown("### 부팅 경고(BOOT-WARN)")
-        boot_warns = globals().get("_BOOT_WARNINGS") or []
         if not boot_warns:
             st.caption("부팅 경고 없음.")
         else:
@@ -958,34 +964,54 @@ def render_tag_diagnostics():
     # ✅ B) 임포트 오류 원문(_import_errors)
     with st.container(border=True):
         st.markdown("### 임포트 오류 원문")
-        import_errs = globals().get("_import_errors") or []
         if not import_errs:
             st.caption("기록된 임포트 오류 없음.")
         else:
             for i, err in enumerate(import_errs, 1):
                 st.write(f"• `{err}`")
 
-    # ✅ C) Attach/Restore 타임라인 로그(최근 100개 역순)
+    # ✅ C) Attach/Restore 타임라인 로그(최근 100개 역순) + 복사/다운로드
     with st.container(border=True):
         st.markdown("### Attach/Restore 타임라인")
-        logs = st.session_state.get("_attach_log") or []
-        colL, colR = st.columns([0.85, 0.15])
+        colL, colR = st.columns([0.75, 0.25])
         with colR:
             if st.button("🧹 로그 비우기", use_container_width=True):
                 st.session_state["_attach_log"] = []
                 st.toast("로그를 비웠습니다.")
                 st.experimental_rerun()
+
         if not logs:
             st.caption("아직 기록된 로그가 없습니다. 자동 연결 또는 복구를 수행하면 여기에 단계별 로그가 표시됩니다.")
         else:
+            # 표시
             for item in reversed(logs[-100:]):
                 ts = item.get("ts")
                 step = item.get("step")
                 rest = {k: v for k, v in item.items() if k not in ("ts", "step")}
                 st.write(f"• **{ts}** — `{step}`", (f" · `{_json.dumps(rest, ensure_ascii=False)}`" if rest else ""))
 
+            # ✅ 병합 텍스트(복사용) + 다운로드
+            merged_lines = []
+            for item in logs:
+                ts = item.get("ts", "")
+                step = item.get("step", "")
+                rest = {k: v for k, v in item.items() if k not in ("ts", "step")}
+                merged_lines.append(f"{ts}\t{step}\t{_json.dumps(rest, ensure_ascii=False)}")
+            merged_txt = "\n".join(merged_lines) if merged_lines else "(no logs)"
+
+            st.markdown("---")
+            st.caption("▼ 로그 복사/다운로드")
+            # st.code 는 자체 복사 버튼을 제공함
+            st.code(merged_txt, language="text")
+            st.download_button(
+                "⬇ 로그 텍스트 다운로드",
+                data=merged_txt.encode("utf-8"),
+                file_name="maic_attach_logs.txt",
+                mime="text/plain",
+                use_container_width=True,
+            )
+
     # ✅ D) 자동 복구 상태 스냅샷
-    auto_info = st.session_state.get("_auto_restore_last")
     with st.container(border=True):
         st.markdown("### 자동 복구 상태")
         if not auto_info:
