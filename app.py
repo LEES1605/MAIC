@@ -1215,11 +1215,48 @@ def render_qa_panel():
         if len(ctx) > max_chars: ctx = ctx[-max_chars:]
         return ctx
 
+# ===== [PATCH-qa_build_parts] unify dict/obj access ==================== START
     def _build_parts(mode_label: str, q_text: str, use_rag: bool):
         from src.prompt_modes import build_prompt
-        parts = build_prompt(mode_label, q_text or "", lang="ko", extras={
+        raw = build_prompt(mode_label, q_text or "", lang="ko", extras={
             "level":  st.session_state.get("student_level"),
             "tone":   "encouraging",
+    })
+
+        # 1) 반환 형태 정규화: dict/객체 모두 dict로 통일
+        if isinstance(raw, dict):
+            parts = dict(raw)  # 얕은 복사
+            parts.setdefault("system", "")
+            parts.setdefault("user", "")
+            parts.setdefault("provider_kwargs", {})
+        else:
+            parts = {
+                "system": getattr(raw, "system", "") or "",
+                "user": getattr(raw, "user", "") or "",
+                "provider_kwargs": getattr(raw, "provider_kwargs", {}) or {},
+        }
+
+        # 2) 출처/디클레이머 규칙 추가
+        rules = []
+        if use_rag:
+            rules.append("출처 표기 규칙: 업로드 자료에서 근거를 찾으면 문서명/소단원명/페이지 등 구체적으로 표기합니다. "
+                         "근거를 찾지 못했다면 'AI지식 활용'이라고만 간단히 표기합니다.")
+        else:
+            rules.append("출처 표기 규칙: 현재 업로드 자료(RAG)를 사용하지 못하므로, 답변 맨 끝에 'AI지식 활용'이라고만 표기합니다.")
+        rules.append("출처/근거 표기는 답변 맨 끝에 '근거/출처: '로 시작하는 한 줄로만 작성하십시오. 여러 개면 세미콜론(;)으로 구분합니다.")
+        rules.append("금지: '일반적인 지식/일반 학습자료' 등에 기반했다는 포괄적 디클레이머를 출력하지 마십시오.")
+        if parts["system"]:
+            parts["system"] = parts["system"] + "\n\n" + "\n".join(rules)
+
+        # 3) 대화 맥락 주입(있을 때만)
+        ctx = _build_context_text(int(st.session_state["context_turns"]),
+                                  int(st.session_state["context_max_chars"]))
+        if ctx:
+            parts["user"] = f"{parts['user']}\n\n[대화 맥락]\n{ctx}"
+
+        return parts
+# ===== [PATCH-qa_build_parts] unify dict/obj access ====================== END
+
         })
         # 출처/디클레이머 규칙
         rules = []
