@@ -653,7 +653,6 @@ def _render_admin_diagnostics_section():
 _render_admin_diagnostics_section()
 # ===== [04C] END ==============================================================
 
-
 # ===== [05A] 자료 최적화/백업 패널 ==========================================
 def render_brain_prep_main():
     """
@@ -676,6 +675,9 @@ def render_brain_prep_main():
     ):
         return
 
+    # 🔽 전역 토글 상태 반영
+    _expand_all = bool(st.session_state.get("_admin_expand_all", True))
+
     def _log(step: str, **kw):
         try:
             if "_log_attach" in globals() and callable(globals()["_log_attach"]):
@@ -696,7 +698,6 @@ def render_brain_prep_main():
         BACKUP_DIR  = getattr(idx_mod, "BACKUP_DIR",  BACKUP_DIR)
         QUALITY_REPORT_PATH = getattr(idx_mod, "QUALITY_REPORT_PATH", QUALITY_REPORT_PATH)
     except Exception as e:
-        # 모듈이 없어도 패널은 동작(버튼 중 일부만 제한됨)
         _log("index_module_import_warn", error=f"{type(e).__name__}: {e}")
 
     # 관련 함수 핸들(없으면 None)
@@ -708,162 +709,167 @@ def render_brain_prep_main():
     auto_restore  = globals().get("_auto_attach_or_restore_silently")
     force_persist = globals().get("_force_persist_dir")
 
-    st.subheader("자료 최적화 · 백업", anchor=False)
+    with st.expander("🧩 자료 최적화 · 백업(관리자)", expanded=_expand_all):
+        st.subheader("자료 최적화 · 백업", anchor=False)
 
-    # 경로/상태 요약
-    with st.container(border=True):
-        st.markdown("### 경로 및 상태")
-        st.write("• Persist 디렉터리:", f"`{Path(PERSIST_DIR)}`")
-        st.write("• Backup 디렉터리:", f"`{Path(BACKUP_DIR)}`")
-        qr_exists = Path(QUALITY_REPORT_PATH).exists()
-        st.markdown(f"• 품질 리포트(quality_report.json): {'✅ 있음' if qr_exists else '❌ 없음'} "
-                    f"(`{Path(QUALITY_REPORT_PATH)}`)")
+        # 경로/상태 요약
+        with st.container(border=True):
+            st.markdown("### 경로 및 상태")
+            st.write("• Persist 디렉터리:", f"`{Path(PERSIST_DIR)}`")
+            st.write("• Backup 디렉터리:", f"`{Path(BACKUP_DIR)}`")
+            qr_exists = Path(QUALITY_REPORT_PATH).exists()
+            st.markdown(f"• 품질 리포트(quality_report.json): {'✅ 있음' if qr_exists else '❌ 없음'} "
+                        f"(`{Path(QUALITY_REPORT_PATH)}`)")
 
-        # 사전점검(precheck)
-        if callable(precheck_fn):
-            try:
-                need = precheck_fn()  # bool 예상
-                badge = "🟡 재빌드 권장" if need else "🟢 양호"
-                st.write("• 사전점검 결과:", badge)
-            except Exception as e:
-                st.write("• 사전점검 결과: ⚠ 오류",
-                         f"(`{type(e).__name__}: {e}`)")
-        else:
-            st.caption("사전점검 함수가 없어 건너뜁니다(선택 기능).")
-
-    # 액션 버튼들
-    col1, col2, col3, col4 = st.columns([1,1,1,1])
-    with col1:
-        if st.button("🧠 두뇌 연결(강제)", use_container_width=True):
-            with st.status("강제 연결 중…", state="running") as s:
+            if callable(precheck_fn):
                 try:
-                    if callable(force_persist):
-                        force_persist()
-                    ok = False
-                    if callable(attach_fn):
-                        _log("manual_local_attach_try")
-                        ok = bool(attach_fn())
-                    if not ok and callable(auto_restore):
-                        _log("manual_auto_restore_try")
-                        ok = bool(auto_restore())
-                    if ok:
-                        s.update(label="연결 완료", state="complete")
-                        st.success("세션에 두뇌가 연결되었습니다.")
-                        _log("manual_attach_done", ok=True)
-                    else:
-                        s.update(label="연결 실패", state="error")
-                        st.error("두뇌 연결에 실패했습니다.")
-                        _log("manual_attach_fail", ok=False)
+                    need = precheck_fn()  # bool 예상
+                    badge = "🟡 재빌드 권장" if need else "🟢 양호"
+                    st.write("• 사전점검 결과:", badge)
                 except Exception as e:
-                    s.update(label="연결 중 예외", state="error")
-                    st.error(f"연결 중 오류: {type(e).__name__}: {e}")
-                    _log("manual_attach_exception", error=f"{type(e).__name__}: {e}")
+                    st.write("• 사전점검 결과: ⚠ 오류",
+                             f"(`{type(e).__name__}: {e}`)")
+            else:
+                st.caption("사전점검 함수가 없어 건너뜁니다(선택 기능).")
 
-    with col2:
-        if st.button("⬇ 최신 백업 복원", use_container_width=True, disabled=not callable(restore_fn)):
-            with st.status("최신 백업 복원 중…", state="running") as s:
-                try:
-                    if not callable(restore_fn):
-                        s.update(label="복원 기능 없음", state="error")
-                        st.error("restore_latest_backup_to_local 함수가 없습니다.")
-                        _log("restore_latest_backup_missing")
-                    else:
-                        r = restore_fn() or {}
-                        ok = bool(r.get("ok"))
-                        _log("drive_restore_result", ok=ok)
-                        if ok and callable(attach_fn):
-                            if callable(force_persist):
-                                force_persist()
-                            _log("local_attach_try")
-                            ok = bool(attach_fn())
-                            if ok:
-                                _log("local_attach_ok")
-                        if ok:
-                            s.update(label="복원 및 연결 완료", state="complete")
-                            st.success("최신 백업 복원 완료(연결됨).")
-                        else:
-                            s.update(label="복원 실패", state="error")
-                            st.error("백업 복원에 실패했습니다.")
-                except Exception as e:
-                    s.update(label="복원 중 예외", state="error")
-                    st.error(f"복원 중 오류: {type(e).__name__}: {e}")
-                    _log("drive_restore_exception", error=f"{type(e).__name__}: {e}")
-
-    with col3:
-        if st.button("♻ 인덱스 재빌드(최소 옵션)", use_container_width=True, disabled=not callable(build_fn)):
-            with st.status("인덱스 재빌드 중…", state="running") as s:
-                try:
-                    if not callable(build_fn):
-                        s.update(label="빌더 없음", state="error")
-                        st.error("build_index_with_checkpoint 함수가 없습니다.")
-                        _log("rebuild_skip", reason="build_fn_not_callable")
-                    else:
-                        persist_dir = str(PERSIST_DIR)
-                        _log("rebuild_try", persist_dir=persist_dir)
-                        try:
-                            build_fn(
-                                update_pct=lambda *_a, **_k: None,
-                                update_msg=lambda *_a, **_k: None,
-                                gdrive_folder_id="",
-                                gcp_creds={},
-                                persist_dir=persist_dir,
-                                remote_manifest={},
-                            )
-                        except TypeError:
-                            # 시그니처가 다른 배포본 지원
-                            build_fn()
-                        _log("rebuild_ok")
-                        # 재부착
-                        ok_attach = False
+        # 액션 버튼들
+        col1, col2, col3, col4 = st.columns([1,1,1,1])
+        with col1:
+            if st.button("🧠 두뇌 연결(강제)", use_container_width=True):
+                with st.status("강제 연결 중…", state="running") as s:
+                    try:
                         if callable(force_persist):
                             force_persist()
+                        ok = False
                         if callable(attach_fn):
-                            _log("local_attach_try")
-                            ok_attach = bool(attach_fn())
-                            if ok_attach:
-                                _log("local_attach_ok")
-                        s.update(label="재빌드 완료", state="complete")
-                        st.success("인덱스 재빌드가 완료되었습니다.")
-                except Exception as e:
-                    s.update(label="재빌드 실패", state="error")
-                    st.error(f"재빌드 실패: {type(e).__name__}: {e}")
-                    _log("rebuild_fail", error=f"{type(e).__name__}: {e}")
-
-    with col4:
-        if st.button("⬆ 백업 만들기/업로드", use_container_width=True, disabled=not callable(backup_fn)):
-            with st.status("백업 생성/업로드 중…", state="running") as s:
-                try:
-                    if not callable(backup_fn):
-                        s.update(label="백업기 없음", state="error")
-                        st.error("백업 생성 함수가 없습니다.")
-                        _log("backup_skip", reason="backup_fn_not_callable")
-                    else:
-                        r = backup_fn() or {}
-                        ok = bool(r.get("ok", False))
-                        _log("backup_result", ok=ok)
+                            _log("manual_local_attach_try")
+                            ok = bool(attach_fn())
+                        if not ok and callable(auto_restore):
+                            _log("manual_auto_restore_try")
+                            ok = bool(auto_restore())
                         if ok:
-                            s.update(label="백업 완료", state="complete")
-                            st.success("백업 생성/업로드가 완료되었습니다.")
+                            s.update(label="연결 완료", state="complete")
+                            st.success("세션에 두뇌가 연결되었습니다.")
+                            _log("manual_attach_done", ok=True)
                         else:
-                            s.update(label="백업 실패", state="error")
-                            st.error(f"백업 실패: {json.dumps(r, ensure_ascii=False)}")
-                except Exception as e:
-                    s.update(label="백업 중 예외", state="error")
-                    st.error(f"백업 중 오류: {type(e).__name__}: {e}")
-                    _log("backup_exception", error=f"{type(e).__name__}: {e}")
+                            s.update(label="연결 실패", state="error")
+                            st.error("두뇌 연결에 실패했습니다.")
+                            _log("manual_attach_fail", ok=False)
+                    except Exception as e:
+                        s.update(label="연결 중 예외", state="error")
+                        st.error(f"연결 중 오류: {type(e).__name__}: {e}")
+                        _log("manual_attach_exception", error=f"{type(e).__name__}: {e}")
+
+        with col2:
+            if st.button("⬇ 최신 백업 복원", use_container_width=True, disabled=not callable(restore_fn)):
+                with st.status("최신 백업 복원 중…", state="running") as s:
+                    try:
+                        if not callable(restore_fn):
+                            s.update(label="복원 기능 없음", state="error")
+                            st.error("restore_latest_backup_to_local 함수가 없습니다.")
+                            _log("restore_latest_backup_missing")
+                        else:
+                            r = restore_fn() or {}
+                            ok = bool(r.get("ok"))
+                            _log("drive_restore_result", ok=ok)
+                            if ok and callable(attach_fn):
+                                if callable(force_persist):
+                                    force_persist()
+                                _log("local_attach_try")
+                                ok = bool(attach_fn())
+                                if ok:
+                                    _log("local_attach_ok")
+                            if ok:
+                                s.update(label="복원 및 연결 완료", state="complete")
+                                st.success("최신 백업 복원 완료(연결됨).")
+                            else:
+                                s.update(label="복원 실패", state="error")
+                                st.error("백업 복원에 실패했습니다.")
+                    except Exception as e:
+                        s.update(label="복원 중 예외", state="error")
+                        st.error(f"복원 중 오류: {type(e).__name__}: {e}")
+                        _log("drive_restore_exception", error=f"{type(e).__name__}: {e}")
+
+        with col3:
+            if st.button("♻ 인덱스 재빌드(최소 옵션)", use_container_width=True, disabled=not callable(build_fn)):
+                with st.status("인덱스 재빌드 중…", state="running") as s:
+                    try:
+                        if not callable(build_fn):
+                            s.update(label="빌더 없음", state="error")
+                            st.error("build_index_with_checkpoint 함수가 없습니다.")
+                            _log("rebuild_skip", reason="build_fn_not_callable")
+                        else:
+                            persist_dir = str(PERSIST_DIR)
+                            _log("rebuild_try", persist_dir=persist_dir)
+                            try:
+                                build_fn(
+                                    update_pct=lambda *_a, **_k: None,
+                                    update_msg=lambda *_a, **_k: None,
+                                    gdrive_folder_id="",
+                                    gcp_creds={},
+                                    persist_dir=persist_dir,
+                                    remote_manifest={},
+                                )
+                            except TypeError:
+                                build_fn()
+                            _log("rebuild_ok")
+                            ok_attach = False
+                            if callable(force_persist):
+                                force_persist()
+                            if callable(attach_fn):
+                                _log("local_attach_try")
+                                ok_attach = bool(attach_fn())
+                                if ok_attach:
+                                    _log("local_attach_ok")
+                            s.update(label="재빌드 완료", state="complete")
+                            st.success("인덱스 재빌드가 완료되었습니다.")
+                    except Exception as e:
+                        s.update(label="재빌드 실패", state="error")
+                        st.error(f"재빌드 실패: {type(e).__name__}: {e}")
+                        _log("rebuild_fail", error=f"{type(e).__name__}: {e}")
+
+        with col4:
+            if st.button("⬆ 백업 만들기/업로드", use_container_width=True, disabled=not callable(backup_fn)):
+                with st.status("백업 생성/업로드 중…", state="running") as s:
+                    try:
+                        if not callable(backup_fn):
+                            s.update(label="백업기 없음", state="error")
+                            st.error("백업 생성 함수가 없습니다.")
+                            _log("backup_skip", reason="backup_fn_not_callable")
+                        else:
+                            r = backup_fn() or {}
+                            ok = bool(r.get("ok", False))
+                            _log("backup_result", ok=ok)
+                            if ok:
+                                s.update(label="백업 완료", state="complete")
+                                st.success("백업 생성/업로드가 완료되었습니다.")
+                            else:
+                                s.update(label="백업 실패", state="error")
+                                st.error(f"백업 실패: {json.dumps(r, ensure_ascii=False)}")
+                    except Exception as e:
+                        s.update(label="백업 중 예외", state="error")
+                        st.error(f"백업 중 오류: {type(e).__name__}: {e}")
+                        _log("backup_exception", error=f"{type(e).__name__}: {e}")
 # ===== [05A] END =============================================================
 
-
-# ===== [05B] 간단 진단 패널(선택) ===========================================
+# ===== [05B] 간단 진단 패널(전역 토글 연동) ==================================
 def render_tag_diagnostics():
     """
-    자동 복구 상태, rag_index 경로, 품질 리포트 등 간단 요약 +
-    ✅ attach/restore 타임라인, ✅ BOOT-WARN 경고, ✅ 임포트 오류(_import_errors)까지
-    한 화면에서 확인하는 진단 패널.
-    + ✅ 로그 복사/다운로드(텍스트 병합본)
+    한 화면에서 모든 진단 확인:
+    - BOOT-WARN 경고
+    - 임포트 오류(_import_errors)
+    - Attach/Restore 타임라인 (+복사/다운로드)
+    - 자동 복구 상태 스냅샷
+    - rag_index Persist 경로 추정
+    - 품질 리포트 존재 여부
+    (모든 섹션 expander가 전역 토글 `_admin_expand_all`과 연동됨)
     """
     import importlib, json as _json
     from datetime import datetime
+    from pathlib import Path
+
+    # 🔽 전역 토글 상태 반영
+    _expand_all = bool(st.session_state.get("_admin_expand_all", True))
 
     # 기본 경로
     PERSIST_DIR = Path.home() / ".maic" / "persist"
@@ -879,106 +885,98 @@ def render_tag_diagnostics():
     except Exception:
         _m = None
 
-    st.subheader("진단(간단)", anchor=False)
+    with st.expander("🧪 간단 진단(관리자)", expanded=_expand_all):
+        st.subheader("진단(간단)", anchor=False)
 
-    # 수집 데이터
-    boot_warns = globals().get("_BOOT_WARNINGS") or []
-    import_errs = globals().get("_import_errors") or []
-    logs = st.session_state.get("_attach_log") or []
-    auto_info = st.session_state.get("_auto_restore_last")
+        # 수집 데이터
+        boot_warns = globals().get("_BOOT_WARNINGS") or []
+        import_errs = globals().get("_import_errors") or []
+        logs = st.session_state.get("_attach_log") or []
+        auto_info = st.session_state.get("_auto_restore_last")
 
-    # ✅ A) BOOT-WARN 경고 묶음
-    with st.container(border=True):
-        st.markdown("### 부팅 경고(BOOT-WARN)")
-        if not boot_warns:
-            st.caption("부팅 경고 없음.")
-        else:
-            for i, msg in enumerate(boot_warns, 1):
-                with st.expander(f"경고 {i}", expanded=(i == 1)):
-                    st.markdown(msg)
+        # A) BOOT-WARN
+        with st.expander("부팅 경고(BOOT-WARN)", expanded=_expand_all):
+            if not boot_warns:
+                st.caption("부팅 경고 없음.")
+            else:
+                for i, msg in enumerate(boot_warns, 1):
+                    with st.expander(f"경고 {i}", expanded=(True if _expand_all else (i == 1))):
+                        st.markdown(msg)
 
-    # ✅ B) 임포트 오류 원문(_import_errors)
-    with st.container(border=True):
-        st.markdown("### 임포트 오류 원문")
-        if not import_errs:
-            st.caption("기록된 임포트 오류 없음.")
-        else:
-            for i, err in enumerate(import_errs, 1):
-                st.write(f"• `{err}`")
+        # B) 임포트 오류
+        with st.expander("임포트 오류 원문(_import_errors)", expanded=_expand_all):
+            if not import_errs:
+                st.caption("기록된 임포트 오류 없음.")
+            else:
+                for i, err in enumerate(import_errs, 1):
+                    st.write(f"• `{err}`")
 
-    # ✅ C) Attach/Restore 타임라인 로그(최근 100개 역순) + 복사/다운로드
-    with st.container(border=True):
-        st.markdown("### Attach/Restore 타임라인")
-        colL, colR = st.columns([0.75, 0.25])
-        with colR:
-            if st.button("🧹 로그 비우기", use_container_width=True):
-                st.session_state["_attach_log"] = []
-                st.toast("로그를 비웠습니다.")
-                st.experimental_rerun()
+        # C) 타임라인 + 복사/다운로드
+        with st.expander("Attach/Restore 타임라인", expanded=_expand_all):
+            colL, colR = st.columns([0.75, 0.25])
+            with colR:
+                if st.button("🧹 로그 비우기", use_container_width=True):
+                    st.session_state["_attach_log"] = []
+                    st.toast("로그를 비웠습니다.")
+                    st.experimental_rerun()
 
-        if not logs:
-            st.caption("아직 기록된 로그가 없습니다. 자동 연결 또는 복구를 수행하면 여기에 단계별 로그가 표시됩니다.")
-        else:
-            # 표시
-            for item in reversed(logs[-100:]):
-                ts = item.get("ts")
-                step = item.get("step")
-                rest = {k: v for k, v in item.items() if k not in ("ts", "step")}
-                st.write(f"• **{ts}** — `{step}`", (f" · `{_json.dumps(rest, ensure_ascii=False)}`" if rest else ""))
+            if not logs:
+                st.caption("아직 기록된 로그가 없습니다. 자동 연결 또는 복구를 수행하면 여기에 단계별 로그가 표시됩니다.")
+            else:
+                for item in reversed(logs[-100:]):
+                    ts = item.get("ts")
+                    step = item.get("step")
+                    rest = {k: v for k, v in item.items() if k not in ("ts", "step")}
+                    st.write(f"• **{ts}** — `{step}`", (f" · `{_json.dumps(rest, ensure_ascii=False)}`" if rest else ""))
 
-            # ✅ 병합 텍스트(복사용) + 다운로드
-            merged_lines = []
-            for item in logs:
-                ts = item.get("ts", "")
-                step = item.get("step", "")
-                rest = {k: v for k, v in item.items() if k not in ("ts", "step")}
-                merged_lines.append(f"{ts}\t{step}\t{_json.dumps(rest, ensure_ascii=False)}")
-            merged_txt = "\n".join(merged_lines) if merged_lines else "(no logs)"
+                merged_lines = []
+                for item in logs:
+                    ts = item.get("ts", "")
+                    step = item.get("step", "")
+                    rest = {k: v for k, v in item.items() if k not in ("ts", "step")}
+                    merged_lines.append(f"{ts}\t{step}\t{_json.dumps(rest, ensure_ascii=False)}")
+                merged_txt = "\n".join(merged_lines) if merged_lines else "(no logs)"
 
-            st.markdown("---")
-            st.caption("▼ 로그 복사/다운로드")
-            # st.code 는 자체 복사 버튼을 제공함
-            st.code(merged_txt, language="text")
-            st.download_button(
-                "⬇ 로그 텍스트 다운로드",
-                data=merged_txt.encode("utf-8"),
-                file_name="maic_attach_logs.txt",
-                mime="text/plain",
-                use_container_width=True,
-            )
+                st.markdown("---")
+                st.caption("▼ 로그 복사/다운로드")
+                st.code(merged_txt, language="text")
+                st.download_button(
+                    "⬇ 로그 텍스트 다운로드",
+                    data=merged_txt.encode("utf-8"),
+                    file_name="maic_attach_logs.txt",
+                    mime="text/plain",
+                    use_container_width=True,
+                )
 
-    # ✅ D) 자동 복구 상태 스냅샷
-    with st.container(border=True):
-        st.markdown("### 자동 복구 상태")
-        if not auto_info:
-            st.caption("아직 자동 복구 시도 기록이 없습니다.")
-        else:
-            st.code(_json.dumps(auto_info, ensure_ascii=False, indent=2), language="json")
+        # D) 자동 복구 상태 스냅샷
+        with st.expander("자동 복구 상태", expanded=_expand_all):
+            if not auto_info:
+                st.caption("아직 자동 복구 시도 기록이 없습니다.")
+            else:
+                st.code(_json.dumps(auto_info, ensure_ascii=False, indent=2), language="json")
 
-    # ✅ E) rag_index Persist 경로 추정
-    with st.container(border=True):
-        st.markdown("### rag_index Persist 경로 추정")
-        rag = st.session_state.get("rag_index")
-        if rag is None:
-            st.caption("rag_index 객체가 세션에 없습니다.")
-        else:
-            cand = None
-            for attr in ("persist_dir", "storage_context", "vector_store", "index_struct"):
-                try:
-                    val = getattr(rag, attr, None)
-                    if val:
-                        cand = str(val)
-                        break
-                except Exception:
-                    continue
-            st.write("🔍 rag_index 내부 persist_dir/유사 속성:", cand or "(발견되지 않음)")
+        # E) rag_index Persist 경로 추정
+        with st.expander("rag_index Persist 경로 추정", expanded=_expand_all):
+            rag = st.session_state.get("rag_index")
+            if rag is None:
+                st.caption("rag_index 객체가 세션에 없습니다.")
+            else:
+                cand = None
+                for attr in ("persist_dir", "storage_context", "vector_store", "index_struct"):
+                    try:
+                        val = getattr(rag, attr, None)
+                        if val:
+                            cand = str(val); break
+                    except Exception:
+                        continue
+                st.write("🔍 rag_index 내부 persist_dir/유사 속성:", cand or "(발견되지 않음)")
 
-    # ✅ F) 품질 리포트 존재 여부
-    qr_exists = QUALITY_REPORT_PATH.exists()
-    qr_badge = "✅ 있음" if qr_exists else "❌ 없음"
-    st.markdown(f"- **품질 리포트(quality_report.json)**: {qr_badge}  (`{QUALITY_REPORT_PATH.as_posix()}`)")
-# ===== [05B] END ===========================================================
-
+        # F) 품질 리포트
+        with st.expander("품질 리포트 존재 여부", expanded=_expand_all):
+            qr_exists = QUALITY_REPORT_PATH.exists()
+            qr_badge = "✅ 있음" if qr_exists else "❌ 없음"
+            st.markdown(f"- **품질 리포트(quality_report.json)**: {qr_badge}  (`{QUALITY_REPORT_PATH.as_posix()}`)")
+# ===== [05B] END =============================================================
 
 
 # ===== [PATCH-BRAIN-HELPER] 두뇌(인덱스) 연결 여부 감지 =======================
