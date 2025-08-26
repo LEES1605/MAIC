@@ -578,11 +578,6 @@ def render_prompt_source_diag():
 # render_prompt_source_diag()
 # ===== [04C] END ====================================================
 
-File "/mount/src/maic/app.py", line 645
-      except Exception as e:
-      ^
-SyntaxError: invalid syntax
-
 # ===== [05B] TAG DIAGNOSTICS (NEW) — START ==================================
 def render_tag_diagnostics():
     """
