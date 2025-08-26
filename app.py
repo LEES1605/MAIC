@@ -1184,97 +1184,65 @@ def render_qa_panel():
         # 프롬프트 미리보기 토글(전역)
         show_prompt = st.toggle("프롬프트 미리보기", value=False, key="show_prompt_toggle")
 
-    # ── (U1) 채팅창 말풍선/패널 스타일(CSS) ──────────────────────────────────
-    st.markdown("""
-    <style>
-      div[data-testid="stChatMessage"]{
-        background:#EAF5FF; border:1px solid #BCDFFF; border-radius:12px;
-        padding:6px 10px; margin:6px 0;
-      }
-      div[data-testid="stChatMessage"] .stMarkdown p{ margin-bottom:0.4rem; }
-    </style>
-    """, unsafe_allow_html=True)
-
-    # ── 프롬프트 빌더(+ 출처 규칙/맥락 주입) ─────────────────────────────────
-    def _build_context_text(max_turns: int, max_chars: int) -> str:
-        if not st.session_state.get("use_context", True):
-            return ""
-        history = st.session_state.get("chat", [])
-        if not history:
-            return st.session_state.get("_session_summary", "")
-        turns = []
-        k = int(st.session_state.get("context_turns", 8))
-        for m in history[-k:]:
-            role = "학생" if m["role"] == "user" else f"AI({m.get('provider','AI')})"
-            text = (m.get("text") or "").strip().replace("\n", " ")
-            if text: turns.append(f"{role}: {text}")
-        ctx = "\n".join(turns).strip()
-        summary = (st.session_state.get("_session_summary") or "").strip()
-        if summary: ctx = f"[요약]\n{summary}\n\n[최근]\n{ctx}" if ctx else f"[요약]\n{summary}"
-        max_chars = int(st.session_state.get("context_max_chars", max_chars))
-        if len(ctx) > max_chars: ctx = ctx[-max_chars:]
-        return ctx
-
-# ===== [PATCH-qa_build_parts] unify dict/obj access ==================== START
     def _build_parts(mode_label: str, q_text: str, use_rag: bool):
-        from src.prompt_modes import build_prompt
-        raw = build_prompt(mode_label, q_text or "", lang="ko", extras={
-            "level":  st.session_state.get("student_level"),
-            "tone":   "encouraging",
+    """
+    Build final prompt parts for the selected mode.
+
+    변경 사항(안정화 포인트):
+      1) build_prompt()가 dict를 반환하든, 객체를 반환하든 안전하게 처리
+      2) system 끝에 '출처 규칙/디클레이머 금지' 정책을 주입
+      3) user 끝에 [대화 맥락] 블록을 안전하게 덧붙임
+         (키가 없을 때를 대비해 setdefault로 방어)
+
+    반환 형태: dict {"system": str, "user": str, "provider_kwargs": dict}
+    """
+    from src.prompt_modes import build_prompt
+
+    raw = build_prompt(mode_label, q_text or "", lang="ko", extras={
+        "level":  st.session_state.get("student_level"),
+        "tone":   "encouraging",
     })
 
-        # 1) 반환 형태 정규화: dict/객체 모두 dict로 통일
-        if isinstance(raw, dict):
-            parts = dict(raw)  # 얕은 복사
-            parts.setdefault("system", "")
-            parts.setdefault("user", "")
-            parts.setdefault("provider_kwargs", {})
-        else:
-            parts = {
-                "system": getattr(raw, "system", "") or "",
-                "user": getattr(raw, "user", "") or "",
-                "provider_kwargs": getattr(raw, "provider_kwargs", {}) or {},
+    # 1) 반환 형태 정규화: dict/객체 → dict로 통일
+    if isinstance(raw, dict):
+        parts = dict(raw)  # 얕은 복사
+        parts.setdefault("system", "")
+        parts.setdefault("user", "")
+        parts.setdefault("provider_kwargs", {})
+    else:
+        parts = {
+            "system": getattr(raw, "system", "") or "",
+            "user": getattr(raw, "user", "") or "",
+            "provider_kwargs": getattr(raw, "provider_kwargs", {}) or {},
         }
 
-        # 2) 출처/디클레이머 규칙 추가
-        rules = []
-        if use_rag:
-            rules.append("출처 표기 규칙: 업로드 자료에서 근거를 찾으면 문서명/소단원명/페이지 등 구체적으로 표기합니다. "
-                         "근거를 찾지 못했다면 'AI지식 활용'이라고만 간단히 표기합니다.")
-        else:
-            rules.append("출처 표기 규칙: 현재 업로드 자료(RAG)를 사용하지 못하므로, 답변 맨 끝에 'AI지식 활용'이라고만 표기합니다.")
-        rules.append("출처/근거 표기는 답변 맨 끝에 '근거/출처: '로 시작하는 한 줄로만 작성하십시오. 여러 개면 세미콜론(;)으로 구분합니다.")
-        rules.append("금지: '일반적인 지식/일반 학습자료' 등에 기반했다는 포괄적 디클레이머를 출력하지 마십시오.")
-        if parts["system"]:
-            parts["system"] = parts["system"] + "\n\n" + "\n".join(rules)
+    # 2) 출처/디클레이머 규칙 주입
+    rules = []
+    if use_rag:
+        rules.append(
+            "출처 표기 규칙: 업로드 자료에서 근거를 찾으면 문서명/소단원명/페이지 등 구체적으로 표기합니다. "
+            "근거를 찾지 못했다면 'AI지식 활용'이라고만 간단히 표기합니다."
+        )
+    else:
+        rules.append(
+            "출처 표기 규칙: 현재 업로드 자료(RAG)를 사용하지 못하므로, 답변 맨 끝에 'AI지식 활용'이라고만 표기합니다."
+        )
+    rules.append("출처/근거 표기는 답변 맨 끝에 '근거/출처: '로 시작하는 한 줄로만 작성하십시오. 여러 개면 세미콜론(;)으로 구분합니다.")
+    rules.append("금지: '일반적인 지식/일반 학습자료' 등에 기반했다는 포괄적 디클레이머를 출력하지 마십시오.")
 
-        # 3) 대화 맥락 주입(있을 때만)
-        ctx = _build_context_text(int(st.session_state["context_turns"]),
-                                  int(st.session_state["context_max_chars"]))
-        if ctx:
-            parts["user"] = f"{parts['user']}\n\n[대화 맥락]\n{ctx}"
+    if parts.get("system"):
+        parts["system"] = parts["system"] + "\n\n" + "\n".join(rules)
 
-        return parts
-# ===== [PATCH-qa_build_parts] unify dict/obj access ====================== END
+    # 3) 대화 맥락 주입(설정 허용 시)
+    ctx = _build_context_text(
+        int(st.session_state["context_turns"]),
+        int(st.session_state["context_max_chars"])
+    )
+    if ctx:
+        parts["user"] = f"{parts['user']}\n\n[대화 맥락]\n{ctx}"
 
-        })
-        # 출처/디클레이머 규칙
-        rules = []
-        if use_rag:
-            rules.append("출처 표기 규칙: 업로드 자료에서 근거를 찾으면 문서명/소단원명/페이지 등 구체적으로 표기합니다. "
-                         "근거를 찾지 못했다면 'AI지식 활용'이라고만 간단히 표기합니다.")
-        else:
-            rules.append("출처 표기 규칙: 현재 업로드 자료(RAG)를 사용하지 못하므로, 답변 맨 끝에 'AI지식 활용'이라고만 표기합니다.")
-        rules.append("출처/근거 표기는 답변 맨 끝에 '근거/출처: '로 시작하는 한 줄로만 작성하십시오. 여러 개면 세미콜론(;)으로 구분합니다.")
-        rules.append("금지: '일반적인 지식/일반 학습자료' 등에 기반했다는 포괄적 디클레이머를 출력하지 마십시오.")
-        if parts and getattr(parts, "system", None):
-            parts.system = parts.system + "\n\n" + "\n".join(rules)
+    return parts
 
-        # 대화 맥락 주입
-        ctx = _build_context_text(int(st.session_state["context_turns"]),
-                                  int(st.session_state["context_max_chars"]))
-        if ctx: parts.user = f"{parts.user}\n\n[대화 맥락]\n{ctx}"
-        return parts
 
     # ── 라이브러리/키 상태 ───────────────────────────────────────────────────
     have_openai_lib  = importlib.util.find_spec("openai") is not None
