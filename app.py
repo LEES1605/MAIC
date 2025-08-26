@@ -124,6 +124,26 @@ st.set_page_config(page_title="AI Teacher (Clean)", layout="wide")
 st.session_state.setdefault("rag_index", None)
 st.session_state.setdefault("mode", "Grammar")    # Grammar | Sentence | Passage
 st.session_state.setdefault("qa_submitted", False)
+st.session_state.setdefault("_attach_log", [])    # ✅ attach/restore 상세 로그 보관
+
+def _log_attach(step: str, **fields):
+    """
+    자동/강제 attach 및 복구 과정의 상세 로그를 세션에 기록.
+    - step: 단계 태그 (예: 'start', 'local_attach_ok', 'drive_restore_fail' 등)
+    - fields: 부가 정보 (status, error, counts 등)
+    """
+    from datetime import datetime
+    try:
+        entry = {"ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "step": step}
+        if fields: entry.update(fields)
+        logs = st.session_state.get("_attach_log") or []
+        logs.append(entry)
+        # 오래된 로그는 정리(최대 200개 유지)
+        if len(logs) > 200:
+            logs = logs[-200:]
+        st.session_state["_attach_log"] = logs
+    except Exception:
+        pass
 
 def _force_persist_dir() -> str:
     """
@@ -133,17 +153,22 @@ def _force_persist_dir() -> str:
     """
     import importlib, os
     target = Path.home() / ".maic" / "persist"
-    try: target.mkdir(parents=True, exist_ok=True)
-    except Exception: pass
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
 
     for modname in ("src.rag.index_build", "rag.index_build"):
         try:
             m = importlib.import_module(modname)
-            try: setattr(m, "PERSIST_DIR", target)
-            except Exception: pass
+            try:
+                setattr(m, "PERSIST_DIR", target)
+            except Exception:
+                pass
         except Exception:
             continue
     os.environ["MAIC_PERSIST_DIR"] = str(target)
+    _log_attach("force_persist_dir", target=str(target))
     return str(target)
 
 def _is_attached_session() -> bool:
@@ -187,17 +212,22 @@ def _attach_from_local() -> bool:
     """로컬 인덱스를 세션에 부착 시도."""
     _force_persist_dir()
     if get_or_build_index is None:
+        _log_attach("local_attach_skip", reason="get_or_build_index_none")
         return False
     try:
+        _log_attach("local_attach_try")
         idx = get_or_build_index()
         st.session_state["rag_index"] = idx
-        # ✅ 성공 시 세션 플래그를 확실하게 찍어 UI 혼선을 방지
+        # ✅ 성공 시 플래그 명확화
         st.session_state["brain_attached"] = True
         st.session_state["rag_index_attached"] = True
+        _log_attach("local_attach_ok")
         return True
     except LocalIndexMissing:
+        _log_attach("local_attach_fail", error="LocalIndexMissing")
         return False
-    except Exception:
+    except Exception as e:
+        _log_attach("local_attach_fail", error=f"{type(e).__name__}: {e}")
         return False
 
 def _auto_attach_or_restore_silently() -> bool:
@@ -215,25 +245,32 @@ def _auto_attach_or_restore_silently() -> bool:
         "rebuild": None,
         "final_attach": None,
     }
+    _log_attach("auto_attach_start")
+
     _force_persist_dir()
 
     # 1) 로컬 attach
     if _attach_from_local():
         st.session_state["_auto_restore_last"].update(step="attached_local", local_attach=True, final_attach=True)
+        _log_attach("auto_attach_done", path="local")
         return True
     st.session_state["_auto_restore_last"]["local_attach"] = False
+    _log_attach("local_attach_result", ok=False)
 
     # 2) 드라이브에서 복구 시도
     try:
         mod = importlib.import_module("src.rag.index_build")
         restore_fn = getattr(mod, "restore_latest_backup_to_local", None)
         ok_restore = bool(callable(restore_fn) and (restore_fn() or {}).get("ok"))
-    except Exception:
+    except Exception as e:
         ok_restore = False
+        _log_attach("drive_restore_exception", error=f"{type(e).__name__}: {e}")
     st.session_state["_auto_restore_last"]["drive_restore"] = ok_restore
+    _log_attach("drive_restore_result", ok=bool(ok_restore))
 
     if ok_restore and _has_local_index_files() and _attach_from_local():
         st.session_state["_auto_restore_last"].update(step="restored_and_attached", final_attach=True)
+        _log_attach("auto_attach_done", path="drive_restore")
         return True
 
     # 3) 마지막 안전망: 인덱스 재생성
@@ -244,6 +281,7 @@ def _auto_attach_or_restore_silently() -> bool:
         persist_dir = getattr(mod, "PERSIST_DIR", Path.home() / ".maic" / "persist")
         if callable(build_fn):
             try:
+                _log_attach("rebuild_try", persist_dir=str(persist_dir))
                 build_fn(
                     update_pct=lambda *_a, **_k: None,
                     update_msg=lambda *_a, **_k: None,
@@ -255,37 +293,17 @@ def _auto_attach_or_restore_silently() -> bool:
             except TypeError:
                 build_fn()
             ok_rebuild = True
+            _log_attach("rebuild_ok")
         else:
             ok_rebuild = False
-    except Exception:
+            _log_attach("rebuild_skip", reason="build_fn_not_callable")
+    except Exception as e:
         ok_rebuild = False
+        _log_attach("rebuild_fail", error=f"{type(e).__name__}: {e}")
     st.session_state["_auto_restore_last"]["rebuild"] = ok_rebuild
 
     if _attach_from_local():
-        st.session_state["_auto_restore_last"].update(step="rebuilt_and_attached", final_attach=True)
-        return True
-
-    st.session_state["_auto_restore_last"]["final_attach"] = False
-    return False
-
-def _get_enabled_modes_unified() -> Dict[str, bool]:
-    """
-    관리자 설정 상태를 단일 맵으로 반환.
-    반환 예: {"Grammar": True, "Sentence": True, "Passage": False}
-    """
-    ss = st.session_state
-    # 신형(체크박스) 우선
-    g = ss.get("cfg_show_mode_grammar",   ss.get("show_mode_grammar",   True))
-    s = ss.get("cfg_show_mode_structure", ss.get("show_mode_structure", True))
-    p = ss.get("cfg_show_mode_passage",   ss.get("show_mode_passage",   True))
-    # 리스트 기반 설정이 있으면 덮어쓰기
-    lst = ss.get("qa_modes_enabled")
-    if isinstance(lst, list):
-        g = ("문법설명" in lst)
-        s = ("문장구조분석" in lst)
-        p = ("지문분석" in lst)
-    return {"Grammar": bool(g), "Sentence": bool(s), "Passage": bool(p)}
-# ===== [03] END ===============================================================
+        st.session_state["_auto_restore_last"].update(step="rebuilt_and_attached", final_]()_
 
 # ===== [04] HEADER (비워둠: 타이틀/배지는 [07]에서 렌더) =====================
 def render_header():
