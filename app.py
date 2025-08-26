@@ -683,372 +683,205 @@ def _render_admin_diagnostics_section():
 _render_admin_diagnostics_section()
 # ===== [04C] END ==============================================================
 
-
-# ===== [05A] 자료 최적화/백업 패널 (관리자 전용) =============================
+# ===== [05A] 자료 최적화/백업 패널 ==========================================
 def render_brain_prep_main():
     """
-    - Drive 'prepared' 변화 감지(quick_precheck) → 결과 요약(+파일 목록)
-    - 상태 배지(우선순위): no_prepared → delta → no_manifest → no_change
-    - 인덱싱 중: 현재 파일명(아이콘) + 처리 n/총 m + ETA 표시
-    - 완료 시 요약 배지 + 세션 기록(_optimize_last) + 복구 상세 표시
-    - 복구 직후/자료없음일 때 manifest: '— (업데이트 시 생성)'로 표기
-    - 🧠 두뇌 연결(강제) 버튼 포함
+    인덱스(두뇌) 최적화/복구/백업을 위한 관리자 패널
+    - 강제 부착, 최신 백업 복원, 인덱스 재빌드, 백업 생성/업로드
+    - 모든 동작은 [05B] 타임라인 로그(_log_attach)와 연계
     """
+    import os
+    import json
+    import importlib  # ✅ NameError 방지: 함수 내부 임포트
+    from pathlib import Path
+    from datetime import datetime
+
     # 관리자 가드
-    def _is_admin() -> bool:
-        ss = st.session_state
-        return bool(
-            ss.get("is_admin") or ss.get("admin_mode")
-            or (ss.get("role") == "admin") or (ss.get("mode") == "admin")
-        )
-    if not _is_admin():
+    if not (
+        st.session_state.get("is_admin")
+        or st.session_state.get("admin_mode")
+        or st.session_state.get("role") == "admin"
+        or st.session_state.get("mode") == "admin"
+    ):
         return
 
-    # 모듈/함수 바인딩
+    def _log(step: str, **kw):
+        try:
+            if "_log_attach" in globals() and callable(globals()["_log_attach"]):
+                globals()["_log_attach"](step, **kw)
+        except Exception:
+            pass
+
+    # 기본 경로 추정
+    PERSIST_DIR = Path.home() / ".maic" / "persist"
+    BACKUP_DIR  = Path.home() / ".maic" / "backup"
+    QUALITY_REPORT_PATH = Path.home() / ".maic" / "quality_report.json"
+
+    # src.rag.index_build 의 경로 상수/함수들 (있으면 사용)
+    idx_mod = None
     try:
-        mod = importlib.import_module("src.rag.index_build")
+        idx_mod = importlib.import_module("src.rag.index_build")
+        PERSIST_DIR = getattr(idx_mod, "PERSIST_DIR", PERSIST_DIR)
+        BACKUP_DIR  = getattr(idx_mod, "BACKUP_DIR",  BACKUP_DIR)
+        QUALITY_REPORT_PATH = getattr(idx_mod, "QUALITY_REPORT_PATH", QUALITY_REPORT_PATH)
     except Exception as e:
-        st.error(f"인덱스 모듈 임포트 실패: {type(e).__name__}: {e}")
-        return
-    quick_precheck = getattr(mod, "quick_precheck", None) or getattr(mod, "precheck_build_needed", None)
-    build_fn       = getattr(mod, "build_index_with_checkpoint", None)
-    restore_fn     = getattr(mod, "restore_latest_backup_to_local", None)
-    upload_zip_fn  = getattr(mod, "_make_and_upload_backup_zip", None)
-    persist_dir    = getattr(mod, "PERSIST_DIR", Path.home() / ".maic" / "persist")
-    if not callable(restore_fn):
-        st.error("restore_latest_backup_to_local()를 찾지 못했습니다."); return
-    if not callable(build_fn):
-        st.error("build_index_with_checkpoint()를 찾지 못했습니다."); return
+        # 모듈이 없어도 패널은 동작(버튼 중 일부만 제한됨)
+        _log("index_module_import_warn", error=f"{type(e).__name__}: {e}")
 
-    # 인덱스 상태
-    try:
-        idx_status = get_index_status()
-    except Exception:
-        idx_status = "missing"
-    status_badge = {"ready":"🟢 답변준비 완료","pending":"🟡 로컬 파일 감지(세션 미부착)","missing":"🔴 인덱스 없음"}.get(idx_status,"❔ 상태 미상")
+    # 관련 함수 핸들(없으면 None)
+    precheck_fn   = globals().get("precheck_build_needed") or globals().get("quick_precheck")
+    build_fn      = globals().get("build_index_with_checkpoint")
+    restore_fn    = globals().get("restore_latest_backup_to_local")
+    backup_fn     = globals().get("_make_and_upload_backup_zip")
+    attach_fn     = globals().get("_attach_from_local")
+    auto_restore  = globals().get("_auto_attach_or_restore_silently")
+    force_persist = globals().get("_force_persist_dir")
 
-    # 신규자료 점검 + 델타/사유 파싱
-    prepared_cnt = manifest_cnt = 0
-    reasons: List[str] = []
-    added: List[str]; modified: List[str]; removed: List[str]; moved: List[str]; skipped: List[str]
-    added, modified, removed, moved, skipped = [], [], [], [], []
-    try:
-        if callable(quick_precheck):
-            pre = quick_precheck(None)  # 폴더 ID는 내부 자동 탐색
-            prepared_cnt = int(pre.get("prepared_count", 0))
-            manifest_cnt = int(pre.get("manifest_count", 0))
-            reasons = list(pre.get("reasons", []))
-            delta = pre.get("delta") or {}
-            added    = list(pre.get("added",    [])) or list(delta.get("added",    []))
-            modified = list(pre.get("modified", [])) or list(delta.get("modified", []))
-            removed  = list(pre.get("removed",  [])) or list(delta.get("removed",  []))
-            moved    = list(pre.get("moved",    [])) or list(delta.get("moved",    []))
-            skipped  = list(pre.get("skipped",  [])) or list(delta.get("skipped",  []))
-    except Exception as e:
-        reasons = [f"precheck_failed:{type(e).__name__}"]
+    st.subheader("자료 최적화 · 백업", anchor=False)
 
-    # 상태 분류(우선순위)
-    delta_count = len(added) + len(modified) + len(removed) + len(moved)
-    if prepared_cnt == 0:
-        status_kind = "no_prepared"
-    elif delta_count > 0:
-        status_kind = "delta"
-    elif manifest_cnt == 0:
-        status_kind = "no_manifest"
-    else:
-        status_kind = "no_change"
-
-    kind_badge = {
-        "delta":       "🟢 신규자료 감지",
-        "no_manifest": "🟡 초기화 필요(매니페스트 없음)",
-        "no_prepared": "⚪ 자료 없음",
-        "no_change":   "✅ 변경 없음",
-    }[status_kind]
-
-    # 확장자 아이콘
-    ICONS = {".pdf":"📕",".doc":"📝",".docx":"📝",".txt":"🗒️",".md":"🗒️",".ppt":"📊",".pptx":"📊",
-             ".xls":"📈",".xlsx":"📈",".csv":"📑",".json":"🧩",".html":"🌐",
-             ".jpg":"🖼️",".jpeg":"🖼️",".png":"🖼️",".gif":"🖼️",".webp":"🖼️",".svg":"🖼️",
-             ".mp3":"🔊",".wav":"🔊",".mp4":"🎞️",".mkv":"🎞️",".py":"🐍",".ipynb":"📓"}
-    def _icon_for(path: str) -> str:
-        ext = os.path.splitext(str(path).lower())[1]
-        return ICONS.get(ext, "📄")
-
-    # 패널 렌더
+    # 경로/상태 요약
     with st.container(border=True):
-        st.subheader("자료 최적화/백업 패널")
-        st.caption("Drive의 prepared 폴더와 로컬 manifest를 비교하여 업데이트 필요 여부를 판단합니다.")
+        st.markdown("### 경로 및 상태")
+        st.write("• Persist 디렉터리:", f"`{Path(PERSIST_DIR)}`")
+        st.write("• Backup 디렉터리:", f"`{Path(BACKUP_DIR)}`")
+        qr_exists = Path(QUALITY_REPORT_PATH).exists()
+        st.markdown(f"• 품질 리포트(quality_report.json): {'✅ 있음' if qr_exists else '❌ 없음'} "
+                    f"(`{Path(QUALITY_REPORT_PATH)}`)")
 
-        # manifest 표기 규칙(복구 직후/자료 없음 → '— (업데이트 시 생성)')
-        last = st.session_state.get("_optimize_last") or {}
-        restored_recently = (last.get("ok") and last.get("tag") == "restore")
-        show_manifest_hint = (prepared_cnt == 0) or restored_recently
-        manifest_label = ("— (업데이트 시 생성)" if (manifest_cnt == 0 and show_manifest_hint)
-                          else str(manifest_cnt))
-
-        cols = st.columns([1,1,1,1])
-        cols[0].write(f"**인덱스 상태:** {status_badge}")
-        cols[1].write(f"**신규자료:** {kind_badge}")
-        cols[2].write(f"**prepared:** {prepared_cnt}")
-        cols[3].write(f"**manifest:** {manifest_label}")
-
-        # 델타 상세
-        if status_kind == "delta":
-            with st.expander("🔎 신규자료 상세(추가/수정/삭제 내역)", expanded=True):
-                st.caption(
-                    f"추가 {len(added)} · 수정 {len(modified)} · 삭제 {len(removed)}"
-                    + (f" · 이동 {len(moved)}" if moved else "")
-                    + (f" · 제외 {len(skipped)}" if skipped else "")
-                )
-                c1, c2, c3 = st.columns(3)
-                def _render_list(col, title, rows, limit=20):
-                    with col:
-                        st.markdown(f"**{title}**")
-                        if not rows:
-                            st.caption("— 없음")
-                        else:
-                            for x in rows[:limit]:
-                                st.write(f"{_icon_for(x)} {x}")
-                            if len(rows) > limit:
-                                st.caption(f"… 외 {len(rows)-limit}개")
-                _render_list(c1, "추가됨", added); _render_list(c2, "수정됨", modified); _render_list(c3, "삭제됨", removed)
-
-        if reasons and status_kind != "delta":
-            with st.expander("세부 사유 보기", expanded=False):
-                for r in reasons:
-                    st.write("•", str(r))
-
-        st.divider()
-
-        # 권장 동작 배지
-        RECO = {
-            "delta":       "업데이트 실행을 추천합니다.",
-            "no_manifest": "최신 백업 복구 또는 강제 최적화 초기화를 추천합니다.",
-            "no_prepared": "최신 백업 복구를 추천합니다.",
-            "no_change":   "필요 시 최신 백업 복구만 수행해도 됩니다.",
-        }
-        st.caption(f"**권장:** {RECO[status_kind]}")
-
-        # 버튼 가드(상태별 노출)
-        show_update = (status_kind == "delta") or (status_kind == "no_manifest" and prepared_cnt > 0)
-        if show_update:
-            c1, c2, c3, c4 = st.columns([1,1,1,1])
-            do_update        = c1.button("🚀 업데이트 실행 (최적화→업로드→복구→연결)", use_container_width=True)
-            skip_and_restore = c2.button("⏭ 업데이트 건너뛰기 (기존 백업 복구→연결)", use_container_width=True)
-            force_rebuild    = c3.button("🛠 강제 최적화 초기화", use_container_width=True)
-            force_attach_now = c4.button("🧠 두뇌 연결(강제)", use_container_width=True)
-        else:
-            c1, c2, c3 = st.columns([1,1,1])
-            do_update        = False
-            skip_and_restore = c1.button("📦 최신 백업 복구 → 연결", use_container_width=True)
-            force_rebuild    = c2.button("🛠 강제 최적화 초기화", use_container_width=True)
-            force_attach_now = c3.button("🧠 두뇌 연결(강제)", use_container_width=True)
-
-        # 공통 헬퍼
-        def _final_attach():
-            with st.status("두뇌 연결 중…", state="running") as s2:
-                ok = _auto_attach_or_restore_silently()
-                if ok:
-                    s2.update(label="두뇌 연결 완료 ✅", state="complete")
-                    st.toast("🟢 답변준비 완료")
-                    st.rerun()
-                else:
-                    s2.update(label="두뇌 연결 실패 ❌", state="error")
-                    st.error("세션 부착 실패")
-
-        def _record_result(ok: bool, took_s: float, tag: str, processed:int|None=None, total:int|None=None):
-            st.session_state["_optimize_last"] = {
-                "ok": bool(ok), "took_sec": round(float(took_s), 1),
-                "status_kind": status_kind,
-                "counts": {"added": len(added),"modified": len(modified),"removed": len(removed),"moved": len(moved),"skipped": len(skipped)},
-                "processed": processed, "total": total, "tag": tag
-            }
-            if ok:
-                extra = (f" · 처리 {processed}/{total}" if (processed and total) else "")
-                st.success(f"✅ 완료: {tag} · 소요 {took_s:.1f}s{extra}")
-            else:
-                st.error(f"❌ 실패: {tag} · 소요 {took_s:.1f}s")
-
-        # 진행표시 유틸 (파일명 + n/총 m + ETA)
-        path_regex = re.compile(r'([A-Za-z]:\\[^:*?"<>|\n]+|/[^ \n]+?\.[A-Za-z0-9]{1,8})')
-        def _fmt_eta(sec: float) -> str:
-            if sec <= 0 or math.isinf(sec) or math.isnan(sec): return "—"
-            m, s = divmod(int(sec+0.5), 60); return f"{m}:{s:02d}" if m else f"{s}s"
-        def _progress_context(total_guess: int):
-            file_slot = st.empty(); ctr_slot = st.empty(); eta_slot = st.empty(); bar = st.progress(0)
-            seen = set(); t0 = time.time()
-            def on_msg(msg: str):
-                m = path_regex.search(str(msg)); 
-                if not m: return
-                path = m.group(1).replace("\\","/"); fname = os.path.basename(path)
-                if fname not in seen: seen.add(fname)
-                processed = len(seen); total = max(total_guess, processed) if total_guess else processed
-                pct = int(min(100, (processed/total)*100)) if total else 0
-                took = time.time()-t0; eta = _fmt_eta((took/processed)*(total-processed)) if processed else "—"
-                file_slot.markdown(f"{_icon_for(fname)} 현재 인덱싱 파일: **`{fname}`**")
-                ctr_slot.markdown(f"진행: **{processed} / {total}**"); eta_slot.caption(f"예상 남은 시간: {eta}")
-                try: bar.progress(pct)
-                except Exception: pass
-                return processed, total, took
-            def finalize():
-                file_slot.markdown("✅ 인덱싱 단계 완료"); ctr_slot.empty(); eta_slot.empty()
-                try: bar.progress(100)
-                except Exception: pass
-                return len(seen), max(total_guess, len(seen)) if total_guess else len(seen), time.time()-t0
-            return on_msg, finalize
-        def _guess_total_for(tag: str) -> int:
-            if status_kind == "delta": return max(1, delta_count)
-            return prepared_cnt or manifest_cnt or 0
-
-        # 처리 분기 — 업데이트
-        if do_update:
-            t0 = time.time()
-            on_msg, finalized = _progress_context(_guess_total_for("update"))
-            log = st.empty()
-            def _pct(v, m=None): 
-                if m: log.info(str(m)); on_msg(m)
-            def _msg(s): 
-                log.write(f"• {s}"); on_msg(s)
-            with st.status("최적화(인덱싱) 실행 중…", state="running") as s:
-                try:
-                    # 표준 시그니처
-                    build_fn(
-                        update_pct=_pct,
-                        update_msg=_msg,
-                        gdrive_folder_id="",
-                        gcp_creds={},
-                        persist_dir=str(persist_dir),
-                        remote_manifest={},
-                    )
-                    s.update(label="최적화 완료 ✅", state="complete")
-                except TypeError:
-                    # 구버전 시그니처 대응
-                    build_fn(_pct, _msg, "", {}, str(persist_dir), {})
-                    s.update(label="최적화 완료 ✅", state="complete")
-                except Exception as e:
-                    s.update(label="최적화 실패 ❌", state="error")
-                    st.error(f"인덱싱 오류: {type(e).__name__}: {e}")
-                    return
-            processed, total, _ = finalized()
-
-            if callable(upload_zip_fn):
-                with st.status("백업 ZIP 업로드 중…", state="running") as s:
-                    try:
-                        up = upload_zip_fn(None, None)
-                        if not (up and up.get("ok")): s.update(label="업로드 실패(계속 진행) ⚠️", state="error")
-                        else:                          s.update(label="업로드 완료 ✅", state="complete")
-                    except Exception:
-                        s.update(label="업로드 실패(계속 진행) ⚠️", state="error")
-
-            with st.status("최신 백업 ZIP 복구 중…", state="running") as s:
-                rr = restore_fn()
-                if not (rr and rr.get("ok")):
-                    s.update(label="복구 실패 ❌", state="error")
-                    _record_result(False, time.time()-t0, "update", processed, total)
-                    st.error(f"복구 실패: {rr.get('error') if rr else 'unknown'}")
-                    return
-                s.update(label="복구 완료 ✅", state="complete")
-                details = []
-                for k in ("zip_name","restored_count","files"):
-                    if k in (rr or {}): 
-                        v = rr[k]; details.append(f"{k}:{v if not isinstance(v,list) else len(v)}")
-                if details: st.caption("복구 상세: " + " · ".join(details))
-            _record_result(True, time.time()-t0, "update", processed, total)
-            _final_attach()
-
-        # 처리 분기 — 건너뛰고 복구
-        if skip_and_restore:
-            t0 = time.time()
-            with st.status("최신 백업 ZIP 복구 중…", state="running") as s:
-                rr = restore_fn()
-                if not (rr and rr.get("ok")):
-                    s.update(label="복구 실패 ❌", state="error")
-                    _record_result(False, time.time()-t0, "restore")
-                    st.error(f"복구 실패: {rr.get('error') if rr else 'unknown'}")
-                    return
-                s.update(label="복구 완료 ✅", state="complete")
-                details = []
-                for k in ("zip_name","restored_count","files"):
-                    if k in (rr or {}):
-                        v = rr[k]; details.append(f"{k}:{v if not isinstance(v,list) else len(v)}")
-                if details: st.caption("복구 상세: " + " · ".join(details))
-            _record_result(True, time.time()-t0, "restore")
-            _final_attach()
-
-        # 처리 분기 — 강제 재최적화
-        if force_rebuild:
-            t0 = time.time()
-            on_msg, finalized = _progress_context(_guess_total_for("rebuild"))
-            log = st.empty()
-            def _pct(v, m=None): 
-                if m: log.info(str(m)); on_msg(m)
-            def _msg(s): 
-                log.write(f"• {s}"); on_msg(s)
-            with st.status("다시 최적화 실행 중…", state="running") as s:
-                try:
-                    build_fn(update_pct=_pct, update_msg=_msg, gdrive_folder_id="", gcp_creds={}, persist_dir=str(persist_dir), remote_manifest={})
-                    s.update(label="다시 최적화 완료 ✅", state="complete")
-                except TypeError:
-                    build_fn(_pct, _msg, "", {}, str(persist_dir), {})
-                    s.update(label="다시 최적화 완료 ✅", state="complete")
-                except Exception as e:
-                    s.update(label="다시 최적화 실패 ❌", state="error")
-                    _record_result(False, time.time()-t0, "rebuild")
-                    st.error(f"재최적화 오류: {type(e).__name__}: {e}")
-                    return
-            processed, total, _ = finalized()
-
-            if callable(upload_zip_fn):
-                with st.status("백업 ZIP 업로드 중…", state="running") as s:
-                    try:
-                        up = upload_zip_fn(None, None)
-                        if not (up and up.get("ok")): s.update(label="업로드 실패(계속 진행) ⚠️", state="error")
-                        else:                          s.update(label="업로드 완료 ✅", state="complete")
-                    except Exception:
-                        s.update(label="업로드 실패(계속 진행) ⚠️", state="error")
-
-            with st.status("최신 백업 ZIP 복구 중…", state="running") as s:
-                rr = restore_fn()
-                if not (rr and rr.get("ok")):
-                    s.update(label="복구 실패 ❌", state="error")
-                    _record_result(False, time.time()-t0, "rebuild", processed, total)
-                    st.error(f"복구 실패: {rr.get('error') if rr else 'unknown'}")
-                    return
-                s.update(label="복구 완료 ✅", state="complete")
-                details = []
-                for k in ("zip_name","restored_count","files"):
-                    if k in (rr or {}):
-                        v = rr[k]; details.append(f"{k}:{v if not isinstance(v,list) else len(v)}")
-                if details: st.caption("복구 상세: " + " · ".join(details))
-            _record_result(True, time.time()-t0, "rebuild", processed, total)
-            _final_attach()
-
-        # 🧠 두뇌 강제 연결(attach)
-        if force_attach_now:
+        # 사전점검(precheck)
+        if callable(precheck_fn):
             try:
-                with st.status("두뇌 연결 중…", state="running") as s:
-                    st.caption(f"persist_dir: `{persist_dir}`")
-                    if not _has_local_index_files():
-                        s.update(label="두뇌 연결 실패 ❌", state="error")
-                        st.error("로컬 인덱스 파일을 찾지 못했습니다. '최신 백업 복구' 또는 '업데이트' 후 재시도하세요.")
-                    else:
-                        ok = False
-                        try:
-                            ok = _attach_from_local()
-                        except Exception as e:
-                            s.update(label="두뇌 연결 실패 ❌", state="error")
-                            st.error(f"예외: {type(e).__name__}: {e}")
-                        if ok:
-                            st.session_state["brain_attached"] = True
-                            s.update(label="두뇌 연결 완료 ✅", state="complete")
-                            st.toast("🟢 답변준비 완료")
-                            st.rerun()
-                        else:
-                            s.update(label="두뇌 연결 실패 ❌", state="error")
-                            st.info("힌트: persist_dir 경로/권한과 파일 유무를 확인하세요. 필요 시 '업데이트' 또는 '최신 백업 복구' 후 다시 시도.")
+                need = precheck_fn()  # bool 예상
+                badge = "🟡 재빌드 권장" if need else "🟢 양호"
+                st.write("• 사전점검 결과:", badge)
             except Exception as e:
-                st.error(f"두뇌 연결 처리 중 예외: {type(e).__name__}: {e}")
-# ===== [05A] END ==============================================================
+                st.write("• 사전점검 결과: ⚠ 오류",
+                         f"(`{type(e).__name__}: {e}`)")
+        else:
+            st.caption("사전점검 함수가 없어 건너뜁니다(선택 기능).")
+
+    # 액션 버튼들
+    col1, col2, col3, col4 = st.columns([1,1,1,1])
+    with col1:
+        if st.button("🧠 두뇌 연결(강제)", use_container_width=True):
+            with st.status("강제 연결 중…", state="running") as s:
+                try:
+                    if callable(force_persist):
+                        force_persist()
+                    ok = False
+                    if callable(attach_fn):
+                        _log("manual_local_attach_try")
+                        ok = bool(attach_fn())
+                    if not ok and callable(auto_restore):
+                        _log("manual_auto_restore_try")
+                        ok = bool(auto_restore())
+                    if ok:
+                        s.update(label="연결 완료", state="complete")
+                        st.success("세션에 두뇌가 연결되었습니다.")
+                        _log("manual_attach_done", ok=True)
+                    else:
+                        s.update(label="연결 실패", state="error")
+                        st.error("두뇌 연결에 실패했습니다.")
+                        _log("manual_attach_fail", ok=False)
+                except Exception as e:
+                    s.update(label="연결 중 예외", state="error")
+                    st.error(f"연결 중 오류: {type(e).__name__}: {e}")
+                    _log("manual_attach_exception", error=f"{type(e).__name__}: {e}")
+
+    with col2:
+        if st.button("⬇ 최신 백업 복원", use_container_width=True, disabled=not callable(restore_fn)):
+            with st.status("최신 백업 복원 중…", state="running") as s:
+                try:
+                    if not callable(restore_fn):
+                        s.update(label="복원 기능 없음", state="error")
+                        st.error("restore_latest_backup_to_local 함수가 없습니다.")
+                        _log("restore_latest_backup_missing")
+                    else:
+                        r = restore_fn() or {}
+                        ok = bool(r.get("ok"))
+                        _log("drive_restore_result", ok=ok)
+                        if ok and callable(attach_fn):
+                            if callable(force_persist):
+                                force_persist()
+                            _log("local_attach_try")
+                            ok = bool(attach_fn())
+                            if ok:
+                                _log("local_attach_ok")
+                        if ok:
+                            s.update(label="복원 및 연결 완료", state="complete")
+                            st.success("최신 백업 복원 완료(연결됨).")
+                        else:
+                            s.update(label="복원 실패", state="error")
+                            st.error("백업 복원에 실패했습니다.")
+                except Exception as e:
+                    s.update(label="복원 중 예외", state="error")
+                    st.error(f"복원 중 오류: {type(e).__name__}: {e}")
+                    _log("drive_restore_exception", error=f"{type(e).__name__}: {e}")
+
+    with col3:
+        if st.button("♻ 인덱스 재빌드(최소 옵션)", use_container_width=True, disabled=not callable(build_fn)):
+            with st.status("인덱스 재빌드 중…", state="running") as s:
+                try:
+                    if not callable(build_fn):
+                        s.update(label="빌더 없음", state="error")
+                        st.error("build_index_with_checkpoint 함수가 없습니다.")
+                        _log("rebuild_skip", reason="build_fn_not_callable")
+                    else:
+                        persist_dir = str(PERSIST_DIR)
+                        _log("rebuild_try", persist_dir=persist_dir)
+                        try:
+                            build_fn(
+                                update_pct=lambda *_a, **_k: None,
+                                update_msg=lambda *_a, **_k: None,
+                                gdrive_folder_id="",
+                                gcp_creds={},
+                                persist_dir=persist_dir,
+                                remote_manifest={},
+                            )
+                        except TypeError:
+                            # 시그니처가 다른 배포본 지원
+                            build_fn()
+                        _log("rebuild_ok")
+                        # 재부착
+                        ok_attach = False
+                        if callable(force_persist):
+                            force_persist()
+                        if callable(attach_fn):
+                            _log("local_attach_try")
+                            ok_attach = bool(attach_fn())
+                            if ok_attach:
+                                _log("local_attach_ok")
+                        s.update(label="재빌드 완료", state="complete")
+                        st.success("인덱스 재빌드가 완료되었습니다.")
+                except Exception as e:
+                    s.update(label="재빌드 실패", state="error")
+                    st.error(f"재빌드 실패: {type(e).__name__}: {e}")
+                    _log("rebuild_fail", error=f"{type(e).__name__}: {e}")
+
+    with col4:
+        if st.button("⬆ 백업 만들기/업로드", use_container_width=True, disabled=not callable(backup_fn)):
+            with st.status("백업 생성/업로드 중…", state="running") as s:
+                try:
+                    if not callable(backup_fn):
+                        s.update(label="백업기 없음", state="error")
+                        st.error("백업 생성 함수가 없습니다.")
+                        _log("backup_skip", reason="backup_fn_not_callable")
+                    else:
+                        r = backup_fn() or {}
+                        ok = bool(r.get("ok", False))
+                        _log("backup_result", ok=ok)
+                        if ok:
+                            s.update(label="백업 완료", state="complete")
+                            st.success("백업 생성/업로드가 완료되었습니다.")
+                        else:
+                            s.update(label="백업 실패", state="error")
+                            st.error(f"백업 실패: {json.dumps(r, ensure_ascii=False)}")
+                except Exception as e:
+                    s.update(label="백업 중 예외", state="error")
+                    st.error(f"백업 중 오류: {type(e).__name__}: {e}")
+                    _log("backup_exception", error=f"{type(e).__name__}: {e}")
+# ===== [05A] END =============================================================
+
 
 # ===== [05B] 간단 진단 패널(선택) ===========================================
 def render_tag_diagnostics():
