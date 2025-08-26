@@ -1005,16 +1005,17 @@ def _is_brain_ready() -> bool:
     return any(bool(x) for x in flags)
 # ===== [PATCH-BRAIN-HELPER] END ==============================================
 
-# ===== [06] 질문/답변 패널 — 채팅 스켈레톤(카톡형, 1차 완료 후 즉시 rerun) ======
+# ===== [06] 질문/답변 패널 — 채팅 UI( chat_input, 1차 완료 후 즉시 rerun ) =======
 def render_qa_panel():
     """
-    카톡형 채팅 UI:
-      - 대화 리스트(말풍선) : 학생=오른쪽(user), AI=왼쪽(assistant)
-      - 질문 제출 → 선두 모델 1차 답변을 'assistant' 말풍선으로 스트리밍
-      - 1차 말풍선 아래 '💬 보충 설명' 버튼 → 다른 모델로 보충 말풍선 스트리밍
-      - 자동 듀얼(관리자) ON 시 1차 완료 후 보충을 자동 예약
+    채팅형 Q/A:
+      - 대화 리스트(말풍선): 학생=오른쪽(user), AI=왼쪽(assistant)
+      - 입력칸: st.chat_input() → Enter 전송 & 자동 비우기
+      - 1차: 선두 모델(기본 Gemini) 스트리밍 후 메시지로 고정, 즉시 rerun → 보충 버튼 노출
+      - 2차: '💬 보충 설명' 클릭 시 반대 모델로 새 말풍선 스트리밍
+      - 자동 듀얼 ON 시 1차 완료 직후 2차 자동 예약
       - 출처 규칙: 근거 있으면 구체 표기, 없으면 'AI지식 활용'
-      - 디클레이머 금지
+      - 포괄적 디클레이머 금지
     """
     import os, time
     import traceback, importlib.util
@@ -1067,7 +1068,7 @@ def render_qa_panel():
         else:
             st.caption("🧠 두뇌 상태: **미연결** · 현재 응답은 **LLM-only(자료 미참조)** 입니다")
 
-        # 관리 영역(좌) · 입력 폼(우)
+        # 관리 영역(좌) · 도움말(우)
         colL, colR = st.columns([1,3], vertical_alignment="top")
 
         # ── (좌) 관리자 컨트롤 ───────────────────────────────────────────────
@@ -1130,21 +1131,8 @@ def render_qa_panel():
             # 프롬프트 미리보기 토글
             show_prompt = st.toggle("프롬프트 미리보기", value=False)
 
-        # ── (우) 입력 폼 ────────────────────────────────────────────────────
         with colR:
-            with st.form("qa_form_chat", clear_on_submit=False):
-                c1, c2 = st.columns([0.86, 0.14])
-                with c1:
-                    st.session_state.setdefault("qa_question", "")
-                    question = st.text_area(
-                        "질문을 입력하세요", key="qa_question", height=72,
-                        placeholder="예: I had my bike repaired."
-                    )
-                with c2:
-                    submitted = st.form_submit_button("검색하기", use_container_width=True)
-
-            col_reset, _ = st.columns([1,3])
-            if col_reset.button("🧹 새 질문으로 초기화", use_container_width=True):
+            if st.button("🧹 새 질문으로 초기화", use_container_width=True):
                 st.session_state["chat"] = []
                 st.session_state["_chat_next_id"] = 1
                 st.session_state["_supplement_for_msg_id"] = None
@@ -1267,7 +1255,7 @@ def render_qa_panel():
         except Exception as e:
             return False, f"{type(e).__name__}: {e}", "Gemini"
 
-    # ── 대화 렌더(과거 기록) ─────────────────────────────────────────────────
+    # ── 과거 대화 렌더 ───────────────────────────────────────────────────────
     for msg in st.session_state["chat"]:
         if msg["role"] == "user":
             with _chatbox("user", avatar="🧑"):
@@ -1277,7 +1265,6 @@ def render_qa_panel():
             with _chatbox("assistant", avatar="🤖"):
                 st.caption(provider_badge)
                 st.markdown(msg["text"])
-                # 1차(primary) 말풍선이면 보충 버튼
                 if msg.get("kind") == "primary":
                     colX, _ = st.columns([1,5])
                     btn_key = f"btn_supp_{msg['id']}"
@@ -1285,17 +1272,23 @@ def render_qa_panel():
                         st.session_state["_supplement_for_msg_id"] = msg["id"]
                         st.rerun()
 
-    # ── 제출: 유저 말풍선 추가 → 1차 스트리밍 말풍선 생성 ─────────────────────
-    if submitted and (question or "").strip():
+    # ── 입력(Enter 전송 & 자동 비우기) ────────────────────────────────────────
+    # chat_input 은 제출 시 문자열을 반환하고, 입력창은 자동으로 비워짐
+    question = st.chat_input("질문을 입력하세요")
+    submitted = bool((question or "").strip())
+
+    # ── 제출: 유저 말풍선 추가 → 1차 스트리밍 → 메시지 고정 & 즉시 rerun ──────
+    if submitted:
+        qtext = question.strip()
+
         # 1) 유저 말풍선
-        uid = _new_id()
         st.session_state["chat"].append({
-            "id": uid, "role": "user", "text": question.strip(), "ts": _ts()
+            "id": _new_id(), "role": "user", "text": qtext, "ts": _ts()
         })
 
         # 2) 프롬프트 생성
         try:
-            parts = _build_parts(st.session_state.get("qa_mode_radio","문법설명"), question, rag_ready)
+            parts = _build_parts(st.session_state.get("qa_mode_radio","문법설명"), qtext, rag_ready)
         except Exception as e:
             with _chatbox("assistant", avatar="⚠️"):
                 st.error(f"프롬프트 생성 실패: {type(e).__name__}: {e}")
@@ -1309,7 +1302,7 @@ def render_qa_panel():
                 st.code(getattr(parts, "system", ""), language="markdown")
                 st.code(getattr(parts, "user", ""), language="markdown")
 
-        # 3) 1차 답변 스트리밍 말풍선
+        # 3) 1차 답변 스트리밍
         lead = st.session_state.get("lead_provider", "Gemini")
         with _chatbox("assistant", avatar="🤖"):
             st.caption(f"_{lead} 생성 중…_")
@@ -1330,7 +1323,7 @@ def render_qa_panel():
                     ok, out, provider_used = False, "OpenAI/Gemini 사용 불가(패키지 또는 키 누락)", lead
 
             if ok and out:
-                # 말풍선 고정(최종 텍스트 저장)
+                # 1차 메시지 고정
                 aid = _new_id()
                 st.session_state["chat"].append({
                     "id": aid, "role": "assistant", "provider": provider_used,
@@ -1339,7 +1332,7 @@ def render_qa_panel():
                 # 자동 듀얼이면 보충 예약
                 if bool(st.session_state.get("dual_generate", False)):
                     st.session_state["_supplement_for_msg_id"] = aid
-                # ✅ 1차 완료 후 항상 즉시 재렌더 → 보충 버튼/자동 보충 표시
+                # 🔁 즉시 재렌더 → 보충 버튼/자동 보충 표시
                 st.rerun()
             else:
                 st.error(f"1차 생성 실패: {out or '원인 불명'}")
