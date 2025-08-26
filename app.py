@@ -43,16 +43,20 @@ def _bootstrap_env_from_secrets() -> None:
 _bootstrap_env_from_secrets()
 # ===== [00A-FIX] END =========================================================
 
-# ===== [01] APP BOOT & ENV ===================================================
-# (주의) 여기에는 'from __future__'를 다시 쓰지 않습니다.
+# ===== [01] 앱 부트 & 환경 변수 세팅 ========================================
+from __future__ import annotations   # ✅ 반드시 파일 최상단에 위치해야 함
+import os
+
+# Streamlit 서버 관련 환경변수 (성능/안정화 목적)
 os.environ["STREAMLIT_SERVER_FILE_WATCHER_TYPE"] = "none"
 os.environ["STREAMLIT_RUN_ON_SAVE"] = "false"
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 os.environ["STREAMLIT_SERVER_ENABLE_WEBSOCKET_COMPRESSION"] = "false"
+
 # ===== [01] END ===============================================================
 
+
 # ===== [02] IMPORTS & RAG 바인딩(예외 내성) ================================
-from __future__ import annotations
 from pathlib import Path
 import os, sys
 
@@ -85,14 +89,11 @@ if LocalIndexMissing is None:
         """로컬 인덱스가 없거나 읽을 수 없음을 나타내는 예외(대체 정의)."""
         ...
 
-# 4) 디버그 힌트(관리자만 보는 로그에 쓰이도록 환경 변수로 남김)
-#    - 이 값은 [03]의 _log_attach()가 기록하는 메타 정보 등과 함께 관리자 패널에서 간접 확인 가능
+# 4) 디버그 힌트(관리자만 확인 가능)
 os.environ.setdefault("MAIC_IMPORT_INDEX_BUILD_RESOLVE",
     "src" if "src" in sys.modules else ("rag" if "rag" in sys.modules else "fallback"))
+# ===== [02] END ===============================================================
 
-# (참고) PERSIST_DIR은 [03]의 _force_persist_dir()에서 강제 통일하므로
-# 여기서는 별도 경로 주입을 하지 않습니다. 모듈 내 PERSIST_DIR은 런타임에 [03]에서 덮어씌워집니다.
-# ===== [02] END ==============================================================
 
 # ===== [BOOT-WARN] set_page_config 이전 경고 누적 ============================
 _BOOT_WARNINGS: List[str] = []
