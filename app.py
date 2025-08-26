@@ -1005,16 +1005,19 @@ def _is_brain_ready() -> bool:
     return any(bool(x) for x in flags)
 # ===== [PATCH-BRAIN-HELPER] END ==============================================
 
-# ===== [06] 질문/답변 패널 — 채팅 UI(내 질문 즉시 말풍선, 카톡 정렬) ============
+# ===== [06] 질문/답변 패널 — 채팅창 UI(테두리·파스텔) + 대화 맥락 엔진 ========
 def render_qa_panel():
     """
     채팅형 Q/A:
-      - 정렬: 학생(내 메시지)=오른쪽, AI=왼쪽 (st.chat_message 사용)
+      - 정렬: 학생(내 메시지)=오른쪽, AI=왼쪽 (st.chat_message)
       - 입력: st.chat_input() → Enter 전송 & 자동 비우기
-      - 제출 직후: 내 말풍선 즉시 렌더 → 이어서 AI 말풍선 스트리밍
-      - 1차 완료 후 즉시 rerun → 보충 버튼 노출 / 자동 듀얼이면 보충 예약
+      - 채팅창 스타일: 외곽 테두리 + 말풍선 파스텔 하늘색 톤
+      - 1차: 선두 모델(기본 Gemini) 스트리밍 → 완료 즉시 rerun → 보충 버튼 노출
+      - 2차: '💬 보충 설명' 클릭 시 반대 모델로 새 말풍선 스트리밍
+      - 자동 듀얼 ON 시 1차 완료 직후 2차 자동 예약
       - 출처 규칙: 근거 있으면 구체 표기, 없으면 'AI지식 활용'
       - 포괄적 디클레이머 금지
+      - 대화 맥락 엔진: 최근 K턴 + 길이 상한, 관리자 옵션/초기화 제공
     """
     import os
     import traceback, importlib.util
@@ -1032,6 +1035,12 @@ def render_qa_panel():
                                 os.getenv("GEMINI_MODEL", "gemini-1.5-flash"))
     st.session_state.setdefault("gen_temperature", 0.3)
     st.session_state.setdefault("gen_max_tokens", 700)
+
+    # ── (C1) 대화 맥락 옵션(관리자) ─────────────────────────────────────────
+    st.session_state.setdefault("use_context", True)         # 맥락 사용 여부
+    st.session_state.setdefault("context_turns", 8)          # 최근 포함 턴 수(K)
+    st.session_state.setdefault("context_max_chars", 2500)   # 맥락 길이 상한(문자)
+    st.session_state.setdefault("_session_summary", "")      # 필요시 요약 저장(옵션)
 
     # ── 유틸 ─────────────────────────────────────────────────────────────────
     def _new_id() -> int:
@@ -1127,23 +1136,90 @@ def render_qa_panel():
                     value=int(st.session_state["gen_max_tokens"]), step=50
                 )
 
-            # 프롬프트 미리보기 토글
-            show_prompt = st.toggle("프롬프트 미리보기", value=False)
+                st.markdown("---")
+                st.caption("대화 맥락(세션 메모리)")
+                st.session_state["use_context"] = st.toggle(
+                    "맥락 사용", value=bool(st.session_state["use_context"])
+                )
+                st.session_state["context_turns"] = st.slider(
+                    "최근 포함 턴 수(K)", min_value=2, max_value=12,
+                    value=int(st.session_state["context_turns"]), step=1
+                )
+                st.session_state["context_max_chars"] = st.slider(
+                    "맥락 길이 상한(문자)", min_value=500, max_value=6000,
+                    value=int(st.session_state["context_max_chars"]), step=100
+                )
+                if st.button("🧽 맥락 초기화", use_container_width=True):
+                    st.session_state["_session_summary"] = ""
+                    st.toast("대화 맥락 요약을 초기화했습니다.", icon="🧼")
 
         with colR:
             if st.button("🧹 새 질문으로 초기화", use_container_width=True):
                 st.session_state["chat"] = []
                 st.session_state["_chat_next_id"] = 1
                 st.session_state["_supplement_for_msg_id"] = None
+                st.session_state["_session_summary"] = ""
                 st.rerun()
 
-    # ── 프롬프트 빌더(+ 출처 규칙 주입) ───────────────────────────────────────
+    # ── (U1) 채팅창 말풍선/패널 스타일(CSS) ──────────────────────────────────
+    st.markdown("""
+    <style>
+      /* 각 말풍선 컨테이너에 파스텔 하늘색 계열 톤 적용 */
+      div[data-testid="stChatMessage"]{
+        background: #EAF5FF;          /* 파스텔 하늘색 */
+        border: 1px solid #BCDFFF;    /* 은은한 테두리 */
+        border-radius: 12px;
+        padding: 6px 10px;
+        margin: 6px 0;
+      }
+      /* 말풍선 내부 마크다운 간격 줄이기 */
+      div[data-testid="stChatMessage"] .stMarkdown p{ margin-bottom: 0.4rem; }
+    </style>
+    """, unsafe_allow_html=True)
+
+    # ── 프롬프트 빌더(+ 출처 규칙/맥락 주입) ─────────────────────────────────
+    def _build_context_text(max_turns: int, max_chars: int) -> str:
+        """
+        최근 K턴을 '학생:' / 'AI(provider):'로 요약 없이 줄만 정리하여 전달.
+        (너무 길면 뒤에서 max_chars로 자름; 필요시 _session_summary 확장 가능)
+        """
+        if not st.session_state.get("use_context", True):
+            return ""
+
+        history = st.session_state.get("chat", [])
+        if not history:
+            return st.session_state.get("_session_summary", "")
+
+        # 최근 K턴 추출
+        turns = []
+        k = int(st.session_state.get("context_turns", 8))
+        # 턴=메시지 1개 기준(사용자/AI 각각 1), 최근 k개 메시지
+        for m in history[-k:]:
+            role = "학생" if m["role"] == "user" else f"AI({m.get('provider','AI')})"
+            text = (m.get("text") or "").strip().replace("\n", " ")
+            if text:
+                turns.append(f"{role}: {text}")
+        ctx = "\n".join(turns).strip()
+
+        # 요약(선택): _session_summary가 있으면 앞에 붙임
+        summary = (st.session_state.get("_session_summary") or "").strip()
+        if summary:
+            ctx = f"[요약]\n{summary}\n\n[최근]\n{ctx}" if ctx else f"[요약]\n{summary}"
+
+        # 길이 상한 적용(뒤에서 자르기)
+        max_chars = int(st.session_state.get("context_max_chars", max_chars))
+        if len(ctx) > max_chars:
+            ctx = ctx[-max_chars:]
+
+        return ctx
+
     def _build_parts(mode_label: str, q_text: str, use_rag: bool):
         from src.prompt_modes import build_prompt
         parts = build_prompt(mode_label, q_text or "", lang="ko", extras={
             "level":  st.session_state.get("student_level"),
             "tone":   "encouraging",
         })
+        # 출처/디클레이머 규칙
         rules = []
         if use_rag:
             rules.append(
@@ -1154,12 +1230,19 @@ def render_qa_panel():
             rules.append(
                 "출처 표기 규칙: 현재 업로드 자료(RAG)를 사용하지 못하므로, 답변 맨 끝에 'AI지식 활용'이라고만 표기합니다."
             )
-        rules.append(
-            "출처/근거 표기는 답변 맨 끝에 '근거/출처: '로 시작하는 한 줄로만 작성하십시오. 여러 개면 세미콜론(;)으로 구분합니다."
-        )
+        rules.append("출처/근거 표기는 답변 맨 끝에 '근거/출처: '로 시작하는 한 줄로만 작성하십시오. 여러 개면 세미콜론(;)으로 구분합니다.")
         rules.append("금지: '일반적인 지식/일반 학습자료' 등에 기반했다는 포괄적 디클레이머를 출력하지 마십시오.")
         if parts and getattr(parts, "system", None):
             parts.system = parts.system + "\n\n" + "\n".join(rules)
+
+        # (C1) 대화 맥락 주입
+        ctx = _build_context_text(
+            max_turns=int(st.session_state.get("context_turns", 8)),
+            max_chars=int(st.session_state.get("context_max_chars", 2500)),
+        )
+        if ctx:
+            parts.user = f"{parts.user}\n\n[대화 맥락]\n{ctx}"
+
         return parts
 
     # ── 라이브러리/키 상태 ───────────────────────────────────────────────────
@@ -1254,36 +1337,38 @@ def render_qa_panel():
         except Exception as e:
             return False, f"{type(e).__name__}: {e}", "Gemini"
 
-    # ── 과거 대화 렌더 ───────────────────────────────────────────────────────
-    for msg in st.session_state["chat"]:
-        if msg["role"] == "user":
-            with _chatbox("user", avatar="🧑"):
-                st.markdown(msg["text"])
-        else:
-            provider_badge = f"_{msg.get('provider','AI')}_"
-            with _chatbox("assistant", avatar="🤖"):
-                st.caption(provider_badge)
-                st.markdown(msg["text"])
-                if msg.get("kind") == "primary":
-                    colX, _ = st.columns([1,5])
-                    btn_key = f"btn_supp_{msg['id']}"
-                    if colX.button("💬 보충 설명", key=btn_key, use_container_width=True):
-                        st.session_state["_supplement_for_msg_id"] = msg["id"]
-                        st.rerun()
+    # ── 과거 대화 렌더(채팅창 테두리 안) ──────────────────────────────────────
+    with st.container(border=True):
+        # ↑ 이 컨테이너가 "채팅창" 외곽 테두리 역할을 합니다.
+        for msg in st.session_state["chat"]:
+            if msg["role"] == "user":
+                with _chatbox("user", avatar="🧑"):
+                    st.markdown(msg["text"])
+            else:
+                provider_badge = f"_{msg.get('provider','AI')}_"
+                with _chatbox("assistant", avatar="🤖"):
+                    st.caption(provider_badge)
+                    st.markdown(msg["text"])
+                    if msg.get("kind") == "primary":
+                        colX, _ = st.columns([1,5])
+                        btn_key = f"btn_supp_{msg['id']}"
+                        if colX.button("💬 보충 설명", key=btn_key, use_container_width=True):
+                            st.session_state["_supplement_for_msg_id"] = msg["id"]
+                            st.rerun()
 
     # ── 입력(Enter 전송 & 자동 비우기): 내 말풍선 즉시 렌더 ────────────────────
     question = st.chat_input("질문을 입력하세요")
     if (question or "").strip():
         qtext = question.strip()
 
-        # 1) 내(학생) 말풍선: 즉시 화면에 렌더 + 히스토리에도 저장
+        # 1) 내(학생) 말풍선: 즉시 화면에 렌더 + 히스토리 저장
         with _chatbox("user", avatar="🧑"):
             st.markdown(qtext)
         st.session_state["chat"].append({
             "id": _new_id(), "role": "user", "text": qtext, "ts": _ts()
         })
 
-        # 2) 프롬프트 생성
+        # 2) 프롬프트 생성(+ 맥락/출처 규칙)
         try:
             parts = _build_parts(st.session_state.get("qa_mode_radio","문법설명"), qtext, rag_ready)
         except Exception as e:
@@ -1293,7 +1378,7 @@ def render_qa_panel():
             return
 
         # 프리뷰(선택)
-        if show_prompt:
+        if st.toggle("프롬프트 미리보기", value=False, key="preview_toggle_inline"):
             with _chatbox("assistant", avatar="🧩"):
                 st.markdown("**프롬프트(미리보기)**")
                 st.code(getattr(parts, "system", ""), language="markdown")
@@ -1334,7 +1419,7 @@ def render_qa_panel():
             else:
                 st.error(f"1차 생성 실패: {out or '원인 불명'}")
 
-    # ── 보충 설명 실행(예약된 경우) ────────────────────────────────────────────
+    # ── 보충 설명 실행(예약된 경우; 맥락 포함) ─────────────────────────────────
     target_id = st.session_state.get("_supplement_for_msg_id")
     if target_id:
         # 타겟 1차 메시지 찾기
@@ -1343,7 +1428,7 @@ def render_qa_panel():
             if msg["id"] == target_id and msg.get("kind") == "primary":
                 primary = msg; break
         if primary:
-            # 보충 프롬프트 구성(1차 요지 포함)
+            # 보충 프롬프트 구성(1차 요지 + 최근 맥락)
             base_q = ""
             for m in reversed(st.session_state["chat"]):
                 if m["role"] == "user" and m["id"] < primary["id"]:
