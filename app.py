@@ -903,7 +903,8 @@ def render_qa_panel():
     학생 질문 → (모드) → 프롬프트 빌드 → LLM 호출(OpenAI/Gemini) → 답변 표시
     - 관리자에서 켠 모드만 라디오에 노출
     - 라이브러리/키 상태에 따라 안전하게 폴백
-    - ✅ 이번 변경: 스트리밍 출력 + 세션 캐싱 + Gemini 모델 선택(관리자)
+    - ✅ 스트리밍 출력 + 세션 캐싱 + Gemini 모델 선택(관리자)
+    - ✅ (NEW) 관리자용 생성 설정: temperature / max_tokens 슬라이더 적용
     """
     import traceback, importlib.util
 
@@ -935,18 +936,34 @@ def render_qa_panel():
         colm, colq = st.columns([1,3])
         with colm:
             sel_mode = st.radio("모드", options=labels, horizontal=True, key="qa_mode_radio")
-            # ✅ 관리자 전용: Gemini 모델 선택 라디오(Flash/Pro)
-            if (st.session_state.get("is_admin")
+
+            # ✅ 관리자 전용: Gemini 모델 선택 + 생성 설정 슬라이더
+            is_admin = (
+                st.session_state.get("is_admin")
                 or st.session_state.get("admin_mode")
                 or st.session_state.get("role") == "admin"
-                or st.session_state.get("mode") == "admin"):
+                or st.session_state.get("mode") == "admin"
+            )
+            if is_admin:
                 st.markdown("---")
                 st.caption("Gemini 모델 선택(관리자)")
                 default_model = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
                 st.session_state.setdefault("gemini_model_selection", default_model)
                 st.session_state["gemini_model_selection"] = st.radio(
                     "Gemini 모델", options=["gemini-1.5-flash", "gemini-1.5-pro"],
-                    index=0 if default_model.endswith("flash") else 1, key="gemini_model_radio"
+                    index=0 if str(default_model).endswith("flash") else 1, key="gemini_model_radio"
+                )
+
+                st.markdown("---")
+                st.caption("생성 설정(관리자)")
+                # 기본값: 안정적 톤과 과도한 장문 방지
+                st.session_state.setdefault("gen_temperature", 0.3)
+                st.session_state.setdefault("gen_max_tokens", 700)
+                st.session_state["gen_temperature"] = st.slider(
+                    "Temperature (창의성)", min_value=0.0, max_value=1.0, value=float(st.session_state["gen_temperature"]), step=0.1
+                )
+                st.session_state["gen_max_tokens"] = st.slider(
+                    "Max Tokens (응답 길이 상한)", min_value=100, max_value=2000, value=int(st.session_state["gen_max_tokens"]), step=50
                 )
         with colq:
             question = st.text_area("질문을 입력하세요", height=96, placeholder="예: I had my bike repaired.")
@@ -1008,14 +1025,27 @@ def render_qa_panel():
     # ✅ 스트리밍 출력용 슬롯
     out_box = st.empty()
 
+    # 관리자 설정값 읽기(비관리자는 기본값)
+    temp = float(st.session_state.get("gen_temperature", 0.3))
+    max_toks = int(st.session_state.get("gen_max_tokens", 700))
+    # 안전 가드
+    if not (0.0 <= temp <= 1.0): temp = 0.3
+    if not (100 <= max_toks <= 2000): max_toks = 700
+
     # LLM 호출 (OpenAI → Gemini)
     def _call_openai_stream(p):
         try:
             client = _get_openai_client()
             payload = to_openai(p)  # {"messages":[...], ...}
             model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-            # ✅ 스트리밍
-            stream = client.chat.completions.create(model=model, stream=True, **payload)
+            # ✅ 스트리밍 + 생성 설정 적용
+            stream = client.chat.completions.create(
+                model=model,
+                stream=True,
+                temperature=temp,
+                max_tokens=max_toks,
+                **payload
+            )
             buf = []
             for event in stream:
                 delta = getattr(event.choices[0], "delta", None)
@@ -1037,18 +1067,19 @@ def render_qa_panel():
             model_name = st.session_state.get("gemini_model_selection") or os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
             model = _get_gemini_model(model_name)
             payload = to_gemini(p)  # {"contents":[...], ...}
+            gen_cfg = {"temperature": temp, "max_output_tokens": max_toks}
+
             # ✅ 스트리밍
-            stream = model.generate_content(payload["contents"], stream=True)
+            stream = model.generate_content(payload["contents"], generation_config=gen_cfg, stream=True)
             buf = []
             for chunk in stream:
-                # chunk.text가 누적 제공됨
                 if getattr(chunk, "text", None):
                     buf.append(chunk.text)
                     out_box.markdown("".join(buf))
             text = "".join(buf).strip()
             if not text:
-                # 후보군이 있는 경우 첫 파트 텍스트 시도
-                resp = model.generate_content(payload["contents"])
+                # 후보군이 있는 경우 첫 파트 텍스트 시도(비스트림 백업)
+                resp = model.generate_content(payload["contents"], generation_config=gen_cfg)
                 text = getattr(resp, "text", "") or (
                     resp.candidates[0].content.parts[0].text
                     if getattr(resp, "candidates", None) else ""
@@ -1066,8 +1097,7 @@ def render_qa_panel():
 
         if ok and (out is not None):
             s.update(label=f"{provider} 응답 수신 ✅", state="complete")
-            # 스트리밍 동안 이미 out_box에 출력됨. 마지막으로 정리 표기만.
-            st.caption(f"모델: {provider}")
+            st.caption(f"모델: {provider} · temperature={temp} · max_tokens={max_toks}")
         else:
             s.update(label="LLM 호출 실패 ❌", state="error")
             st.error("LLM 호출에 실패했습니다.")
@@ -1082,17 +1112,21 @@ def render_qa_panel():
                 hints.append("Gemini를 쓰려면 `google-generativeai` 설치가 필요합니다.")
             if not have_openai_lib:
                 hints.append("OpenAI를 쓰려면 `openai` 패키지가 필요합니다.")
-            # ✅ 관리자용 추가 힌트
-            if (st.session_state.get("is_admin")
+            # 관리자용 추가 힌트
+            if (
+                st.session_state.get("is_admin")
                 or st.session_state.get("admin_mode")
                 or st.session_state.get("role") == "admin"
-                or st.session_state.get("mode") == "admin"):
+                or st.session_state.get("mode") == "admin"
+            ):
                 hints.append("Gemini 실패 시 모델을 Flash ↔ Pro로 바꿔 재시도해 보세요.")
+                hints.append("응답이 길면 max_tokens를 500~800 사이로 낮추면 속도가 빨라집니다.")
             if hints:
                 st.info(" · ".join(hints))
             st.caption(f"원인(마지막 시도): {out or '원인 불명'}")
             st.info("프롬프트 미리보기 토글을 켜고 내용을 확인해 주세요.")
 # ===== [06] END ==============================================================
+
 
 # ===== [07] MAIN — 오케스트레이터 ============================================
 def _render_title_with_status():
