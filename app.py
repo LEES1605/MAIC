@@ -1049,9 +1049,16 @@ def render_qa_panel():
     with st.container(border=True):
         st.subheader("질문/답변")
 
-        # 두뇌 상태 배지
-        rag_ready = (globals().get("_is_attached_session")() if "_is_attached_session" in globals()
-                     else _is_brain_ready())
+        # 두뇌 상태 배지(안전 호출)
+        rag_ready = False
+        try:
+            if "_is_attached_session" in globals() and callable(globals()["_is_attached_session"]):
+                rag_ready = globals()["_is_attached_session"]()
+            elif "_is_brain_ready" in globals() and callable(globals()["_is_brain_ready"]):
+                rag_ready = globals()["_is_brain_ready"]()
+        except Exception:
+            rag_ready = False
+
         if rag_ready:
             st.caption("🧠 두뇌 상태: **연결됨** · 업로드 자료(RAG) 사용 가능")
         else:
@@ -1134,7 +1141,7 @@ def render_qa_panel():
                           "_secondary_requested","_qa_last_question",
                           "_qa_provider_used"]:
                     st.session_state.pop(k, None)
-                st.rerun()  # ← 변경: experimental_rerun → rerun
+                st.rerun()
 
     # 1) 프롬프트 빌드 도우미(+ 규칙 주입)
     def _build_parts(mode_label: str, q_text: str, use_rag: bool):
@@ -1204,12 +1211,23 @@ def render_qa_panel():
         return to_gemini(parts)
 
     def _call_openai_stream(parts, out_slot):
+        """OpenAI 스트리밍 호출 - payload 중복 키 제거(sanitize) 후 호출"""
         try:
             client = _get_openai_client()
-            payload = _to_openai_payload(parts)  # {"messages":[...], ...}
+            raw_payload = _to_openai_payload(parts) or {}
+            # ✅ 중복될 수 있는 키 제거(우리가 직접 지정할 것들)
+            payload = dict(raw_payload)  # shallow copy
+            for k in ("temperature", "max_tokens", "model", "stream"):
+                if k in payload:
+                    payload.pop(k, None)
+
             model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
             stream = client.chat.completions.create(
-                model=model, stream=True, temperature=temp, max_tokens=max_toks, **payload
+                model=model,
+                stream=True,
+                temperature=temp,
+                max_tokens=max_toks,
+                **payload  # messages/tools/tool_choice 등만 남김
             )
             buf = []
             for event in stream:
@@ -1332,7 +1350,7 @@ def render_qa_panel():
             if not auto_dual:
                 if st.button(f"💬 {other}로 보충 설명 보기", use_container_width=True, key="btn_secondary"):
                     st.session_state["_secondary_requested"] = True
-                    st.rerun()  # ← 변경: experimental_rerun → rerun
+                    st.rerun()
         with colS2:
             if auto_dual:
                 st.info("관리자 설정: 두 모델 모두 자동 생성 모드입니다.")
