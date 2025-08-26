@@ -399,56 +399,28 @@ render_role_caption()
 st.divider()
 # ===== [04A] END ==============================================================
 
-# ===== [04B] ADMIN SETTINGS — 질문 모드 표시 여부 ============================
-def render_admin_settings():
-    # 관리자만 보이도록 가드
-    if not (st.session_state.get("is_admin")
-            or st.session_state.get("admin_mode")
-            or st.session_state.get("role") == "admin"
-            or st.session_state.get("mode") == "admin"):
+# ===== [04B] 관리자 전역 토글 바 =============================================
+def render_admin_toolbar():
+    """관리자용 글로벌 도구 막대: 모든 패널 일괄 펼치기/접기 토글 제공"""
+    # 관리자 가드
+    if not (
+        st.session_state.get("is_admin")
+        or st.session_state.get("admin_mode")
+        or st.session_state.get("role") == "admin"
+        or st.session_state.get("mode") == "admin"
+    ):
         return
 
-    with st.container(border=True):
-        st.markdown("**관리자 설정**")
-        st.caption("질문 모드 표시 여부를 선택하세요.")
+    st.session_state.setdefault("_admin_expand_all", True)  # 기본: 펼침
+    st.markdown("### 관리자 도구")
+    st.session_state["_admin_expand_all"] = st.toggle(
+        "📂 관리자 패널 모두 펼치기", value=bool(st.session_state["_admin_expand_all"]),
+        help="켜면 아래 관리자용 패널들이 모두 펼쳐져 보입니다. 끄면 모두 접힙니다.",
+        key="_admin_expand_all"
+    )
 
-        # 기본값 및 기존 키 호환
-        defaults = {"문법설명": True, "문장구조분석": True, "지문분석": True}
-        vis_list = st.session_state.get("qa_modes_enabled")
-        if not isinstance(vis_list, list):
-            vis_list = []
-            if st.session_state.get("show_mode_grammar",  defaults["문법설명"]):    vis_list.append("문법설명")
-            if st.session_state.get("show_mode_structure",defaults["문장구조분석"]):  vis_list.append("문장구조분석")
-            if st.session_state.get("show_mode_passage",  defaults["지문분석"]):    vis_list.append("지문분석")
-            if not vis_list:
-                vis_list = [k for k, v in defaults.items() if v]
-        enabled = set(vis_list)
-
-        # 가로 3열 배치
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            opt_grammar = st.checkbox("문법설명", value=("문법설명" in enabled), key="cfg_show_mode_grammar")
-        with col2:
-            opt_structure = st.checkbox("문장구조분석", value=("문장구조분석" in enabled), key="cfg_show_mode_structure")
-        with col3:
-            opt_passage = st.checkbox("지문분석", value=("지문분석" in enabled), key="cfg_show_mode_passage")
-
-        # 선택 결과 집계
-        selected = []
-        if opt_grammar:   selected.append("문법설명")
-        if opt_structure: selected.append("문장구조분석")
-        if opt_passage:   selected.append("지문분석")
-
-        # 세션 상태 갱신(신/구 키 모두)
-        st.session_state["qa_modes_enabled"]    = selected
-        st.session_state["show_mode_grammar"]   = opt_grammar
-        st.session_state["show_mode_structure"] = opt_structure
-        st.session_state["show_mode_passage"]   = opt_passage
-
-        st.caption("표시 중: " + (" · ".join(selected) if selected else "없음"))
-
-def render_admin_settings_panel(*args, **kwargs):
-    return render_admin_settings(*args, **kwargs)
+# 전역 토글 바 렌더(관리자에게만 보임)
+render_admin_toolbar()
 # ===== [04B] END ==============================================================
 
 # ===== [04C] 프롬프트 소스/드라이브 진단 패널(고급) ==========================
@@ -476,7 +448,10 @@ def _render_admin_diagnostics_section():
             or st.session_state.get("mode") == "admin"):
         return
 
-    with st.expander("🛠 진단 · 프롬프트 소스 상태(고급)", expanded=True):
+    # 🔽 전역 토글 상태 반영
+    _expand_all = bool(st.session_state.get("_admin_expand_all", True))
+
+    with st.expander("🛠 진단 · 프롬프트 소스 상태(고급)", expanded=_expand_all):
         # 0) 모듈 로드
         try:
             pm = importlib.import_module("src.prompt_modes")
@@ -567,7 +542,7 @@ def _render_admin_diagnostics_section():
                         if hasattr(pm, "_pull_remote_overrides_if_newer"):
                             pulled = pm._pull_remote_overrides_if_newer()
                         else:
-                            # 5-3) 폴백: 로컬 로드(로드하며 내부적으로 드라이브가 갱신될 수도 있음)
+                            # 5-3) 폴백: 로컬 로드
                             _ = pm.load_overrides()
                             pulled = "loaded"
                         # 5-4) 메타 기록
@@ -609,7 +584,7 @@ def _render_admin_diagnostics_section():
 
         st.markdown("---")
 
-        # 6) Δ(차이) 요약: 이전 스냅샷 vs 현재 로드
+        # 6) Δ(차이) 요약
         st.caption("Δ(차이) 요약: 이전 스냅샷 ↔ 현재 로드된 overrides 비교")
         st.session_state.setdefault("prompts_last_loaded", None)
 
@@ -624,11 +599,9 @@ def _render_admin_diagnostics_section():
             _log("prompts_yaml_load_fail", error=load_err)
 
         if curr is not None:
-            # 이전 스냅샷 없으면 현재를 저장만
             if prev is None:
                 st.session_state["prompts_last_loaded"] = curr
 
-            # modes 키 목록 비교
             modes_prev = set(((prev or {}).get("modes") or {}).keys())
             modes_curr = set(((curr or {}).get("modes") or {}).keys())
             added = sorted(list(modes_curr - modes_prev))
@@ -641,7 +614,6 @@ def _render_admin_diagnostics_section():
             with col2:
                 st.write("➖ 제거된 모드:", ", ".join(removed) if removed else "— 없음")
 
-            # 공통 모드의 주요 키 변경 감지(얕은 비교)
             changed_summary = []
             for m in common:
                 a = (prev or {}).get("modes", {}).get(m, {})
@@ -656,10 +628,10 @@ def _render_admin_diagnostics_section():
                             va, vb = str(a.get(k)), str(b.get(k))
                         changes.append(f"{k}: {va} → {vb}")
                 if changes:
-                    changed_summary.append((m, changes[:8]))  # 너무 길면 상위 8개만
+                    changed_summary.append((m, changes[:8]))
 
             if changed_summary:
-                with st.expander("📝 변경된 모드 상세 (상위 일부)", expanded=False):
+                with st.expander("📝 변경된 모드 상세 (상위 일부)", expanded=_expand_all):
                     for m, chs in changed_summary:
                         st.markdown(f"- **{m}**")
                         for line in chs:
@@ -667,13 +639,11 @@ def _render_admin_diagnostics_section():
             else:
                 st.caption("모드 구성 값 변경 없음(얕은 비교 기준).")
 
-            # 스냅샷 업데이트 버튼
             if st.button("📌 현재 구성을 기준 스냅샷으로 저장", use_container_width=True, key="btn_save_prompts_snapshot"):
                 st.session_state["prompts_last_loaded"] = curr
                 st.success("현재 로드된 overrides를 스냅샷으로 저장했습니다.")
                 _log("prompts_snapshot_saved")
 
-        # 7) 포함된 모드 목록(현재)
         try:
             modes = list(((curr or {}).get("modes") or {}).keys())
         except Exception:
@@ -682,6 +652,7 @@ def _render_admin_diagnostics_section():
 
 _render_admin_diagnostics_section()
 # ===== [04C] END ==============================================================
+
 
 # ===== [05A] 자료 최적화/백업 패널 ==========================================
 def render_brain_prep_main():
