@@ -58,29 +58,57 @@ os.environ["STREAMLIT_SERVER_ENABLE_WEBSOCKET_COMPRESSION"] = "false"
 # ===== [02] IMPORTS & RAG 바인딩(예외 내성) ================================
 from pathlib import Path
 import os, sys
+from typing import List
 
 # 전역 바인딩 기본값(안전장치)
 get_or_build_index = None
 LocalIndexMissing = None
 
-# 1) 우선 경로: src.rag.index_build
-try:
-    from src.rag.index_build import get_or_build_index as _gobi1  # type: ignore
-    from src.rag.index_build import LocalIndexMissing as _lim1     # type: ignore
-    get_or_build_index = _gobi1
-    LocalIndexMissing  = _lim1
-except Exception:
-    pass
+# 인덱스 빌드/프리체크 관련 함수들(전역으로 항상 존재하도록: 없으면 None)
+precheck_build_needed = None
+quick_precheck = None
+build_index_with_checkpoint = None
+restore_latest_backup_to_local = None
+_make_and_upload_backup_zip = None
 
-# 2) 대체 경로: rag.index_build (패키지 루트가 다른 배포 환경용)
-if get_or_build_index is None or LocalIndexMissing is None:
+# 임포트 오류 모음(BOOT-WARN에서 표시)
+_import_errors: List[str] = []
+
+def _try_bind_from(modname: str) -> bool:
+    """modname에서 필요한 심볼들을 가능한 만큼 바인딩. 하나라도 성공하면 True."""
+    global get_or_build_index, LocalIndexMissing
+    global precheck_build_needed, quick_precheck, build_index_with_checkpoint
+    global restore_latest_backup_to_local, _make_and_upload_backup_zip
     try:
-        from rag.index_build import get_or_build_index as _gobi2    # type: ignore
-        from rag.index_build import LocalIndexMissing as _lim2       # type: ignore
-        get_or_build_index = _gobi2
-        LocalIndexMissing  = _lim2
-    except Exception:
-        pass
+        m = __import__(modname, fromlist=["*"])
+    except Exception as e:
+        _import_errors.append(f"{modname}: {type(e).__name__}: {e}")
+        return False
+    try:
+        if getattr(m, "get_or_build_index", None):
+            get_or_build_index = m.get_or_build_index
+        if getattr(m, "LocalIndexMissing", None):
+            LocalIndexMissing = m.LocalIndexMissing
+        if getattr(m, "precheck_build_needed", None):
+            precheck_build_needed = m.precheck_build_needed
+        if getattr(m, "quick_precheck", None):
+            quick_precheck = m.quick_precheck
+        if getattr(m, "build_index_with_checkpoint", None):
+            build_index_with_checkpoint = m.build_index_with_checkpoint
+        if getattr(m, "restore_latest_backup_to_local", None):
+            restore_latest_backup_to_local = m.restore_latest_backup_to_local
+        if getattr(m, "_make_and_upload_backup_zip", None):
+            _make_and_upload_backup_zip = m._make_and_upload_backup_zip
+        # PERSIST_DIR 등 경로 상수는 [03]의 _force_persist_dir()이 런타임에 강제 통일
+        return True
+    except Exception as e:
+        _import_errors.append(f"{modname} bind: {type(e).__name__}: {e}")
+        return False
+
+# 1) 우선 경로: src.rag.index_build → 실패 시 2) 대체 경로: rag.index_build
+resolved = _try_bind_from("src.rag.index_build")
+if not resolved:
+    _try_bind_from("rag.index_build")
 
 # 3) 최종 안전망: LocalIndexMissing이 없으면 대체 예외 정의
 if LocalIndexMissing is None:
@@ -89,24 +117,42 @@ if LocalIndexMissing is None:
         ...
 
 # 4) 디버그 힌트(관리자만 확인 가능)
-os.environ.setdefault("MAIC_IMPORT_INDEX_BUILD_RESOLVE",
-    "src" if "src" in sys.modules else ("rag" if "rag" in sys.modules else "fallback"))
+#    - 어떤 경로가 실제로 로드되었는지 유추(단순 표기)
+os.environ.setdefault(
+    "MAIC_IMPORT_INDEX_BUILD_RESOLVE",
+    "src" if "src.rag.index_build" in _import_errors and "rag.index_build" not in _import_errors else
+    ("rag" if "rag.index_build" in _import_errors else "unknown")
+)
 # ===== [02] END ===============================================================
 
-
 # ===== [BOOT-WARN] set_page_config 이전 경고 누적 ============================
+from typing import List
+
 _BOOT_WARNINGS: List[str] = []
-if precheck_build_needed is None or build_index_with_checkpoint is None:
-    _BOOT_WARNINGS.append(
-        "사전점검/빌더 임포트에 실패했습니다.\n\n"
-        + "\n".join(f"• {msg}" for msg in _import_errors)
-        + "\n\n확인하세요:\n"
-        + "1) 파일 존재: src/rag/index_build.py\n"
-        + "2) 패키지 마커: src/__init__.py, src/rag/__init__.py\n"
-        + "3) 함수 이름: precheck_build_needed **또는** quick_precheck 중 하나 필요\n"
-        + "4) import 철자: index_build(언더스코어), index.build(점) 아님"
+
+# precheck는 precheck_build_needed 또는 quick_precheck 둘 중 하나만 있어도 정상
+_no_precheck = (precheck_build_needed is None and quick_precheck is None)
+_no_builder  = (build_index_with_checkpoint is None)
+
+if _no_precheck or _no_builder:
+    msgs = []
+    if _no_precheck:
+        msgs.append("• 사전점검 함수(precheck_build_needed 또는 quick_precheck)를 찾지 못했습니다.")
+    if _no_builder:
+        msgs.append("• 빌더 함수(build_index_with_checkpoint)를 찾지 못했습니다.")
+    import_errs = globals().get("_import_errors") or []
+    if import_errs:
+        msgs.append("\n[임포트 오류]\n" + "\n".join(f"  - {m}" for m in import_errs))
+    guide = (
+        "\n확인하세요:\n"
+        "1) 파일 존재: src/rag/index_build.py\n"
+        "2) 패키지 마커: src/__init__.py, src/rag/__init__.py\n"
+        "3) 함수 이름: precheck_build_needed **또는** quick_precheck 중 하나 필요\n"
+        "4) import 철자: index_build(언더스코어), index.build(점) 아님"
     )
+    _BOOT_WARNINGS.append("사전점검/빌더 임포트에 실패했습니다.\n" + "\n".join(msgs) + guide)
 # ===== [BOOT-WARN] END =======================================================
+
 
 # ===== [03] SESSION & HELPERS ===============================================
 st.set_page_config(page_title="AI Teacher (Clean)", layout="wide")
