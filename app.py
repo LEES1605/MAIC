@@ -411,17 +411,22 @@ def render_admin_toolbar():
     ):
         return
 
-    st.session_state.setdefault("_admin_expand_all", True)  # 기본: 펼침
+    # ✅ 위젯 키는 위젯이 관리하도록: 최초 1회만 초기값 세팅(직접 대입 최소화)
+    if "_admin_expand_all" not in st.session_state:
+        st.session_state["_admin_expand_all"] = True  # 기본: 펼침
+
     st.markdown("### 관리자 도구")
-    st.session_state["_admin_expand_all"] = st.toggle(
-        "📂 관리자 패널 모두 펼치기", value=bool(st.session_state["_admin_expand_all"]),
-        help="켜면 아래 관리자용 패널들이 모두 펼쳐져 보입니다. 끄면 모두 접힙니다.",
-        key="_admin_expand_all"
+    # ✅ 반환값을 세션에 다시 대입하지 않음 / value 파라미터도 생략
+    st.toggle(
+        "📂 관리자 패널 모두 펼치기",
+        key="_admin_expand_all",
+        help="켜면 아래 관리자용 패널들이 모두 펼쳐져 보입니다. 끄면 모두 접힙니다."
     )
 
 # 전역 토글 바 렌더(관리자에게만 보임)
 render_admin_toolbar()
 # ===== [04B] END ==============================================================
+
 
 # ===== [04C] 프롬프트 소스/드라이브 진단 패널(고급) ==========================
 def _render_admin_diagnostics_section():
