@@ -1,428 +1,459 @@
-# ============================================================
-# ============ [PM-01] PROMPT MODES MODULE (UPDATED) =========
-# ============================================================
+# ===== [PM] FILE: src/prompt_modes.py ========================================
+"""
+Google Drive → Local 캐시 기반 프롬프트 로더/엔진
+- Drive `prompts` 폴더 내 `prompts.yaml`(또는 최신 .yaml)을 찾아 로컬에 캐시
+- YAML(persona/guidelines/modes/…)을 읽어 모드별 system/user 프롬프트 조립
+- 후속질문(followup)/보충(supplement) 템플릿 지원
+- 안전치환: {question},{context},{today},{mode},{lang},{primary_answer} '정확 토큰'만 교체
+- OpenAI / Gemini 페이로드 변환 유틸 제공
+
+주의:
+- 교육 예시용 중괄호 { } 가 많으므로 str.format* 금지. 안전치환 사용.
+- Drive 실패/로컬 부재 시 내장 기본 YAML로 폴백(서비스 다운 방지).
+"""
+
+# ===== [PM-00] Imports & Globals ============================================
 from __future__ import annotations
-from dataclasses import dataclass, asdict
-from typing import Dict, Any, Optional, Tuple
+import os
+import time
 from pathlib import Path
-from datetime import datetime, timezone
-import os, json, io
+from typing import Optional, Dict, Any, TypedDict, List, cast
 
-# ---- YAML 지원(없으면 JSON 폴백) --------------------------------------------
-try:
-    import yaml  # type: ignore
-except Exception:  # PyYAML이 없으면 내부 json으로 폴백
-    yaml = None  # noqa: N816
+_OVR_CACHE: Optional[dict] = None  # YAML 메모리 캐시
+_REMOTE_PULL_ONCE_FLAG = {"done": False}  # [04C] 패널 호환용 플래그
 
-# ============================================================
-# 경로/환경설정
-# ============================================================
-def _expand_user_path(p: str) -> Path:
-    return Path(os.path.expanduser(p)).resolve()
+# ----- Optional imports (지연) ------------------------------------------------
+def _maybe_import_streamlit():
+    try:
+        import streamlit as st
+        return st
+    except Exception:
+        return None
 
+def _maybe_import_yaml():
+    try:
+        import yaml  # type: ignore
+        return yaml
+    except Exception:
+        return None
+
+# ===== [PM-01] Paths & Drive helpers ========================================
 def get_overrides_path() -> Path:
     """
-    로컬 prompts.yaml 경로를 반환.
-    - 우선순위: 환경변수 MAIC_PROMPTS_PATH > ~/.maic/prompts.yaml
+    로컬 캐시 경로(기존 규칙 유지):
+      - ENV MAIC_PROMPTS_PATH 가 있으면 그 파일 경로 사용
+      - 없으면 ~/.maic/prompts.yaml
     """
     env_path = os.getenv("MAIC_PROMPTS_PATH")
     if env_path:
-        p = _expand_user_path(env_path)
+        p = Path(env_path).expanduser()
         p.parent.mkdir(parents=True, exist_ok=True)
         return p
-    base = _expand_user_path("~/.maic")
-    base.mkdir(parents=True, exist_ok=True)
-    return base / "prompts.yaml"
+    p = Path.home().joinpath(".maic", "prompts.yaml")
+    p.parent.mkdir(parents=True, exist_ok=True)
+    return p
 
-# ============================================================
-# 안전한 format_map
-# ============================================================
-class _SafeDict(dict):
-    def __missing__(self, key):
-        return "{" + key + "}"
-
-def _fmt(template: str, values: Dict[str, Any]) -> str:
+def _get_drive_folder_id() -> Optional[str]:
+    """Drive 폴더 ID (ENV → st.secrets 순)"""
+    fid = os.getenv("MAIC_PROMPTS_DRIVE_FOLDER_ID")
+    if fid:
+        return str(fid)
+    st = _maybe_import_streamlit()
     try:
-        return str(template).format_map(_SafeDict(values))
+        if st and "MAIC_PROMPTS_DRIVE_FOLDER_ID" in st.secrets:
+            return str(st.secrets["MAIC_PROMPTS_DRIVE_FOLDER_ID"])
     except Exception:
-        return str(template)
+        pass
+    return None
 
-# ============================================================
-# 데이터 구조
-# ============================================================
-@dataclass
-class PromptParts:
-    system: str
-    user: str
-    tools: Optional[list] = None
-    provider_kwargs: Optional[Dict[str, Any]] = None
-    meta: Optional[Dict[str, Any]] = None
-
-    def to_dict(self) -> Dict[str, Any]:
-        return asdict(self)
-
-@dataclass
-class ModeSpec:
-    name: str
-    version: str
-    system_template: str
-    user_template: str
-    provider_kwargs: Dict[str, Any]
-
-# ============================================================
-# 기본 템플릿
-# ============================================================
-GLOBAL_DEFAULT = ModeSpec(
-    name="GLOBAL",
-    version="1.0.0",
-    system_template=(
-        "너는 학생을 돕는 영어 코치야. 답변은 {lang}로 친절하고 간결하게.\n"
-        "사실 확인이 필요한 내용은 조심스럽게 다루고, 모르면 솔직히 모른다고 말해.\n"
-        "불필요한 장황함은 피하고, 예시는 짧고 명확하게."
-    ),
-    user_template="",
-    provider_kwargs={"temperature": 0.2, "max_tokens": 1024},
-)
-
-MODE_DEFAULTS: Dict[str, ModeSpec] = {
-    "문법설명": ModeSpec(
-        name="문법설명", version="1.0.0",
-        system_template=(
-            "역할: 영문법 튜터. 규칙→예외 순서로 설명하고, 마지막에 간단 체크리스트 제공.\n"
-            "설명은 국문, 예문은 영어 {examples}."
-        ),
-        user_template=(
-            "질문(문장/규칙): {question}\n"
-            "요구사항:\n"
-            "1) 핵심 규칙 3줄 요약\n"
-            "2) 자주 틀리는 예외 2가지\n"
-            "3) 예문 3개(영어/해석)\n"
-            "4) 한 줄 마무리 팁\n"
-        ),
-        provider_kwargs={"temperature": 0.1},
-    ),
-    "문장구조분석": ModeSpec(
-        name="문장구조분석", version="1.0.0",
-        system_template=(
-            "역할: 문장 구조 분석가.\n"
-            "품사 태깅, 구/절 분해, 의존관계 핵심만. 과잉 용어 사용 금지."
-        ),
-        user_template=(
-            "분석 대상 문장: {question}\n"
-            "출력 형식:\n"
-            "- 품사 태깅(핵심 단어 위주)\n"
-            "- 구/절 구조 요약(2~4줄)\n"
-            "- 핵심 골격: [S: … | V: … | O: … | C: … | M: …]\n"
-            "- 오해하기 쉬운 포인트 1개"
-        ),
-        provider_kwargs={"temperature": 0.1},
-    ),
-    "지문분석": ModeSpec(
-        name="지문분석", version="1.0.0",
-        system_template=(
-            "역할: 리딩 코치. 요지와 근거 중심으로 설명하되, 불필요한 요약은 지양."
-        ),
-        user_template=(
-            "지문(또는 질문): {question}\n"
-            "원하는 출력:\n"
-            "1) 한 줄 요지\n"
-            "2) 핵심 논지/전개(3포인트)\n"
-            "3) 근거 문장 번호 또는 단서(가능하면)\n"
-            "4) 오답유형 주의 1가지"
-        ),
-        provider_kwargs={"temperature": 0.2},
-    ),
-}
-MODE_ALIASES = {
-    "Grammar": "문법설명",
-    "Sentence": "문장구조분석",
-    "Passage": "지문분석",
-    "문장분석": "문장구조분석",
-}
-
-def _normalize_mode(mode: str) -> str:
-    m = str(mode or "").strip()
-    return MODE_ALIASES.get(m, m) if m else "문법설명"
-
-# ============================================================
-# 로컬 오버라이드 I/O
-# ============================================================
-def _deep_merge(base: Dict[str, Any], extra: Dict[str, Any]) -> Dict[str, Any]:
-    out = dict(base)
-    for k, v in (extra or {}).items():
-        if isinstance(v, dict) and isinstance(out.get(k), dict):
-            out[k] = _deep_merge(out[k], v)
-        else:
-            out[k] = v
-    return out
-
-def _spec_to_dict(spec: ModeSpec) -> Dict[str, Any]:
-    return {
-        "name": spec.name,
-        "version": spec.version,
-        "system": spec.system_template,
-        "user": spec.user_template,
-        "provider_kwargs": dict(spec.provider_kwargs or {}),
-    }
-
-def _build_defaults_dict() -> Dict[str, Any]:
-    return {
-        "version": 1,
-        "global": {
-            "system": GLOBAL_DEFAULT.system_template,
-            "user": GLOBAL_DEFAULT.user_template,
-            "provider_kwargs": dict(GLOBAL_DEFAULT.provider_kwargs),
-        },
-        "modes": {k: _spec_to_dict(v) for k, v in MODE_DEFAULTS.items()},
-    }
-
-def save_overrides(data: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
-    try:
-        p = get_overrides_path()
-        if yaml:
-            with p.open("w", encoding="utf-8") as f:
-                yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False)
-        else:
-            with p.open("w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-        return True, None
-    except Exception as e:
-        return False, f"{type(e).__name__}: {e}"
-
-def reset_overrides() -> Tuple[bool, Optional[str]]:
-    try:
-        p = get_overrides_path()
-        if p.exists():
-            p.unlink()
-        return True, None
-    except Exception as e:
-        return False, f"{type(e).__name__}: {e}"
-
-# ============================================================
-# Google Drive 연동(옵션) — 최신 prompts.yaml 자동 pull
-# ============================================================
-_REMOTE_PULL_ONCE_FLAG = {"done": False}
-
-def _drive_service_or_none():
+def _get_drive_service():
     """
-    src.rag.index_build._drive_service() 가 있으면 재사용.
-    없거나 라이브러리 미설치면 None.
+    src.rag.index_build 에 정의된 _drive_service() 재사용.
+    (없으면 None)
     """
     try:
         import importlib
-        m = importlib.import_module("src.rag.index_build")
-        return getattr(m, "_drive_service", None)() if hasattr(m, "_drive_service") else None
+        im = importlib.import_module("src.rag.index_build")
+        if hasattr(im, "_drive_service") and callable(getattr(im, "_drive_service")):
+            return im._drive_service()
     except Exception:
         return None
-
-def _find_drive_prompts_file(svc, folder_id: Optional[str]) -> Optional[Dict[str, Any]]:
-    """
-    드라이브에서 prompts.yaml을 최신 수정순으로 찾는다.
-    folder_id가 있으면 그 폴더 내부에서만 검색.
-    """
-    try:
-        files = svc.files()
-        params = {
-            "supportsAllDrives": True,
-            "includeItemsFromAllDrives": True,
-            "fields": "files(id, name, modifiedTime, parents, mimeType)",
-            "pageSize": 10,
-            "orderBy": "modifiedTime desc",
-        }
-        if folder_id:
-            q = f"'{folder_id}' in parents and name = 'prompts.yaml' and trashed = false"
-        else:
-            q = "name = 'prompts.yaml' and trashed = false"
-        params["q"] = q
-        resp = files.list(**params).execute() or {}
-        arr = resp.get("files") or []
-        return arr[0] if arr else None
-    except Exception:
-        return None
-
-def _download_file_bytes(svc, file_id: str) -> Optional[bytes]:
-    try:
-        # 간단한 방식: get_media().execute() 로 바이트 획득
-        req = svc.files().get_media(fileId=file_id, supportsAllDrives=True)
-        return req.execute()
-    except Exception:
-        return None
-
-def _utc_from_rfc3339(s: str) -> datetime:
-    # '2025-08-25T09:10:11.000Z' → datetime UTC
-    dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
-    return dt.astimezone(timezone.utc)
+    return None
 
 def _pull_remote_overrides_if_newer() -> Optional[str]:
     """
-    드라이브의 prompts.yaml 이 로컬보다 최신이면 다운로드하여 저장.
-    성공 시 'pulled', 조건 불충족/실패 시 None.
+    Drive prompts 폴더에서 .yaml 파일을 찾아 로컬 캐시를 갱신.
+    - 우선순위: 이름이 정확히 'prompts.yaml' → 없으면 가장 최근 수정된 .yaml
+    - 로컬이 없거나, 원격 modifiedTime 이 더 최신이면 다운로드
+    반환: "downloaded" | "nochange" | None(실패/연결없음)
     """
-    svc = _drive_service_or_none()
+    folder_id = _get_drive_folder_id()
+    if not folder_id:
+        return None
+    svc = _get_drive_service()
     if not svc:
         return None
 
-    folder_id = os.getenv("MAIC_PROMPTS_DRIVE_FOLDER_ID") or None
-    meta = _find_drive_prompts_file(svc, folder_id)
-    if not meta:
-        return None  # 드라이브에 파일 없음
-
-    # Drive modifiedTime
-    drive_mtime = _utc_from_rfc3339(meta.get("modifiedTime"))
-
-    # 로컬 mtime
-    local_path = get_overrides_path()
-    local_exists = local_path.exists()
-    local_mtime = datetime.fromtimestamp(0, tz=timezone.utc)
-    if local_exists:
-        try:
-            local_mtime = datetime.fromtimestamp(local_path.stat().st_mtime, tz=timezone.utc)
-        except Exception:
-            pass
-
-    if (not local_exists) or (drive_mtime > local_mtime):
-        data = _download_file_bytes(svc, meta["id"])
-        if not data:
+    try:
+        q = f"'{folder_id}' in parents and trashed=false"
+        res = svc.files().list(q=q, fields="files(id,name,mimeType,modifiedTime)").execute()
+        files = res.get("files", []) or []
+        cands = [f for f in files if (f.get("name","").lower().endswith(".yaml"))]
+        if not cands:
             return None
-        # 저장
-        local_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(local_path, "wb") as f:
-            f.write(data)
+
+        target = None
+        for f in cands:
+            if f.get("name","").lower() == "prompts.yaml":
+                target = f; break
+        if not target:
+            # modifiedTime 기준 최신
+            target = sorted(cands, key=lambda x: x.get("modifiedTime",""))[-1]
+
+        lp = get_overrides_path()
+        remote_mtime = target.get("modifiedTime") or ""
+        local_mtime = ""
+        if lp.exists():
+            try:
+                local_mtime = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(lp.stat().st_mtime))
+            except Exception:
+                local_mtime = ""
+
+        need = (not lp.exists()) or (remote_mtime and remote_mtime > local_mtime)
+        if not need:
+            return "nochange"
+
+        # 다운로드
+        dl = svc.files().get_media(fileId=target["id"]).execute()
+        data = dl if isinstance(dl, (bytes, bytearray)) else (dl.read() if hasattr(dl, "read") else bytes(dl))
+        lp.write_bytes(data)
+        _REMOTE_PULL_ONCE_FLAG["done"] = True
+        return "downloaded"
+    except Exception:
+        return None
+
+def pull_remote_overrides_once() -> Optional[str]:
+    """
+    외부에서 호출해 원격 갱신을 1회 시도하고 캐시 무효화.
+    [04C]에서 사용.
+    """
+    global _OVR_CACHE
+    result = _pull_remote_overrides_if_newer()
+    _OVR_CACHE = None
+    return result
+
+# ===== [PM-02] Built-in fallback YAML =======================================
+_DEFAULT_OVERRIDES_YAML = """\
+version: 1
+modes:
+  문장구조분석:
+    system: |
+      당신은 영문법(통사론·의미론) 전문가 AI로서, 현대 영국·미국 영어 모두에 정통합니다.
+      당신의 분석은 최신 코퍼스 언어학과 실제 사용 용례에 근거해야 하며, 추측은 금지합니다.
+      EFL 학습자를 배려해 한국어로 간결·정확하게 설명하되, 예시는 자연스러운 영어를 사용합니다.
+      모호함이 있을 땐 임의 판단하지 말고 먼저 사용자에게 필요한 추가 정보를 물어봅니다.
+      대화 중 확정된 지침은 이후 답변에 일관되게 적용합니다.
+      관용구/연어/굳어진 표현으로 판단되면 그 사실을 가장 먼저 밝히고 설명을 시작합니다.
+      답변의 신뢰성에 스스로 엄격하세요. 확신이 부족하거나 잠재적 부정확 가능성이 있다고 판단되면 그 사실을 명시합니다.
+
+    user: |
+      [분석 목적]
+      - 입력 문장을 엄격한 "괄호 규칙"에 따라 구조적으로 분석하고,
+        핵심 골격과 어휘·표현, 자연스러운 번역, 근거를 단계별로 제시합니다.
+      - 언어: {lang} / 모드: {mode} / 날짜: {today}
+
+      [입력 문장]
+      {question}
+
+      [데이터·근거 사용 원칙]
+      - 가능하면 업로드된 자료(최근 10개), 최근 10년간 TOEFL/IELTS 예문·지문 및 신뢰 가능한 문법 규칙을 근거로 사용합니다.
+      - 출처는 항목 끝에 간단히 표기하세요. (예: [업로드/파일명], [TOEFL-2018/Reading], [규칙: 가주어-진주어])
+
+      [문장 구조 분석 — 괄호 규칙(엄수)]
+      - 명사적 용법(준동사/절): 대괄호 [ ]   예) [To study hard] is important. / She knows [what she said].
+      - 형용사적 용법(구/절, 분사 수식 포함): 중괄호 { }   예) This is a chance {to succeed}. / Look at the {sleeping} baby.
+      - 부사적 용법(구/절): 기예메 « »   예) He studies hard «to pass the exam». / Call me «when you are ready».
+      - 전치사구: 소괄호 ( )   예) The book is (on the desk).
+      - 일반 명사/명사구 자체에는 괄호를 쓰지 않습니다. (예: The beautiful house (on the hill) is expensive.)
+      - It-cleft(강조) : 강조 대상이 명사(구)면 [[ ]] 사용, 부사/부사구/부사절이면 « » 사용. It 자체엔 괄호 없음.
+        예) It was [[John]] {who broke the window}. / It was «yesterday» {that I met him}.
+      - 가주어/진주어: 진주어가 명사절/명사적 준동사구이면 [It] is ... [진주어] 로 표기.
+        예) [It] is important [to finish the work on time]. / [It] is true [that he is honest].
+      - 생략 복원: 의미상 필요한 생략 요소(관계대명사, 주격관계대명사+be 등)는 (*생략형) 로 해당 위치에 복원 표시.
+        예) This is the house {(*that/which) I built}. / The girl {(*who is) playing the piano} is my sister.
+      - 비교급 상관구문: «The 비교급 S V», the 비교급 S V — 첫 절은 부사절로 « » 사용, 주절엔 별도 괄호 없음.
+        예) «The harder you study», the better grades you will get.
+      - 도치구문(동사가 주어 앞): 문두 이동된 부분을 규칙대로 괄호 처리하고, 문장 끝에 -INVS 표시.
+        예) «Nor» does it happen.-INVS
+      - 비교급에서 that/as는 원칙적으로 부사절로 취급.
+      - afraid/sure/aware + to-V, 그리고 해당 형용사 + that S V 는 형용사 보충어로 간주(별도 괄호 적용하지 않음).
+
+      [출력 형식(항상 아래 구조로)]
+      0) 모호성 점검(필요시 질문 1~2개만)
+      1) 괄호 규칙 적용 표기: 입력 문장을 위 규칙 그대로 표시 (한 줄)
+      2) 핵심 골격: [S: … | V: … | O: … | C: … | M: …]
+      3) 구조 요약: 구/절 계층과 의존관계를 2~4줄로 요약
+      4) 어휘·표현: 핵심 어휘/관용구 설명(간결)
+      5) 번역: 자연스러운 한국어 번역 1–2문장
+      6) 근거/출처: 사용한 규칙·자료의 출처를 최소 1개 이상 표기
+
+    followup_user: |
+      [추가 질문]
+      {question}
+
+      [참고: 이전 대화 요지(재진술 금지)]
+      {context}
+
+      [응답 지시 — 후속 모드]
+      - 새 정보/정정/예외만 3~5줄로.
+      - 이전 답변 재진술 금지, 중복 금지.
+      - 필요하면 예문 1–2개만(간결).
+
+    supplement:
+      user: |
+        [1차 응답 요지]
+        {primary_answer}
+
+        [보충 지시 — 차별화]
+        - 1차와 다른 관점/구조로 설명.
+        - 비교 포인트 2~3개, 예문 1~2개.
+        - 반복 금지.
+
+    provider_kwargs:
+      temperature: 0.1
+      top_p: 1
+      presence_penalty: 0.0
+      frequency_penalty: 0.0
+      max_tokens: 1400
+"""
+
+# ===== [PM-03] YAML load with fallback ======================================
+def load_overrides(force_refresh: bool = False) -> dict:
+    """
+    로컬/Drive에서 prompts YAML을 읽어 dict 반환.
+    - 경로: ENV MAIC_PROMPTS_PATH 우선, 없으면 ~/.maic/prompts.yaml
+    - 파일이 없거나 파싱 실패 시:
+        1) (가능하면) 원격 당겨오기 시도
+        2) 그래도 실패하면 _DEFAULT_OVERRIDES_YAML 로 폴백
+    - force_refresh=True 이면 원격 갱신 훅 먼저 시도
+    """
+    global _OVR_CACHE
+    if (not force_refresh) and (_OVR_CACHE is not None):
+        return _OVR_CACHE
+
+    lp = get_overrides_path()
+
+    # 강제 새로고침 시 원격 시도
+    if force_refresh:
         try:
-            # 파일 mtime을 드라이브 시간과 맞춤(선택)
-            ts = drive_mtime.timestamp()
-            os.utime(local_path, (ts, ts))
+            _pull_remote_overrides_if_newer()
         except Exception:
             pass
-        return "pulled"
 
+    # 로컬 없으면 원격 한 번 시도
+    if not lp.exists():
+        try:
+            _pull_remote_overrides_if_newer()
+        except Exception:
+            pass
+
+    data: dict = {}
+    yaml = _maybe_import_yaml()
+    try:
+        if lp.exists() and yaml:
+            data = yaml.safe_load(lp.read_text(encoding="utf-8")) or {}
+        else:
+            # 폴백
+            if yaml:
+                data = yaml.safe_load(_DEFAULT_OVERRIDES_YAML) or {}
+            else:
+                data = {"version": 1, "modes": {}}
+    except Exception:
+        try:
+            if yaml:
+                data = yaml.safe_load(_DEFAULT_OVERRIDES_YAML) or {}
+            else:
+                data = {"version": 1, "modes": {}}
+        except Exception:
+            data = {"version": 1, "modes": {}}
+
+    if not isinstance(data, dict):
+        data = {"version": 1, "modes": {}}
+    data.setdefault("version", 1)
+    data.setdefault("modes", {})
+
+    _OVR_CACHE = data
+    return data
+
+# ===== [PM-04] Safe replace (정확 토큰만 치환) ===============================
+def _safe_replace(text: str, mapping: dict) -> str:
+    """
+    {question}, {context}, {today}, {mode}, {lang}, {primary_answer}
+    정확히 일치하는 토큰만 교체. 일반 { } 예시에는 영향 없음.
+    """
+    if not isinstance(text, str) or not mapping:
+        return text
+    out = text
+    for key, val in mapping.items():
+        token = "{" + key + "}"
+        out = out.replace(token, "" if val is None else str(val))
+    return out
+
+def _fmt(tmpl: str, mapping: dict) -> str:
+    """안전치환 래퍼(과거 format_map 대체)."""
+    return _safe_replace(tmpl or "", mapping or {})
+
+# ===== [PM-05] Mode selection & prompt build ================================
+class PromptParts(TypedDict, total=False):
+    system: str
+    user: str
+    provider_kwargs: dict
+
+def _select_mode_block(modes: dict, mode_label: str) -> Optional[dict]:
+    """모드명 정확→별칭→소문자 근사 매칭"""
+    if not isinstance(modes, dict):
+        return None
+    if mode_label in modes:
+        return modes[mode_label]
+    alias_map = {
+        "Grammar": "문법설명",
+        "Sentence": "문장구조분석",
+        "Passage": "지문분석",
+        "문장 분석": "문장구조분석",
+    }
+    alt = alias_map.get(mode_label)
+    if alt and alt in modes:
+        return modes[alt]
+    norm = str(mode_label).strip().lower()
+    for k in modes.keys():
+        if str(k).strip().lower() == norm:
+            return modes[k]
     return None
 
-def _lazy_remote_pull_once():
-    # 프로세스 당 최초 1회만 시도(불필요한 API 호출 방지)
-    if _REMOTE_PULL_ONCE_FLAG["done"]:
-        return
-    try:
-        _pull_remote_overrides_if_newer()
-    finally:
-        _REMOTE_PULL_ONCE_FLAG["done"] = True
-
-# ============================================================
-# 오버라이드 로딩
-# ============================================================
-def load_overrides() -> Dict[str, Any]:
+def build_prompt(
+    mode_label: str,
+    question: str,
+    lang: str = "ko",
+    extras: Optional[Dict[str, Any]] = None,
+) -> PromptParts:
     """
-    ~/.maic/prompts.yaml (+ 환경변수 경로) 를 로드.
-    - 최초 호출 시 1회, 구글드라이브에서 최신본 자동 pull(가능한 환경이면)
+    YAML(overrides)을 읽어 해당 모드의 system/user 프롬프트 조립.
+    - 후속: extras['is_followup'] True & YAML.followup_user 있으면 우선 사용
+            (없으면 기존 user에 후속 지시를 자동 덧붙임)
+    - 보충: extras['primary_answer'] 존재 & YAML.supplement.user 있으면 우선 사용
+            (없으면 기존 user에 차별화 지시 자동 덧붙임)
+    - 안전치환: {question},{context},{today},{mode},{lang},{primary_answer}
     """
-    _lazy_remote_pull_once()
-    p = get_overrides_path()
-    if not p.exists():
-        return {}
-    try:
-        if yaml:
-            with p.open("r", encoding="utf-8") as f:
-                data = yaml.safe_load(f) or {}
-        else:
-            with p.open("r", encoding="utf-8") as f:
-                data = json.load(f)
-        return data if isinstance(data, dict) else {}
-    except Exception:
-        return {}
+    data = load_overrides()
+    modes = data.get("modes") or {}
+    blk = _select_mode_block(modes, mode_label) or {}
 
-# ============================================================
-# 스펙 조회/프롬프트 빌드
-# ============================================================
-def list_modes() -> Dict[str, str]:
-    return {k: k for k in MODE_DEFAULTS.keys()}
+    is_follow = bool((extras or {}).get("is_followup"))
+    has_primary = bool((extras or {}).get("primary_answer"))
 
-def get_prompt_spec(mode: str) -> Dict[str, Any]:
-    defaults = _build_defaults_dict()
-    overrides = load_overrides()
-    merged = _deep_merge(defaults, overrides)
+    tpl_system = blk.get("system") or ""
+    tpl_user = blk.get("user") or ""
 
-    mname = _normalize_mode(mode)
-    global_spec = merged.get("global", {}) or {}
-    mode_spec = merged.get("modes", {}).get(mname, {}) or {}
+    # 후속/보충 템플릿 우선
+    if has_primary and isinstance(blk.get("supplement"), dict) and blk["supplement"].get("user"):
+        tpl_user = blk["supplement"]["user"] or tpl_user
+    elif is_follow and blk.get("followup_user"):
+        tpl_user = blk["followup_user"] or tpl_user
 
-    alias = MODE_ALIASES.get(mode)
-    if alias and alias in (merged.get("modes") or {}):
-        mode_spec = _deep_merge(mode_spec, merged["modes"][alias])
+    from datetime import datetime as _dt
+    today = (extras or {}).get("today") or _dt.now().strftime("%Y-%m-%d")
+    context = (extras or {}).get("context") or ""
+    primary_answer = (extras or {}).get("primary_answer") or ""
+    mode_display = (extras or {}).get("mode_display") or mode_label
 
-    return {"global": global_spec, "mode": mode_spec}
-
-def build_prompt(mode: str, question: str, *, lang: str = "ko", extras: Optional[Dict[str, Any]] = None) -> PromptParts:
-    extras = extras or {}
-    values = {
+    mapping = {
         "question": question or "",
-        "mode": _normalize_mode(mode),
+        "context": context or "",
+        "primary_answer": primary_answer or "",
+        "today": today,
+        "mode": mode_display,
         "lang": lang or "ko",
-        "today": datetime.now().strftime("%Y-%m-%d"),
-        **extras,
     }
 
-    spec = get_prompt_spec(mode)
-    g = spec.get("global", {}) or {}
-    m = spec.get("mode", {}) or {}
+    system_final = _fmt(tpl_system, mapping)
+    user_final = _fmt(tpl_user, mapping)
 
-    sys_global = str(g.get("system") or GLOBAL_DEFAULT.system_template)
-    usr_global = str(g.get("user") or GLOBAL_DEFAULT.user_template)
-    sys_mode   = str(m.get("system") or MODE_DEFAULTS[_normalize_mode(mode)].system_template)
-    usr_mode   = str(m.get("user")   or MODE_DEFAULTS[_normalize_mode(mode)].user_template)
+    provider_kwargs = dict(blk.get("provider_kwargs") or {})
 
-    system_text = _fmt(sys_global, values).strip()
-    if sys_mode.strip():
-        system_text = (system_text + "\n\n" + _fmt(sys_mode, values)).strip()
+    # 템플릿 없을 때의 보조 지시(짧게)
+    if has_primary and "primary_answer" not in tpl_user:
+        user_final += (
+            "\n\n[보충 지시 — 차별화]\n"
+            "- 1차와 다른 관점/구조로 설명.\n"
+            "- 비교 포인트 2~3개, 예문 1~2개.\n"
+            "- 반복/재진술 금지.\n"
+        )
+    elif is_follow and "추가 질문" not in tpl_user:
+        user_final += (
+            "\n\n[후속 지시]\n"
+            "- 새 정보/정정/예외만 간결히(3~5줄).\n"
+            "- 이전 답변 재진술/중복 금지.\n"
+            "- 필요 시 예문 1~2개.\n"
+        )
 
-    user_text = _fmt(usr_global, values).strip()
-    if usr_mode.strip():
-        user_text = ((user_text + "\n\n") if user_text else "") + _fmt(usr_mode, values)
+    return cast(PromptParts, {
+        "system": system_final,
+        "user": user_final,
+        "provider_kwargs": provider_kwargs,
+    })
 
-    pk_global = dict(g.get("provider_kwargs") or {})
-    pk_mode   = dict(m.get("provider_kwargs") or {})
-    pk_extra  = dict((extras.get("provider_kwargs") or {}))
-    provider_kwargs = _deep_merge(_deep_merge(pk_global, pk_mode), pk_extra) or None
-
-    return PromptParts(
-        system=system_text,
-        user=user_text,
-        tools=None,
-        provider_kwargs=provider_kwargs,
-        meta={"mode": _normalize_mode(mode), "lang": lang},
-    )
-
-# ============================================================
-# 프로바이더 페이로드 변환 예시
-# ============================================================
-def to_openai(parts: PromptParts) -> Dict[str, Any]:
+# ===== [PM-06] Payload converters ===========================================
+def to_openai(parts: PromptParts) -> dict:
+    """
+    OpenAI Chat Completions 형식으로 변환.
+    (temperature/max_tokens/top_p 등은 호출부에서 병합/덮어쓰기 권장)
+    """
+    sys = (parts.get("system") or "").strip()
+    usr = (parts.get("user") or "").strip()
     messages = []
-    if parts.system.strip():
-        messages.append({"role": "system", "content": parts.system})
-    if parts.user.strip():
-        messages.append({"role": "user", "content": parts.user})
-    payload = {"messages": messages}
-    if parts.provider_kwargs:
-        payload.update(parts.provider_kwargs)
-    return payload
+    if sys:
+        messages.append({"role": "system", "content": sys})
+    messages.append({"role": "user", "content": usr})
 
-def to_gemini(parts: PromptParts) -> Dict[str, Any]:
-    full = parts.system.strip()
-    if parts.user.strip():
-        full = (full + "\n\n" + parts.user.strip()).strip()
-    payload = {"contents": [{"role": "user", "parts": [{"text": full}]}]}
-    if parts.provider_kwargs:
-        payload.update(parts.provider_kwargs)
-    return payload
+    out = {"messages": messages}
+    if parts.get("provider_kwargs"):
+        # 참고용으로 동봉(호출부에서 사용/무시 선택)
+        out.update(parts["provider_kwargs"])
+    return out
 
-# ============================================================
-# 편의: 기본 오버라이드 파일 생성
-# ============================================================
-def write_default_overrides_if_missing() -> bool:
-    p = get_overrides_path()
-    if p.exists():
-        return False
-    data = _build_defaults_dict()
-    ok, _ = save_overrides(data)
-    return bool(ok)
+def to_gemini(parts: PromptParts) -> dict:
+    """
+    Gemini generateContent 형식으로 변환.
+    시스템 프롬프트는 단순 결합하여 user 텍스트로 전달.
+    """
+    sys = (parts.get("system") or "").strip()
+    usr = (parts.get("user") or "").strip()
+    full = (sys + "\n\n" + usr) if sys else usr
+    contents = [{"role": "user", "parts": [{"text": full}]}]
+    out = {"contents": contents}
+    if parts.get("provider_kwargs"):
+        out.update(parts["provider_kwargs"])
+    return out
 
-# ========================== [PM-01] END ============================
+# ===== [PM-07] Diagnostics helpers ==========================================
+def list_modes() -> List[str]:
+    """YAML에 포함된 모드명 나열(진단 패널 [04C]에서 사용)."""
+    try:
+        data = load_overrides()
+        modes = data.get("modes") or {}
+        return list(modes.keys())
+    except Exception:
+        return []
+
+def get_enabled_modes_unified() -> dict:
+    """
+    기존 UI 호환용: Grammar/Sentence/Passage 키로 단순 맵 반환.
+    """
+    names = set(list_modes())
+    return {
+        "Grammar": ("문법설명" in names) or ("Grammar" in names),
+        "Sentence": ("문장구조분석" in names) or ("Sentence" in names),
+        "Passage": ("지문분석" in names) or ("Passage" in names),
+    }
+
+# ===== [PM] END ==============================================================
