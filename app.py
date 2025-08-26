@@ -303,7 +303,33 @@ def _auto_attach_or_restore_silently() -> bool:
     st.session_state["_auto_restore_last"]["rebuild"] = ok_rebuild
 
     if _attach_from_local():
-        st.session_state["_auto_restore_last"].update(step="rebuilt_and_attached", final_]()_
+        st.session_state["_auto_restore_last"].update(step="rebuilt_and_attached", final_attach=True)
+        _log_attach("auto_attach_done", path="rebuild")
+        return True
+
+    st.session_state["_auto_restore_last"]["final_attach"] = False
+    _log_attach("auto_attach_fail")
+    return False
+
+def _get_enabled_modes_unified() -> Dict[str, bool]:
+    """
+    관리자 설정 상태를 단일 맵으로 반환.
+    반환 예: {"Grammar": True, "Sentence": True, "Passage": False}
+    """
+    ss = st.session_state
+    # 신형(체크박스) 우선
+    g = ss.get("cfg_show_mode_grammar",   ss.get("show_mode_grammar",   True))
+    s = ss.get("cfg_show_mode_structure", ss.get("show_mode_structure", True))
+    p = ss.get("cfg_show_mode_passage",   ss.get("show_mode_passage",   True))
+    # 리스트 기반 설정이 있으면 덮어쓰기
+    lst = ss.get("qa_modes_enabled")
+    if isinstance(lst, list):
+        g = ("문법설명" in lst)
+        s = ("문장구조분석" in lst)
+        p = ("지문분석" in lst)
+    return {"Grammar": bool(g), "Sentence": bool(s), "Passage": bool(p)}
+# ===== [03] END ===============================================================
+
 
 # ===== [04] HEADER (비워둠: 타이틀/배지는 [07]에서 렌더) =====================
 def render_header():
