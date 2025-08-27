@@ -2110,7 +2110,7 @@ def _boot_and_render():
         st.session_state.setdefault("prompts_path", local_prompts_path)
 
     try:
-        if "render_header" in globals(): render_header()
+        if "render_header" in globals(): render_admin_tools()
     except Exception:
         pass
 
@@ -2118,6 +2118,118 @@ def _boot_and_render():
 
 _boot_and_render()
 # ===== [07] MAIN — END =======================================================
+# ===== [08] ADMIN — 인덱싱/강제 동기화 도구 — START ===========================
+def _run_index_job(mode: str) -> tuple[bool, str]:
+    """
+    인덱스 실행 진입점(풀/증분). 여러 모듈 시그니처를 관대하게 지원.
+    우선순위: src.index_build → index_build → rag.index_build
+    시도 함수: build_index(mode=...), build_all(), build_incremental(), main([...])
+    """
+    import os, importlib, importlib.util, subprocess, sys, shlex
+
+    def _find_mod(cands: list[str]):
+        for name in cands:
+            if importlib.util.find_spec(name) is not None:
+                return importlib.import_module(name)
+        return None
+
+    mod = _find_mod(["src.index_build", "index_build", "rag.index_build"])
+    persist_dir = os.path.expanduser("~/.maic/persist")
+    os.makedirs(persist_dir, exist_ok=True)
+
+    # (A) 파이썬 모듈로 바로 호출
+    try:
+        if mod:
+            # 1) build_index(mode=...)
+            if hasattr(mod, "build_index"):
+                mod.build_index(mode=mode, persist_dir=persist_dir)
+                return True, f"build_index(mode={mode}) 완료"
+            # 2) build_all()/build_incremental()
+            if mode == "full" and hasattr(mod, "build_all"):
+                mod.build_all(persist_dir=persist_dir)
+                return True, "build_all 완료"
+            if mode == "inc" and hasattr(mod, "build_incremental"):
+                mod.build_incremental(persist_dir=persist_dir)
+                return True, "build_incremental 완료"
+            # 3) main([...])
+            if hasattr(mod, "main"):
+                argv = ["--persist", persist_dir, "--mode", ("full" if mode=="full" else "inc")]
+                mod.main(argv)  # type: ignore
+                return True, f"main({argv}) 완료"
+    except Exception as e:
+        return False, f"인덱스 모듈 호출 실패: {type(e).__name__}: {e}"
+
+    # (B) 모듈이 없으면 서브프로세스 시도 (python -m src.index_build ...)
+    try:
+        py = sys.executable
+        for dotted in ["src.index_build", "index_build", "rag.index_build"]:
+            cmd = f"{shlex.quote(py)} -m {dotted} --mode {('full' if mode=='full' else 'inc')} --persist {shlex.quote(persist_dir)}"
+            rc = subprocess.call(cmd, shell=True)
+            if rc == 0:
+                return True, f"subprocess 완료: {cmd}"
+    except Exception as e:
+        return False, f"서브프로세스 실패: {type(e).__name__}: {e}"
+
+    return False, "인덱스 엔트리포인트를 찾지 못했습니다(src.index_build / index_build / rag.index_build)"
+
+def render_admin_tools():
+    """
+    사이드/본문에 '관리자 도구' 섹션을 렌더.
+    - 상태표시: Drive 폴더 ID, 연결 계정, 로컬 경로, 파일 존재
+    - 액션 버튼: 전체 인덱스, 신규만 인덱스, prompts.yaml 강제 동기화
+    """
+    import os, json, pathlib
+    with st.expander("관리자 도구", expanded=False):
+        st.caption("⚙️ 진단 · 프롬프트 소스 상태(고급)")
+
+        # 상태판
+        folder_id = os.getenv("PROMPTS_DRIVE_FOLDER_ID") or getattr(st, "secrets", {}).get("PROMPTS_DRIVE_FOLDER_ID")
+        oauth_info = getattr(st, "secrets", {}).get("gdrive_oauth")
+        who = None
+        try:
+            if isinstance(oauth_info, str):
+                who = json.loads(oauth_info).get("email")
+            elif isinstance(oauth_info, dict):
+                who = oauth_info.get("email")
+        except Exception:
+            pass
+
+        local_path = os.path.expanduser("~/.maic/prompts.yaml")
+        exists = pathlib.Path(local_path).exists()
+
+        st.write(f"• 인덱스 로드 경로 힌트: `resolved`")
+        st.write(f"• Drive 폴더 ID: `{folder_id or '미설정'}`")
+        st.write(f"• Drive 연결: {'🟢 연결됨' if bool(oauth_info) else '🔴 미연결'}")
+        st.write(f"• 연결 계정: `{who or '알 수 없음'}`")
+        st.write(f"• 로컬 경로: `{local_path}`")
+        st.write(f"• 파일 존재: {'✅ 있음' if exists else '❌ 없음'}")
+
+        st.divider()
+
+        # 액션 버튼
+        c1, c2, c3 = st.columns([1,1,1])
+        with c1:
+            if st.button("전체 인덱스 다시 만들기", use_container_width=True):
+                with st.spinner("전체 인덱싱 중…"):
+                    ok, msg = _run_index_job("full")
+                (st.success if ok else st.error)(msg)
+        with c2:
+            if st.button("신규 파일만 인덱스", use_container_width=True):
+                with st.spinner("증분 인덱싱 중…"):
+                    ok, msg = _run_index_job("inc")
+                (st.success if ok else st.error)(msg)
+        with c3:
+            if st.button("드라이브에서 prompts.yaml 당겨오기(강제)", use_container_width=True):
+                with st.spinner("동기화 중…"):
+                    ok, msg = sync_prompts_from_drive(
+                        local_path=os.path.expanduser("~/.maic/prompts.yaml"),
+                        file_name=(os.getenv("PROMPTS_FILE_NAME") or getattr(st, "secrets", {}).get("PROMPTS_FILE_NAME") or "prompts.yaml"),
+                        folder_id=(os.getenv("PROMPTS_DRIVE_FOLDER_ID") or getattr(st, "secrets", {}).get("PROMPTS_DRIVE_FOLDER_ID")),
+                        prefer_folder_name="prompts",
+                        verbose=True,
+                    )
+                (st.success if ok else st.error)(msg)
+# ===== [08] ADMIN — 인덱싱/강제 동기화 도구 — END =============================
 
 
 # ===== [23] PROMPTS 동기화 (Google Drive → Local) — START =====================
