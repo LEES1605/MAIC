@@ -54,7 +54,6 @@ os.environ["STREAMLIT_SERVER_ENABLE_WEBSOCKET_COMPRESSION"] = "false"
 
 # ===== [01] END ===============================================================
 
-
 # ===== [02] IMPORTS & RAG 바인딩(예외 내성) ================================
 from pathlib import Path
 import os, sys
@@ -164,7 +163,6 @@ if _no_precheck or _no_builder:
     )
     _BOOT_WARNINGS.append("사전점검/빌더 임포트에 실패했습니다.\n" + "\n".join(msgs) + guide)
 # ===== [BOOT-WARN] END =======================================================
-
 
 # ===== [03] SESSION & HELPERS ===============================================
 st.set_page_config(page_title="AI Teacher (Clean)", layout="wide")
@@ -379,7 +377,6 @@ def _get_enabled_modes_unified() -> Dict[str, bool]:
     return {"Grammar": bool(g), "Sentence": bool(s), "Passage": bool(p)}
 # ===== [03] END ===============================================================
 
-
 # ===== [04] HEADER (비워둠: 타이틀/배지는 [07]에서 렌더) =====================
 def render_header():
     """중복 렌더 방지용(과거 호환)."""
@@ -426,7 +423,6 @@ def render_admin_toolbar():
 # 전역 토글 바 렌더(관리자에게만 보임)
 render_admin_toolbar()
 # ===== [04B] END ==============================================================
-
 
 # ===== [04C] 프롬프트 소스/드라이브 진단 패널(고급) ==========================
 def _render_admin_diagnostics_section():
@@ -986,7 +982,6 @@ def rollback_to(snapshot_dir: Path) -> Tuple[bool, str]:
     _atomic_point_to(snapshot_dir)
     return True, f"롤백 완료: {snapshot_dir.name}"
 # ===== [04D] 인덱스 스냅샷/전체 재빌드/롤백 — 유틸리티 (세션/ENV/멀티루트) === END
-# ===== [04D] 인덱스 스냅샷/전체 재빌드/롤백 — 유틸리티 (세션/ENV/멀티루트) === END
 
 # ===== [04E] 부팅 훅: Drive → prepared 동기화 + 자동 전체 인덱스 ========= START
 import time
@@ -1093,7 +1088,6 @@ try:
 except Exception:
     pass
 # ===== [04E] 부팅 훅: Drive → prepared 동기화 + 자동 전체 인덱스 ========= END
-
 
 # ===== [05A] 자료 최적화/백업 패널 ==========================================
 def render_brain_prep_main():
@@ -1487,7 +1481,6 @@ def render_index_snapshots_admin():
 # 이 패널을 즉시 렌더링(관리자만 보임)
 render_index_snapshots_admin()
 # ===== [05C] 인덱스 스냅샷 — 최소/전체·안전 커밋/롤백(관리자) ================ END
-# ===== [05C] 인덱스 스냅샷 — 최소/전체·안전 커밋/롤백(관리자) ================ END
 
 # ===== [05D] 자료 폴더 설정(관리자) ========================================= START
 def render_prepared_dir_admin():
@@ -1533,7 +1526,6 @@ def render_prepared_dir_admin():
 # 즉시 렌더(관리자 전용)
 render_prepared_dir_admin()
 # ===== [05D] 자료 폴더 설정(관리자) =========================================== END
-# ===== [05C] 인덱스 스냅샷 — 최소/전체·안전 커밋/롤백(관리자) ================ END
 
 # ===== [05E] 시작 시 자동 인덱스 상태/토글 ================================= START
 def render_auto_index_admin():
@@ -2129,7 +2121,6 @@ def render_qa_panel():
             st.session_state["_supplement_for_msg_id"] = None
             st.rerun()
 # ===== [06] END ===============================================================
-
 
 # ===== [07] MAIN — 오케스트레이터 ============================================
 def _render_title_with_status():
