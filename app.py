@@ -1143,15 +1143,13 @@ def precheck_build_needed() -> bool:
 def render_brain_prep_main():
     """
     인덱스(두뇌) 최적화/복구/백업 관리자 패널
-    - 경로 표기/검사를 config 기반으로 통일
-    - 재빌드 버튼이 Drive-first 빌더(build_index_with_checkpoint)를 폴더 ID와 함께 직접 호출
+    - 경로 표기/검사를 config 기반으로 '강제' 고정 (레거시 폴백 제거)
+    - 재빌드 버튼은 Drive-first 빌더(build_index_with_checkpoint)를 폴더 ID와 함께 직접 호출
     - 모든 동작은 [05B] 타임라인 로그(_log_attach)와 연계
     """
     import os
     import json
-    import importlib  # ✅ NameError 방지: 함수 내부 임포트
     from pathlib import Path
-    from datetime import datetime
 
     # 관리자 가드
     if not (
@@ -1172,23 +1170,17 @@ def render_brain_prep_main():
         except Exception:
             pass
 
-    # === 경로: config 우선 ===
-    try:
-        from src.config import (
-            PERSIST_DIR as CFG_PERSIST_DIR,
-            QUALITY_REPORT_PATH as CFG_QUALITY_REPORT_PATH,
-            APP_DATA_DIR as CFG_APP_DATA_DIR,
-        )
-    except Exception:
-        CFG_PERSIST_DIR = Path.home() / ".maic" / "persist"
-        CFG_QUALITY_REPORT_PATH = Path.home() / ".maic" / "quality_report.json"
-        CFG_APP_DATA_DIR = Path.home() / ".maic"
-
+    # === 경로: src.config 기준으로 '무조건' 고정 (폴백/재할당 금지) ===
+    from src.config import (
+        PERSIST_DIR as CFG_PERSIST_DIR,
+        QUALITY_REPORT_PATH as CFG_QUALITY_REPORT_PATH,
+        APP_DATA_DIR as CFG_APP_DATA_DIR,
+    )
     PERSIST_DIR = Path(CFG_PERSIST_DIR)
     QUALITY_REPORT_PATH = Path(CFG_QUALITY_REPORT_PATH)
     BACKUP_DIR = (Path(CFG_APP_DATA_DIR) / "backup").resolve()
 
-    # 관련 함수 핸들(없으면 None)
+    # 관련 함수 핸들
     precheck_fn   = globals().get("precheck_build_needed") or globals().get("quick_precheck")
     build_fn      = globals().get("build_index_with_checkpoint")   # ✅ Drive-first 엔트리
     restore_fn    = globals().get("restore_latest_backup_to_local")
@@ -1305,7 +1297,6 @@ def render_brain_prep_main():
                             st.error("build_index_with_checkpoint 함수가 없습니다.")
                             _log("rebuild_skip", reason="build_fn_not_callable")
                         else:
-                            # 준비: 폴더 ID/경로
                             folder_id = _prepared_folder_id()
                             persist_dir = str(PERSIST_DIR)
 
@@ -1365,6 +1356,7 @@ def render_brain_prep_main():
                         _log("backup_exception", error=f"{type(e).__name__}: {e}")
 # <<<<< END [05A] 자료 최적화/백업 패널
 # ===== [05A] END =============================================================
+
 
 # ===== [05B] 간단 진단 패널(전역 토글 연동) ==================================
 # >>>>> START [05B] 간단 진단 패널
