@@ -658,57 +658,23 @@ def _render_admin_diagnostics_section():
 _render_admin_diagnostics_section()
 # ===== [04C] END ==============================================================
 
-# ===== [04D] 인덱스 스냅샷/전체 재빌드/롤백 — 유틸리티 (멀티 루트 폴백) === START
+# ===== [04C] END ==============================================================
+
+# ===== [04D] 인덱스 스냅샷/전체 재빌드/롤백 — 유틸리티 (세션/ENV/멀티루트) == START
 import os, io, json, time, shutil, hashlib, importlib
 from datetime import datetime
 from pathlib import Path
 from typing import Tuple, Optional, Callable, Iterable, List
 
-# 스냅샷 루트 및 current 포인터
 INDEX_ROOT = Path(os.environ.get("MAIC_INDEX_ROOT", "~/.maic/persist")).expanduser()
 SNAP_ROOT  = INDEX_ROOT / "indexes"
-CUR_LINK   = SNAP_ROOT / "current"           # symlink 선호
-KEEP_N     = 5                                # 보존할 스냅샷 수
-REQ_FILES  = ["chunks.jsonl", "manifest.json"]  # 헬스체크 필수 산출물
+CUR_LINK   = SNAP_ROOT / "current"
+KEEP_N     = 5
+REQ_FILES  = ["chunks.jsonl", "manifest.json"]
 
-# 폴백 전체 빌더: 지원 확장자
 TEXT_EXTS = {".txt", ".md"}
 PDF_EXTS  = {".pdf"}
-DOCX_EXTS = {".docx", ".docs"}  # Google Docs export 파일명 대비
-
-# ----------------------- 소스 루트 자동 탐색 -----------------------
-def _candidate_roots() -> List[Path]:
-    roots: List[Path] = []
-
-    # 0) ENV가 있으면 최우선
-    env_dir = os.environ.get("MAIC_PREPARED_DIR", "").strip()
-    if env_dir:
-        roots.append(Path(env_dir).expanduser())
-
-    # 1) 흔한 후보 경로들 (프로젝트/컨테이너 환경 고려)
-    roots += [
-        Path("~/.maic/prepared").expanduser(),
-        Path("./prepared").resolve(),
-        Path("./knowledge").resolve(),
-        Path("/mount/data/knowledge"),
-        Path("/mount/data"),
-        Path("/mnt/data/knowledge"),
-        Path("/mnt/data"),
-    ]
-
-    # 존재하는 디렉토리만, 중복 제거
-    seen = set()
-    valid: List[Path] = []
-    for p in roots:
-        try:
-            rp = p.resolve()
-        except Exception:
-            continue
-        key = str(rp)
-        if rp.exists() and rp.is_dir() and key not in seen:
-            valid.append(rp)
-            seen.add(key)
-    return valid
+DOCX_EXTS = {".docx", ".docs"}
 
 def _now_ts() -> str:
     return datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -751,6 +717,49 @@ def _gc_old_snapshots(keep: int = KEEP_N) -> None:
         try: shutil.rmtree(p)
         except Exception: pass
 
+# ---------- 후보 루트: 세션 → ENV → 흔한 경로들 ----------
+def _candidate_roots() -> List[Path]:
+    roots: List[Path] = []
+
+    # 1) Streamlit 세션 우선 (관리자 UI에서 설정)
+    try:
+        import streamlit as st  # 없으면 무시
+        pd = st.session_state.get("prepared_dir")
+        if pd:
+            roots.append(Path(pd).expanduser())
+    except Exception:
+        pass
+
+    # 2) 환경변수
+    env_dir = os.environ.get("MAIC_PREPARED_DIR", "").strip()
+    if env_dir:
+        roots.append(Path(env_dir).expanduser())
+
+    # 3) 흔한 후보 (프로젝트/컨테이너)
+    roots += [
+        Path("~/.maic/prepared").expanduser(),
+        Path("./prepared").resolve(),
+        Path("./knowledge").resolve(),
+        Path("/mount/data/knowledge"),
+        Path("/mount/data"),
+        Path("/mnt/data/knowledge"),
+        Path("/mnt/data"),
+    ]
+
+    # 존재하는 디렉토리만, 중복 제거
+    seen = set()
+    valid: List[Path] = []
+    for p in roots:
+        try:
+            rp = p.resolve()
+        except Exception:
+            continue
+        key = str(rp)
+        if rp.exists() and rp.is_dir() and key not in seen:
+            valid.append(rp)
+            seen.add(key)
+    return valid
+
 def _healthcheck(stage_dir: Path, stats: Optional[dict]=None) -> Tuple[bool, str]:
     for name in REQ_FILES:
         f = stage_dir / name
@@ -773,7 +782,7 @@ def _healthcheck(stage_dir: Path, stats: Optional[dict]=None) -> Tuple[bool, str
         return False, f"chunks.jsonl 파싱 실패: {e}"
     return True, "OK"
 
-# --------------------------- 파일 스캐너/리더 ---------------------------
+# ---------- 파일 스캐너/리더 ----------
 def _iter_docs(roots: List[Path]) -> Iterable[Path]:
     for root in roots:
         for p in root.rglob("*"):
@@ -793,26 +802,26 @@ def _read_text_file(p: Path, max_bytes: int = 4_000_000) -> str:
 
 def _read_pdf_file(p: Path, max_pages: int = 100) -> str:
     try:
-        import PyPDF2  # 선택 의존성
+        import PyPDF2
     except Exception:
         return ""
     try:
-        text_parts = []
+        parts = []
         with open(p, "rb") as f:
             reader = PyPDF2.PdfReader(f)
             n = min(len(reader.pages), max_pages)
             for i in range(n):
                 try:
-                    text_parts.append(reader.pages[i].extract_text() or "")
+                    parts.append(reader.pages[i].extract_text() or "")
                 except Exception:
                     continue
-        return "\n".join([t for t in text_parts if t]).strip()
+        return "\n".join([t for t in parts if t]).strip()
     except Exception:
         return ""
 
 def _read_docx_file(p: Path, max_paras: int = 500) -> str:
     try:
-        import docx  # python-docx (선택 의존성)
+        import docx  # python-docx
     except Exception:
         return ""
     try:
@@ -826,15 +835,8 @@ def _read_docx_file(p: Path, max_paras: int = 500) -> str:
     except Exception:
         return ""
 
-# --------------------------- 확장 폴백 빌더 ---------------------------
+# ---------- 폴백 전체 빌더 ----------
 def _fallback_build_full_index(out_dir: Path) -> dict:
-    """
-    외부 빌더가 없을 때 사용하는 확장 폴백:
-      - 여러 후보 루트를 모두 스캔 (ENV 지정이 있으면 최우선 포함)
-      - .txt/.md/.pdf/.docx를 가능한 범위에서 텍스트 추출
-      - 한 파일 = 한 chunk (간단 규칙)
-      - stats 반환(헬스체크/로그에 활용)
-    """
     out_dir.mkdir(parents=True, exist_ok=True)
     chunks_path   = out_dir / "chunks.jsonl"
     manifest_path = out_dir / "manifest.json"
@@ -876,6 +878,7 @@ def _fallback_build_full_index(out_dir: Path) -> dict:
             items.append({"id": rec["id"], "source": rec["source"]})
             stats["chunks"] += 1
 
+    # 결과 요약
     manifest = {
         "created_at": _now_ts(),
         "source_roots": stats["roots"],
@@ -889,9 +892,8 @@ def _fallback_build_full_index(out_dir: Path) -> dict:
 
     return stats
 
-# ----------------------- 외부 빌더 자동 탐색 ------------------------
+# ---------- 외부 빌더 자동 탐색 ----------
 def _try_import_full_builder() -> Tuple[Optional[Callable], str]:
-    # 환경변수 우선
     env_spec = os.environ.get("MAIC_INDEX_BUILDER", "").strip()
     if env_spec and ":" in env_spec:
         mod, fn = env_spec.split(":", 1)
@@ -903,7 +905,6 @@ def _try_import_full_builder() -> Tuple[Optional[Callable], str]:
         except Exception:
             pass
 
-    # 흔한 후보들
     candidates = [
         ("src.rag.index_build", "build_full_index"),
         ("src.rag.index_build", "build_index"),
@@ -925,18 +926,10 @@ def _try_import_full_builder() -> Tuple[Optional[Callable], str]:
         except Exception:
             continue
 
-    # 전부 실패하면 폴백 사용
     return None, "fallback"
 
-# ------------------------ 퍼블릭 API (버튼에서 호출) ------------------------
+# ---------- 퍼블릭 API ----------
 def full_rebuild_safe(progress=None, on_drive_upload=None) -> Tuple[bool, str, Optional[Path]]:
-    """
-    전체 재빌드(안전 커밋):
-      - 스테이징 디렉토리(v_타임스탬프)에 빌드
-      - 헬스체크 통과 시에만 current를 새 스냅샷으로 원자적 스왑
-      - (선택) Drive ZIP 업로드
-      - 실패 시 current는 그대로(자동 롤백 효과)
-    """
     _ensure_dirs()
     builder, where = _try_import_full_builder()
 
@@ -945,11 +938,9 @@ def full_rebuild_safe(progress=None, on_drive_upload=None) -> Tuple[bool, str, O
     stage.mkdir(parents=True, exist_ok=False)
 
     if progress: progress(10, text=f"전체 인덱스 빌드 시작… ({'외부' if builder else '폴백'})")
-    # 빌드 수행
     stats = None
     try:
         if builder:
-            # out_dir 인자를 받는/안 받는 구현 모두 대응
             try:
                 builder(out_dir=str(stage))
             except TypeError:
@@ -996,7 +987,8 @@ def rollback_to(snapshot_dir: Path) -> Tuple[bool, str]:
         return False, f"스냅샷 헬스체크 실패: {msg}"
     _atomic_point_to(snapshot_dir)
     return True, f"롤백 완료: {snapshot_dir.name}"
-# ===== [04D] 인덱스 스냅샷/전체 재빌드/롤백 — 유틸리티 (멀티 루트 폴백) === END
+# ===== [04D] 인덱스 스냅샷/전체 재빌드/롤백 — 유틸리티 (세션/ENV/멀티루트) === END
+
 
 # ===== [05A] 자료 최적화/백업 패널 ==========================================
 def render_brain_prep_main():
@@ -1323,7 +1315,6 @@ def render_tag_diagnostics():
             qr_badge = "✅ 있음" if qr_exists else "❌ 없음"
             st.markdown(f"- **품질 리포트(quality_report.json)**: {qr_badge}  (`{QUALITY_REPORT_PATH.as_posix()}`)")
 # ===== [05B] END =============================================================
-# ===== [05B] END =============================================================
 
 # ===== [05C] 인덱스 스냅샷 — 최소/전체·안전 커밋/롤백(관리자) =============== START
 def render_index_snapshots_admin():
@@ -1391,9 +1382,52 @@ def render_index_snapshots_admin():
 # 이 패널을 즉시 렌더링(관리자만 보임)
 render_index_snapshots_admin()
 # ===== [05C] 인덱스 스냅샷 — 최소/전체·안전 커밋/롤백(관리자) ================ END
+# ===== [05C] 인덱스 스냅샷 — 최소/전체·안전 커밋/롤백(관리자) ================ END
 
-# ===== [06] 질문/답변 패널 — 채팅창 UI + 맥락 + 보충 차별화/유사도 가드 ========
+# ===== [05D] 자료 폴더 설정(관리자) ========================================= START
+def render_prepared_dir_admin():
+    import streamlit as st
+    from pathlib import Path
 
+    if not (
+        st.session_state.get("is_admin")
+        or st.session_state.get("admin_mode")
+        or st.session_state.get("role") == "admin"
+        or st.session_state.get("mode") == "admin"
+    ):
+        return
+
+    with st.expander("📂 자료 폴더 설정 (prepared dir)", expanded=True):
+        cur_env = os.environ.get("MAIC_PREPARED_DIR", "")
+        cur_ss  = st.session_state.get("prepared_dir", "")
+        st.write("현재 환경변수:", cur_env or "(미설정)")
+        st.write("현재 세션:", cur_ss or "(미설정)")
+
+        new_dir = st.text_input("자료 폴더 절대경로 입력", value=cur_ss or cur_env, placeholder="/absolute/path/to/knowledge or prepared")
+
+        colA, colB = st.columns([1,1])
+        with colA:
+            if st.button("경로 테스트"):
+                p = Path(new_dir).expanduser()
+                if p.exists() and p.is_dir():
+                    cnt = sum(1 for _ in p.rglob("*") if _.is_file())
+                    st.success(f"OK: {p} (파일 {cnt}개)")
+                else:
+                    st.error(f"경로가 폴더로 존재하지 않습니다: {p}")
+
+        with colB:
+            if st.button("이 경로 사용(세션+ENV 반영)"):
+                p = Path(new_dir).expanduser()
+                if p.exists() and p.is_dir():
+                    st.session_state["prepared_dir"] = str(p)
+                    os.environ["MAIC_PREPARED_DIR"]   = str(p)
+                    st.success(f"적용 완료: {p}")
+                else:
+                    st.error("적용 실패: 유효한 폴더 경로가 아닙니다.")
+
+# 즉시 렌더(관리자 전용)
+render_prepared_dir_admin()
+# ===== [05D] 자료 폴더 설정(관리자) =========================================== END
 
 # ===== [PATCH-BRAIN-HELPER] 두뇌(인덱스) 연결 여부 감지 =======================
 def _is_brain_ready() -> bool:
