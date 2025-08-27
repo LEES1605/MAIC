@@ -43,6 +43,32 @@ def _bootstrap_env_from_secrets() -> None:
 _bootstrap_env_from_secrets()
 # ===== [00A-FIX] END =========================================================
 
+# ===== [00B] ERROR LOG 헬퍼 — START ==========================================
+def _errlog(msg: str, *, where: str = "", exc: Exception | None = None):
+    """에러/경고를 세션 로그에 적재(관리자 패널에서 복사/다운로드 가능)."""
+    import traceback, datetime, io
+    ss = st.session_state
+    ss.setdefault("_error_log", [])
+    rec = {
+        "ts": datetime.datetime.utcnow().isoformat(timespec="seconds"),
+        "where": where,
+        "msg": str(msg),
+        "trace": traceback.format_exc() if exc else "",
+    }
+    ss["_error_log"].append(rec)
+
+def _errlog_text() -> str:
+    """세션 내 에러 로그를 텍스트로 직렬화."""
+    ss = st.session_state
+    buf = io.StringIO()
+    for i, r in enumerate(ss.get("_error_log", []), 1):
+        buf.write(f"[{i}] {r['ts']}  {r.get('where','')}\n{r['msg']}\n")
+        if r.get("trace"): buf.write(r["trace"] + "\n")
+        buf.write("-" * 60 + "\n")
+    return buf.getvalue()
+# ===== [00B] ERROR LOG 헬퍼 — END ============================================
+
+
 # ===== [01] 앱 부트 & 환경 변수 세팅 ========================================
 import os
 
@@ -1585,379 +1611,160 @@ except Exception:
     pass
 # ===== [05E] 시작 시 자동 인덱스 상태/토글 =================================== END
 
-# ===== [06] 질문/답변 패널 — 채팅창 UI + 맥락 + 보충 차별화/유사도 가드 ========
-
-# ===== [PATCH-BRAIN-HELPER] 두뇌(인덱스) 연결 여부 감지 =======================
-def _is_brain_ready() -> bool:
-    """
-    세션에 저장된 여러 플래그를 종합해 RAG 인덱스가 '부착됨' 상태인지 추정.
-    기존/미래 키와 호환되도록 넓게 본다.
-    """
-    ss = st.session_state
-    last = ss.get("_auto_restore_last") or {}
-    flags = (
-        ss.get("rag_attached"),
-        ss.get("rag_index_ready"),
-        ss.get("rag_index_attached"),
-        ss.get("index_attached"),
-        ss.get("attached_local"),
-        last.get("attached_local"),
-    )
-    return any(bool(x) for x in flags)
-
-# ===== [06] 질문/답변 패널 — 채팅창 UI + 맥락 + 보충 차별화/유사도 가드 ========
+# ===== [06] 질문/답변 패널 — 학생 화면 최소화 지원(모드ON/OFF/에러로그 연동) — START
 def _render_qa_panel():
     """
-    질문/답변 패널 전체:
-      - 상단: 두뇌 준비 배지/상태
-      - 질문 모드 선택(문법설명/문장구조분석/지문분석)
-      - 대화 맥락 포함/길이 조절
-      - 1차/2차 생성 파라미터 분리(온도/토큰/탑P)
-      - 디클레이머 금지
-      - 맥락 엔진: 최근 K턴 + 길이 상한, 관리자 옵션
-      - 보충 다양화: 1차/2차 온도 분리 + 2차 top_p + 유사도 가드(자동 재생성 1회)
+    학생/관리자 겸용 Q&A 패널.
+      - 학생 화면: 두뇌 상태(녹색불), 응답 모드 선택, 채팅창만 노출
+      - 관리자 화면: 기존 고급 옵션 그대로
+      - 응답 모드 ON/OFF: ~/.maic/mode_enabled.json 반영
+      - 에러 발생 시 [00B] 헬퍼로 세션 로그 기록
     """
-    import os, difflib
-    import traceback, importlib.util
+    import os, difflib, importlib.util, traceback
     from datetime import datetime
 
-    # ── 세션 기본키 ───────────────────────────────────────────────────────────
-    st.session_state.setdefault("chat", [])              # [{id,role,text,provider,kind,ts}]
+    # ── 공용 세션 키 ─────────────────────────────────────────────────────────
+    st.session_state.setdefault("chat", [])
     st.session_state.setdefault("_chat_next_id", 1)
     st.session_state.setdefault("_supplement_for_msg_id", None)
-
-    # 기존 상태키(안전 유지)
-    st.session_state.setdefault("lead_provider", "Gemini")  # "Gemini" | "OpenAI"
+    st.session_state.setdefault("lead_provider", "Gemini")
     st.session_state.setdefault("dual_generate", False)
-    st.session_state.setdefault("gemini_model_selection",
-                                os.getenv("GEMINI_MODEL", "gemini-1.5-flash"))
-
-    # ── (C1) 대화 맥락 옵션(관리자) ─────────────────────────────────────────
-    st.session_state.setdefault("use_context", True)         # 맥락 사용 여부
-    st.session_state.setdefault("context_turns", 8)          # 최근 포함 턴 수(K)
-    st.session_state.setdefault("context_max_chars", 2500)   # 맥락 길이 상한(문자)
-    st.session_state.setdefault("_session_summary", "")      # 필요시 요약 저장(옵션)
-
-    # ── (NEW) 생성 파라미터(1차/2차 분리) ───────────────────────────────────
+    st.session_state.setdefault("gemini_model_selection", os.getenv("GEMINI_MODEL","gemini-1.5-flash"))
+    st.session_state.setdefault("use_context", True)
+    st.session_state.setdefault("context_turns", 8)
+    st.session_state.setdefault("context_max_chars", 2500)
     st.session_state.setdefault("primary_temperature", 0.3)
     st.session_state.setdefault("supp_temperature", 0.7)
     st.session_state.setdefault("supp_top_p", 0.95)
 
-    # ── (C2) 디클레이머 금지, 스타일 ────────────────────────────────────────
-    DECL_NO = (
-        "주의: 변명/사과/한계 설명(디클레이머) 금지. 학생이 이해할 수 있게 친절히 설명."
-    )
+    # ── 학생/관리자 모드 판단 ───────────────────────────────────────────────
+    def _to_bool(x): return str(x).strip().lower() in ("1","true","yes","y","on")
+    app_mode = (os.getenv("APP_MODE") or getattr(st, "secrets", {}).get("APP_MODE") or "student").lower()
+    student_view = (app_mode == "student") or _to_bool(getattr(st, "secrets", {}).get("STUDENT_VIEW", "true"))
 
-    # ── (H) 보조 헬퍼 ───────────────────────────────────────────────────────
+    # ── 모드 ON/OFF 로드 ────────────────────────────────────────────────────
+    def _enabled_modes() -> list[str]:
+        try:
+            return _load_enabled_modes(["문법설명","문장구조분석","지문분석"])
+        except Exception as e:
+            _errlog(f"enabled_modes 로드 실패: {e}", where="[06]_enabled_modes", exc=e)
+            return ["문법설명","문장구조분석","지문분석"]
+
+    # ── 도우미 ──────────────────────────────────────────────────────────────
     def _ts(): return datetime.utcnow().isoformat(timespec="seconds")
     def _new_id():
         i = st.session_state["_chat_next_id"]; st.session_state["_chat_next_id"] += 1; return i
-
     @st.cache_data(show_spinner=False)
     def _have_libs():
-        have_gemini_lib = importlib.util.find_spec("google.generativeai") is not None
-        # OpenAI SDK v1 계열: openai 모듈 + client.chat.completions.create 사용
-        have_openai_lib = importlib.util.find_spec("openai") is not None
-        return have_gemini_lib, have_openai_lib
+        have_gemini = importlib.util.find_spec("google.generativeai") is not None
+        have_openai = importlib.util.find_spec("openai") is not None
+        return have_gemini, have_openai
 
     have_gemini_lib, have_openai_lib = _have_libs()
     has_gemini_key = bool(os.getenv("GEMINI_API_KEY") or getattr(st, "secrets", {}).get("GEMINI_API_KEY"))
     has_openai_key = bool(os.getenv("OPENAI_API_KEY") or getattr(st, "secrets", {}).get("OPENAI_API_KEY"))
 
-    # ── (U0) 상단 상태/옵션 바 ───────────────────────────────────────────────
+    # ── 상단(학생: 녹색불/모드 선택만 · 관리자: 고급옵션 포함) ────────────────
     rag_ready = _is_brain_ready()
-    with st.container(border=True):
-        c1, c2, c3, c4 = st.columns([1,1,1,1])
-        with c1:
-            badge = "🟢 두뇌 준비됨" if rag_ready else "🟡 두뇌 연결 대기"
-            st.markdown(f"**{badge}**")
-        with c2:
-            st.session_state["lead_provider"] = st.radio(
-                "리드 모델", options=["Gemini", "OpenAI"], horizontal=True,
-                index=0 if st.session_state.get("lead_provider","Gemini")=="Gemini" else 1
-            )
-        with c3:
-            st.session_state["dual_generate"] = st.toggle("보충 설명 추가 생성", value=bool(st.session_state.get("dual_generate", False)))
-        with c4:
-            prim_temp = st.number_input("1차 온도", value=float(st.session_state.get("primary_temperature", 0.3)), min_value=0.0, max_value=2.0, step=0.1)
-            st.session_state["primary_temperature"] = prim_temp
-
-    # 프롬프트 모드 셀렉터
-    with st.container(border=True):
-        m1, m2, m3 = st.columns([1,1,1])
-        with m1:
-            mode = st.session_state.get("qa_mode_radio", "문법설명")
-            mode = st.radio("질문 모드", ["문법설명","문장구조분석","지문분석"], index=["문법설명","문장구조분석","지문분석"].index(mode), horizontal=True)
+    if student_view:
+        with st.container(border=True):
+            st.markdown(f"**{'🟢 두뇌 준비됨' if rag_ready else '🟡 두뇌 연결 대기'}**")
+            enabled = _enabled_modes()
+            mode = st.session_state.get("qa_mode_radio", enabled[0] if enabled else "문법설명")
+            mode = st.radio("응답 모드", enabled or ["문법설명"], horizontal=True,
+                            index=min((enabled or ["문법설명"]).index(mode) if mode in (enabled or []) else 0, len(enabled or ["문법설명"])-1))
             st.session_state["qa_mode_radio"] = mode
-        with m2:
-            st.session_state["use_context"] = st.toggle("맥락 포함", value=bool(st.session_state.get("use_context", True)))
-        with m3:
-            cturn = st.number_input("최근 포함 턴(K)", min_value=2, max_value=20, value=int(st.session_state.get("context_turns", 8)))
-            st.session_state["context_turns"] = int(cturn)
-
-    # 프롬프트 미리보기 토글(전역)
-    show_prompt = st.toggle("프롬프트 미리보기", value=False, key="show_prompt_toggle")
-
-    # ===== [06A] (U1+Builder) 채팅창 CSS + 프롬프트 빌더(맥락·출처 규칙) = START
-    # ── (U1) 채팅창 말풍선/패널 스타일(CSS) ──────────────────────────────────
-    st.markdown("""
-    <style>
-      div[data-testid="stChatMessage"]{
-        background:#EAF5FF; border:1px solid #BCDFFF; border-radius:12px;
-        padding:6px 10px; margin:6px 0;
-      }
-      div[data-testid="stChatMessage"] .stMarkdown p{ margin-bottom:0.4rem; }
-    </style>
-    """, unsafe_allow_html=True)
-
-    # ── (U2) 말풍선 컨텍스트 ──────────────────────────────────────────────────
-    from contextlib import contextmanager
-    @contextmanager
-    def _chatbox(role: str, avatar: str="🤖"):
-        with st.chat_message(role, avatar=avatar):
-            yield
-
-    # ── (B0) OpenAI/Gemini 공통 페이로드 생성 ───────────────────────────────
-    def _build_parts(mode: str, qtext: str, rag_ok: bool):
-        # (요약) prompts + DECL_NO + 사용자의 질문 + 선택적 맥락/출처
-        from src.prompt_modes import prepare_prompt  # 내부에서 prompts.yaml/폴백YAML 처리
-        parts = prepare_prompt(
-            mode=mode, question=qtext, use_context=bool(st.session_state.get("use_context", True)),
-            context_turns=int(st.session_state.get("context_turns", 8)),
-            context_max_chars=int(st.session_state.get("context_max_chars", 2500)),
-            history=list(st.session_state.get("chat", [])),
-            rag_ready=rag_ok,
-            disclaimers_off=True
-        )
-        # 디클레이머 금지 규칙 삽입(시스템)
-        parts["system"] = f"{parts.get('system','')}\n{DECL_NO}".strip()
-        if show_prompt:
-            with st.expander("프롬프트 미리보기", expanded=False):
-                st.code(parts, language="json")
-        return parts
-
-# ===== [21] OPENAI 스트림 호출 헬퍼 (표준화/안정화) — START =====================
-def _call_openai_stream(parts, out_slot, temperature: float, top_p: float | None, max_tokens: int):
-    """
-    OpenAI Chat Completions 스트리밍 호출 (표준화 버전)
-    - SDK v1/구버전 혼선 방지: 모듈식 호출(openai.chat.completions.create)
-    - 예외 분기 명확화: 인증/요금제/레이트리밋/연결/기타
-    - 빈 응답 방지: 최종 텍스트가 공백이면 실패(폴백 신호 전달)
-    """
-    try:
-        import os, openai
-
-        # 1) 키 확인
-        api_key = os.getenv("OPENAI_API_KEY") or getattr(st, "secrets", {}).get("OPENAI_API_KEY")
-        if not api_key:
-            return False, "OPENAI_API_KEY 미설정", "OpenAI"
-        openai.api_key = api_key  # 모듈 전역에 키 설정
-
-        # 2) 페이로드 구성
-        model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-        messages = [
-            {"role": "system", "content": parts.get("system", "")},
-            *parts.get("messages", []),
-        ]
-        kwargs = dict(
-            model=model,
-            messages=messages,
-            stream=True,
-            temperature=float(temperature),
-            max_tokens=int(max_tokens),
-        )
-        if top_p is not None:
-            kwargs["top_p"] = float(top_p)
-
-        # 3) 스트리밍 루프
-        buf: list[str] = []
-        stream = openai.chat.completions.create(**kwargs)
-        for event in stream:
-            # v0.28 계열: event.choices[0].delta.content
-            # v1 계열 래핑에서도 동일 경로가 노출됨(호환 레이어)
-            try:
-                delta = getattr(event.choices[0], "delta", None)
-                chunk = getattr(delta, "content", None) if delta else None
-            except Exception:
-                chunk = None
-            if chunk:
-                buf.append(chunk)
-                out_slot.markdown("".join(buf))
-
-        text = "".join(buf).strip()
-        if not text:
-            # 스트림 중 내용이 전혀 없었다면 실패로 간주 (폴백 신호)
-            return False, "OpenAI 빈 응답", "OpenAI"
-
-        return True, text, "OpenAI"
-
-    # 4) 예외 분기: SDK 버전에 따라 에러 클래스가 다를 수 있어 넓게 처리
-    except Exception as e:
-        # 가능한 한 의미 있는 에러 메시지로 매핑
-        et = type(e).__name__
-        msg = str(e) or et
-        # 대표적인 경우들 키워드 스캔 (간이 매핑)
-        if "RateLimit" in msg or "rate limit" in msg.lower():
-            return False, f"RateLimitError: {msg}", "OpenAI"
-        if "authentication" in msg.lower() or "api key" in msg.lower():
-            return False, f"AuthenticationError: {msg}", "OpenAI"
-        if "connection" in msg.lower() or "timeout" in msg.lower():
-            return False, f"APIConnectionError: {msg}", "OpenAI"
-        return False, f"{et}: {msg}", "OpenAI"
-# ===== [21] OPENAI 스트림 호출 헬퍼 (표준화/안정화) — END =======================
-# ===== [22] GEMINI 모델 팩토리 안정화 — START =================================
-def _get_gemini_model(name: str):
-    """
-    Gemini 모델명 안전 매핑 + 최종 폴백까지 보장.
-    - 입력: 사용자가 선택/환경변수로 준 모델명(대소문자/레거시/별칭 포함 가능)
-    - 동작:
-        1) API 키 확인 및 genai.configure
-        2) 별칭/레거시 -> 정식 모델명으로 매핑
-        3) 모델 생성 실패 시 1차 폴백(1.5-flash), 그마저 실패 시 마지막 폴백(1.5-pro)
-    """
-    import os
-    import google.generativeai as genai
-
-    # 0) 키 확인 + 설정
-    api_key = os.getenv("GEMINI_API_KEY") or getattr(st, "secrets", {}).get("GEMINI_API_KEY")
-    if not api_key:
-        # 호출부에서 ok=False로 처리하도록 예외를 명시적으로 올린다
-        raise RuntimeError("GEMINI_API_KEY 미설정")
-    genai.configure(api_key=api_key)
-
-    # 1) 정규화
-    raw = (name or "").strip()
-    key = raw.lower().replace("models/", "")  # 일부 예전 문서의 'models/' prefix 제거
-
-    # 2) 별칭/레거시 매핑
-    #    - 최신 계열 우선: 2.0 > 1.5
-    #    - 'pro','flash' 단독, 하이픈 유무 등 관대한 처리
-    aliases = {
-        # 2.0 계열 (있으면 이쪽 우선 사용)
-        "2.0-flash": "gemini-2.0-flash",
-        "2.0-pro":   "gemini-2.0-pro",
-        "gemini-2.0-flash": "gemini-2.0-flash",
-        "gemini-2.0-pro":   "gemini-2.0-pro",
-
-        # 1.5 계열
-        "1.5-flash": "gemini-1.5-flash",
-        "1.5-pro":   "gemini-1.5-pro",
-        "gemini-1.5-flash": "gemini-1.5-flash",
-        "gemini-1.5-pro":   "gemini-1.5-pro",
-
-        # 단축/별칭
-        "flash": "gemini-1.5-flash",
-        "pro":   "gemini-1.5-pro",
-
-        # 레거시 명칭
-        "gemini-pro": "gemini-1.0-pro",
-        "1.0-pro":    "gemini-1.0-pro",
-        "gemini-pro-vision": "gemini-1.0-pro-vision",
-    }
-
-    # 정식 이름으로 보정
-    if key in aliases:
-        canonical = aliases[key]
-    elif key.startswith("gemini-"):
-        canonical = key  # 이미 정식 이름일 가능성
     else:
-        # 환경 기본값 → 없으면 flash
-        canonical = os.getenv("GEMINI_MODEL_DEFAULT", "gemini-1.5-flash")
+        # 관리자 뷰(기존 옵션 유지)
+        with st.container(border=True):
+            c1, c2, c3, c4 = st.columns([1,1,1,1])
+            with c1:
+                st.markdown(f"**{'🟢 두뇌 준비됨' if rag_ready else '🟡 두뇌 연결 대기'}**")
+            with c2:
+                st.session_state["lead_provider"] = st.radio("리드 모델", ["Gemini","OpenAI"],
+                                                             index=0 if st.session_state.get("lead_provider","Gemini")=="Gemini" else 1, horizontal=True)
+            with c3:
+                st.session_state["dual_generate"] = st.toggle("보충 설명 추가 생성", value=bool(st.session_state.get("dual_generate", False)))
+            with c4:
+                prim_temp = st.number_input("1차 온도", value=float(st.session_state.get("primary_temperature", 0.3)),
+                                            min_value=0.0, max_value=2.0, step=0.1)
+                st.session_state["primary_temperature"] = prim_temp
+        with st.container(border=True):
+            m1, m2, m3 = st.columns([1,1,1])
+            with m1:
+                enabled = _enabled_modes()
+                mode = st.session_state.get("qa_mode_radio", enabled[0] if enabled else "문법설명")
+                mode = st.radio("질문 모드", enabled or ["문법설명"], horizontal=True,
+                                index=min((enabled or ["문법설명"]).index(mode) if mode in (enabled or []) else 0, len(enabled or ["문법설명"])-1))
+                st.session_state["qa_mode_radio"] = mode
+            with m2:
+                st.session_state["use_context"] = st.toggle("맥락 포함", value=bool(st.session_state.get("use_context", True)))
+            with m3:
+                cturn = st.number_input("최근 포함 턴(K)", min_value=2, max_value=20, value=int(st.session_state.get("context_turns", 8)))
+                st.session_state["context_turns"] = int(cturn)
 
-    # 3) 모델 생성 + 다단 폴백
-    try:
-        return genai.GenerativeModel(canonical)
-    except Exception:
-        # 1차 폴백: flash
-        try:
-            return genai.GenerativeModel("gemini-1.5-flash")
-        except Exception:
-            # 2차 폴백: pro
-            return genai.GenerativeModel("gemini-1.5-pro")
-# ===== [22] GEMINI 모델 팩토리 안정화 — END ===================================
-
-    # ── (B2) Gemini 호환 — 스트림 호출 ───────────────────────────────────────
-    def _call_gemini_stream(parts, out_slot, temperature: float, top_p: float | None, max_tokens: int):
-        try:
-            import google.generativeai as genai
-            api_key = os.getenv("GEMINI_API_KEY") or getattr(st, "secrets", {}).get("GEMINI_API_KEY")
-            if not api_key: return False, "GEMINI_API_KEY 미설정", "Gemini"
-            model_name = st.session_state.get("gemini_model_selection") or os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
-            model = _get_gemini_model(model_name)
-            payload = _to_gemini_payload(parts)  # {"contents":[...], ...}
-            gen_cfg = {"temperature": temperature, "max_output_tokens": max_tokens}
-            if top_p is not None: gen_cfg["top_p"] = top_p
-            stream = model.generate_content(payload["contents"], generation_config=gen_cfg, stream=True)
-            buf = []
-            for chunk in stream:
-                if getattr(chunk, "text", None):
-                    buf.append(chunk.text); out_slot.markdown("".join(buf))
-            text = "".join(buf).strip()
-            if not text:
-                resp = model.generate_content(payload["contents"], generation_config=gen_cfg)
-                text = getattr(resp, "text", "") or (
-                    resp.candidates[0].content.parts[0].text if getattr(resp, "candidates", None) else ""
-                )
-            # ✅ 빈 응답이면 실패로 간주하여 폴백 가능하도록 반환
-            if not (text and text.strip()):
-                return False, "Gemini 빈 응답", "Gemini"
-            return True, text, "Gemini"
-        except Exception as e:
-            return False, f"{type(e).__name__}: {e}", "Gemini"
-
-    # ── 과거 대화 렌더(채팅창 테두리 안) ──────────────────────────────────────
+    # ── 과거 대화 렌더 ───────────────────────────────────────────────────────
     with st.container(border=True):
         for msg in st.session_state["chat"]:
             if msg["role"] == "user":
-                with _chatbox("user", avatar="🧑"):
-                    st.markdown(msg["text"])
+                with st.chat_message("user", avatar="🧑"): st.markdown(msg["text"])
             else:
                 provider_emoji = "🟣" if msg.get("provider") == "Gemini" else "🔵"
-                with _chatbox("assistant", avatar=provider_emoji):
-                    st.markdown(msg["text"])
+                with st.chat_message("assistant", avatar=provider_emoji): st.markdown(msg["text"])
 
-    # ── 입력(Enter 전송 & 자동 비우기): 내 말풍선 즉시 렌더 ────────────────────
+    # ── 입력 & 1차 생성 ─────────────────────────────────────────────────────
     question = st.chat_input("질문을 입력하세요")
     if (question or "").strip():
         qtext = question.strip()
-        with _chatbox("user", avatar="🧑"): st.markdown(qtext)
+        with st.chat_message("user", avatar="🧑"): st.markdown(qtext)
         st.session_state["chat"].append({ "id": _new_id(), "role": "user", "text": qtext, "ts": _ts() })
 
-        # 프롬프트 생성(+ 맥락/출처)
+        # 프롬프트 빌드
         try:
-            parts = _build_parts(st.session_state.get("qa_mode_radio","문법설명"), qtext, rag_ready)
+            from src.prompt_modes import prepare_prompt
+            parts = prepare_prompt(
+                mode=st.session_state.get("qa_mode_radio","문법설명"),
+                question=qtext,
+                use_context=bool(st.session_state.get("use_context", True)),
+                context_turns=int(st.session_state.get("context_turns", 8)),
+                context_max_chars=int(st.session_state.get("context_max_chars", 2500)),
+                history=list(st.session_state.get("chat", [])),
+                rag_ready=rag_ready,
+                disclaimers_off=True
+            )
+            parts["system"] = f"{parts.get('system','')}\n주의: 변명/사과/한계 설명 금지. 학생이 이해하도록 친절히."
         except Exception as e:
-            with _chatbox("assistant", avatar="⚠️"):
+            _errlog(f"프롬프트 생성 실패: {e}", where="[06]prepare_prompt", exc=e)
+            with st.chat_message("assistant", avatar="⚠️"):
                 st.error(f"프롬프트 생성 실패: {type(e).__name__}: {e}")
                 st.code(traceback.format_exc(), language="python")
             return
 
-        # 1차/2차 파라미터
         prim_temp = float(st.session_state.get("primary_temperature", 0.3))
-        supp_temp = float(st.session_state.get("supp_temperature", 0.7))
         max_toks = 800
-
-        # 1차 스트리밍
         lead = st.session_state.get("lead_provider", "Gemini")
-        with _chatbox("assistant", avatar="🤖"):
-            st.caption(f"_{lead} 생성 중…_")
-            out_slot = st.empty()
-            if lead == "Gemini":
-                if have_gemini_lib and has_gemini_key:
-                    ok, out, provider_used = _call_gemini_stream(parts, out_slot, prim_temp, None, max_toks)
-                elif have_openai_lib and has_openai_key:
-                    ok, out, provider_used = _call_openai_stream(parts, out_slot, prim_temp, None, max_toks)
-                else:
-                    ok, out, provider_used = False, "Gemini/OpenAI 사용 불가(패키지 또는 키 누락)", lead
-            else:
-                if have_openai_lib and has_openai_key:
-                    ok, out, provider_used = _call_openai_stream(parts, out_slot, prim_temp, None, max_toks)
-                elif have_gemini_lib and has_gemini_key:
-                    ok, out, provider_used = _call_gemini_stream(parts, out_slot, prim_temp, None, max_toks)
-                else:
-                    ok, out, provider_used = False, "OpenAI/Gemini 사용 불가(패키지 또는 키 누락)", lead
 
-            # ✅ 성공 판정 강화: 공백 응답 방지
+        with st.chat_message("assistant", avatar="🤖"):
+            st.caption(f"_{lead} 생성 중…_"); out_slot = st.empty()
+            try:
+                if lead == "Gemini":
+                    if have_gemini_lib and has_gemini_key:
+                        ok, out, provider_used = _call_gemini_stream(parts, out_slot, prim_temp, None, max_toks)
+                    elif have_openai_lib and has_openai_key:
+                        ok, out, provider_used = _call_openai_stream(parts, out_slot, prim_temp, None, max_toks)
+                    else:
+                        ok, out, provider_used = False, "Gemini/OpenAI 사용 불가(패키지 또는 키 누락)", lead
+                else:
+                    if have_openai_lib and has_openai_key:
+                        ok, out, provider_used = _call_openai_stream(parts, out_slot, prim_temp, None, max_toks)
+                    elif have_gemini_lib and has_gemini_key:
+                        ok, out, provider_used = _call_gemini_stream(parts, out_slot, prim_temp, None, max_toks)
+                    else:
+                        ok, out, provider_used = False, "OpenAI/Gemini 사용 불가(패키지 또는 키 누락)", lead
+            except Exception as e:
+                _errlog(f"1차 생성 호출 실패: {e}", where="[06]primary_call", exc=e)
+                ok, out, provider_used = False, f"{type(e).__name__}: {e}", lead
+
             if ok and (out and out.strip()):
                 aid = _new_id()
                 st.session_state["chat"].append({
@@ -1968,102 +1775,73 @@ def _get_gemini_model(name: str):
                     st.session_state["_supplement_for_msg_id"] = aid
                 st.rerun()
             else:
-                # ✅ 폴백 시도: 리드 실패 시 반대 모델로 재시도
+                # 폴백
                 fallback_ok, fallback_out, fallback_provider = False, None, lead
                 if lead == "Gemini" and have_openai_lib and has_openai_key:
-                    st.caption("_Gemini 실패 → OpenAI로 폴백 시도_")
+                    st.caption("_Gemini 실패 → OpenAI 폴백_")
                     fallback_ok, fallback_out, fallback_provider = _call_openai_stream(parts, out_slot, prim_temp, None, max_toks)
                 elif lead != "Gemini" and have_gemini_lib and has_gemini_key:
-                    st.caption("_OpenAI 실패 → Gemini로 폴백 시도_")
+                    st.caption("_OpenAI 실패 → Gemini 폴백_")
                     fallback_ok, fallback_out, fallback_provider = _call_gemini_stream(parts, out_slot, prim_temp, None, max_toks)
 
                 if fallback_ok and (fallback_out and fallback_out.strip()):
                     aid = _new_id()
-                    st.session_state["chat"].append({
-                        "id": aid, "role": "assistant", "provider": fallback_provider,
-                        "kind": "primary", "text": fallback_out, "ts": _ts()
-                    })
+                    st.session_state["chat"].append({ "id": aid, "role": "assistant", "provider": fallback_provider,
+                                                      "kind": "primary", "text": fallback_out, "ts": _ts() })
                     if bool(st.session_state.get("dual_generate", False)):
                         st.session_state["_supplement_for_msg_id"] = aid
                     st.rerun()
                 else:
+                    _errlog(f"1차 생성 실패: {(fallback_out or out) or '원인 불명'}", where="[06]primary_fail")
                     st.error(f"1차 생성 실패: {(fallback_out or out) or '원인 불명'}")
 
-    # ── 보충 설명 실행(예약된 경우; 차별화 프롬프트 + 유사도 가드) ───────────────
-    target_id = st.session_state.get("_supplement_for_msg_id")
-    if target_id:
-        primary = None
-        for msg in reversed(st.session_state["chat"]):
-            if msg["id"] == target_id and msg.get("kind") == "primary":
-                primary = msg; break
-        if primary:
-            base_q = ""
-            for m in reversed(st.session_state["chat"]):
-                if m["role"] == "user" and m["id"] < primary["id"]:
-                    base_q = m["text"]; break
-            try:
-                # 2차 프롬프트: 더 창의적이고, 유사도/중복 방지
-                parts2 = _build_parts(st.session_state.get("qa_mode_radio","문법설명"), base_q, rag_ready)
-                # 2차 생성 파라미터
-                supp_temp2 = float(st.session_state.get("supp_temperature", 0.7))
-                supp_top_p2 = float(st.session_state.get("supp_top_p", 0.95))
-                other = "OpenAI" if primary.get("provider") == "Gemini" else "Gemini"
-
-                def _gen_supp_retry(p):
-                    # 2차는 기본적으로 '다른 모델'을 시도
+    # ── 보충 생성(관리자 옵션 켠 경우만) ─────────────────────────────────────
+    if not student_view:
+        target_id = st.session_state.get("_supplement_for_msg_id")
+        if target_id:
+            primary = None
+            for msg in reversed(st.session_state["chat"]):
+                if msg["id"] == target_id and msg.get("kind") == "primary":
+                    primary = msg; break
+            if primary:
+                base_q = ""
+                for m in reversed(st.session_state["chat"]):
+                    if m["role"] == "user" and m["id"] < primary["id"]:
+                        base_q = m["text"]; break
+                try:
+                    from src.prompt_modes import prepare_prompt
+                    parts2 = prepare_prompt(
+                        mode=st.session_state.get("qa_mode_radio","문법설명"), question=base_q,
+                        use_context=bool(st.session_state.get("use_context", True)),
+                        context_turns=int(st.session_state.get("context_turns", 8)),
+                        context_max_chars=int(st.session_state.get("context_max_chars", 2500)),
+                        history=list(st.session_state.get("chat", [])),
+                        rag_ready=rag_ready, disclaimers_off=True
+                    )
+                    supp_temp2 = float(st.session_state.get("supp_temperature", 0.7))
+                    supp_top_p2 = float(st.session_state.get("supp_top_p", 0.95))
+                    other = "OpenAI" if primary.get("provider") == "Gemini" else "Gemini"
                     out_slot = st.empty()
                     if other == "OpenAI":
-                        if have_openai_lib and has_openai_key:
-                            return _call_openai_stream(p, out_slot, supp_temp2, supp_top_p2, max_toks)
-                        return False, "OpenAI 사용 불가(패키지 또는 키 누락)", other
+                        ok2, out2, _ = _call_openai_stream(parts2, out_slot, supp_temp2, supp_top_p2, 800)
                     else:
-                        if have_gemini_lib and has_gemini_key:
-                            return _call_gemini_stream(p, out_slot, supp_temp2, supp_top_p2, max_toks)
-                        return False, "Gemini 사용 불가(패키지 또는 키 누락)", other
+                        ok2, out2, _ = _call_gemini_stream(parts2, out_slot, supp_temp2, supp_top_p2, 800)
+                except Exception as e:
+                    _errlog(f"보충 생성 실패: {e}", where="[06]supplement", exc=e)
+                    st.session_state["_supplement_for_msg_id"] = None
+                    return
 
-                ok2, out2, _ = _gen_supp_retry(parts2)
+                if ok2 and out2:
+                    st.session_state["chat"].append({
+                        "id": _new_id(), "role": "assistant", "provider": other,
+                        "kind": "supplement", "text": out2, "ts": _ts()
+                    })
+                    st.session_state["_supplement_for_msg_id"] = None
+                    st.rerun()
+                else:
+                    st.session_state["_supplement_for_msg_id"] = None
+# ===== [06] 질문/답변 패널 — END ==============================================
 
-                # ── 유사도 가드(필요 시 자동 재생성 1회) ───────────────────────────
-                if ok2 and out2 and primary["text"]:
-                    sim = difflib.SequenceMatcher(a=primary["text"], b=out2).ratio()
-                    if sim >= 0.85:
-                        # 너무 비슷하면 톤/관점 분화 재시도
-                        parts2b = parts2.copy()
-                        # (간단) 사용자 메시지에 "다른 관점/예시" 요청 추가
-                        parts2b["messages"] = parts2["messages"] + [
-                            {"role":"user", "content":"같은 내용을 다른 관점/예시로, 초등학생도 이해할 수 있게 다시 설명해줘."}
-                        ]
-                        def _gen_supp_retry2(p):
-                            out_slot = st.empty()
-                            if other == "OpenAI":
-                                if have_openai_lib and has_openai_key:
-                                    return _call_openai_stream(p, out_slot, supp_temp2, supp_top_p2, max_toks)
-                                return False, "OpenAI 사용 불가(패키지 또는 키 누락)", other
-                            else:
-                                if have_gemini_lib and has_gemini_key:
-                                    return _call_gemini_stream(p, out_slot, supp_temp2, supp_top_p2, max_toks)
-                                return False, "Gemini 사용 불가(패키지 또는 키 누락)", other
-                        ok2b, out2b, _ = _gen_supp_retry(parts2)
-                        if ok2b and out2b: out2 = out2b  # 더 나은 재작성으로 교체
-
-            except Exception as e:
-                with _chatbox("assistant", avatar="⚠️"):
-                    st.error(f"보충 생성 실패: {type(e).__name__}: {e}")
-                    st.code(traceback.format_exc(), language="python")
-                st.session_state["_supplement_for_msg_id"] = None
-                return
-
-            if ok2 and out2:
-                st.session_state["chat"].append({
-                    "id": _new_id(), "role": "assistant", "provider": other,
-                    "kind": "supplement", "text": out2, "ts": _ts()
-                })
-                st.session_state["_supplement_for_msg_id"] = None
-                st.rerun()
-            else:
-                st.session_state["_supplement_for_msg_id"] = None
-
-# ===== [06] END ===============================================================
 
 # ===== [07] MAIN — 부팅 훅 + 프롬프트 동기화 연결 ============================
 
@@ -2119,26 +1897,51 @@ def _boot_and_render():
 _boot_and_render()
 # ===== [07] MAIN — END =======================================================
 
-# ===== [08] ADMIN — 인덱싱/강제 동기화 도구 — START ===========================
+# ===== [08] ADMIN — 인덱싱/강제 동기화·모드ON/OFF·에러로그 — START ============
+def _load_modes_from_yaml(path: str) -> list[str]:
+    """로컬 prompts.yaml에서 modes 키 목록을 읽어온다."""
+    try:
+        import yaml, os, pathlib
+        p = pathlib.Path(path)
+        if not p.exists(): return []
+        data = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+        modes = list((data.get("modes") or {}).keys())
+        return [m for m in modes if isinstance(m, str)]
+    except Exception as e:
+        _errlog(f"prompts.yaml 파싱 실패: {e}", where="[ADMIN]_load_modes_from_yaml", exc=e)
+        return []
+
+def _load_enabled_modes(defaults: list[str]) -> list[str]:
+    """~/.maic/mode_enabled.json 에 저장된 on/off 목록 로드, 없으면 defaults 전체 사용."""
+    import json, os, pathlib
+    path = pathlib.Path(os.path.expanduser("~/.maic/mode_enabled.json"))
+    if not path.exists(): return list(defaults)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        enabled = [m for m, on in data.items() if on]
+        return enabled or list(defaults)
+    except Exception as e:
+        _errlog(f"mode_enabled.json 로드 실패: {e}", where="[ADMIN]_load_enabled_modes", exc=e)
+        return list(defaults)
+
+def _save_enabled_modes(state: dict[str, bool]) -> tuple[bool, str]:
+    """모드 on/off 저장."""
+    import json, os, pathlib
+    try:
+        path = pathlib.Path(os.path.expanduser("~/.maic/mode_enabled.json"))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+        return True, f"저장됨: {path}"
+    except Exception as e:
+        _errlog(f"mode_enabled 저장 실패: {e}", where="[ADMIN]_save_enabled_modes", exc=e)
+        return False, f"{type(e).__name__}: {e}"
+
 def _run_index_job(mode: str) -> tuple[bool, str]:
     """
-    인덱스 실행(전체/증분). 프로젝트의 인덱스 모듈을 자동 탐색하고
-    함수 시그니처를 동적으로 맞춰 호출합니다.
-
-    우선 탐색 모듈(순서):
-      1) src.rag.index_build
-      2) src.index_build
-      3) index_build
-      4) rag.index_build
-
-    우선 호출 함수(순서):
-      - build_index_with_checkpoint(update_pct, update_msg, gdrive_folder_id, gcp_creds, persist_dir, remote_manifest, should_stop, mode?)
-      - build_index(mode, persist_dir, gdrive_folder_id?, update_pct?, update_msg?, should_stop?)
-      - build_all(persist_dir?)
-      - build_incremental(persist_dir?)
-      - main(argv: list[str])
+    인덱스 실행(전체/증분). 프로젝트 인덱스 모듈을 자동 탐색해 호출.
+    우선 모듈: src.rag.index_build → src.index_build → index_build → rag.index_build
     """
-    import os, importlib, importlib.util, inspect
+    import importlib, importlib.util, inspect
     from pathlib import Path
 
     def _find_module(names: list[str]):
@@ -2147,177 +1950,168 @@ def _run_index_job(mode: str) -> tuple[bool, str]:
                 return importlib.import_module(n)
         return None
 
-    mod = _find_module(["src.rag.index_build", "src.index_build", "index_build", "rag.index_build"])
+    mod = _find_module(["src.rag.index_build","src.index_build","index_build","rag.index_build"])
     if not mod:
-        return False, "인덱스 모듈을 찾지 못했습니다 (src.rag.index_build/src.index_build/index_build/rag.index_build)"
+        return False, "인덱스 모듈을 찾지 못했습니다"
 
-    # persist 경로
     PERSIST_DIR = Path.home() / ".maic" / "persist"
     PERSIST_DIR.mkdir(parents=True, exist_ok=True)
 
-    # prepared 폴더 ID (secrets 여러 키를 관대하게 탐색)
+    # prepared 폴더 ID (secrets에서 관대하게 탐색)
     def _pick_folder_id():
-        keys = [
-            "GDRIVE_PREPARED_FOLDER_ID", "PREPARED_FOLDER_ID",
-            "APP_GDRIVE_FOLDER_ID", "GDRIVE_FOLDER_ID"
-        ]
-        for k in keys:
-            try:
-                v = getattr(st, "secrets", {}).get(k)
-                if v and str(v).strip():
-                    return str(v).strip()
-            except Exception:
-                pass
+        for k in ["GDRIVE_PREPARED_FOLDER_ID","PREPARED_FOLDER_ID","APP_GDRIVE_FOLDER_ID","GDRIVE_FOLDER_ID"]:
+            v = getattr(st, "secrets", {}).get(k)
+            if v and str(v).strip(): return str(v).strip()
         return ""
 
     gdrive_folder_id = _pick_folder_id()
 
-    # 진행률/메시지 콜백(스트림릿 위젯)
     prog = st.progress(0, text="인덱싱 준비 중…")
     msg_box = st.empty()
-    def _pct(v: int, msg: str | None = None):
+    def _pct(v: int, msg: str|None=None):
         try: prog.progress(max(0, min(100, int(v))), text=(msg or "인덱싱 중…"))
         except Exception: pass
     def _msg(s: str):
         try: msg_box.write(s)
         except Exception: pass
 
-    # 증분 모드라면 manifest 로드 시도
-    remote_manifest = {}
-    if mode != "full":
-        try:
-            loader = getattr(mod, "_load_manifest_dict", None)
-            if callable(loader):
-                remote_manifest = loader() or {}
-        except Exception:
-            remote_manifest = {}
-
-    # 동적 호출 헬퍼(시그니처에 맞춰 전달 가능한 인자만 주입)
-    def _try_call(fn_name: str, **kw):
+    # 동적 시그니처 호출
+    import inspect
+    def _try(fn_name: str, **kw):
         fn = getattr(mod, fn_name, None)
         if not callable(fn): return False, None
         try:
             sig = inspect.signature(fn)
-            call_kw = {}
-            for p in sig.parameters.values():
-                if p.name in kw:
-                    call_kw[p.name] = kw[p.name]
+            call_kw = {k:v for k,v in kw.items() if k in sig.parameters}
             res = fn(**call_kw)
             return True, res
         except Exception as e:
+            _errlog(f"{fn_name} 실패: {e}", where="[ADMIN]_run_index_job", exc=e)
             return False, f"{fn_name} 실패: {type(e).__name__}: {e}"
 
     # 1) build_index_with_checkpoint
-    ok, res = _try_call(
-        "build_index_with_checkpoint",
-        update_pct=_pct, update_msg=_msg,
-        gdrive_folder_id=gdrive_folder_id,
-        gcp_creds={},  # 사용하지 않는 구현도 있어 관대한 값
-        persist_dir=str(PERSIST_DIR),
-        remote_manifest=remote_manifest,
-        should_stop=None, mode=mode
-    )
+    ok, res = _try("build_index_with_checkpoint",
+                   update_pct=_pct, update_msg=_msg, gdrive_folder_id=gdrive_folder_id,
+                   gcp_creds={}, persist_dir=str(PERSIST_DIR), remote_manifest={}, should_stop=None, mode=mode)
     if ok: 
         try: st.cache_data.clear()
         except Exception: pass
         return True, "인덱싱 완료(build_index_with_checkpoint)"
 
     # 2) build_index
-    ok, res = _try_call(
-        "build_index", mode=mode, persist_dir=str(PERSIST_DIR),
-        gdrive_folder_id=gdrive_folder_id,
-        update_pct=_pct, update_msg=_msg, should_stop=None
-    )
+    ok, res = _try("build_index", mode=mode, persist_dir=str(PERSIST_DIR),
+                   gdrive_folder_id=gdrive_folder_id, update_pct=_pct, update_msg=_msg, should_stop=None)
     if ok:
         try: st.cache_data.clear()
         except Exception: pass
         return True, "인덱싱 완료(build_index)"
 
     # 3) build_all / build_incremental
-    if mode == "full":
-        ok, res = _try_call("build_all", persist_dir=str(PERSIST_DIR))
-        if ok:
+    if mode=="full":
+        ok, res = _try("build_all", persist_dir=str(PERSIST_DIR))
+        if ok: 
             try: st.cache_data.clear()
             except Exception: pass
             return True, "인덱싱 완료(build_all)"
     else:
-        ok, res = _try_call("build_incremental", persist_dir=str(PERSIST_DIR))
+        ok, res = _try("build_incremental", persist_dir=str(PERSIST_DIR))
         if ok:
             try: st.cache_data.clear()
             except Exception: pass
             return True, "인덱싱 완료(build_incremental)"
 
     # 4) main(argv)
-    ok, res = _try_call("main", argv=[
-        "--persist", str(PERSIST_DIR),
-        "--mode", ("full" if mode=="full" else "inc"),
-        "--folder", gdrive_folder_id
-    ])
+    ok, res = _try("main", argv=["--persist", str(PERSIST_DIR), "--mode", ("full" if mode=="full" else "inc"), "--folder", gdrive_folder_id])
     if ok:
         try: st.cache_data.clear()
         except Exception: pass
         return True, "인덱싱 완료(main)"
 
-    # 실패 시 메시지 반환
     return False, (res or "인덱스 엔트리포인트 호출 실패")
 
 def render_admin_tools():
     """
-    관리자 도구(한 화면로 통합):
-      - 프롬프트 상태
-      - 인덱싱(전체/신규만)
-      - 프롬프트 강제 동기화
+    관리자 도구(모듈형, 모두 접기/펼치기 가능)
+      ① 프롬프트/연결 상태
+      ② 응답 모드 ON/OFF
+      ③ 인덱싱(전체/신규만)
+      ④ prompts.yaml 강제 동기화
+      ⑤ 에러 로그(복사/다운로드/초기화)
     """
-    import os, json, pathlib
+    import os, json, pathlib, io
     from pathlib import Path
 
     with st.expander("관리자 도구", expanded=True):
-        st.caption("⚙️ 진단 · 프롬프트/인덱스 상태")
+        # ① 상태
+        with st.expander("① 진단 · 프롬프트/연결 상태", expanded=True):
+            folder_id = os.getenv("PROMPTS_DRIVE_FOLDER_ID") or getattr(st, "secrets", {}).get("PROMPTS_DRIVE_FOLDER_ID")
+            oauth_info = getattr(st, "secrets", {}).get("gdrive_oauth")
+            who = None
+            try:
+                if isinstance(oauth_info, str): who = json.loads(oauth_info).get("email")
+                elif isinstance(oauth_info, dict): who = oauth_info.get("email")
+            except Exception: pass
+            local_prompts = os.path.expanduser("~/.maic/prompts.yaml")
+            exists = pathlib.Path(local_prompts).exists()
+            persist_dir = Path.home() / ".maic" / "persist"
 
-        # 연결/상태
-        folder_id = os.getenv("PROMPTS_DRIVE_FOLDER_ID") or getattr(st, "secrets", {}).get("PROMPTS_DRIVE_FOLDER_ID")
-        oauth_info = getattr(st, "secrets", {}).get("gdrive_oauth")
-        who = None
-        try:
-            if isinstance(oauth_info, str): who = json.loads(oauth_info).get("email")
-            elif isinstance(oauth_info, dict): who = oauth_info.get("email")
-        except Exception: pass
+            st.write(f"• Drive 폴더 ID(프롬프트): `{folder_id or '미설정'}`")
+            st.write(f"• Drive 연결: {'🟢 연결됨' if bool(oauth_info) else '🔴 미연결'} — 계정: `{who or '알 수 없음'}`")
+            st.write(f"• 로컬 prompts 경로: `{local_prompts}` — 존재: {'✅ 있음' if exists else '❌ 없음'}")
+            st.write(f"• 인덱스 보관 경로: `{persist_dir}`")
 
-        local_prompts = os.path.expanduser("~/.maic/prompts.yaml")
-        exists = pathlib.Path(local_prompts).exists()
-        persist_dir = Path.home() / ".maic" / "persist"
-
-        st.write(f"• Drive 폴더 ID(프롬프트): `{folder_id or '미설정'}`")
-        st.write(f"• Drive 연결: {'🟢 연결됨' if bool(oauth_info) else '🔴 미연결'} — 계정: `{who or '알 수 없음'}`")
-        st.write(f"• 로컬 prompts 경로: `{local_prompts}` — 존재: {'✅ 있음' if exists else '❌ 없음'}")
-        st.write(f"• 인덱스 보관 경로: `{persist_dir}`")
-
-        st.divider()
-
-        # 액션 버튼
-        c1, c2, c3 = st.columns([1,1,1])
-        with c1:
-            if st.button("전체 인덱스 다시 만들기", use_container_width=True):
-                with st.spinner("전체 인덱싱 중… 시간이 걸릴 수 있어요"):
-                    ok, msg = _run_index_job("full")
+        # ② 모드 ON/OFF
+        with st.expander("② 응답 모드 ON/OFF", expanded=True):
+            prompts_path = st.session_state.get("prompts_path", os.path.expanduser("~/.maic/prompts.yaml"))
+            all_modes = _load_modes_from_yaml(prompts_path) or ["문법설명","문장구조분석","지문분석"]
+            st.caption(f"감지된 모드: {', '.join(all_modes)}")
+            current_on = _load_enabled_modes(all_modes)
+            state = {}
+            cols = st.columns(min(3, len(all_modes)) or 1)
+            for i, m in enumerate(all_modes):
+                with cols[i % len(cols)]:
+                    state[m] = st.toggle(m, value=(m in current_on), key=f"mode_on__{m}")
+            if st.button("저장(학생 화면 반영)", use_container_width=True):
+                ok, msg = _save_enabled_modes(state)
                 (st.success if ok else st.error)(msg)
-        with c2:
-            if st.button("신규 파일만 인덱스", use_container_width=True):
-                with st.spinner("증분 인덱싱 중…"):
-                    ok, msg = _run_index_job("inc")
+
+        # ③ 인덱싱
+        with st.expander("③ 인덱싱(전체/신규만)", expanded=False):
+            c1, c2 = st.columns(2)
+            with c1:
+                if st.button("전체 인덱스 다시 만들기", use_container_width=True):
+                    with st.spinner("전체 인덱싱 중… 시간이 걸릴 수 있어요"):
+                        ok, msg = _run_index_job("full")
+                    (st.success if ok else st.error)(msg)
+            with c2:
+                if st.button("신규 파일만 인덱스", use_container_width=True):
+                    with st.spinner("증분 인덱싱 중…"):
+                        ok, msg = _run_index_job("inc")
+                    (st.success if ok else st.error)(msg)
+
+        # ④ prompts.yaml 강제 동기화
+        with st.expander("④ 드라이브에서 prompts.yaml 당겨오기(강제)", expanded=False):
+            if st.button("동기화 실행", use_container_width=True):
+                ok, msg = sync_prompts_from_drive(
+                    local_path=os.path.expanduser("~/.maic/prompts.yaml"),
+                    file_name=(os.getenv("PROMPTS_FILE_NAME") or getattr(st, "secrets", {}).get("PROMPTS_FILE_NAME") or "prompts.yaml"),
+                    folder_id=(os.getenv("PROMPTS_DRIVE_FOLDER_ID") or getattr(st, "secrets", {}).get("PROMPTS_DRIVE_FOLDER_ID")),
+                    prefer_folder_name="prompts", verbose=True
+                )
                 (st.success if ok else st.error)(msg)
-        with c3:
-            if st.button("드라이브에서 prompts.yaml 당겨오기(강제)", use_container_width=True):
-                with st.spinner("동기화 중…"):
-                    ok, msg = sync_prompts_from_drive(
-                        local_path=os.path.expanduser("~/.maic/prompts.yaml"),
-                        file_name=(os.getenv("PROMPTS_FILE_NAME") or getattr(st, "secrets", {}).get("PROMPTS_FILE_NAME") or "prompts.yaml"),
-                        folder_id=(os.getenv("PROMPTS_DRIVE_FOLDER_ID") or getattr(st, "secrets", {}).get("PROMPTS_DRIVE_FOLDER_ID")),
-                        prefer_folder_name="prompts",
-                        verbose=True
-                    )
-                (st.success if ok else st.error)(msg)
-# ===== [08] ADMIN — 인덱싱/강제 동기화 도구 — END =============================
+
+        # ⑤ 에러 로그
+        with st.expander("⑤ 에러/오류 로그", expanded=False):
+            logs = _errlog_text()
+            st.text_area("세션 에러 로그 (복사 가능)", value=logs, height=200)
+            c1, c2 = st.columns(2)
+            with c1:
+                st.download_button("로그 내려받기", data=logs or "로그 없음", file_name="error_log.txt")
+            with c2:
+                if st.button("로그 초기화"):
+                    st.session_state["_error_log"] = []
+                    st.success("초기화 완료")
+# ===== [08] ADMIN — 인덱싱/강제 동기화·모드ON/OFF·에러로그 — END =============
 
 
 # ===== [23] PROMPTS 동기화 (Google Drive → Local) — START =====================
