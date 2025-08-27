@@ -657,13 +657,14 @@ def _render_admin_diagnostics_section():
 
 _render_admin_diagnostics_section()
 # ===== [04C] END ==============================================================
+
 # ===== [04C] END ==============================================================
 
 # ===== [04D] 인덱스 스냅샷/전체 재빌드/롤백 — 유틸리티 ===================== START
-import os, io, json, time, shutil, hashlib
+import os, io, json, time, shutil, hashlib, importlib
 from datetime import datetime
 from pathlib import Path
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Callable
 
 # 스냅샷 루트 및 current 포인터
 INDEX_ROOT = Path(os.environ.get("MAIC_INDEX_ROOT", "~/.maic/persist")).expanduser()
@@ -731,29 +732,53 @@ def _healthcheck(stage_dir: Path) -> Tuple[bool, str]:
         return False, f"chunks.jsonl 파싱 실패: {e}"
     return True, "OK"
 
-def _try_import_full_builder():
+def _try_import_full_builder() -> Tuple[Optional[Callable], str]:
     """
-    프로젝트별 전체 빌더 함수 자동 탐색.
-    우선 순위:
-      1) src.rag.index_build.build_full_index
-      2) src.rag.index_build.build_index
-      3) rag.index_build.build_full_index
-      4) rag.index_build.build_index
+    전체 빌더 함수 자동 탐색 + 환경변수 지정 지원.
+    - 우선순위 0: 환경변수 MAIC_INDEX_BUILDER="모듈경로:함수명"
+    - 우선순위 1~N: 자주 쓰는 경로 시도
+    실패 시, 시도한 경로와 예외 메시지를 모두 반환하여 UI에서 안내.
     """
+    tried: list[str] = []
+
+    # 0) 환경변수 지정 경로 우선
+    env_spec = os.environ.get("MAIC_INDEX_BUILDER", "").strip()
+    if env_spec and ":" in env_spec:
+        mod, fn = env_spec.split(":", 1)
+        try:
+            m = importlib.import_module(mod)
+            f = getattr(m, fn, None)
+            if callable(f):
+                return f, f"[ENV] {mod}:{fn}"
+            tried.append(f"[ENV] {mod}:{fn} (속성 없음/비호출)")
+        except Exception as e:
+            tried.append(f"[ENV] {mod}:{fn} (import 실패: {e})")
+
+    # 1) 자주 쓰는 후보들
     candidates = [
         ("src.rag.index_build", "build_full_index"),
         ("src.rag.index_build", "build_index"),
         ("rag.index_build",     "build_full_index"),
         ("rag.index_build",     "build_index"),
+        ("src.index_build",     "build_full_index"),
+        ("src.index_build",     "build_index"),
+        ("index_build",         "build_full_index"),
+        ("index_build",         "build_index"),
+        ("MAIC.index_build",    "build_full_index"),
+        ("MAIC.index_build",    "build_index"),
     ]
     for mod, attr in candidates:
         try:
-            m = __import__(mod, fromlist=[attr])
-            fn = getattr(m, attr, None)
-            if callable(fn): return fn
-        except Exception:
-            continue
-    return None
+            m = importlib.import_module(mod)
+            f = getattr(m, attr, None)
+            if callable(f):
+                return f, f"[AUTO] {mod}:{attr}"
+            tried.append(f"[AUTO] {mod}:{attr} (속성 없음/비호출)")
+        except Exception as e:
+            tried.append(f"[AUTO] {mod}:{attr} (import 실패: {e})")
+
+    detail = " / ".join(tried)
+    return None, detail
 
 def full_rebuild_safe(progress=None, on_drive_upload=None) -> Tuple[bool, str, Optional[Path]]:
     """
@@ -764,21 +789,25 @@ def full_rebuild_safe(progress=None, on_drive_upload=None) -> Tuple[bool, str, O
       - 실패 시 current는 그대로(자동 롤백 효과)
     """
     _ensure_dirs()
-    builder = _try_import_full_builder()
+    builder, where = _try_import_full_builder()
     if not builder:
-        return False, "전체 빌더 함수를 찾지 못했습니다(src.rag.index_build 확인).", None
+        return False, f"전체 빌더 함수를 찾지 못했습니다. (시도 경로: {where})\n" \
+                      f"해결: 환경변수 MAIC_INDEX_BUILDER='모듈:함수'로 지정하거나 index_build 모듈 경로를 확인하세요.", None
 
     ts = _now_ts()
     stage = SNAP_ROOT / f"v_{ts}"
     stage.mkdir(parents=True, exist_ok=False)
 
-    if progress: progress(10, text="전체 인덱스 빌드 시작…")
+    if progress: progress(10, text=f"전체 인덱스 빌드 시작… {where}")
     # 빌더는 out_dir에 필수 산출물 생성해야 함
     try:
-        builder(out_dir=str(stage))
-    except TypeError:
-        # out_dir 인자를 받지 않는 구현 대비
-        builder()
+        # out_dir 인자를 받는/안 받는 구현 모두 대응
+        try:
+            builder(out_dir=str(stage))
+        except TypeError:
+            builder()
+    except Exception as e:
+        return False, f"빌드 함수 실행 실패: {e}", stage
 
     if progress: progress(65, text="헬스체크 수행…")
     ok, msg = _healthcheck(stage)
@@ -806,8 +835,8 @@ def incremental_rebuild_minimal(progress=None) -> Tuple[bool, str]:
     """
     try:
         from src.rag.index_build import rebuild_incremental_minimal
-    except Exception:
-        return False, "증분 빌더(rebuild_incremental_minimal) 미탑재.", 
+    except Exception as e:
+        return False, f"증분 빌더(rebuild_incremental_minimal) 미탑재: {e}", 
     if progress: progress(20, text="신규 파일 감지…")
     n = rebuild_incremental_minimal()
     if progress: progress(100, text=f"증분 완료: {n}개 반영")
@@ -823,6 +852,9 @@ def rollback_to(snapshot_dir: Path) -> Tuple[bool, str]:
     _atomic_point_to(snapshot_dir)
     return True, f"롤백 완료: {snapshot_dir.name}"
 # ===== [04D] 인덱스 스냅샷/전체 재빌드/롤백 — 유틸리티 ======================= END
+
+# ===== [05A] 자료 최적화/백업 패널 ==========================================
+
 
 # ===== [05A] 자료 최적화/백업 패널 ==========================================
 
