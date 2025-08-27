@@ -1610,6 +1610,57 @@ except Exception:
     pass
 # ===== [05E] 시작 시 자동 인덱스 상태/토글 =================================== END
 
+# ===== [05] 두뇌 준비 상태 헬퍼(RAG readiness) — START =======================
+def _is_brain_ready() -> bool:
+    """
+    인덱스/퍼시스트가 준비되었는지 판별.
+    - 우선순위 경로: env PERSIST_DIR → st.secrets['PERSIST_DIR'] → ~/.maic/persist
+    - 아래 마커 파일이 하나라도 있으면 준비 완료로 간주:
+        manifest.json / manifest.yaml / manifest.yml / manifest.pkl
+        chroma.sqlite / faiss.index / index.faiss / index.bin
+        docstore.json / vector.index / collections.parquet 등
+    - 마커가 없어도, persist 폴더 하위에 10KB 이상 파일이 하나라도 있으면 True
+    - 실패 시 False (그리고 에러 로그에 기록)
+    """
+    import os, pathlib
+    try:
+        persist_dir = (
+            os.getenv("PERSIST_DIR")
+            or getattr(st, "secrets", {}).get("PERSIST_DIR")
+            or os.path.expanduser("~/.maic/persist")
+        )
+        p = pathlib.Path(persist_dir)
+        if not p.exists():
+            return False
+
+        markers = [
+            "manifest.json","manifest.yaml","manifest.yml","manifest.pkl",
+            "chroma.sqlite","faiss.index","index.faiss","index.bin",
+            "docstore.json","vector.index","collections.parquet","collection.parquet"
+        ]
+        for m in markers:
+            if (p / m).exists():
+                return True
+
+        # 용량 기반 휴리스틱(10KB 이상 파일이 하나라도 있으면 준비됨으로 간주)
+        for q in p.rglob("*"):
+            try:
+                if q.is_file() and q.stat().st_size > 10 * 1024:
+                    return True
+            except Exception:
+                continue
+
+        return False
+
+    except Exception as e:
+        try:
+            _errlog(f"두뇌 상태 확인 실패: {e}", where="[05]_is_brain_ready", exc=e)  # [00B]가 있으면 기록
+        except Exception:
+            pass
+        return False
+# ===== [05] 두뇌 준비 상태 헬퍼(RAG readiness) — END =========================
+
+
 # ===== [06] 질문/답변 패널 — 학생 화면 최소화 지원(모드ON/OFF/에러로그 연동) — START
 def _render_qa_panel():
     """
