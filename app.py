@@ -1736,37 +1736,145 @@ def _render_qa_panel():
                 st.code(parts, language="json")
         return parts
 
-    # ── (B1) OpenAI 호환 — 스트림 호출 ───────────────────────────────────────
-    def _call_openai_stream(parts, out_slot, temperature: float, top_p: float | None, max_tokens: int):
-        try:
-            import openai
-            # SDK v1: 글로벌 키 설정
-            openai.api_key = os.getenv("OPENAI_API_KEY") or getattr(st, "secrets", {}).get("OPENAI_API_KEY")
-            if not openai.api_key: return False, "OPENAI_API_KEY 미설정", "OpenAI"
+# ===== [21] OPENAI 스트림 호출 헬퍼 (표준화/안정화) — START =====================
+def _call_openai_stream(parts, out_slot, temperature: float, top_p: float | None, max_tokens: int):
+    """
+    OpenAI Chat Completions 스트리밍 호출 (표준화 버전)
+    - SDK v1/구버전 혼선 방지: 모듈식 호출(openai.chat.completions.create)
+    - 예외 분기 명확화: 인증/요금제/레이트리밋/연결/기타
+    - 빈 응답 방지: 최종 텍스트가 공백이면 실패(폴백 신호 전달)
+    """
+    try:
+        import os, openai
 
-            # 메시지 변환
-            payload = {
-                "messages": [
-                    {"role": "system", "content": parts["system"]},
-                    *parts["messages"],
-                ]
-            }
-            # 모델/파라미터
-            model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-            kwargs = dict(model=model, stream=True, temperature=temperature, max_tokens=max_tokens)
-            if top_p is not None: kwargs["top_p"] = top_p
-            kwargs.update(payload)
-            stream = openai.chat.completions.create(**kwargs)
-            buf = []
-            for event in stream:
+        # 1) 키 확인
+        api_key = os.getenv("OPENAI_API_KEY") or getattr(st, "secrets", {}).get("OPENAI_API_KEY")
+        if not api_key:
+            return False, "OPENAI_API_KEY 미설정", "OpenAI"
+        openai.api_key = api_key  # 모듈 전역에 키 설정
+
+        # 2) 페이로드 구성
+        model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+        messages = [
+            {"role": "system", "content": parts.get("system", "")},
+            *parts.get("messages", []),
+        ]
+        kwargs = dict(
+            model=model,
+            messages=messages,
+            stream=True,
+            temperature=float(temperature),
+            max_tokens=int(max_tokens),
+        )
+        if top_p is not None:
+            kwargs["top_p"] = float(top_p)
+
+        # 3) 스트리밍 루프
+        buf: list[str] = []
+        stream = openai.chat.completions.create(**kwargs)
+        for event in stream:
+            # v0.28 계열: event.choices[0].delta.content
+            # v1 계열 래핑에서도 동일 경로가 노출됨(호환 레이어)
+            try:
                 delta = getattr(event.choices[0], "delta", None)
-                if delta and getattr(delta, "content", None):
-                    buf.append(delta.content)
-                    out_slot.markdown("".join(buf))
-            text = "".join(buf).strip()
-            return True, (text if text else None), "OpenAI"
-        except Exception as e:
-            return False, f"{type(e).__name__}: {e}", "OpenAI"
+                chunk = getattr(delta, "content", None) if delta else None
+            except Exception:
+                chunk = None
+            if chunk:
+                buf.append(chunk)
+                out_slot.markdown("".join(buf))
+
+        text = "".join(buf).strip()
+        if not text:
+            # 스트림 중 내용이 전혀 없었다면 실패로 간주 (폴백 신호)
+            return False, "OpenAI 빈 응답", "OpenAI"
+
+        return True, text, "OpenAI"
+
+    # 4) 예외 분기: SDK 버전에 따라 에러 클래스가 다를 수 있어 넓게 처리
+    except Exception as e:
+        # 가능한 한 의미 있는 에러 메시지로 매핑
+        et = type(e).__name__
+        msg = str(e) or et
+        # 대표적인 경우들 키워드 스캔 (간이 매핑)
+        if "RateLimit" in msg or "rate limit" in msg.lower():
+            return False, f"RateLimitError: {msg}", "OpenAI"
+        if "authentication" in msg.lower() or "api key" in msg.lower():
+            return False, f"AuthenticationError: {msg}", "OpenAI"
+        if "connection" in msg.lower() or "timeout" in msg.lower():
+            return False, f"APIConnectionError: {msg}", "OpenAI"
+        return False, f"{et}: {msg}", "OpenAI"
+# ===== [21] OPENAI 스트림 호출 헬퍼 (표준화/안정화) — END =======================
+# ===== [22] GEMINI 모델 팩토리 안정화 — START =================================
+def _get_gemini_model(name: str):
+    """
+    Gemini 모델명 안전 매핑 + 최종 폴백까지 보장.
+    - 입력: 사용자가 선택/환경변수로 준 모델명(대소문자/레거시/별칭 포함 가능)
+    - 동작:
+        1) API 키 확인 및 genai.configure
+        2) 별칭/레거시 -> 정식 모델명으로 매핑
+        3) 모델 생성 실패 시 1차 폴백(1.5-flash), 그마저 실패 시 마지막 폴백(1.5-pro)
+    """
+    import os
+    import google.generativeai as genai
+
+    # 0) 키 확인 + 설정
+    api_key = os.getenv("GEMINI_API_KEY") or getattr(st, "secrets", {}).get("GEMINI_API_KEY")
+    if not api_key:
+        # 호출부에서 ok=False로 처리하도록 예외를 명시적으로 올린다
+        raise RuntimeError("GEMINI_API_KEY 미설정")
+    genai.configure(api_key=api_key)
+
+    # 1) 정규화
+    raw = (name or "").strip()
+    key = raw.lower().replace("models/", "")  # 일부 예전 문서의 'models/' prefix 제거
+
+    # 2) 별칭/레거시 매핑
+    #    - 최신 계열 우선: 2.0 > 1.5
+    #    - 'pro','flash' 단독, 하이픈 유무 등 관대한 처리
+    aliases = {
+        # 2.0 계열 (있으면 이쪽 우선 사용)
+        "2.0-flash": "gemini-2.0-flash",
+        "2.0-pro":   "gemini-2.0-pro",
+        "gemini-2.0-flash": "gemini-2.0-flash",
+        "gemini-2.0-pro":   "gemini-2.0-pro",
+
+        # 1.5 계열
+        "1.5-flash": "gemini-1.5-flash",
+        "1.5-pro":   "gemini-1.5-pro",
+        "gemini-1.5-flash": "gemini-1.5-flash",
+        "gemini-1.5-pro":   "gemini-1.5-pro",
+
+        # 단축/별칭
+        "flash": "gemini-1.5-flash",
+        "pro":   "gemini-1.5-pro",
+
+        # 레거시 명칭
+        "gemini-pro": "gemini-1.0-pro",
+        "1.0-pro":    "gemini-1.0-pro",
+        "gemini-pro-vision": "gemini-1.0-pro-vision",
+    }
+
+    # 정식 이름으로 보정
+    if key in aliases:
+        canonical = aliases[key]
+    elif key.startswith("gemini-"):
+        canonical = key  # 이미 정식 이름일 가능성
+    else:
+        # 환경 기본값 → 없으면 flash
+        canonical = os.getenv("GEMINI_MODEL_DEFAULT", "gemini-1.5-flash")
+
+    # 3) 모델 생성 + 다단 폴백
+    try:
+        return genai.GenerativeModel(canonical)
+    except Exception:
+        # 1차 폴백: flash
+        try:
+            return genai.GenerativeModel("gemini-1.5-flash")
+        except Exception:
+            # 2차 폴백: pro
+            return genai.GenerativeModel("gemini-1.5-pro")
+# ===== [22] GEMINI 모델 팩토리 안정화 — END ===================================
 
     # ── (B2) Gemini 호환 — 스트림 호출 ───────────────────────────────────────
     def _call_gemini_stream(parts, out_slot, temperature: float, top_p: float | None, max_tokens: int):
@@ -1956,7 +2064,6 @@ def _render_qa_panel():
                 st.session_state["_supplement_for_msg_id"] = None
 
 # ===== [06] END ===============================================================
-
 
 # ===== [07] MAIN — 오케스트레이터 ============================================
 def _render_title_with_status():
