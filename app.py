@@ -657,6 +657,174 @@ def _render_admin_diagnostics_section():
 
 _render_admin_diagnostics_section()
 # ===== [04C] END ==============================================================
+# ===== [04C] END ==============================================================
+
+# ===== [04D] 인덱스 스냅샷/전체 재빌드/롤백 — 유틸리티 ===================== START
+import os, io, json, time, shutil, hashlib
+from datetime import datetime
+from pathlib import Path
+from typing import Tuple, Optional
+
+# 스냅샷 루트 및 current 포인터
+INDEX_ROOT = Path(os.environ.get("MAIC_INDEX_ROOT", "~/.maic/persist")).expanduser()
+SNAP_ROOT  = INDEX_ROOT / "indexes"
+CUR_LINK   = SNAP_ROOT / "current"           # symlink 선호
+KEEP_N     = 5                                # 보존할 스냅샷 수
+REQ_FILES  = ["chunks.jsonl", "manifest.json"]  # 헬스체크 필수 산출물
+
+def _now_ts() -> str:
+    return datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+
+def _ensure_dirs() -> None:
+    SNAP_ROOT.mkdir(parents=True, exist_ok=True)
+
+def _resolve_current_path() -> Optional[Path]:
+    """current가 symlink면 대상, 아니면 current.path 포인터를 읽음."""
+    if CUR_LINK.exists() and CUR_LINK.is_symlink():
+        return CUR_LINK.resolve()
+    ptr = SNAP_ROOT / "current.path"
+    if ptr.exists():
+        p = Path(ptr.read_text(encoding="utf-8").strip())
+        return p if p.exists() else None
+    return None
+
+def _atomic_point_to(new_dir: Path) -> None:
+    """원자적 교체: symlink 교체가 실패하면 포인터 파일로 대체."""
+    _ensure_dirs()
+    tmp = SNAP_ROOT / (".current_tmp_" + _now_ts())
+    try:
+        if tmp.exists():
+            if tmp.is_symlink() or tmp.is_file(): tmp.unlink()
+            elif tmp.is_dir(): shutil.rmtree(tmp)
+        os.symlink(new_dir, tmp)
+        if CUR_LINK.exists() or CUR_LINK.is_symlink():
+            CUR_LINK.unlink()
+        os.replace(tmp, CUR_LINK)
+        (SNAP_ROOT / "current.path").write_text(str(new_dir), encoding="utf-8")
+    except Exception:
+        (SNAP_ROOT / "current.path").write_text(str(new_dir), encoding="utf-8")
+
+def _list_snapshots() -> list[Path]:
+    _ensure_dirs()
+    items = [p for p in SNAP_ROOT.iterdir() if p.is_dir() and p.name.startswith("v_")]
+    items.sort(reverse=True)
+    return items
+
+def _gc_old_snapshots(keep: int = KEEP_N) -> None:
+    for p in _list_snapshots()[keep:]:
+        try: shutil.rmtree(p)
+        except Exception: pass
+
+def _healthcheck(stage_dir: Path) -> Tuple[bool, str]:
+    """필수 파일 존재/크기 + chunks.jsonl 첫 레코드 파싱."""
+    for name in REQ_FILES:
+        f = stage_dir / name
+        if not f.exists() or f.stat().st_size == 0:
+            return False, f"필수 산출물 누락/0바이트: {name}"
+    try:
+        with open(stage_dir / "chunks.jsonl", "r", encoding="utf-8") as fr:
+            line = fr.readline()
+            if not line.strip():
+                return False, "chunks.jsonl 첫 레코드 없음"
+            _ = json.loads(line)
+    except Exception as e:
+        return False, f"chunks.jsonl 파싱 실패: {e}"
+    return True, "OK"
+
+def _try_import_full_builder():
+    """
+    프로젝트별 전체 빌더 함수 자동 탐색.
+    우선 순위:
+      1) src.rag.index_build.build_full_index
+      2) src.rag.index_build.build_index
+      3) rag.index_build.build_full_index
+      4) rag.index_build.build_index
+    """
+    candidates = [
+        ("src.rag.index_build", "build_full_index"),
+        ("src.rag.index_build", "build_index"),
+        ("rag.index_build",     "build_full_index"),
+        ("rag.index_build",     "build_index"),
+    ]
+    for mod, attr in candidates:
+        try:
+            m = __import__(mod, fromlist=[attr])
+            fn = getattr(m, attr, None)
+            if callable(fn): return fn
+        except Exception:
+            continue
+    return None
+
+def full_rebuild_safe(progress=None, on_drive_upload=None) -> Tuple[bool, str, Optional[Path]]:
+    """
+    전체 재빌드(안전 커밋):
+      - 스테이징 디렉토리(v_타임스탬프)에 빌드
+      - 헬스체크 통과 시에만 current를 새 스냅샷으로 원자적 스왑
+      - (선택) Drive ZIP 업로드
+      - 실패 시 current는 그대로(자동 롤백 효과)
+    """
+    _ensure_dirs()
+    builder = _try_import_full_builder()
+    if not builder:
+        return False, "전체 빌더 함수를 찾지 못했습니다(src.rag.index_build 확인).", None
+
+    ts = _now_ts()
+    stage = SNAP_ROOT / f"v_{ts}"
+    stage.mkdir(parents=True, exist_ok=False)
+
+    if progress: progress(10, text="전체 인덱스 빌드 시작…")
+    # 빌더는 out_dir에 필수 산출물 생성해야 함
+    try:
+        builder(out_dir=str(stage))
+    except TypeError:
+        # out_dir 인자를 받지 않는 구현 대비
+        builder()
+
+    if progress: progress(65, text="헬스체크 수행…")
+    ok, msg = _healthcheck(stage)
+    if not ok:
+        return False, f"헬스체크 실패: {msg}", stage
+
+    if progress: progress(80, text="원자적 커밋(스왑)…")
+    _atomic_point_to(stage)
+    _gc_old_snapshots(keep=KEEP_N)
+
+    if on_drive_upload:
+        if progress: progress(90, text="Drive 백업 업로드…")
+        try:
+            on_drive_upload(stage)
+        except Exception as e:
+            return True, f"커밋 성공 / Drive 업로드 실패: {e}", stage
+
+    if progress: progress(100, text="완료")
+    return True, "전체 인덱스 재빌드 커밋 완료", stage
+
+def incremental_rebuild_minimal(progress=None) -> Tuple[bool, str]:
+    """
+    최소(증분) 재빌드: 신규 파일만 반영.
+    실제 구현은 src.rag.index_build.rebuild_incremental_minimal()에 위임.
+    """
+    try:
+        from src.rag.index_build import rebuild_incremental_minimal
+    except Exception:
+        return False, "증분 빌더(rebuild_incremental_minimal) 미탑재.", 
+    if progress: progress(20, text="신규 파일 감지…")
+    n = rebuild_incremental_minimal()
+    if progress: progress(100, text=f"증분 완료: {n}개 반영")
+    return True, f"증분 반영: {n}개 파일", 
+
+def rollback_to(snapshot_dir: Path) -> Tuple[bool, str]:
+    """선택 스냅샷으로 current 포인터 이동."""
+    if not snapshot_dir.exists():
+        return False, "스냅샷 경로가 존재하지 않습니다"
+    ok, msg = _healthcheck(snapshot_dir)
+    if not ok:
+        return False, f"스냅샷 헬스체크 실패: {msg}"
+    _atomic_point_to(snapshot_dir)
+    return True, f"롤백 완료: {snapshot_dir.name}"
+# ===== [04D] 인덱스 스냅샷/전체 재빌드/롤백 — 유틸리티 ======================= END
+
+# ===== [05A] 자료 최적화/백업 패널 ==========================================
 
 # ===== [05A] 자료 최적화/백업 패널 ==========================================
 def render_brain_prep_main():
@@ -983,6 +1151,76 @@ def render_tag_diagnostics():
             qr_badge = "✅ 있음" if qr_exists else "❌ 없음"
             st.markdown(f"- **품질 리포트(quality_report.json)**: {qr_badge}  (`{QUALITY_REPORT_PATH.as_posix()}`)")
 # ===== [05B] END =============================================================
+# ===== [05B] END =============================================================
+
+# ===== [05C] 인덱스 스냅샷 — 최소/전체·안전 커밋/롤백(관리자) =============== START
+def render_index_snapshots_admin():
+    """
+    인덱스 스냅샷 관리:
+      - 인덱스 재빌드(최소: 증분)
+      - 인덱스 재빌드(전체·안전 커밋): 스테이징 → 헬스체크 → current 스왑
+      - 스냅샷 롤백
+    """
+    import importlib
+    if not (
+        st.session_state.get("is_admin")
+        or st.session_state.get("admin_mode")
+        or st.session_state.get("role") == "admin"
+        or st.session_state.get("mode") == "admin"
+    ):
+        return
+
+    # 전역 토글 반영
+    _expand_all = bool(st.session_state.get("_admin_expand_all", True))
+
+    # Drive 업로드 콜백(선택)
+    def _drive_upload_callback(stage_dir: Path):
+        try:
+            m = importlib.import_module("src.rag.index_build")
+            up = getattr(m, "upload_index_snapshot_zip", None)  # 디렉토리 → ZIP 업로드
+            if callable(up): up(stage_dir)
+        except Exception:
+            pass  # 미구현이면 조용히 패스
+
+    with st.expander("📚 인덱스 관리 — 최소/전체/롤백", expanded=_expand_all):
+        col1, col2, col3 = st.columns([1,1,1])
+
+        with col1:
+            if st.button("인덱스 재빌드(최소: 증분)", use_container_width=True):
+                prog = st.progress(0, text="시작…")
+                ok, msg = incremental_rebuild_minimal(progress=prog.progress)
+                prog.progress(100, text="완료")
+                st.success(msg) if ok else st.error(msg)
+
+        with col2:
+            if st.button("인덱스 재빌드(전체·안전 커밋)", use_container_width=True):
+                prog = st.progress(0, text="준비…")
+                ok, msg, stage = full_rebuild_safe(progress=prog.progress, on_drive_upload=_drive_upload_callback)
+                if ok:
+                    prog.progress(100, text="완료")
+                    st.success(msg)
+                    if stage: st.caption(f"스냅샷: {stage}")
+                else:
+                    st.error(msg)
+                    if stage: st.caption(f"실패 스테이징 보존: {stage}")
+
+        with col3:
+            snaps = _list_snapshots()
+            snap_names = [p.name for p in snaps]
+            pick = st.selectbox("롤백 대상 스냅샷", snap_names, index=0 if snap_names else None)
+            if st.button("스냅샷 롤백", disabled=not snap_names, use_container_width=True):
+                target = SNAP_ROOT / pick
+                ok, msg = rollback_to(target)
+                st.success(msg) if ok else st.error(msg)
+
+        cur = _resolve_current_path()
+        st.write("**현재 사용본:**", str(cur) if cur else "미설정")
+
+# 이 패널을 즉시 렌더링(관리자만 보임)
+render_index_snapshots_admin()
+# ===== [05C] 인덱스 스냅샷 — 최소/전체·안전 커밋/롤백(관리자) ================ END
+
+# ===== [06] 질문/답변 패널 — 채팅창 UI + 맥락 + 보충 차별화/유사도 가드 ========
 
 
 # ===== [PATCH-BRAIN-HELPER] 두뇌(인덱스) 연결 여부 감지 =======================
