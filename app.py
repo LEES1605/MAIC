@@ -68,7 +68,6 @@ def _errlog_text() -> str:
     return buf.getvalue()
 # ===== [00B] ERROR LOG 헬퍼 — END ============================================
 
-
 # ===== [01] 앱 부트 & 환경 변수 세팅 ========================================
 import os
 
@@ -1842,15 +1841,13 @@ def _render_qa_panel():
                     st.session_state["_supplement_for_msg_id"] = None
 # ===== [06] 질문/답변 패널 — END ==============================================
 
-
 # ===== [07] MAIN — 부팅 훅 + 프롬프트 동기화 연결 ============================
 
 def _boot_and_render():
     """
-    앱 부팅 시점에 Google Drive의 prompts.yaml을 최신으로 동기화(옵션)하고
-    이후 기존 UI 렌더링 흐름(_render_qa_panel 등)으로 진입합니다.
-    - 토글: AUTO_SYNC_PROMPTS = true/1/yes/on (env 또는 st.secrets)
-    - 성공 시: st.session_state['prompts_path'] 에 로컬 경로(~/.maic/prompts.yaml) 저장
+    앱 부팅 시 Drive→Local prompts.yaml 동기화(옵션) 후 UI 진입.
+    - 토글: AUTO_SYNC_PROMPTS=true/1/yes/on
+    - 성공 시: st.session_state['prompts_path'] = ~/.maic/prompts.yaml
     """
     import os
     def _to_bool(x): return str(x).strip().lower() in ("1","true","yes","y","on")
@@ -1859,21 +1856,15 @@ def _boot_and_render():
     auto_sec = getattr(st, "secrets", {}).get("AUTO_SYNC_PROMPTS")
     auto_sync = _to_bool(auto_env) if auto_env is not None else _to_bool(auto_sec)
 
-    # 관리자 패널과 일치하는 경로
     local_prompts_path = os.path.expanduser("~/.maic/prompts.yaml")
-
-    # Drive 검색 힌트: 폴더 ID/파일명 (관리자 패널의 폴더 ID를 그대로 쓰면 가장 안정적)
     folder_id = os.getenv("PROMPTS_DRIVE_FOLDER_ID") or getattr(st, "secrets", {}).get("PROMPTS_DRIVE_FOLDER_ID")
     file_name = os.getenv("PROMPTS_FILE_NAME") or getattr(st, "secrets", {}).get("PROMPTS_FILE_NAME") or "prompts.yaml"
 
     if auto_sync:
         try:
             ok, msg = sync_prompts_from_drive(
-                local_path=local_prompts_path,
-                file_name=file_name,
-                folder_id=folder_id,
-                prefer_folder_name="prompts",
-                verbose=True
+                local_path=local_prompts_path, file_name=file_name,
+                folder_id=folder_id, prefer_folder_name="prompts", verbose=True
             )
             if ok:
                 st.session_state["prompts_path"] = local_prompts_path
@@ -1887,8 +1878,15 @@ def _boot_and_render():
     else:
         st.session_state.setdefault("prompts_path", local_prompts_path)
 
+    # (선택) 헤더
     try:
-        if "render_header" in globals(): render_admin_tools()
+        if "render_header" in globals(): render_header()
+    except Exception:
+        pass
+
+    # ✅ 관리자 도구 렌더(정의가 위에 있어야 함)
+    try:
+        if "render_admin_tools" in globals(): render_admin_tools()
     except Exception:
         pass
 
@@ -1897,11 +1895,12 @@ def _boot_and_render():
 _boot_and_render()
 # ===== [07] MAIN — END =======================================================
 
+
 # ===== [08] ADMIN — 인덱싱/강제 동기화·모드ON/OFF·에러로그 — START ============
 def _load_modes_from_yaml(path: str) -> list[str]:
     """로컬 prompts.yaml에서 modes 키 목록을 읽어온다."""
     try:
-        import yaml, os, pathlib
+        import yaml, pathlib
         p = pathlib.Path(path)
         if not p.exists(): return []
         data = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
@@ -1975,8 +1974,6 @@ def _run_index_job(mode: str) -> tuple[bool, str]:
         try: msg_box.write(s)
         except Exception: pass
 
-    # 동적 시그니처 호출
-    import inspect
     def _try(fn_name: str, **kw):
         fn = getattr(mod, fn_name, None)
         if not callable(fn): return False, None
@@ -1989,16 +1986,14 @@ def _run_index_job(mode: str) -> tuple[bool, str]:
             _errlog(f"{fn_name} 실패: {e}", where="[ADMIN]_run_index_job", exc=e)
             return False, f"{fn_name} 실패: {type(e).__name__}: {e}"
 
-    # 1) build_index_with_checkpoint
     ok, res = _try("build_index_with_checkpoint",
                    update_pct=_pct, update_msg=_msg, gdrive_folder_id=gdrive_folder_id,
                    gcp_creds={}, persist_dir=str(PERSIST_DIR), remote_manifest={}, should_stop=None, mode=mode)
-    if ok: 
+    if ok:
         try: st.cache_data.clear()
         except Exception: pass
         return True, "인덱싱 완료(build_index_with_checkpoint)"
 
-    # 2) build_index
     ok, res = _try("build_index", mode=mode, persist_dir=str(PERSIST_DIR),
                    gdrive_folder_id=gdrive_folder_id, update_pct=_pct, update_msg=_msg, should_stop=None)
     if ok:
@@ -2006,10 +2001,9 @@ def _run_index_job(mode: str) -> tuple[bool, str]:
         except Exception: pass
         return True, "인덱싱 완료(build_index)"
 
-    # 3) build_all / build_incremental
     if mode=="full":
         ok, res = _try("build_all", persist_dir=str(PERSIST_DIR))
-        if ok: 
+        if ok:
             try: st.cache_data.clear()
             except Exception: pass
             return True, "인덱싱 완료(build_all)"
@@ -2020,8 +2014,7 @@ def _run_index_job(mode: str) -> tuple[bool, str]:
             except Exception: pass
             return True, "인덱싱 완료(build_incremental)"
 
-    # 4) main(argv)
-    ok, res = _try("main", argv=["--persist", str(PERSIST_DIR), "--mode", ("full" if mode=="full" else "inc"), "--folder", gdrive_folder_id])
+    ok, res = _try("main", argv=["--persist", str(PERSIST_DIR), "--mode", ("full" if mode=='full' else 'inc'), "--folder", gdrive_folder_id])
     if ok:
         try: st.cache_data.clear()
         except Exception: pass
@@ -2038,7 +2031,7 @@ def render_admin_tools():
       ④ prompts.yaml 강제 동기화
       ⑤ 에러 로그(복사/다운로드/초기화)
     """
-    import os, json, pathlib, io
+    import os, json, pathlib
     from pathlib import Path
 
     with st.expander("관리자 도구", expanded=True):
