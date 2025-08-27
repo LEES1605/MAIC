@@ -1125,7 +1125,11 @@ def render_brain_prep_main():
 
     # === 경로: config 우선 ===
     try:
-        from src.config import PERSIST_DIR as CFG_PERSIST_DIR, QUALITY_REPORT_PATH as CFG_QUALITY_REPORT_PATH, APP_DATA_DIR as CFG_APP_DATA_DIR
+        from src.config import (
+            PERSIST_DIR as CFG_PERSIST_DIR,
+            QUALITY_REPORT_PATH as CFG_QUALITY_REPORT_PATH,
+            APP_DATA_DIR as CFG_APP_DATA_DIR,
+        )
     except Exception:
         CFG_PERSIST_DIR = Path.home() / ".maic" / "persist"
         CFG_QUALITY_REPORT_PATH = Path.home() / ".maic" / "quality_report.json"
@@ -1136,7 +1140,6 @@ def render_brain_prep_main():
     BACKUP_DIR = (Path(CFG_APP_DATA_DIR) / "backup").resolve()
 
     # src.rag.index_build 의 경로/함수들 (있으면 사용)
-    idx_mod = None
     try:
         idx_mod = importlib.import_module("src.rag.index_build")
         PERSIST_DIR = Path(getattr(idx_mod, "PERSIST_DIR", PERSIST_DIR))
@@ -1176,8 +1179,10 @@ def render_brain_prep_main():
             st.write("• Persist 디렉터리:", f"`{PERSIST_DIR}`")
             st.write("• Backup 디렉터리:", f"`{BACKUP_DIR}`")
             qr_exists = Path(QUALITY_REPORT_PATH).exists()
-            st.markdown(f"• 품질 리포트(quality_report.json): {'✅ 있음' if qr_exists else '❌ 없음'} "
-                        f"(`{QUALITY_REPORT_PATH}`)")
+            st.markdown(
+                f"• 품질 리포트(quality_report.json): {'✅ 있음' if qr_exists else '❌ 없음'} "
+                f"(`{QUALITY_REPORT_PATH}`)"
+            )
 
             if callable(precheck_fn):
                 try:
@@ -1190,14 +1195,15 @@ def render_brain_prep_main():
                 st.caption("사전점검 함수가 없어 건너뜁니다(선택 기능).")
 
         # 액션 버튼들
-        col1, col2, col3, col4 = st.columns([1,1,1,1])
+        col1, col2, col3, col4 = st.columns([1, 1, 1, 1])
 
         # 1) 두뇌 연결(강제)
         with col1:
             if st.button("🧠 두뇌 연결(강제)", use_container_width=True):
                 with st.status("강제 연결 중…", state="running") as s:
                     try:
-                        if callable(force_persist): force_persist()
+                        if callable(force_persist):
+                            force_persist()
                         ok = False
                         if callable(attach_fn):
                             _log("manual_local_attach_try")
@@ -1232,10 +1238,12 @@ def render_brain_prep_main():
                             ok = bool(r.get("ok"))
                             _log("drive_restore_result", ok=ok)
                             if ok and callable(attach_fn):
-                                if callable(force_persist): force_persist()
+                                if callable(force_persist):
+                                    force_persist()
                                 _log("local_attach_try")
                                 ok = bool(attach_fn())
-                                if ok: _log("local_attach_ok")
+                                if ok:
+                                    _log("local_attach_ok")
                             if ok:
                                 s.update(label="복원 및 연결 완료", state="complete")
                                 st.success("최신 백업 복원 완료(연결됨).")
@@ -1277,11 +1285,13 @@ def render_brain_prep_main():
 
                             _log("rebuild_ok")
                             ok_attach = False
-                            if callable(force_persist): force_persist()
+                            if callable(force_persist):
+                                force_persist()
                             if callable(attach_fn):
                                 _log("local_attach_try")
                                 ok_attach = bool(attach_fn())
-                                if ok_attach: _log("local_attach_ok")
+                                if ok_attach:
+                                    _log("local_attach_ok")
 
                             s.update(label="재빌드 완료", state="complete")
                             st.success("인덱스 재빌드가 완료되었습니다.")
