@@ -658,11 +658,11 @@ def _render_admin_diagnostics_section():
 _render_admin_diagnostics_section()
 # ===== [04C] END ==============================================================
 
-# ===== [04D] 인덱스 스냅샷/전체 재빌드/롤백 — 유틸리티 (확장 폴백) ======== START
+# ===== [04D] 인덱스 스냅샷/전체 재빌드/롤백 — 유틸리티 (멀티 루트 폴백) === START
 import os, io, json, time, shutil, hashlib, importlib
 from datetime import datetime
 from pathlib import Path
-from typing import Tuple, Optional, Callable, Iterable
+from typing import Tuple, Optional, Callable, Iterable, List
 
 # 스냅샷 루트 및 current 포인터
 INDEX_ROOT = Path(os.environ.get("MAIC_INDEX_ROOT", "~/.maic/persist")).expanduser()
@@ -671,11 +671,44 @@ CUR_LINK   = SNAP_ROOT / "current"           # symlink 선호
 KEEP_N     = 5                                # 보존할 스냅샷 수
 REQ_FILES  = ["chunks.jsonl", "manifest.json"]  # 헬스체크 필수 산출물
 
-# 폴백 전체 빌더가 훑을 준비소스 디렉토리
-PREPARED_DIR = Path(os.environ.get("MAIC_PREPARED_DIR", "~/.maic/prepared")).expanduser()
+# 폴백 전체 빌더: 지원 확장자
 TEXT_EXTS = {".txt", ".md"}
 PDF_EXTS  = {".pdf"}
-DOCX_EXTS = {".docx", ".docs"}  # MS Word (docx), Google Docs export 파일명 대비
+DOCX_EXTS = {".docx", ".docs"}  # Google Docs export 파일명 대비
+
+# ----------------------- 소스 루트 자동 탐색 -----------------------
+def _candidate_roots() -> List[Path]:
+    roots: List[Path] = []
+
+    # 0) ENV가 있으면 최우선
+    env_dir = os.environ.get("MAIC_PREPARED_DIR", "").strip()
+    if env_dir:
+        roots.append(Path(env_dir).expanduser())
+
+    # 1) 흔한 후보 경로들 (프로젝트/컨테이너 환경 고려)
+    roots += [
+        Path("~/.maic/prepared").expanduser(),
+        Path("./prepared").resolve(),
+        Path("./knowledge").resolve(),
+        Path("/mount/data/knowledge"),
+        Path("/mount/data"),
+        Path("/mnt/data/knowledge"),
+        Path("/mnt/data"),
+    ]
+
+    # 존재하는 디렉토리만, 중복 제거
+    seen = set()
+    valid: List[Path] = []
+    for p in roots:
+        try:
+            rp = p.resolve()
+        except Exception:
+            continue
+        key = str(rp)
+        if rp.exists() and rp.is_dir() and key not in seen:
+            valid.append(rp)
+            seen.add(key)
+    return valid
 
 def _now_ts() -> str:
     return datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -724,8 +757,11 @@ def _healthcheck(stage_dir: Path, stats: Optional[dict]=None) -> Tuple[bool, str
         if not f.exists() or f.stat().st_size == 0:
             detail = ""
             if stats:
-                detail = f" (scanned: txt/md={stats.get('txt_md',0)}, pdf={stats.get('pdf',0)}, docx={stats.get('docx',0)}, " \
-                         f"extracted_chunks={stats.get('chunks',0)})"
+                detail = (
+                    f" (roots={stats.get('roots', [])}, "
+                    f"txt/md={stats.get('txt_md',0)}, pdf={stats.get('pdf',0)}, "
+                    f"docx={stats.get('docx',0)}, extracted_chunks={stats.get('chunks',0)})"
+                )
             return False, f"필수 산출물 누락/0바이트: {name}{detail}"
     try:
         with open(stage_dir / "chunks.jsonl", "r", encoding="utf-8") as fr:
@@ -738,15 +774,14 @@ def _healthcheck(stage_dir: Path, stats: Optional[dict]=None) -> Tuple[bool, str
     return True, "OK"
 
 # --------------------------- 파일 스캐너/리더 ---------------------------
-def _iter_docs(root: Path) -> Iterable[Path]:
-    if not root.exists():
-        return []
-    for p in root.rglob("*"):
-        if not p.is_file(): 
-            continue
-        ext = p.suffix.lower()
-        if ext in TEXT_EXTS | PDF_EXTS | DOCX_EXTS:
-            yield p
+def _iter_docs(roots: List[Path]) -> Iterable[Path]:
+    for root in roots:
+        for p in root.rglob("*"):
+            if not p.is_file(): 
+                continue
+            ext = p.suffix.lower()
+            if ext in (TEXT_EXTS | PDF_EXTS | DOCX_EXTS):
+                yield p
 
 def _read_text_file(p: Path, max_bytes: int = 4_000_000) -> str:
     try:
@@ -795,19 +830,22 @@ def _read_docx_file(p: Path, max_paras: int = 500) -> str:
 def _fallback_build_full_index(out_dir: Path) -> dict:
     """
     외부 빌더가 없을 때 사용하는 확장 폴백:
+      - 여러 후보 루트를 모두 스캔 (ENV 지정이 있으면 최우선 포함)
       - .txt/.md/.pdf/.docx를 가능한 범위에서 텍스트 추출
       - 한 파일 = 한 chunk (간단 규칙)
-      - 무엇을 몇 개 읽었는지 stats 반환(헬스체크 메시지에 활용)
+      - stats 반환(헬스체크/로그에 활용)
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     chunks_path   = out_dir / "chunks.jsonl"
     manifest_path = out_dir / "manifest.json"
 
-    stats = {"txt_md":0, "pdf":0, "docx":0, "chunks":0}
+    roots = _candidate_roots()
+    stats = {"roots":[str(r) for r in roots], "txt_md":0, "pdf":0, "docx":0, "chunks":0}
     items = []
 
     with open(chunks_path, "w", encoding="utf-8") as fw:
-        for i, p in enumerate(_iter_docs(PREPARED_DIR), start=1):
+        idx = 0
+        for p in _iter_docs(roots):
             ext = p.suffix.lower()
             text = ""
             if ext in TEXT_EXTS:
@@ -823,8 +861,9 @@ def _fallback_build_full_index(out_dir: Path) -> dict:
             if not (text and text.strip()):
                 continue
 
+            idx += 1
             rec = {
-                "id": f"{p.stem}-{i}",
+                "id": f"{p.stem}-{idx}",
                 "source": str(p),
                 "text": text,
                 "meta": {
@@ -839,10 +878,10 @@ def _fallback_build_full_index(out_dir: Path) -> dict:
 
     manifest = {
         "created_at": _now_ts(),
-        "source_root": str(PREPARED_DIR),
+        "source_roots": stats["roots"],
         "count": len(items),
         "items": items[:2000],
-        "generator": "fallback_builder+",
+        "generator": "fallback_builder_multi",
         "stats": stats,
     }
     with open(manifest_path, "w", encoding="utf-8") as fm:
@@ -957,7 +996,7 @@ def rollback_to(snapshot_dir: Path) -> Tuple[bool, str]:
         return False, f"스냅샷 헬스체크 실패: {msg}"
     _atomic_point_to(snapshot_dir)
     return True, f"롤백 완료: {snapshot_dir.name}"
-# ===== [04D] 인덱스 스냅샷/전체 재빌드/롤백 — 유틸리티 (확장 폴백) ========= END
+# ===== [04D] 인덱스 스냅샷/전체 재빌드/롤백 — 유틸리티 (멀티 루트 폴백) === END
 
 # ===== [05A] 자료 최적화/백업 패널 ==========================================
 def render_brain_prep_main():
