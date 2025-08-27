@@ -2170,3 +2170,96 @@ def main():
 if __name__ == "__main__":
     main()
 # ===== [07] END ===============================================================
+# ===== [23] PROMPTS 동기화 (Google Drive → Local) — START =====================
+def sync_prompts_from_drive(
+    *,
+    local_path: str = os.path.expanduser("~/.maic/prompts/prompts.yaml"),
+    file_name: str = "prompts.yaml",
+    prefer_folder_name: str | None = "prompts",   # 폴더명이 다르면 None 유지(전역 검색)
+    verbose: bool = True,
+) -> tuple[bool, str]:
+    """
+    Google Drive에서 최신 'prompts.yaml'을 찾아 로컬로 저장.
+    - Service Account 키는 st.secrets 또는 환경변수에서 로드
+    - 우선순위: (1) prefer_folder_name 내 최신 -> (2) 전체 Drive에서 최신
+    - 반환: (ok, message)
+
+    필요 시 다음 시크릿 키 사용(예시):
+      st.secrets['gcp_service_account']  # 서비스계정 JSON (3중 작은따옴표 템플릿 권장)
+    """
+    try:
+        import io
+        from google.oauth2 import service_account
+        from googleapiclient.discovery import build
+        from googleapiclient.http import MediaIoBaseDownload
+
+        # 0) 자격 증명 불러오기
+        sa_info = (getattr(st, "secrets", {}).get("gcp_service_account")
+                   or os.getenv("GCP_SERVICE_ACCOUNT_JSON"))
+        if not sa_info:
+            return False, "gcp_service_account 시크릿/환경변수 누락"
+
+        if isinstance(sa_info, str):
+            # 문자열(JSON) → dict
+            import json as _json
+            sa_info = _json.loads(sa_info)
+
+        creds = service_account.Credentials.from_service_account_info(
+            sa_info, scopes=["https://www.googleapis.com/auth/drive.readonly"]
+        )
+        drive = build("drive", "v3", credentials=creds, cache_discovery=False)
+
+        # 1) 검색 쿼리 구성
+        #   - 폴더명 힌트가 있으면 그 폴더를 먼저 찾고, 안 되면 전역 검색
+        file_id: str | None = None
+
+        def _search_latest_in_folder_id(folder_id: str) -> str | None:
+            q = f"'{folder_id}' in parents and name = '{file_name}' and trashed = false"
+            res = drive.files().list(q=q, orderBy="modifiedTime desc", pageSize=1,
+                                     fields="files(id, name, modifiedTime)").execute()
+            arr = res.get("files", [])
+            return arr[0]["id"] if arr else None
+
+        # 1-a) 폴더명으로 폴더 ID 추정 → 그 안에서 검색
+        if prefer_folder_name:
+            q_folder = f"mimeType = 'application/vnd.google-apps.folder' and name = '{prefer_folder_name}' and trashed = false"
+            r = drive.files().list(q=q_folder, fields="files(id,name)", pageSize=5).execute()
+            for f in r.get("files", []):
+                fid = _search_latest_in_folder_id(f["id"])
+                if fid:
+                    file_id = fid
+                    break
+
+        # 1-b) 폴더 힌트로 못 찾으면 전역에서 파일명 최신 검색
+        if not file_id:
+            q_any = f"name = '{file_name}' and trashed = false"
+            r = drive.files().list(q=q_any, orderBy="modifiedTime desc", pageSize=1,
+                                   fields="files(id, name, modifiedTime, parents)").execute()
+            arr = r.get("files", [])
+            if arr:
+                file_id = arr[0]["id"]
+
+        if not file_id:
+            return False, f"Drive에서 '{file_name}'을 찾지 못했습니다"
+
+        # 2) 다운로드
+        req = drive.files().get_media(fileId=file_id)
+        buf = io.BytesIO()
+        downloader = MediaIoBaseDownload(buf, req)
+        done = False
+        while not done:
+            status, done = downloader.next_chunk()
+
+        # 3) 저장 경로 보장 후 기록
+        os.makedirs(os.path.dirname(local_path), exist_ok=True)
+        with open(local_path, "wb") as f:
+            f.write(buf.getvalue())
+
+        if verbose:
+            st.toast(f"prompts.yaml 동기화 완료 → {local_path}")
+
+        return True, f"다운로드 성공: {local_path}"
+
+    except Exception as e:
+        return False, f"{type(e).__name__}: {e}"
+# ===== [23] PROMPTS 동기화 (Google Drive → Local) — END =======================
