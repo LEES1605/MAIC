@@ -1076,38 +1076,38 @@ def _auto_bootstrap_prepared_and_index(max_retries: int = 3, sleep_sec: float = 
     ok = False
     stage = None
 # >>>>> START [A03] boot_full_index_loop (Drive-first 빌드 고정)
-for i in range(max_retries):
-    # 전체 인덱스(Drive-first) 시도
-    log(f"[부팅 훅] 전체 인덱스 시도 {i+1}/{max_retries} (Drive-first)")
-    try:
-        from pathlib import Path as _P
-        from src.config import PERSIST_DIR as _PD
-        from src.rag.index_build import build_index_with_checkpoint as _build
-
-        persist_dir = str(_P(_PD))
-        _build(
-            update_pct=lambda *_a, **_k: None,
-            update_msg=lambda *_a, **_k: None,
-            gdrive_folder_id=(folder_id or ""),
-            gcp_creds={},
-            persist_dir=persist_dir,
-            remote_manifest={},
-        )
-        ok = True
-        stage = _P(persist_dir)
-        log("Drive-first 빌드 성공")
-        break
-    except TypeError:
+    for i in range(max_retries):
+        # 전체 인덱스(Drive-first) 시도
+        log(f"[부팅 훅] 전체 인덱스 시도 {i+1}/{max_retries} (Drive-first)")
         try:
-            _build()  # 레거시 서명 대비
-            ok = True; stage = _P(persist_dir)
-            log("Drive-first 빌드(레거시) 성공")
+            from pathlib import Path as _P
+            from src.config import PERSIST_DIR as _PD
+            from src.rag.index_build import build_index_with_checkpoint as _build
+
+            persist_dir = str(_P(_PD))
+            _build(
+                update_pct=lambda *_a, **_k: None,
+                update_msg=lambda *_a, **_k: None,
+                gdrive_folder_id=(folder_id or ""),
+                gcp_creds={},
+                persist_dir=persist_dir,
+                remote_manifest={},
+            )
+            ok = True
+            stage = _P(persist_dir)
+            log("Drive-first 빌드 성공")
             break
+        except TypeError:
+            try:
+                _build()  # 레거시 서명 대비
+                ok = True; stage = _P(persist_dir)
+                log("Drive-first 빌드(레거시) 성공")
+                break
+            except Exception as e:
+                log(f"레거시 빌드 실패: {type(e).__name__}: {e}")
         except Exception as e:
-            log(f"레거시 빌드 실패: {type(e).__name__}: {e}")
-    except Exception as e:
-        log(f"빌드 실패: {type(e).__name__}: {e}")
-    time.sleep(sleep_sec)
+            log(f"빌드 실패: {type(e).__name__}: {e}")
+        time.sleep(sleep_sec)
 # <<<<< END [A03] boot_full_index_loop
 
 # ===== [04E] 부팅 훅: Drive → prepared 동기화 + 자동 전체 인덱스 ========= END
