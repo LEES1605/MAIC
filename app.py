@@ -2084,7 +2084,7 @@ def _boot_and_render():
     auto_sec = getattr(st, "secrets", {}).get("AUTO_SYNC_PROMPTS")
     auto_sync = _to_bool(auto_env) if auto_env is not None else _to_bool(auto_sec)
 
-    local_prompts_path = os.path.expanduser("~/.maic/prompts/prompts.yaml")
+    local_prompts_path = os.path.expanduser("~/.maic/prompts.yaml")
 
     # 1) 동기화 시도 (토글이 켜진 경우에만)
     if auto_sync:
