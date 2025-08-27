@@ -1090,6 +1090,7 @@ except Exception:
 # ===== [04E] 부팅 훅: Drive → prepared 동기화 + 자동 전체 인덱스 ========= END
 
 # ===== [05A] 자료 최적화/백업 패널 ==========================================
+# >>>>> START [05A] 자료 최적화/백업 패널
 def render_brain_prep_main():
     """
     인덱스(두뇌) 최적화/복구/백업 관리자 패널
@@ -1312,7 +1313,7 @@ def render_brain_prep_main():
                         s.update(label="백업 중 예외", state="error")
                         st.error(f"백업 중 오류: {type(e).__name__}: {e}")
                         _log("backup_exception", error=f"{type(e).__name__}: {e}")
-
+# <<<<< END [05A] 자료 최적화/백업 패널
 # ===== [05A] END =============================================================
 
 
