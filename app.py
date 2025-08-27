@@ -1139,15 +1139,6 @@ def render_brain_prep_main():
     QUALITY_REPORT_PATH = Path(CFG_QUALITY_REPORT_PATH)
     BACKUP_DIR = (Path(CFG_APP_DATA_DIR) / "backup").resolve()
 
-    # src.rag.index_build 의 경로/함수들 (있으면 사용)
-    try:
-        idx_mod = importlib.import_module("src.rag.index_build")
-        PERSIST_DIR = Path(getattr(idx_mod, "PERSIST_DIR", PERSIST_DIR))
-        BACKUP_DIR  = Path(getattr(idx_mod, "BACKUP_DIR",  BACKUP_DIR))
-        QUALITY_REPORT_PATH = Path(getattr(idx_mod, "QUALITY_REPORT_PATH", QUALITY_REPORT_PATH))
-    except Exception as e:
-        _log("index_module_import_warn", error=f"{type(e).__name__}: {e}")
-
     # 관련 함수 핸들(없으면 None)
     precheck_fn   = globals().get("precheck_build_needed") or globals().get("quick_precheck")
     build_fn      = globals().get("build_index_with_checkpoint")   # ✅ Drive-first 엔트리
@@ -1166,7 +1157,7 @@ def render_brain_prep_main():
             except Exception:
                 fid = ""
         if not fid:
-            # 프로젝트 합의 기본값(메모리에 고정): prepared 폴더 ID
+            # 프로젝트 합의 기본값(고정): prepared 폴더 ID
             fid = "1bltOvqYsifPtmcx-epwJTq-hYAklNp2j"
         return fid
 
