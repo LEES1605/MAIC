@@ -1088,6 +1088,55 @@ try:
 except Exception:
     pass
 # ===== [04E] 부팅 훅: Drive → prepared 동기화 + 자동 전체 인덱스 ========= END
+# ===== [04F] 사전점검 래퍼(config 기준) =======================================
+# >>>>> START [04F] precheck_build_needed
+def precheck_build_needed() -> bool:
+    """
+    Drive-first 체계에서의 간단/신뢰성 높은 사전점검:
+      - PERSIST_DIR/chunks.jsonl 존재 + 크기 > 0  (핵심 산출물)
+      - MANIFEST_PATH 존재                          (인덱스 메타)
+      - QUALITY_REPORT_PATH 존재 여부는 참고만     (없어도 재빌드 권장 X)
+
+    반환값: True  → 재빌드 권장
+            False → 양호
+    """
+    try:
+        from pathlib import Path
+        # config 기준 경로만 사용 (레거시 .maic 하드코딩 금지)
+        from src.config import PERSIST_DIR as _PD, MANIFEST_PATH as _MF, QUALITY_REPORT_PATH as _QR
+
+        persist_dir = Path(_PD)
+        chunks_path = persist_dir / "chunks.jsonl"
+        manifest_ok = Path(_MF).exists()
+
+        chunks_ok = chunks_path.exists()
+        try:
+            if chunks_ok and chunks_path.stat().st_size <= 0:
+                chunks_ok = False
+        except Exception:
+            chunks_ok = False
+
+        # 품질 리포트는 보조 지표(없다고 바로 권장 X)
+        qr_exists = False
+        try:
+            qr_exists = Path(_QR).exists()
+        except Exception:
+            qr_exists = False
+
+        # 핵심 기준: chunks_ok & manifest_ok
+        if not chunks_ok:
+            return True
+        if not manifest_ok:
+            return True
+
+        # 품질 리포트가 없으면 경고 수준이지만, 운영 편의상 False(양호)로 보고
+        # 패널에서만 "없음" 배지만 표기하게 둡니다.
+        return False
+    except Exception:
+        # 예외 시 보수적으로 재빌드 권장
+        return True
+# <<<<< END [04F] precheck_build_needed
+# ===== [04F] END =============================================================
 
 # ===== [05A] 자료 최적화/백업 패널 ==========================================
 # >>>>> START [05A] 자료 최적화/백업 패널
