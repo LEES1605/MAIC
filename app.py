@@ -658,8 +658,6 @@ def _render_admin_diagnostics_section():
 _render_admin_diagnostics_section()
 # ===== [04C] END ==============================================================
 
-# ===== [04C] END ==============================================================
-
 # ===== [04D] 인덱스 스냅샷/전체 재빌드/롤백 — 유틸리티 (세션/ENV/멀티루트) == START
 import os, io, json, time, shutil, hashlib, importlib
 from datetime import datetime
@@ -988,6 +986,113 @@ def rollback_to(snapshot_dir: Path) -> Tuple[bool, str]:
     _atomic_point_to(snapshot_dir)
     return True, f"롤백 완료: {snapshot_dir.name}"
 # ===== [04D] 인덱스 스냅샷/전체 재빌드/롤백 — 유틸리티 (세션/ENV/멀티루트) === END
+# ===== [04D] 인덱스 스냅샷/전체 재빌드/롤백 — 유틸리티 (세션/ENV/멀티루트) === END
+
+# ===== [04E] 부팅 훅: Drive → prepared 동기화 + 자동 전체 인덱스 ========= START
+import time
+
+def _get_drive_prepared_folder_id() -> str | None:
+    """secrets 또는 환경변수에서 Drive prepared 폴더 ID를 얻는다."""
+    fid = os.environ.get("GDRIVE_PREPARED_FOLDER_ID", "").strip()
+    if fid:
+        return fid
+    try:
+        import streamlit as st
+        fid = str(st.secrets.get("GDRIVE_PREPARED_FOLDER_ID", "")).strip()
+        if fid:
+            return fid
+    except Exception:
+        pass
+    # 프로젝트에서 지정하신 기본값(메모리에 기록해둔 ID)
+    fallback = "1bltOvqYsifPtmcx-epwJTq-hYAklNp2j".strip()
+    return fallback or None
+
+def _drive_sync_to_local_prepared(dest_dir: str | Path, folder_id: str, logger=None) -> bool:
+    """
+    Drive의 prepared 폴더(ID) → 로컬 dest_dir 로 동기화.
+    - src.drive_sync.download_folder_by_id(stage_dir, folder_id) 가 있으면 사용
+    - 없으면 조용히 skip (False 반환)
+    """
+    dest = Path(dest_dir).expanduser()
+    dest.mkdir(parents=True, exist_ok=True)
+    try:
+        import importlib
+        m = importlib.import_module("src.drive_sync")
+        fn = getattr(m, "download_folder_by_id", None)
+        if callable(fn):
+            if logger: logger(f"Drive 동기화 시작: folder_id={folder_id} → {dest}")
+            fn(folder_id=folder_id, local_dir=str(dest))
+            if logger: logger("Drive 동기화 완료")
+            return True
+    except Exception as e:
+        if logger: logger(f"Drive 동기화 모듈 사용 불가: {e}")
+    return False
+
+def _auto_bootstrap_prepared_and_index(max_retries: int = 3, sleep_sec: float = 2.0):
+    """
+    앱 시작 시 한 번만:
+      1) Drive prepared 동기화(가능하면)
+      2) prepared 후보 루트 재검출
+      3) 전체 인덱스(안전 커밋) 자동 실행
+    - 세션 플래그로 중복 실행 방지
+    """
+    # Streamlit 세션 유무에 상관 없이, 환경변수 플래그로 켜고 끌 수 있음(기본: on)
+    auto_on = os.environ.get("MAIC_AUTO_INDEX_ON_START", "1").strip() not in ("0", "false", "False")
+    if not auto_on:
+        return
+
+    # 세션 플래그: 한 세션에서 한 번만
+    try:
+        import streamlit as st
+        if st.session_state.get("_auto_bootstrap_done"):
+            return
+    except Exception:
+        pass
+
+    logs: list[str] = []
+    def log(msg: str): logs.append(msg)
+
+    # 0) Drive → 로컬 동기화 시도 (있으면 사용)
+    folder_id = _get_drive_prepared_folder_id()
+    # 동기화 목적지: 세션 지정 > ENV > 기본(~/.maic/prepared)
+    preferred = None
+    try:
+        import streamlit as st
+        preferred = st.session_state.get("prepared_dir")
+    except Exception:
+        pass
+    dest_dir = preferred or os.environ.get("MAIC_PREPARED_DIR", "~/.maic/prepared")
+    if folder_id:
+        _ = _drive_sync_to_local_prepared(dest_dir=dest_dir, folder_id=folder_id, logger=log)
+
+    # 1) 재시도 루프: 루트 후보가 잡힐 때까지 N회
+    ok = False
+    stage = None
+    for i in range(max_retries):
+        # 전체 인덱스(안전 커밋) 시도
+        log(f"[부팅 훅] 전체 인덱스 시도 {i+1}/{max_retries}")
+        ok, msg, stage = full_rebuild_safe(progress=None, on_drive_upload=None)
+        log(msg)
+        if ok:
+            break
+        time.sleep(sleep_sec)
+
+    # 2) 로그와 플래그 기록
+    try:
+        import streamlit as st
+        st.session_state["_auto_bootstrap_done"] = True
+        st.session_state["_auto_bootstrap_logs"] = logs[-10:]  # 최근 10줄만 보관
+        if ok:
+            st.session_state["_auto_bootstrap_stage"] = str(stage) if stage else ""
+    except Exception:
+        pass
+
+# 앱 임포트/실행 시점에 즉시 한 번 트리거
+try:
+    _auto_bootstrap_prepared_and_index()
+except Exception:
+    pass
+# ===== [04E] 부팅 훅: Drive → prepared 동기화 + 자동 전체 인덱스 ========= END
 
 
 # ===== [05A] 자료 최적화/백업 패널 ==========================================
@@ -1428,6 +1533,39 @@ def render_prepared_dir_admin():
 # 즉시 렌더(관리자 전용)
 render_prepared_dir_admin()
 # ===== [05D] 자료 폴더 설정(관리자) =========================================== END
+# ===== [05C] 인덱스 스냅샷 — 최소/전체·안전 커밋/롤백(관리자) ================ END
+
+# ===== [05E] 시작 시 자동 인덱스 상태/토글 ================================= START
+def render_auto_index_admin():
+    import streamlit as st
+    with st.expander("⚙️ 시작 시 자동 인덱스 설정", expanded=False):
+        cur = os.environ.get("MAIC_AUTO_INDEX_ON_START", "1")
+        on = cur not in ("0", "false", "False")
+        st.write("현재 상태:", "**ON**" if on else "**OFF**")
+        new = st.toggle("앱 시작 시 자동으로 Drive 동기화 + 전체 인덱스", value=on)
+        if new != on:
+            os.environ["MAIC_AUTO_INDEX_ON_START"] = "1" if new else "0"
+            st.success("변경 적용 (다음 실행부터 반영)")
+
+        logs = st.session_state.get("_auto_bootstrap_logs", [])
+        if logs:
+            st.caption("최근 부팅 훅 로그")
+            for ln in logs:
+                st.text("- " + ln)
+        stage = st.session_state.get("_auto_bootstrap_stage", "")
+        if stage:
+            st.caption(f"마지막 자동 인덱스 스냅샷: {stage}")
+
+# 관리자만 표시
+try:
+    import streamlit as st
+    if st.session_state.get("is_admin") or st.session_state.get("admin_mode") or st.session_state.get("role")=="admin" or st.session_state.get("mode")=="admin":
+        render_auto_index_admin()
+except Exception:
+    pass
+# ===== [05E] 시작 시 자동 인덱스 상태/토글 =================================== END
+
+# ===== [06] 질문/답변 패널 — 채팅창 UI + 맥락 + 보충 차별화/유사도 가드 ========
 
 # ===== [PATCH-BRAIN-HELPER] 두뇌(인덱스) 연결 여부 감지 =======================
 def _is_brain_ready() -> bool:
