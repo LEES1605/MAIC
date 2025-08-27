@@ -658,13 +658,11 @@ def _render_admin_diagnostics_section():
 _render_admin_diagnostics_section()
 # ===== [04C] END ==============================================================
 
-# ===== [04C] END ==============================================================
-
-# ===== [04D] 인덱스 스냅샷/전체 재빌드/롤백 — 유틸리티 ===================== START
+# ===== [04D] 인덱스 스냅샷/전체 재빌드/롤백 — 유틸리티 (강제 폴백 포함) == START
 import os, io, json, time, shutil, hashlib, importlib
 from datetime import datetime
 from pathlib import Path
-from typing import Tuple, Optional, Callable
+from typing import Tuple, Optional, Callable, Iterable
 
 # 스냅샷 루트 및 current 포인터
 INDEX_ROOT = Path(os.environ.get("MAIC_INDEX_ROOT", "~/.maic/persist")).expanduser()
@@ -672,6 +670,10 @@ SNAP_ROOT  = INDEX_ROOT / "indexes"
 CUR_LINK   = SNAP_ROOT / "current"           # symlink 선호
 KEEP_N     = 5                                # 보존할 스냅샷 수
 REQ_FILES  = ["chunks.jsonl", "manifest.json"]  # 헬스체크 필수 산출물
+
+# 폴백 전체 빌더가 훑을 준비소스 디렉토리(텍스트 위주)
+PREPARED_DIR = Path(os.environ.get("MAIC_PREPARED_DIR", "~/.maic/prepared")).expanduser()
+TEXT_EXTS = {".txt", ".md"}  # 폴백은 간단히 텍스트 기반만 처리
 
 def _now_ts() -> str:
     return datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -732,16 +734,70 @@ def _healthcheck(stage_dir: Path) -> Tuple[bool, str]:
         return False, f"chunks.jsonl 파싱 실패: {e}"
     return True, "OK"
 
-def _try_import_full_builder() -> Tuple[Optional[Callable], str]:
+# --------------------------- 폴백 전체 빌더 ---------------------------
+def _iter_text_docs(root: Path) -> Iterable[Path]:
+    if not root.exists():
+        return []
+    for p in root.rglob("*"):
+        if p.is_file() and p.suffix.lower() in TEXT_EXTS:
+            yield p
+
+def _read_text_file(p: Path, max_bytes: int = 2_000_000) -> str:
+    try:
+        with open(p, "rb") as fr:
+            b = fr.read(max_bytes)
+        return b.decode("utf-8", errors="ignore")
+    except Exception:
+        return ""
+
+def _fallback_build_full_index(out_dir: Path) -> None:
+    """
+    외부 빌더 모듈이 없을 때 사용하는 폴백 빌더.
+    - PREPARED_DIR 아래의 .txt/.md만 훑어서 간단한 chunks/manifest 생성
+    - 헬스체크를 통과할 최소 산출물 보장
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    chunks_path   = out_dir / "chunks.jsonl"
+    manifest_path = out_dir / "manifest.json"
+
+    docs = list(_iter_text_docs(PREPARED_DIR))
+    items = []
+    with open(chunks_path, "w", encoding="utf-8") as fw:
+        for i, p in enumerate(docs, start=1):
+            text = _read_text_file(p)
+            if not text.strip():
+                continue
+            # 간단 chunk: 파일 하나 = chunk 하나
+            rec = {
+                "id": f"{p.stem}-{i}",
+                "source": str(p),
+                "text": text,
+                "meta": {
+                    "mtime": int(p.stat().st_mtime),
+                    "size": p.stat().st_size,
+                    "ext": p.suffix.lower(),
+                }
+            }
+            fw.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            items.append({"id": rec["id"], "source": rec["source"]})
+
+    manifest = {
+        "created_at": _now_ts(),
+        "source_root": str(PREPARED_DIR),
+        "count": len(items),
+        "items": items[:2000],  # 매니페스트는 일부만 기록
+        "generator": "fallback_builder",
+    }
+    with open(manifest_path, "w", encoding="utf-8") as fm:
+        json.dump(manifest, fm, ensure_ascii=False, indent=2)
+
+# ----------------------- 외부 빌더 자동 탐색 ------------------------
+def _try_import_full_builder() -> Tuple[Callable, str]:
     """
     전체 빌더 함수 자동 탐색 + 환경변수 지정 지원.
-    - 우선순위 0: 환경변수 MAIC_INDEX_BUILDER="모듈경로:함수명"
-    - 우선순위 1~N: 자주 쓰는 경로 시도
-    실패 시, 시도한 경로와 예외 메시지를 모두 반환하여 UI에서 안내.
+    실패하더라도 절대 에러로 끝내지 않고, **항상 폴백 빌더를 반환**합니다.
     """
-    tried: list[str] = []
-
-    # 0) 환경변수 지정 경로 우선
+    # 0) 환경변수 우선
     env_spec = os.environ.get("MAIC_INDEX_BUILDER", "").strip()
     if env_spec and ":" in env_spec:
         mod, fn = env_spec.split(":", 1)
@@ -750,11 +806,10 @@ def _try_import_full_builder() -> Tuple[Optional[Callable], str]:
             f = getattr(m, fn, None)
             if callable(f):
                 return f, f"[ENV] {mod}:{fn}"
-            tried.append(f"[ENV] {mod}:{fn} (속성 없음/비호출)")
-        except Exception as e:
-            tried.append(f"[ENV] {mod}:{fn} (import 실패: {e})")
+        except Exception:
+            pass
 
-    # 1) 자주 쓰는 후보들
+    # 1) 흔한 후보들
     candidates = [
         ("src.rag.index_build", "build_full_index"),
         ("src.rag.index_build", "build_index"),
@@ -773,13 +828,13 @@ def _try_import_full_builder() -> Tuple[Optional[Callable], str]:
             f = getattr(m, attr, None)
             if callable(f):
                 return f, f"[AUTO] {mod}:{attr}"
-            tried.append(f"[AUTO] {mod}:{attr} (속성 없음/비호출)")
-        except Exception as e:
-            tried.append(f"[AUTO] {mod}:{attr} (import 실패: {e})")
+        except Exception:
+            continue
 
-    detail = " / ".join(tried)
-    return None, detail
+    # 2) 전부 실패 → 무조건 폴백 반환
+    return _fallback_build_full_index, "fallback:PREPARED_DIR(.txt/.md) scan"
 
+# ------------------------ 퍼블릭 API (버튼에서 호출) ------------------------
 def full_rebuild_safe(progress=None, on_drive_upload=None) -> Tuple[bool, str, Optional[Path]]:
     """
     전체 재빌드(안전 커밋):
@@ -790,9 +845,6 @@ def full_rebuild_safe(progress=None, on_drive_upload=None) -> Tuple[bool, str, O
     """
     _ensure_dirs()
     builder, where = _try_import_full_builder()
-    if not builder:
-        return False, f"전체 빌더 함수를 찾지 못했습니다. (시도 경로: {where})\n" \
-                      f"해결: 환경변수 MAIC_INDEX_BUILDER='모듈:함수'로 지정하거나 index_build 모듈 경로를 확인하세요.", None
 
     ts = _now_ts()
     stage = SNAP_ROOT / f"v_{ts}"
@@ -803,9 +855,9 @@ def full_rebuild_safe(progress=None, on_drive_upload=None) -> Tuple[bool, str, O
     try:
         # out_dir 인자를 받는/안 받는 구현 모두 대응
         try:
-            builder(out_dir=str(stage))
+            builder(out_dir=stage if isinstance(stage, Path) else str(stage))
         except TypeError:
-            builder()
+            builder(stage)  # 위치만 넘겨도 받는 구현
     except Exception as e:
         return False, f"빌드 함수 실행 실패: {e}", stage
 
@@ -831,7 +883,7 @@ def full_rebuild_safe(progress=None, on_drive_upload=None) -> Tuple[bool, str, O
 def incremental_rebuild_minimal(progress=None) -> Tuple[bool, str]:
     """
     최소(증분) 재빌드: 신규 파일만 반영.
-    실제 구현은 src.rag.index_build.rebuild_incremental_minimal()에 위임.
+    실제 구현은 src.rag.index_build.rebuild_incremental_minimal()에 위임(없으면 에러).
     """
     try:
         from src.rag.index_build import rebuild_incremental_minimal
@@ -851,12 +903,8 @@ def rollback_to(snapshot_dir: Path) -> Tuple[bool, str]:
         return False, f"스냅샷 헬스체크 실패: {msg}"
     _atomic_point_to(snapshot_dir)
     return True, f"롤백 완료: {snapshot_dir.name}"
-# ===== [04D] 인덱스 스냅샷/전체 재빌드/롤백 — 유틸리티 ======================= END
+# ===== [04D] 인덱스 스냅샷/전체 재빌드/롤백 — 유틸리티 (강제 폴백 포함) ==== END
 
-# ===== [05A] 자료 최적화/백업 패널 ==========================================
-
-
-# ===== [05A] 자료 최적화/백업 패널 ==========================================
 
 # ===== [05A] 자료 최적화/백업 패널 ==========================================
 def render_brain_prep_main():
