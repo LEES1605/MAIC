@@ -1601,23 +1601,18 @@ def _is_brain_ready() -> bool:
         ss.get("rag_index_attached"),
         ss.get("index_attached"),
         ss.get("attached_local"),
-        ss.get("rag_index"),
-        last.get("final_attach"),
+        last.get("attached_local"),
     )
     return any(bool(x) for x in flags)
-# ===== [PATCH-BRAIN-HELPER] END ==============================================
 
 # ===== [06] 질문/답변 패널 — 채팅창 UI + 맥락 + 보충 차별화/유사도 가드 ========
-def render_qa_panel():
+def _render_qa_panel():
     """
-    채팅형 Q/A:
-      - 정렬: 학생(내 메시지)=오른쪽, AI=왼쪽 (st.chat_message)
-      - 입력: st.chat_input() → Enter 전송 & 자동 비우기
-      - 채팅창 스타일: 외곽 테두리 + 말풍선 파스텔 하늘색 톤
-      - 1차: 선두 모델 스트리밍 → 완료 즉시 rerun → 보충 버튼 노출
-      - 2차: '💬 보충 설명' = 반대 모델로 스트리밍 (차별화 프롬프트 강제)
-      - 자동 듀얼 ON 시 1차 완료 직후 2차 자동 예약
-      - 출처 규칙: 근거 있으면 구체 표기, 없으면 'AI지식 활용'
+    질문/답변 패널 전체:
+      - 상단: 두뇌 준비 배지/상태
+      - 질문 모드 선택(문법설명/문장구조분석/지문분석)
+      - 대화 맥락 포함/길이 조절
+      - 1차/2차 생성 파라미터 분리(온도/토큰/탑P)
       - 디클레이머 금지
       - 맥락 엔진: 최근 K턴 + 길이 상한, 관리자 옵션
       - 보충 다양화: 1차/2차 온도 분리 + 2차 top_p + 유사도 가드(자동 재생성 1회)
@@ -1647,310 +1642,121 @@ def render_qa_panel():
     st.session_state.setdefault("primary_temperature", 0.3)
     st.session_state.setdefault("supp_temperature", 0.7)
     st.session_state.setdefault("supp_top_p", 0.95)
-    st.session_state.setdefault("similarity_threshold", 0.90)   # 0~1
-    st.session_state.setdefault("diversity_strength", "보통")    # 낮음/보통/강함
-    st.session_state.setdefault("gen_max_tokens", 700)
 
-    # ── 유틸 ─────────────────────────────────────────────────────────────────
-    def _new_id() -> int:
-        nid = int(st.session_state["_chat_next_id"])
-        st.session_state["_chat_next_id"] = nid + 1
-        return nid
+    # ── (C2) 디클레이머 금지, 스타일 ────────────────────────────────────────
+    DECL_NO = (
+        "주의: 변명/사과/한계 설명(디클레이머) 금지. 학생이 이해할 수 있게 친절히 설명."
+    )
 
-    def _ts():
-        return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    # ── (H) 보조 헬퍼 ───────────────────────────────────────────────────────
+    def _ts(): return datetime.utcnow().isoformat(timespec="seconds")
+    def _new_id():
+        i = st.session_state["_chat_next_id"]; st.session_state["_chat_next_id"] += 1; return i
 
-    def _chatbox(role: str, avatar: str = None):
-        if hasattr(st, "chat_message"):
-            return st.chat_message(role, avatar=avatar)
-        return st.container()
+    @st.cache_data(show_spinner=False)
+    def _have_libs():
+        have_gemini_lib = importlib.util.find_spec("google.generativeai") is not None
+        # OpenAI SDK v1 계열: openai 모듈 + client.chat.completions.create 사용
+        have_openai_lib = importlib.util.find_spec("openai") is not None
+        return have_gemini_lib, have_openai_lib
 
-    def _norm(s: str) -> str:
-        return (" ".join((s or "").lower().split())).strip()
+    have_gemini_lib, have_openai_lib = _have_libs()
+    has_gemini_key = bool(os.getenv("GEMINI_API_KEY") or getattr(st, "secrets", {}).get("GEMINI_API_KEY"))
+    has_openai_key = bool(os.getenv("OPENAI_API_KEY") or getattr(st, "secrets", {}).get("OPENAI_API_KEY"))
 
-    # 두뇌 상태(안전 호출)
-    rag_ready = False
-    try:
-        if "_is_attached_session" in globals() and callable(globals()["_is_attached_session"]):
-            rag_ready = globals()["_is_attached_session"]()
-        elif "_is_brain_ready" in globals() and callable(globals()["_is_brain_ready"]):
-            rag_ready = globals()["_is_brain_ready"]()
-    except Exception:
-        rag_ready = False
-
-    # ── 상단 안내/관리자 영역 ────────────────────────────────────────────────
+    # ── (U0) 상단 상태/옵션 바 ───────────────────────────────────────────────
+    rag_ready = _is_brain_ready()
     with st.container(border=True):
-        st.subheader("질문/답변 (채팅)")
-        st.caption("Enter로 전송 · 줄바꿈은 Shift+Enter")
-        if rag_ready:
-            st.caption("🧠 두뇌 상태: **연결됨** · 업로드 자료(RAG) 사용 가능")
-        else:
-            st.caption("🧠 두뇌 상태: **미연결** · 현재 응답은 **LLM-only(자료 미참조)** 입니다")
-
-        # 관리 영역(좌) · 도움말(우)
-        colL, colR = st.columns([1,3], vertical_alignment="top")
-
-        # ── (좌) 관리자 컨트롤 ───────────────────────────────────────────────
-        with colL:
-            # 표시 모드(문법/문장/지문)
-            try:
-                modes_enabled = _get_enabled_modes_unified()
-            except Exception:
-                modes_enabled = {"Grammar": True, "Sentence": True, "Passage": True}
-            label_order = [("문법설명","Grammar"), ("문장구조분석","Sentence"), ("지문분석","Passage")]
-            labels = [ko for ko,_ in label_order if (
-                (ko == "문법설명"      and modes_enabled.get("Grammar",  True)) or
-                (ko == "문장구조분석"  and modes_enabled.get("Sentence", True)) or
-                (ko == "지문분석"      and modes_enabled.get("Passage",  True))
-            )]
-            if not labels: labels = ["문법설명"]
-            sel_mode = st.radio("모드", options=labels, horizontal=True, key="qa_mode_radio")
-
-            # 관리자 가드
-            is_admin = (
-                st.session_state.get("is_admin")
-                or st.session_state.get("admin_mode")
-                or st.session_state.get("role") == "admin"
-                or st.session_state.get("mode") == "admin"
+        c1, c2, c3, c4 = st.columns([1,1,1,1])
+        with c1:
+            badge = "🟢 두뇌 준비됨" if rag_ready else "🟡 두뇌 연결 대기"
+            st.markdown(f"**{badge}**")
+        with c2:
+            st.session_state["lead_provider"] = st.radio(
+                "리드 모델", options=["Gemini", "OpenAI"], horizontal=True,
+                index=0 if st.session_state.get("lead_provider","Gemini")=="Gemini" else 1
             )
+        with c3:
+            st.session_state["dual_generate"] = st.toggle("보충 설명 추가 생성", value=bool(st.session_state.get("dual_generate", False)))
+        with c4:
+            prim_temp = st.number_input("1차 온도", value=float(st.session_state.get("primary_temperature", 0.3)), min_value=0.0, max_value=2.0, step=0.1)
+            st.session_state["primary_temperature"] = prim_temp
 
-            if is_admin:
-                st.markdown("---")
-                st.caption("응답 전략(관리자)")
-                st.session_state["lead_provider"] = st.radio(
-                    "선두 모델", options=["Gemini", "OpenAI"],
-                    index=(0 if st.session_state["lead_provider"] == "Gemini" else 1),
-                    key="lead_provider_radio"
-                )
-                st.session_state["dual_generate"] = st.toggle(
-                    "두 모델 모두 자동 생성(비용↑)",
-                    value=bool(st.session_state["dual_generate"])
-                )
+    # 프롬프트 모드 셀렉터
+    with st.container(border=True):
+        m1, m2, m3 = st.columns([1,1,1])
+        with m1:
+            mode = st.session_state.get("qa_mode_radio", "문법설명")
+            mode = st.radio("질문 모드", ["문법설명","문장구조분석","지문분석"], index=["문법설명","문장구조분석","지문분석"].index(mode), horizontal=True)
+            st.session_state["qa_mode_radio"] = mode
+        with m2:
+            st.session_state["use_context"] = st.toggle("맥락 포함", value=bool(st.session_state.get("use_context", True)))
+        with m3:
+            cturn = st.number_input("최근 포함 턴(K)", min_value=2, max_value=20, value=int(st.session_state.get("context_turns", 8)))
+            st.session_state["context_turns"] = int(cturn)
 
-                st.markdown("---")
-                st.caption("Gemini 모델 선택")
-                default_model = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
-                st.session_state["gemini_model_selection"] = st.radio(
-                    "Gemini 모델", options=["gemini-1.5-flash", "gemini-1.5-pro"],
-                    index=0 if str(default_model).endswith("flash") else 1, key="gemini_model_radio"
-                )
-
-                st.markdown("---")
-                st.caption("생성 설정(1차/2차 분리)")
-                st.session_state["primary_temperature"] = st.slider(
-                    "1차 Temperature", 0.0, 1.0, float(st.session_state["primary_temperature"]), 0.1
-                )
-                colA, colB = st.columns(2)
-                with colA:
-                    st.session_state["supp_temperature"] = st.slider(
-                        "2차 Temperature", 0.0, 1.0, float(st.session_state["supp_temperature"]), 0.1
-                    )
-                with colB:
-                    st.session_state["supp_top_p"] = st.slider(
-                        "2차 top_p", 0.5, 1.0, float(st.session_state["supp_top_p"]), 0.01
-                    )
-                st.session_state["gen_max_tokens"] = st.slider(
-                    "Max Tokens", 100, 2000, int(st.session_state["gen_max_tokens"]), 50
-                )
-                st.session_state["diversity_strength"] = st.selectbox(
-                    "보충 다양화 강도", options=["낮음","보통","강함"],
-                    index={"낮음":0,"보통":1,"강함":2}[st.session_state["diversity_strength"]]
-                )
-                st.session_state["similarity_threshold"] = st.slider(
-                    "유사도 재생성 임계치", 0.70, 0.99, float(st.session_state["similarity_threshold"]), 0.01
-                )
-
-                st.markdown("---")
-                st.caption("대화 맥락(세션 메모리)")
-                st.session_state["use_context"] = st.toggle(
-                    "맥락 사용", value=bool(st.session_state["use_context"])
-                )
-                st.session_state["context_turns"] = st.slider(
-                    "최근 포함 턴 수(K)", 2, 12, int(st.session_state["context_turns"]), 1
-                )
-                st.session_state["context_max_chars"] = st.slider(
-                    "맥락 길이 상한(문자)", 500, 6000, int(st.session_state["context_max_chars"]), 100
-                )
-                if st.button("🧽 맥락 초기화", use_container_width=True):
-                    st.session_state["_session_summary"] = ""
-                    st.toast("대화 맥락 요약을 초기화했습니다.", icon="🧼")
-
-        with colR:
-            if st.button("🧹 새 질문으로 초기화", use_container_width=True):
-                st.session_state["chat"] = []
-                st.session_state["_chat_next_id"] = 1
-                st.session_state["_supplement_for_msg_id"] = None
-                st.session_state["_session_summary"] = ""
-                st.rerun()
-
-        # 프롬프트 미리보기 토글(전역)
-        show_prompt = st.toggle("프롬프트 미리보기", value=False, key="show_prompt_toggle")
+    # 프롬프트 미리보기 토글(전역)
+    show_prompt = st.toggle("프롬프트 미리보기", value=False, key="show_prompt_toggle")
 
     # ===== [06A] (U1+Builder) 채팅창 CSS + 프롬프트 빌더(맥락·출처 규칙) = START
     # ── (U1) 채팅창 말풍선/패널 스타일(CSS) ──────────────────────────────────
     st.markdown("""
     <style>
-      div[data-testid=\"stChatMessage\"]{
+      div[data-testid="stChatMessage"]{
         background:#EAF5FF; border:1px solid #BCDFFF; border-radius:12px;
         padding:6px 10px; margin:6px 0;
       }
-      div[data-testid=\"stChatMessage\"] .stMarkdown p{ margin-bottom:0.4rem; }
+      div[data-testid="stChatMessage"] .stMarkdown p{ margin-bottom:0.4rem; }
     </style>
     """, unsafe_allow_html=True)
 
-    # ── 프롬프트 빌더(+ 출처 규칙/맥락 주입) ─────────────────────────────────
-    def _build_context_text(max_turns: int, max_chars: int) -> str:
-        if not st.session_state.get("use_context", True):
-            return ""
-        history = st.session_state.get("chat", [])
-        if not history:
-            return (st.session_state.get("_session_summary") or "").strip()
+    # ── (U2) 말풍선 컨텍스트 ──────────────────────────────────────────────────
+    from contextlib import contextmanager
+    @contextmanager
+    def _chatbox(role: str, avatar: str="🤖"):
+        with st.chat_message(role, avatar=avatar):
+            yield
 
-        # 최근 K턴만, 한 줄 요약 형태로
-        turns = []
-        k = int(st.session_state.get("context_turns", max_turns))
-        for m in history[-k:]:
-            role = "학생" if m.get("role") == "user" else f"AI({m.get('provider','AI')})"
-            text = (m.get("text") or "").strip().replace("\n", " ")
-            if text:
-                turns.append(f"{role}: {text}")
-
-        ctx = "\n".join(turns).strip()
-        summary = (st.session_state.get("_session_summary") or "").strip()
-        if summary:
-            ctx = f"[요약]\n{summary}\n\n[최근]\n{ctx}" if ctx else f"[요약]\n{summary}"
-
-        # 길이 상한 적용
-        limit = int(st.session_state.get("context_max_chars", max_chars))
-        if len(ctx) > limit:
-            ctx = ctx[-limit:]
-        return ctx
-
-    def _build_parts(mode_label: str, q_text: str, use_rag: bool):
-        """
-        최종 프롬프트 조립:
-          - build_prompt() 반환(dict/객체)을 모두 수용하여 dict로 정규화
-          - system 끝에 '출처 표기 규칙/디클레이머 금지' 주입
-          - user 끝에 [대화 맥락] 주입(옵션)
-        반환: {"system": str, "user": str, "provider_kwargs": dict}
-        """
-        from src.prompt_modes import build_prompt
-
-        raw = build_prompt(
-            mode_label,
-            q_text or "",
-            lang="ko",
-            extras={
-                "level": st.session_state.get("student_level"),
-                "tone":  "encouraging",
-            },
+    # ── (B0) OpenAI/Gemini 공통 페이로드 생성 ───────────────────────────────
+    def _build_parts(mode: str, qtext: str, rag_ok: bool):
+        # (요약) prompts + DECL_NO + 사용자의 질문 + 선택적 맥락/출처
+        from src.prompt_modes import prepare_prompt  # 내부에서 prompts.yaml/폴백YAML 처리
+        parts = prepare_prompt(
+            mode=mode, question=qtext, use_context=bool(st.session_state.get("use_context", True)),
+            context_turns=int(st.session_state.get("context_turns", 8)),
+            context_max_chars=int(st.session_state.get("context_max_chars", 2500)),
+            history=list(st.session_state.get("chat", [])),
+            rag_ready=rag_ok,
+            disclaimers_off=True
         )
-
-        # (1) 반환 형태 정규화: dict/객체 모두 dict로 통일
-        if isinstance(raw, dict):
-            parts = dict(raw)  # 얕은 복사
-            parts.setdefault("system", "")
-            parts.setdefault("user", "")
-            parts.setdefault("provider_kwargs", {})
-        else:
-            parts = {
-                "system": getattr(raw, "system", "") or "",
-                "user": getattr(raw, "user", "") or "",
-                "provider_kwargs": getattr(raw, "provider_kwargs", {}) or {},
-            }
-
-        # (2) 출처/디클레이머 규칙 주입
-        rules = []
-        if use_rag:
-            rules.append(
-                "출처 표기 규칙: 업로드 자료에서 근거를 찾으면 문서명/소단원명/페이지 등 구체적으로 표기합니다. "
-                "근거를 찾지 못했다면 'AI지식 활용'이라고만 간단히 표기합니다."
-            )
-        else:
-            rules.append(
-                "출처 표기 규칙: 현재 업로드 자료(RAG)를 사용하지 못하므로, 답변 맨 끝에 'AI지식 활용'이라고만 표기합니다."
-            )
-        rules.append("출처/근거 표기는 답변 맨 끝에 '근거/출처: '로 시작하는 한 줄로만 작성하십시오. 여러 개면 세미콜론(;)으로 구분합니다.")
-        rules.append("금지: '일반적인 지식/일반 학습자료' 등에 기반했다는 포괄적 디클레이머를 출력하지 마십시오.")
-
-        if parts["system"]:
-            parts["system"] = parts["system"] + "\n\n" + "\n".join(rules)
-
-        # (3) 대화 맥락 주입(옵션)
-        ctx = _build_context_text(
-            int(st.session_state.get("context_turns", 8)),
-            int(st.session_state.get("context_max_chars", 2500)),
-        )
-        if ctx:
-            parts["user"] = f"{parts['user']}\n\n[대화 맥락]\n{ctx}"
-
+        # 디클레이머 금지 규칙 삽입(시스템)
+        parts["system"] = f"{parts.get('system','')}\n{DECL_NO}".strip()
+        if show_prompt:
+            with st.expander("프롬프트 미리보기", expanded=False):
+                st.code(parts, language="json")
         return parts
-# ===== [06A] (U1+Builder) 채팅창 CSS + 프롬프트 빌더(맥락·출처 규칙) = END
-# ── 라이브러리/키 상태 ───────────────────────────────────────────────────
-    have_openai_lib  = importlib.util.find_spec("openai") is not None
-    have_gemini_lib  = importlib.util.find_spec("google.generativeai") is not None
-    has_openai_key   = bool(os.getenv("OPENAI_API_KEY") or getattr(st, "secrets", {}).get("OPENAI_API_KEY"))
-    has_gemini_key   = bool(os.getenv("GEMINI_API_KEY") or getattr(st, "secrets", {}).get("GEMINI_API_KEY"))
 
-    # ── LLM 클라이언트 캐시 ─────────────────────────────────────────────────
-    st.session_state.setdefault("_openai_client_cache", None)
-    st.session_state.setdefault("_gemini_model_cache", {})
-
-    def _get_openai_client():
-        if st.session_state["_openai_client_cache"] is None:
-            from openai import OpenAI
-            st.session_state["_openai_client_cache"] = OpenAI()
-        return st.session_state["_openai_client_cache"]
-
-    def _get_gemini_model(model_name: str):
-        cache = st.session_state["_gemini_model_cache"]
-        if model_name in cache: return cache[model_name]
-        import google.generativeai as genai
-        api_key = os.getenv("GEMINI_API_KEY") or getattr(st, "secrets", {}).get("GEMINI_API_KEY")
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel(model_name=model_name)
-        cache[model_name] = model
-        return model
-
-    # ── 생성 설정값 ──────────────────────────────────────────────────────────
-    max_toks = int(st.session_state.get("gen_max_tokens", 700))
-    prim_temp = float(st.session_state.get("primary_temperature", 0.3))
-    supp_temp = float(st.session_state.get("supp_temperature", 0.7))
-    supp_top_p = float(st.session_state.get("supp_top_p", 0.95))
-    sim_th = float(st.session_state.get("similarity_threshold", 0.90))
-
-    # 다양화 강도에 따라 2차 파라미터/지시 강화
-    diversity = st.session_state.get("diversity_strength", "보통")
-    if diversity == "낮음":
-        supp_temp = max(supp_temp, 0.6);  supp_top_p = max(supp_top_p, 0.9)
-        diff_note = "간결한 비교 불릿 3개, 예문 2개"
-    elif diversity == "강함":
-        supp_temp = max(supp_temp, 0.8);  supp_top_p = max(supp_top_p, 0.97)
-        diff_note = "비교표 + 불릿 5개 + 예문 4개 + 흔한 오답 2개"
-    else:
-        diff_note = "비교표 또는 불릿 3~4개, 예문 3개 + 흔한 오답 1개"
-
-    # ── OpenAI/Gemini 호출(스트리밍) ─────────────────────────────────────────
-    def _to_openai_payload(parts):
-        from src.prompt_modes import to_openai
-        return to_openai(parts)
-
-    def _to_gemini_payload(parts):
-        from src.prompt_modes import to_gemini
-        return to_gemini(parts)
-
+    # ── (B1) OpenAI 호환 — 스트림 호출 ───────────────────────────────────────
     def _call_openai_stream(parts, out_slot, temperature: float, top_p: float | None, max_tokens: int):
         try:
-            client = _get_openai_client()
-            raw_payload = _to_openai_payload(parts) or {}
-            payload = dict(raw_payload)
-            for k in ("temperature", "max_tokens", "model", "stream", "top_p"):
-                payload.pop(k, None)
+            import openai
+            # SDK v1: 글로벌 키 설정
+            openai.api_key = os.getenv("OPENAI_API_KEY") or getattr(st, "secrets", {}).get("OPENAI_API_KEY")
+            if not openai.api_key: return False, "OPENAI_API_KEY 미설정", "OpenAI"
+
+            # 메시지 변환
+            payload = {
+                "messages": [
+                    {"role": "system", "content": parts["system"]},
+                    *parts["messages"],
+                ]
+            }
+            # 모델/파라미터
             model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
             kwargs = dict(model=model, stream=True, temperature=temperature, max_tokens=max_tokens)
             if top_p is not None: kwargs["top_p"] = top_p
             kwargs.update(payload)
-            stream = client.chat.completions.create(**kwargs)
+            stream = openai.chat.completions.create(**kwargs)
             buf = []
             for event in stream:
                 delta = getattr(event.choices[0], "delta", None)
@@ -1962,6 +1768,7 @@ def render_qa_panel():
         except Exception as e:
             return False, f"{type(e).__name__}: {e}", "OpenAI"
 
+    # ── (B2) Gemini 호환 — 스트림 호출 ───────────────────────────────────────
     def _call_gemini_stream(parts, out_slot, temperature: float, top_p: float | None, max_tokens: int):
         try:
             import google.generativeai as genai
@@ -1983,7 +1790,10 @@ def render_qa_panel():
                 text = getattr(resp, "text", "") or (
                     resp.candidates[0].content.parts[0].text if getattr(resp, "candidates", None) else ""
                 )
-            return True, (text if text else None), "Gemini"
+            # ✅ 빈 응답이면 실패로 간주하여 폴백 가능하도록 반환
+            if not (text and text.strip()):
+                return False, "Gemini 빈 응답", "Gemini"
+            return True, text, "Gemini"
         except Exception as e:
             return False, f"{type(e).__name__}: {e}", "Gemini"
 
@@ -1994,16 +1804,9 @@ def render_qa_panel():
                 with _chatbox("user", avatar="🧑"):
                     st.markdown(msg["text"])
             else:
-                provider_badge = f"_{msg.get('provider','AI')}_"
-                with _chatbox("assistant", avatar="🤖"):
-                    st.caption(provider_badge)
+                provider_emoji = "🟣" if msg.get("provider") == "Gemini" else "🔵"
+                with _chatbox("assistant", avatar=provider_emoji):
                     st.markdown(msg["text"])
-                    if msg.get("kind") == "primary":
-                        colX, _ = st.columns([1,5])
-                        btn_key = f"btn_supp_{msg['id']}"
-                        if colX.button("💬 보충 설명", key=btn_key, use_container_width=True):
-                            st.session_state["_supplement_for_msg_id"] = msg["id"]
-                            st.rerun()
 
     # ── 입력(Enter 전송 & 자동 비우기): 내 말풍선 즉시 렌더 ────────────────────
     question = st.chat_input("질문을 입력하세요")
@@ -2021,12 +1824,10 @@ def render_qa_panel():
                 st.code(traceback.format_exc(), language="python")
             return
 
-        # 프리뷰(선택)
-        if show_prompt:
-            with _chatbox("assistant", avatar="🧩"):
-                st.markdown("**프롬프트(미리보기)**")
-                st.code(getattr(parts, "system", ""), language="markdown")
-                st.code(getattr(parts, "user", ""), language="markdown")
+        # 1차/2차 파라미터
+        prim_temp = float(st.session_state.get("primary_temperature", 0.3))
+        supp_temp = float(st.session_state.get("supp_temperature", 0.7))
+        max_toks = 800
 
         # 1차 스트리밍
         lead = st.session_state.get("lead_provider", "Gemini")
@@ -2048,7 +1849,8 @@ def render_qa_panel():
                 else:
                     ok, out, provider_used = False, "OpenAI/Gemini 사용 불가(패키지 또는 키 누락)", lead
 
-            if ok and out:
+            # ✅ 성공 판정 강화: 공백 응답 방지
+            if ok and (out and out.strip()):
                 aid = _new_id()
                 st.session_state["chat"].append({
                     "id": aid, "role": "assistant", "provider": provider_used,
@@ -2058,7 +1860,26 @@ def render_qa_panel():
                     st.session_state["_supplement_for_msg_id"] = aid
                 st.rerun()
             else:
-                st.error(f"1차 생성 실패: {out or '원인 불명'}")
+                # ✅ 폴백 시도: 리드 실패 시 반대 모델로 재시도
+                fallback_ok, fallback_out, fallback_provider = False, None, lead
+                if lead == "Gemini" and have_openai_lib and has_openai_key:
+                    st.caption("_Gemini 실패 → OpenAI로 폴백 시도_")
+                    fallback_ok, fallback_out, fallback_provider = _call_openai_stream(parts, out_slot, prim_temp, None, max_toks)
+                elif lead != "Gemini" and have_gemini_lib and has_gemini_key:
+                    st.caption("_OpenAI 실패 → Gemini로 폴백 시도_")
+                    fallback_ok, fallback_out, fallback_provider = _call_gemini_stream(parts, out_slot, prim_temp, None, max_toks)
+
+                if fallback_ok and (fallback_out and fallback_out.strip()):
+                    aid = _new_id()
+                    st.session_state["chat"].append({
+                        "id": aid, "role": "assistant", "provider": fallback_provider,
+                        "kind": "primary", "text": fallback_out, "ts": _ts()
+                    })
+                    if bool(st.session_state.get("dual_generate", False)):
+                        st.session_state["_supplement_for_msg_id"] = aid
+                    st.rerun()
+                else:
+                    st.error(f"1차 생성 실패: {(fallback_out or out) or '원인 불명'}")
 
     # ── 보충 설명 실행(예약된 경우; 차별화 프롬프트 + 유사도 가드) ───────────────
     target_id = st.session_state.get("_supplement_for_msg_id")
@@ -2073,59 +1894,38 @@ def render_qa_panel():
                 if m["role"] == "user" and m["id"] < primary["id"]:
                     base_q = m["text"]; break
             try:
+                # 2차 프롬프트: 더 창의적이고, 유사도/중복 방지
                 parts2 = _build_parts(st.session_state.get("qa_mode_radio","문법설명"), base_q, rag_ready)
-                # —— (A) 보충 전용 차별화 지시(강화) ——
-                prim = (primary.get("text","") or "")[:3000]
-                student_level = st.session_state.get("student_level") or "중등"
-                parts2.user = (
-                    f"{parts2.user}\n\n[참고: 1차 응답 요지]\n{prim}\n\n"
-                    "[보충 설명 지시 — 차별화 필수]\n"
-                    "- 1차 응답의 문장/표현을 재사용하지 말고 **다른 서술 구조**로 설명하세요.\n"
-                    f"- 형식: {diff_note} (섹션 제목 포함)\n"
-                    "- **차이점/추가 포인트 섹션을 반드시 포함**하세요(누락 금지).\n"
-                    "- **예문 3개**(난이도 점진적) + **흔한 오답 1개**와 교정.\n"
-                    f"- 학생 수준: {student_level} 학습자에게 맞춰 부드럽고 간단한 말로.\n"
-                    "- 출처 규칙과 디클레이머 금지 규칙은 동일하게 따르세요.\n"
-                )
-            except Exception as e:
-                with _chatbox("assistant", avatar="⚠️"):
-                    st.error(f"보충 프롬프트 생성 실패: {type(e).__name__}: {e}")
-                    st.code(traceback.format_exc(), language="python")
-                st.session_state["_supplement_for_msg_id"] = None
-                st.rerun()
+                # 2차 생성 파라미터
+                supp_temp2 = float(st.session_state.get("supp_temperature", 0.7))
+                supp_top_p2 = float(st.session_state.get("supp_top_p", 0.95))
+                other = "OpenAI" if primary.get("provider") == "Gemini" else "Gemini"
 
-            other = "OpenAI" if primary.get("provider") == "Gemini" else "Gemini"
-
-            def _gen_supp(p):
-                with _chatbox("assistant", avatar="🤖"):
-                    st.caption(f"_{other} 보충 설명 생성 중…_")
+                def _gen_supp_retry(p):
+                    # 2차는 기본적으로 '다른 모델'을 시도
                     out_slot = st.empty()
                     if other == "OpenAI":
                         if have_openai_lib and has_openai_key:
-                            return _call_openai_stream(p, out_slot, supp_temp, supp_top_p, max_toks)
+                            return _call_openai_stream(p, out_slot, supp_temp2, supp_top_p2, max_toks)
                         return False, "OpenAI 사용 불가(패키지 또는 키 누락)", other
                     else:
                         if have_gemini_lib and has_gemini_key:
-                            return _call_gemini_stream(p, out_slot, supp_temp, supp_top_p, max_toks)
+                            return _call_gemini_stream(p, out_slot, supp_temp2, supp_top_p2, max_toks)
                         return False, "Gemini 사용 불가(패키지 또는 키 누락)", other
 
-            ok2, out2, _ = _gen_supp(parts2)
+                ok2, out2, _ = _gen_supp_retry(parts2)
 
-            # —— (C) 유사도 가드: 너무 비슷하면 한 번 재생성 ——
-            if ok2 and out2:
-                sim = difflib.SequenceMatcher(None, _norm(primary["text"]), _norm(out2)).ratio()
-                if sim >= sim_th:
-                    # 재생성용 추가 지시 + 약간 더 공격적인 탐색
-                    parts2.user += (
-                        "\n\n[재작성 — 매우 다른 구조로]\n"
-                        "표/불릿 구성과 예문을 **완전히 새로** 만들어, 1차와 **다른 관점/용어**로 설명하세요.\n"
-                        "핵심은 '형식 변화'와 '새 예시'입니다.\n"
-                    )
-                    supp_temp2 = min(1.0, supp_temp + 0.1)
-                    supp_top_p2 = min(0.99, supp_top_p + 0.02)
-                    def _gen_supp_retry(p):
-                        with _chatbox("assistant", avatar="🤖"):
-                            st.caption(f"_{other} 보충 설명 재생성 중…_")
+                # ── 유사도 가드(필요 시 자동 재생성 1회) ───────────────────────────
+                if ok2 and out2 and primary["text"]:
+                    sim = difflib.SequenceMatcher(a=primary["text"], b=out2).ratio()
+                    if sim >= 0.85:
+                        # 너무 비슷하면 톤/관점 분화 재시도
+                        parts2b = parts2.copy()
+                        # (간단) 사용자 메시지에 "다른 관점/예시" 요청 추가
+                        parts2b["messages"] = parts2["messages"] + [
+                            {"role":"user", "content":"같은 내용을 다른 관점/예시로, 초등학생도 이해할 수 있게 다시 설명해줘."}
+                        ]
+                        def _gen_supp_retry2(p):
                             out_slot = st.empty()
                             if other == "OpenAI":
                                 if have_openai_lib and has_openai_key:
@@ -2135,20 +1935,28 @@ def render_qa_panel():
                                 if have_gemini_lib and has_gemini_key:
                                     return _call_gemini_stream(p, out_slot, supp_temp2, supp_top_p2, max_toks)
                                 return False, "Gemini 사용 불가(패키지 또는 키 누락)", other
-                    ok2b, out2b, _ = _gen_supp_retry(parts2)
-                    if ok2b and out2b: out2 = out2b  # 더 나은 재작성으로 교체
+                        ok2b, out2b, _ = _gen_supp_retry(parts2)
+                        if ok2b and out2b: out2 = out2b  # 더 나은 재작성으로 교체
+
+            except Exception as e:
+                with _chatbox("assistant", avatar="⚠️"):
+                    st.error(f"보충 생성 실패: {type(e).__name__}: {e}")
+                    st.code(traceback.format_exc(), language="python")
+                st.session_state["_supplement_for_msg_id"] = None
+                return
 
             if ok2 and out2:
                 st.session_state["chat"].append({
                     "id": _new_id(), "role": "assistant", "provider": other,
                     "kind": "supplement", "text": out2, "ts": _ts()
                 })
+                st.session_state["_supplement_for_msg_id"] = None
+                st.rerun()
             else:
-                st.error(f"보충 설명 실패: {out2 or '원인 불명'}")
+                st.session_state["_supplement_for_msg_id"] = None
 
-            st.session_state["_supplement_for_msg_id"] = None
-            st.rerun()
 # ===== [06] END ===============================================================
+
 
 # ===== [07] MAIN — 오케스트레이터 ============================================
 def _render_title_with_status():
