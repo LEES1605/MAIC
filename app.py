@@ -658,7 +658,7 @@ def _render_admin_diagnostics_section():
 _render_admin_diagnostics_section()
 # ===== [04C] END ==============================================================
 
-# ===== [04D] 인덱스 스냅샷/전체 재빌드/롤백 — 유틸리티 (강제 폴백 포함) == START
+# ===== [04D] 인덱스 스냅샷/전체 재빌드/롤백 — 유틸리티 (확장 폴백) ======== START
 import os, io, json, time, shutil, hashlib, importlib
 from datetime import datetime
 from pathlib import Path
@@ -671,9 +671,11 @@ CUR_LINK   = SNAP_ROOT / "current"           # symlink 선호
 KEEP_N     = 5                                # 보존할 스냅샷 수
 REQ_FILES  = ["chunks.jsonl", "manifest.json"]  # 헬스체크 필수 산출물
 
-# 폴백 전체 빌더가 훑을 준비소스 디렉토리(텍스트 위주)
+# 폴백 전체 빌더가 훑을 준비소스 디렉토리
 PREPARED_DIR = Path(os.environ.get("MAIC_PREPARED_DIR", "~/.maic/prepared")).expanduser()
-TEXT_EXTS = {".txt", ".md"}  # 폴백은 간단히 텍스트 기반만 처리
+TEXT_EXTS = {".txt", ".md"}
+PDF_EXTS  = {".pdf"}
+DOCX_EXTS = {".docx", ".docs"}  # MS Word (docx), Google Docs export 파일명 대비
 
 def _now_ts() -> str:
     return datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -682,7 +684,6 @@ def _ensure_dirs() -> None:
     SNAP_ROOT.mkdir(parents=True, exist_ok=True)
 
 def _resolve_current_path() -> Optional[Path]:
-    """current가 symlink면 대상, 아니면 current.path 포인터를 읽음."""
     if CUR_LINK.exists() and CUR_LINK.is_symlink():
         return CUR_LINK.resolve()
     ptr = SNAP_ROOT / "current.path"
@@ -692,7 +693,6 @@ def _resolve_current_path() -> Optional[Path]:
     return None
 
 def _atomic_point_to(new_dir: Path) -> None:
-    """원자적 교체: symlink 교체가 실패하면 포인터 파일로 대체."""
     _ensure_dirs()
     tmp = SNAP_ROOT / (".current_tmp_" + _now_ts())
     try:
@@ -718,12 +718,15 @@ def _gc_old_snapshots(keep: int = KEEP_N) -> None:
         try: shutil.rmtree(p)
         except Exception: pass
 
-def _healthcheck(stage_dir: Path) -> Tuple[bool, str]:
-    """필수 파일 존재/크기 + chunks.jsonl 첫 레코드 파싱."""
+def _healthcheck(stage_dir: Path, stats: Optional[dict]=None) -> Tuple[bool, str]:
     for name in REQ_FILES:
         f = stage_dir / name
         if not f.exists() or f.stat().st_size == 0:
-            return False, f"필수 산출물 누락/0바이트: {name}"
+            detail = ""
+            if stats:
+                detail = f" (scanned: txt/md={stats.get('txt_md',0)}, pdf={stats.get('pdf',0)}, docx={stats.get('docx',0)}, " \
+                         f"extracted_chunks={stats.get('chunks',0)})"
+            return False, f"필수 산출물 누락/0바이트: {name}{detail}"
     try:
         with open(stage_dir / "chunks.jsonl", "r", encoding="utf-8") as fr:
             line = fr.readline()
@@ -734,15 +737,18 @@ def _healthcheck(stage_dir: Path) -> Tuple[bool, str]:
         return False, f"chunks.jsonl 파싱 실패: {e}"
     return True, "OK"
 
-# --------------------------- 폴백 전체 빌더 ---------------------------
-def _iter_text_docs(root: Path) -> Iterable[Path]:
+# --------------------------- 파일 스캐너/리더 ---------------------------
+def _iter_docs(root: Path) -> Iterable[Path]:
     if not root.exists():
         return []
     for p in root.rglob("*"):
-        if p.is_file() and p.suffix.lower() in TEXT_EXTS:
+        if not p.is_file(): 
+            continue
+        ext = p.suffix.lower()
+        if ext in TEXT_EXTS | PDF_EXTS | DOCX_EXTS:
             yield p
 
-def _read_text_file(p: Path, max_bytes: int = 2_000_000) -> str:
+def _read_text_file(p: Path, max_bytes: int = 4_000_000) -> str:
     try:
         with open(p, "rb") as fr:
             b = fr.read(max_bytes)
@@ -750,24 +756,73 @@ def _read_text_file(p: Path, max_bytes: int = 2_000_000) -> str:
     except Exception:
         return ""
 
-def _fallback_build_full_index(out_dir: Path) -> None:
+def _read_pdf_file(p: Path, max_pages: int = 100) -> str:
+    try:
+        import PyPDF2  # 선택 의존성
+    except Exception:
+        return ""
+    try:
+        text_parts = []
+        with open(p, "rb") as f:
+            reader = PyPDF2.PdfReader(f)
+            n = min(len(reader.pages), max_pages)
+            for i in range(n):
+                try:
+                    text_parts.append(reader.pages[i].extract_text() or "")
+                except Exception:
+                    continue
+        return "\n".join([t for t in text_parts if t]).strip()
+    except Exception:
+        return ""
+
+def _read_docx_file(p: Path, max_paras: int = 500) -> str:
+    try:
+        import docx  # python-docx (선택 의존성)
+    except Exception:
+        return ""
+    try:
+        d = docx.Document(str(p))
+        paras = []
+        for i, para in enumerate(d.paragraphs):
+            if i >= max_paras: break
+            t = (para.text or "").strip()
+            if t: paras.append(t)
+        return "\n".join(paras).strip()
+    except Exception:
+        return ""
+
+# --------------------------- 확장 폴백 빌더 ---------------------------
+def _fallback_build_full_index(out_dir: Path) -> dict:
     """
-    외부 빌더 모듈이 없을 때 사용하는 폴백 빌더.
-    - PREPARED_DIR 아래의 .txt/.md만 훑어서 간단한 chunks/manifest 생성
-    - 헬스체크를 통과할 최소 산출물 보장
+    외부 빌더가 없을 때 사용하는 확장 폴백:
+      - .txt/.md/.pdf/.docx를 가능한 범위에서 텍스트 추출
+      - 한 파일 = 한 chunk (간단 규칙)
+      - 무엇을 몇 개 읽었는지 stats 반환(헬스체크 메시지에 활용)
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     chunks_path   = out_dir / "chunks.jsonl"
     manifest_path = out_dir / "manifest.json"
 
-    docs = list(_iter_text_docs(PREPARED_DIR))
+    stats = {"txt_md":0, "pdf":0, "docx":0, "chunks":0}
     items = []
+
     with open(chunks_path, "w", encoding="utf-8") as fw:
-        for i, p in enumerate(docs, start=1):
-            text = _read_text_file(p)
-            if not text.strip():
+        for i, p in enumerate(_iter_docs(PREPARED_DIR), start=1):
+            ext = p.suffix.lower()
+            text = ""
+            if ext in TEXT_EXTS:
+                text = _read_text_file(p)
+                stats["txt_md"] += 1
+            elif ext in PDF_EXTS:
+                text = _read_pdf_file(p)
+                stats["pdf"] += 1
+            elif ext in DOCX_EXTS:
+                text = _read_docx_file(p)
+                stats["docx"] += 1
+
+            if not (text and text.strip()):
                 continue
-            # 간단 chunk: 파일 하나 = chunk 하나
+
             rec = {
                 "id": f"{p.stem}-{i}",
                 "source": str(p),
@@ -775,29 +830,29 @@ def _fallback_build_full_index(out_dir: Path) -> None:
                 "meta": {
                     "mtime": int(p.stat().st_mtime),
                     "size": p.stat().st_size,
-                    "ext": p.suffix.lower(),
+                    "ext": ext,
                 }
             }
             fw.write(json.dumps(rec, ensure_ascii=False) + "\n")
             items.append({"id": rec["id"], "source": rec["source"]})
+            stats["chunks"] += 1
 
     manifest = {
         "created_at": _now_ts(),
         "source_root": str(PREPARED_DIR),
         "count": len(items),
-        "items": items[:2000],  # 매니페스트는 일부만 기록
-        "generator": "fallback_builder",
+        "items": items[:2000],
+        "generator": "fallback_builder+",
+        "stats": stats,
     }
     with open(manifest_path, "w", encoding="utf-8") as fm:
         json.dump(manifest, fm, ensure_ascii=False, indent=2)
 
+    return stats
+
 # ----------------------- 외부 빌더 자동 탐색 ------------------------
-def _try_import_full_builder() -> Tuple[Callable, str]:
-    """
-    전체 빌더 함수 자동 탐색 + 환경변수 지정 지원.
-    실패하더라도 절대 에러로 끝내지 않고, **항상 폴백 빌더를 반환**합니다.
-    """
-    # 0) 환경변수 우선
+def _try_import_full_builder() -> Tuple[Optional[Callable], str]:
+    # 환경변수 우선
     env_spec = os.environ.get("MAIC_INDEX_BUILDER", "").strip()
     if env_spec and ":" in env_spec:
         mod, fn = env_spec.split(":", 1)
@@ -809,7 +864,7 @@ def _try_import_full_builder() -> Tuple[Callable, str]:
         except Exception:
             pass
 
-    # 1) 흔한 후보들
+    # 흔한 후보들
     candidates = [
         ("src.rag.index_build", "build_full_index"),
         ("src.rag.index_build", "build_index"),
@@ -831,8 +886,8 @@ def _try_import_full_builder() -> Tuple[Callable, str]:
         except Exception:
             continue
 
-    # 2) 전부 실패 → 무조건 폴백 반환
-    return _fallback_build_full_index, "fallback:PREPARED_DIR(.txt/.md) scan"
+    # 전부 실패하면 폴백 사용
+    return None, "fallback"
 
 # ------------------------ 퍼블릭 API (버튼에서 호출) ------------------------
 def full_rebuild_safe(progress=None, on_drive_upload=None) -> Tuple[bool, str, Optional[Path]]:
@@ -850,21 +905,25 @@ def full_rebuild_safe(progress=None, on_drive_upload=None) -> Tuple[bool, str, O
     stage = SNAP_ROOT / f"v_{ts}"
     stage.mkdir(parents=True, exist_ok=False)
 
-    if progress: progress(10, text=f"전체 인덱스 빌드 시작… {where}")
-    # 빌더는 out_dir에 필수 산출물 생성해야 함
+    if progress: progress(10, text=f"전체 인덱스 빌드 시작… ({'외부' if builder else '폴백'})")
+    # 빌드 수행
+    stats = None
     try:
-        # out_dir 인자를 받는/안 받는 구현 모두 대응
-        try:
-            builder(out_dir=stage if isinstance(stage, Path) else str(stage))
-        except TypeError:
-            builder(stage)  # 위치만 넘겨도 받는 구현
+        if builder:
+            # out_dir 인자를 받는/안 받는 구현 모두 대응
+            try:
+                builder(out_dir=str(stage))
+            except TypeError:
+                builder()
+        else:
+            stats = _fallback_build_full_index(stage)
     except Exception as e:
         return False, f"빌드 함수 실행 실패: {e}", stage
 
     if progress: progress(65, text="헬스체크 수행…")
-    ok, msg = _healthcheck(stage)
+    ok, msg = _healthcheck(stage, stats=stats or {})
     if not ok:
-        return False, f"헬스체크 실패: {msg}", stage
+        return False, msg, stage
 
     if progress: progress(80, text="원자적 커밋(스왑)…")
     _atomic_point_to(stage)
@@ -881,10 +940,6 @@ def full_rebuild_safe(progress=None, on_drive_upload=None) -> Tuple[bool, str, O
     return True, "전체 인덱스 재빌드 커밋 완료", stage
 
 def incremental_rebuild_minimal(progress=None) -> Tuple[bool, str]:
-    """
-    최소(증분) 재빌드: 신규 파일만 반영.
-    실제 구현은 src.rag.index_build.rebuild_incremental_minimal()에 위임(없으면 에러).
-    """
     try:
         from src.rag.index_build import rebuild_incremental_minimal
     except Exception as e:
@@ -895,7 +950,6 @@ def incremental_rebuild_minimal(progress=None) -> Tuple[bool, str]:
     return True, f"증분 반영: {n}개 파일", 
 
 def rollback_to(snapshot_dir: Path) -> Tuple[bool, str]:
-    """선택 스냅샷으로 current 포인터 이동."""
     if not snapshot_dir.exists():
         return False, "스냅샷 경로가 존재하지 않습니다"
     ok, msg = _healthcheck(snapshot_dir)
@@ -903,8 +957,7 @@ def rollback_to(snapshot_dir: Path) -> Tuple[bool, str]:
         return False, f"스냅샷 헬스체크 실패: {msg}"
     _atomic_point_to(snapshot_dir)
     return True, f"롤백 완료: {snapshot_dir.name}"
-# ===== [04D] 인덱스 스냅샷/전체 재빌드/롤백 — 유틸리티 (강제 폴백 포함) ==== END
-
+# ===== [04D] 인덱스 스냅샷/전체 재빌드/롤백 — 유틸리티 (확장 폴백) ========= END
 
 # ===== [05A] 자료 최적화/백업 패널 ==========================================
 def render_brain_prep_main():
