@@ -2118,72 +2118,109 @@ def _boot_and_render():
 
 _boot_and_render()
 # ===== [07] MAIN — END =======================================================
+
 # ===== [08] ADMIN — 인덱싱/강제 동기화 도구 — START ===========================
 def _run_index_job(mode: str) -> tuple[bool, str]:
     """
-    인덱스 실행 진입점(풀/증분). 여러 모듈 시그니처를 관대하게 지원.
-    우선순위: src.index_build → index_build → rag.index_build
-    시도 함수: build_index(mode=...), build_all(), build_incremental(), main([...])
+    인덱스 실행 진입점(풀/증분).
+    ✅ 이 프로젝트는 src/rag/index_build.py 를 사용합니다.
+       - build_index_with_checkpoint(update_pct, update_msg, gdrive_folder_id, gcp_creds, persist_dir, remote_manifest, should_stop=None)
+       - quick_precheck(gdrive_folder_id) (선택)
+       - _load_manifest_dict() (로컬 manifest 로드)
     """
-    import os, importlib, importlib.util, subprocess, sys, shlex
+    import os
+    from pathlib import Path
+    import importlib
 
-    def _find_mod(cands: list[str]):
-        for name in cands:
-            if importlib.util.find_spec(name) is not None:
-                return importlib.import_module(name)
-        return None
-
-    mod = _find_mod(["src.index_build", "index_build", "rag.index_build"])
-    persist_dir = os.path.expanduser("~/.maic/persist")
-    os.makedirs(persist_dir, exist_ok=True)
-
-    # (A) 파이썬 모듈로 바로 호출
     try:
-        if mod:
-            # 1) build_index(mode=...)
-            if hasattr(mod, "build_index"):
-                mod.build_index(mode=mode, persist_dir=persist_dir)
-                return True, f"build_index(mode={mode}) 완료"
-            # 2) build_all()/build_incremental()
-            if mode == "full" and hasattr(mod, "build_all"):
-                mod.build_all(persist_dir=persist_dir)
-                return True, "build_all 완료"
-            if mode == "inc" and hasattr(mod, "build_incremental"):
-                mod.build_incremental(persist_dir=persist_dir)
-                return True, "build_incremental 완료"
-            # 3) main([...])
-            if hasattr(mod, "main"):
-                argv = ["--persist", persist_dir, "--mode", ("full" if mode=="full" else "inc")]
-                mod.main(argv)  # type: ignore
-                return True, f"main({argv}) 완료"
+        m = importlib.import_module("src.rag.index_build")
     except Exception as e:
-        return False, f"인덱스 모듈 호출 실패: {type(e).__name__}: {e}"
+        return False, f"모듈 로드 실패: {type(e).__name__}: {e}"
 
-    # (B) 모듈이 없으면 서브프로세스 시도 (python -m src.index_build ...)
+    # 준비: 경로/폴더ID/콜백
+    PERSIST_DIR = getattr(m, "PERSIST_DIR", Path.home() / ".maic" / "persist")
+    PERSIST_DIR = Path(PERSIST_DIR)
+    PERSIST_DIR.mkdir(parents=True, exist_ok=True)
+
+    # 폴더 ID는 secrets 의 여러 키를 관대하게 탐색(모듈 내부도 비슷한 로직이 있으나, 명시 전달 우선)
+    def _pick_folder_id():
+        keys = [
+            "GDRIVE_PREPARED_FOLDER_ID", "PREPARED_FOLDER_ID", "APP_GDRIVE_FOLDER_ID",
+            "GDRIVE_FOLDER_ID",
+        ]
+        for k in keys:
+            try:
+                v = getattr(st, "secrets", {}).get(k)
+                if v and str(v).strip():
+                    return str(v).strip()
+            except Exception:
+                pass
+        # 못 찾으면 빈 문자열 전달 → 모듈 내부 _find_folder_id 가 secrets에서 다시 탐색/폴백
+        return ""
+
+    gdrive_folder_id = _pick_folder_id()
+
+    # 진행률/메시지 콜백 (Streamlit 렌더)
+    prog = st.progress(0, text="인덱싱 준비 중…")
+    msg_box = st.empty()
+    def _pct(v: int, msg: str | None = None):
+        try:
+            prog.progress(max(0, min(100, int(v))), text=(msg or "인덱싱 중…"))
+        except Exception:
+            pass
+    def _msg(s: str):
+        try:
+            msg_box.write(s)
+        except Exception:
+            pass
+
+    # 증분 모드면 기존 manifest 로드 시도
+    remote_manifest = {}
+    if mode != "full":
+        try:
+            loader = getattr(m, "_load_manifest_dict", None)
+            if callable(loader):
+                remote_manifest = loader() or {}
+        except Exception:
+            remote_manifest = {}
+
     try:
-        py = sys.executable
-        for dotted in ["src.index_build", "index_build", "rag.index_build"]:
-            cmd = f"{shlex.quote(py)} -m {dotted} --mode {('full' if mode=='full' else 'inc')} --persist {shlex.quote(persist_dir)}"
-            rc = subprocess.call(cmd, shell=True)
-            if rc == 0:
-                return True, f"subprocess 완료: {cmd}"
+        res = m.build_index_with_checkpoint(
+            _pct, _msg,
+            gdrive_folder_id=gdrive_folder_id,
+            gcp_creds={},  # 현재 버전에서 내부적으로 사용 안 함
+            persist_dir=str(PERSIST_DIR),
+            remote_manifest=remote_manifest,
+            should_stop=None
+        )
+        ok = bool(res.get("ok"))
+        # 캐시 무효화(있으면)
+        try: st.cache_data.clear()
+        except Exception: pass
+        return ok, ("인덱싱 완료" if ok else f"인덱싱 실패: {res}")
     except Exception as e:
-        return False, f"서브프로세스 실패: {type(e).__name__}: {e}"
-
-    return False, "인덱스 엔트리포인트를 찾지 못했습니다(src.index_build / index_build / rag.index_build)"
+        return False, f"인덱싱 예외: {type(e).__name__}: {e}"
 
 def render_admin_tools():
     """
-    사이드/본문에 '관리자 도구' 섹션을 렌더.
+    관리자 도구 섹션:
     - 상태표시: Drive 폴더 ID, 연결 계정, 로컬 경로, 파일 존재
     - 액션 버튼: 전체 인덱스, 신규만 인덱스, prompts.yaml 강제 동기화
     """
     import os, json, pathlib
+    from pathlib import Path
     with st.expander("관리자 도구", expanded=False):
         st.caption("⚙️ 진단 · 프롬프트 소스 상태(고급)")
 
-        # 상태판
         folder_id = os.getenv("PROMPTS_DRIVE_FOLDER_ID") or getattr(st, "secrets", {}).get("PROMPTS_DRIVE_FOLDER_ID")
+        # 인덱싱용 prepared 폴더 ID도 병기
+        prepared_id = (
+            getattr(st, "secrets", {}).get("GDRIVE_PREPARED_FOLDER_ID")
+            or getattr(st, "secrets", {}).get("PREPARED_FOLDER_ID")
+            or getattr(st, "secrets", {}).get("APP_GDRIVE_FOLDER_ID")
+            or getattr(st, "secrets", {}).get("GDRIVE_FOLDER_ID")
+        )
+
         oauth_info = getattr(st, "secrets", {}).get("gdrive_oauth")
         who = None
         try:
@@ -2198,19 +2235,17 @@ def render_admin_tools():
         exists = pathlib.Path(local_path).exists()
 
         st.write(f"• 인덱스 로드 경로 힌트: `resolved`")
-        st.write(f"• Drive 폴더 ID: `{folder_id or '미설정'}`")
-        st.write(f"• Drive 연결: {'🟢 연결됨' if bool(oauth_info) else '🔴 미연결'}")
-        st.write(f"• 연결 계정: `{who or '알 수 없음'}`")
-        st.write(f"• 로컬 경로: `{local_path}`")
-        st.write(f"• 파일 존재: {'✅ 있음' if exists else '❌ 없음'}")
+        st.write(f"• (프롬프트) Drive 폴더 ID: `{folder_id or '미설정'}`")
+        st.write(f"• (인덱스) prepared 폴더 ID: `{prepared_id or '미설정'}`")
+        st.write(f"• Drive 연결: {'🟢 연결됨' if bool(oauth_info) else '🔴 미연결'}  — 계정: `{who or '알 수 없음'}`")
+        st.write(f"• 로컬 prompts 경로: `{local_path}` — 존재: {'✅ 있음' if exists else '❌ 없음'}")
 
         st.divider()
 
-        # 액션 버튼
         c1, c2, c3 = st.columns([1,1,1])
         with c1:
             if st.button("전체 인덱스 다시 만들기", use_container_width=True):
-                with st.spinner("전체 인덱싱 중…"):
+                with st.spinner("전체 인덱싱 중…(시간이 걸릴 수 있어요)"):
                     ok, msg = _run_index_job("full")
                 (st.success if ok else st.error)(msg)
         with c2:
