@@ -192,14 +192,18 @@ def _log_attach(step: str, **fields):
     except Exception:
         pass
 
+# >>>>> START [A01] _force_persist_dir (config 기준 강제 통일)
 def _force_persist_dir() -> str:
     """
-    내부 모듈들이 다른 경로를 보더라도, 런타임에서 ~/.maic/persist 로 강제 통일.
+    내부 모듈들이 사용하는 PERSIST_DIR을 'config 기준'으로 강제 통일.
     - src.rag.index_build / rag.index_build 의 PERSIST_DIR 속성 주입
-    - 환경변수 MAIC_PERSIST_DIR 도 세팅(내부 코드가 읽을 수 있음)
+    - 환경변수 MAIC_PERSIST_DIR 세팅
     """
     import importlib, os
-    target = Path.home() / ".maic" / "persist"
+    from pathlib import Path
+    from src.config import PERSIST_DIR as _PD
+
+    target = Path(_PD).expanduser()
     try:
         target.mkdir(parents=True, exist_ok=True)
     except Exception:
@@ -214,9 +218,12 @@ def _force_persist_dir() -> str:
                 pass
         except Exception:
             continue
+
     os.environ["MAIC_PERSIST_DIR"] = str(target)
     _log_attach("force_persist_dir", target=str(target))
     return str(target)
+# <<<<< END [A01] _force_persist_dir
+
 
 def _is_attached_session() -> bool:
     """세션에 실제로 두뇌가 붙었는지(여러 키 중 하나라도 있으면 True)."""
@@ -229,18 +236,23 @@ def _is_attached_session() -> bool:
         ss.get("rag")
     )
 
+# >>>>> START [A02] _has_local_index_files (config 기준 검사)
 def _has_local_index_files() -> bool:
-    """로컬 PERSIST_DIR 안에 .ready 또는 chunks.jsonl 이 있는지 신호만 확인."""
-    import importlib
+    """config의 PERSIST_DIR 안에 .ready 또는 chunks.jsonl이 있는지 신호만 확인."""
     from pathlib import Path as _P
     try:
-        _mod = importlib.import_module("src.rag.index_build")
-        _PERSIST_DIR = getattr(_mod, "PERSIST_DIR", _P.home() / ".maic" / "persist")
+        from src.config import PERSIST_DIR as _PD
+        _PERSIST_DIR = _P(_PD)
     except Exception:
+        # 최후 폴백(정상 환경에서는 도달하지 않음)
         _PERSIST_DIR = _P.home() / ".maic" / "persist"
-    chunks_ok = (_PERSIST_DIR / "chunks.jsonl").exists()
-    ready_ok  = (_PERSIST_DIR / ".ready").exists()
-    return bool(chunks_ok or ready_ok)
+
+    chunks = _PERSIST_DIR / "chunks.jsonl"
+    ready  = _PERSIST_DIR / ".ready"
+    ch_ok = chunks.exists() and (chunks.stat().st_size > 0)
+    return bool(ch_ok or ready.exists())
+# <<<<< END [A02] _has_local_index_files
+
 
 def get_index_status() -> str:
     """
@@ -1063,30 +1075,41 @@ def _auto_bootstrap_prepared_and_index(max_retries: int = 3, sleep_sec: float = 
     # 1) 재시도 루프: 루트 후보가 잡힐 때까지 N회
     ok = False
     stage = None
-    for i in range(max_retries):
-        # 전체 인덱스(안전 커밋) 시도
-        log(f"[부팅 훅] 전체 인덱스 시도 {i+1}/{max_retries}")
-        ok, msg, stage = full_rebuild_safe(progress=None, on_drive_upload=None)
-        log(msg)
-        if ok:
-            break
-        time.sleep(sleep_sec)
-
-    # 2) 로그와 플래그 기록
+# >>>>> START [A03] boot_full_index_loop (Drive-first 빌드 고정)
+for i in range(max_retries):
+    # 전체 인덱스(Drive-first) 시도
+    log(f"[부팅 훅] 전체 인덱스 시도 {i+1}/{max_retries} (Drive-first)")
     try:
-        import streamlit as st
-        st.session_state["_auto_bootstrap_done"] = True
-        st.session_state["_auto_bootstrap_logs"] = logs[-10:]  # 최근 10줄만 보관
-        if ok:
-            st.session_state["_auto_bootstrap_stage"] = str(stage) if stage else ""
-    except Exception:
-        pass
+        from pathlib import Path as _P
+        from src.config import PERSIST_DIR as _PD
+        from src.rag.index_build import build_index_with_checkpoint as _build
 
-# 앱 임포트/실행 시점에 즉시 한 번 트리거
-try:
-    _auto_bootstrap_prepared_and_index()
-except Exception:
-    pass
+        persist_dir = str(_P(_PD))
+        _build(
+            update_pct=lambda *_a, **_k: None,
+            update_msg=lambda *_a, **_k: None,
+            gdrive_folder_id=(folder_id or ""),
+            gcp_creds={},
+            persist_dir=persist_dir,
+            remote_manifest={},
+        )
+        ok = True
+        stage = _P(persist_dir)
+        log("Drive-first 빌드 성공")
+        break
+    except TypeError:
+        try:
+            _build()  # 레거시 서명 대비
+            ok = True; stage = _P(persist_dir)
+            log("Drive-first 빌드(레거시) 성공")
+            break
+        except Exception as e:
+            log(f"레거시 빌드 실패: {type(e).__name__}: {e}")
+    except Exception as e:
+        log(f"빌드 실패: {type(e).__name__}: {e}")
+    time.sleep(sleep_sec)
+# <<<<< END [A03] boot_full_index_loop
+
 # ===== [04E] 부팅 훅: Drive → prepared 동기화 + 자동 전체 인덱스 ========= END
 # ===== [04F] 사전점검 래퍼(config 기준) =======================================
 # >>>>> START [04F] precheck_build_needed
