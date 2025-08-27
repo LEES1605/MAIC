@@ -2065,111 +2065,61 @@ def _get_gemini_model(name: str):
 
 # ===== [06] END ===============================================================
 
-# ===== [07] MAIN — 오케스트레이터 ============================================
-def _render_title_with_status():
-    """상단 헤더: 제목 + 상태배지 + FAQ 토글"""
-    try:
-        status = get_index_status()  # 'ready' | 'pending' | 'missing'
-    except Exception:
-        status = "missing"
-    is_admin = bool(st.session_state.get("is_admin", False))
+# ===== [07] MAIN — 부팅 훅 + 프롬프트 동기화 연결 ============================
 
-    if status == "ready":
-        badge_html = ("<span class='ui-pill ui-pill-green'>🟢 두뇌 준비됨</span>" if is_admin
-                      else "<span class='ui-pill ui-pill-green'>🟢 LEES AI 선생님이 답변준비 완료</span>")
-    elif status == "pending":
-        badge_html = "<span class='ui-pill'>🟡 연결 대기</span>"
-    else:
-        badge_html = "<span class='ui-pill'>🔴 준비 안 됨</span>"
+def _boot_and_render():
+    """
+    앱 부팅 시점에 Google Drive의 prompts.yaml을 최신으로 동기화(옵션)하고
+    이후 기존 UI 렌더링 흐름(_render_qa_panel 등)으로 진입합니다.
+    - 토글: AUTO_SYNC_PROMPTS = true/1/yes/on (env 또는 st.secrets)
+    - 성공 시: st.session_state['prompts_path'] 에 로컬 경로(~/.maic/prompts/prompts.yaml) 저장
+    """
+    import os
 
-    c1, c2 = st.columns([0.78, 0.22])
-    with c1:
-        st.markdown("""
-        <style>
-          .hdr-row { display:flex; align-items:center; gap:.5rem; line-height:1.3; }
-          .hdr-title { font-size:1.25rem; font-weight:800; }
-          .ui-pill { display:inline-block; padding:2px 10px; border-radius:999px; 
-                     border:1px solid #e5e7eb; background:#f8fafc; font-size:0.9rem; }
-          .ui-pill-green { background:#10b98122; border-color:#10b98166; color:#065f46; }
-        </style>
-        <div class='hdr-row'>
-          <span class='hdr-title'>LEES AI 쌤</span>
-          """ + badge_html + """
-        </div>
-        """, unsafe_allow_html=True)
-    with c2:
-        st.write("")
-        show = bool(st.session_state.get("show_faq", False))
-        label = "📚 친구들이 자주하는 질문" if not show else "📚 친구들이 자주하는 질문 닫기"
-        if st.button(label, key="btn_toggle_faq", use_container_width=True):
-            st.session_state["show_faq"] = not show
+    # 0) 프롬프트 동기화 토글 읽기 (env 우선, 없으면 st.secrets)
+    def _to_bool(x):
+        return str(x).strip().lower() in ("1", "true", "yes", "y", "on")
 
-    if st.session_state.get("show_faq", False):
-        popular_fn = globals().get("_popular_questions", None)
-        ranked = popular_fn(top_n=5, days=14) if callable(popular_fn) else []
-        with st.container(border=True):
-            st.markdown("**📚 친구들이 자주하는 질문** — 최근 2주 기준")
-            if not ranked:
-                st.caption("아직 집계된 질문이 없어요.")
-            else:
-                for qtext, cnt in ranked:
-                    if st.button(f"{qtext}  · ×{cnt}", key=f"faq_{hash(qtext)}", use_container_width=True):
-                        st.session_state["qa_q"] = qtext
-                        st.rerun()
+    auto_env = os.getenv("AUTO_SYNC_PROMPTS")
+    auto_sec = getattr(st, "secrets", {}).get("AUTO_SYNC_PROMPTS")
+    auto_sync = _to_bool(auto_env) if auto_env is not None else _to_bool(auto_sec)
 
-def main():
-    # 0) 헤더
-    try:
-        _render_title_with_status()
-    except Exception:
-        pass
+    local_prompts_path = os.path.expanduser("~/.maic/prompts/prompts.yaml")
 
-    # 부트 경고 출력(있을 때만)
-    for _msg in globals().get("_BOOT_WARNINGS", []):
-        st.warning(_msg)
-
-    # 1) 자동 연결/복구
-    try:
-        before = get_index_status()
-    except Exception:
-        before = "missing"
-    try:
-        needs_recovery = (before in ("missing", "pending")) and (not _is_attached_session())
-        if needs_recovery:
-            _auto_attach_or_restore_silently()
-            after = get_index_status()
-            if after != before:
-                st.rerun()
-    except Exception:
-        pass
-
-    # 2) 관리자 패널들(설정/진단)
-    if st.session_state.get("is_admin", False):
+    # 1) 동기화 시도 (토글이 켜진 경우에만)
+    if auto_sync:
         try:
-            render_admin_settings_panel()
-        except Exception:
-            pass
-        with st.expander("진단/로그(관리자 전용)", expanded=False):
-            try:
-                render_tag_diagnostics()
-            except Exception:
-                st.caption("진단 모듈이 비활성화되어 있습니다.")
+            ok, msg = sync_prompts_from_drive(local_path=local_prompts_path, verbose=True)
+            if ok:
+                st.session_state["prompts_path"] = local_prompts_path
+                st.toast("프롬프트 동기화 완료 ✅")
+            else:
+                st.session_state.setdefault("prompts_path", local_prompts_path)
+                st.warning(f"프롬프트 동기화 실패: {msg}")
+        except Exception as e:
+            st.session_state.setdefault("prompts_path", local_prompts_path)
+            st.warning(f"프롬프트 동기화 예외: {type(e).__name__}: {e}")
+    else:
+        # 토글이 꺼져 있으면 로컬 기본 경로만 기록 (없으면 이후 prepare_prompt에서 기존 경로 사용)
+        st.session_state.setdefault("prompts_path", local_prompts_path)
 
-    # 3) 준비/브레인 패널
+    # 2) (선택) 헤더 렌더 시도 — 모듈 유무에 따라 안전 호출
     try:
-        render_brain_prep_main()
+        if "render_header" in globals():
+            render_header()
     except Exception:
         pass
 
-    # 4) 학생 질문 패널
-    try:
-        render_qa_panel()
-    except Exception as e:
-        st.error(f"질문 패널 렌더 중 오류: {type(e).__name__}: {e}")
+    # 3) 기존 질문/답변 패널 진입 (우리가 앞 단계에서 이미 안정화한 구획)
+    _render_qa_panel()
 
-if __name__ == "__main__":
-    main()
-# ===== [07] END ===============================================================
+
+# 모듈 로딩 시 즉시 진입 (Streamlit은 스크립트 실행형이므로 __main__ 가드 불필요)
+_boot_and_render()
+
+# ===== [07] MAIN — END =======================================================
+
+
 # ===== [23] PROMPTS 동기화 (Google Drive → Local) — START =====================
 def sync_prompts_from_drive(
     *,
