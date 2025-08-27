@@ -1474,72 +1474,26 @@ def render_tag_diagnostics():
 # ===== [05B] END =============================================================
 
 
-# ===== [05C] 인덱스 스냅샷 — 최소/전체·안전 커밋/롤백(관리자) =============== START
-def render_index_snapshots_admin():
+# ===== [05C] 인덱스 관리(레거시) ==========================================
+# >>>>> START [05C] 인덱스 관리(레거시)
+def render_legacy_index_panel():
     """
-    인덱스 스냅샷 관리:
-      - 인덱스 재빌드(최소: 증분)
-      - 인덱스 재빌드(전체·안전 커밋): 스테이징 → 헬스체크 → current 스왑
-      - 스냅샷 롤백
+    [레거시 UI] 최소/전체/롤백 인덱스 관리 패널.
+    현재 앱은 [05A] '자료 최적화·백업' 패널을 표준으로 사용합니다.
+    기본은 비표시하며, 환경변수 SHOW_LEGACY_INDEX_PANEL=1 일 때만 노출합니다.
     """
-    import importlib
-    if not (
-        st.session_state.get("is_admin")
-        or st.session_state.get("admin_mode")
-        or st.session_state.get("role") == "admin"
-        or st.session_state.get("mode") == "admin"
-    ):
+    import os
+    show = os.environ.get("SHOW_LEGACY_INDEX_PANEL", "0").lower() in ("1", "true", "yes", "on")
+    if not show:
+        # 기본은 숨김
         return
 
-    # 전역 토글 반영
-    _expand_all = bool(st.session_state.get("_admin_expand_all", True))
+    # 필요 시 임시로 과거 UI를 다시 보고자 할 때만 아래에 기존 구현을 재삽입하세요.
+    # (의도적으로 빈 본문; 운영 중에는 사용하지 않습니다.)
+    st.info("레거시 인덱스 패널은 기본 숨김입니다. SHOW_LEGACY_INDEX_PANEL=1 로 일시 활성화 가능합니다.")
+# <<<<< END [05C] 인덱스 관리(레거시)
+# ===== [05C] END =============================================================
 
-    # Drive 업로드 콜백(선택)
-    def _drive_upload_callback(stage_dir: Path):
-        try:
-            m = importlib.import_module("src.rag.index_build")
-            up = getattr(m, "upload_index_snapshot_zip", None)  # 디렉토리 → ZIP 업로드
-            if callable(up): up(stage_dir)
-        except Exception:
-            pass  # 미구현이면 조용히 패스
-
-    with st.expander("📚 인덱스 관리 — 최소/전체/롤백", expanded=_expand_all):
-        col1, col2, col3 = st.columns([1,1,1])
-
-        with col1:
-            if st.button("인덱스 재빌드(최소: 증분)", use_container_width=True):
-                prog = st.progress(0, text="시작…")
-                ok, msg = incremental_rebuild_minimal(progress=prog.progress)
-                prog.progress(100, text="완료")
-                st.success(msg) if ok else st.error(msg)
-
-        with col2:
-            if st.button("인덱스 재빌드(전체·안전 커밋)", use_container_width=True):
-                prog = st.progress(0, text="준비…")
-                ok, msg, stage = full_rebuild_safe(progress=prog.progress, on_drive_upload=_drive_upload_callback)
-                if ok:
-                    prog.progress(100, text="완료")
-                    st.success(msg)
-                    if stage: st.caption(f"스냅샷: {stage}")
-                else:
-                    st.error(msg)
-                    if stage: st.caption(f"실패 스테이징 보존: {stage}")
-
-        with col3:
-            snaps = _list_snapshots()
-            snap_names = [p.name for p in snaps]
-            pick = st.selectbox("롤백 대상 스냅샷", snap_names, index=0 if snap_names else None)
-            if st.button("스냅샷 롤백", disabled=not snap_names, use_container_width=True):
-                target = SNAP_ROOT / pick
-                ok, msg = rollback_to(target)
-                st.success(msg) if ok else st.error(msg)
-
-        cur = _resolve_current_path()
-        st.write("**현재 사용본:**", str(cur) if cur else "미설정")
-
-# 이 패널을 즉시 렌더링(관리자만 보임)
-render_index_snapshots_admin()
-# ===== [05C] 인덱스 스냅샷 — 최소/전체·안전 커밋/롤백(관리자) ================ END
 
 # ===== [05D] 자료 폴더 설정(관리자) ========================================= START
 def render_prepared_dir_admin():
