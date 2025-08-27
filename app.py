@@ -1892,57 +1892,72 @@ def _render_qa_panel():
                     st.session_state["_supplement_for_msg_id"] = None
 # ===== [06] 질문/답변 패널 — END ==============================================
 
-# ===== [07] MAIN — 부팅 훅 + 프롬프트 동기화 연결 ============================
-
+# ===== [07] MAIN — 오케스트레이터 (정리/표준화) ===============================
 def _boot_and_render():
     """
-    앱 부팅 시 Drive→Local prompts.yaml 동기화(옵션) 후 UI 진입.
-    - 토글: AUTO_SYNC_PROMPTS=true/1/yes/on
-    - 성공 시: st.session_state['prompts_path'] = ~/.maic/prompts.yaml
+    - 상단 헤더/상태
+    - (선택) 관리자 툴바
+    - 관리자 패널: 진단(선택), 자료 최적화/백업(인덱싱 버튼 포함) ★
+    - 학생/관리자 Q&A 패널
     """
-    import os
-    def _to_bool(x): return str(x).strip().lower() in ("1","true","yes","y","on")
+    import os, traceback
 
-    auto_env = os.getenv("AUTO_SYNC_PROMPTS")
-    auto_sec = getattr(st, "secrets", {}).get("AUTO_SYNC_PROMPTS")
-    auto_sync = _to_bool(auto_env) if auto_env is not None else _to_bool(auto_sec)
+    # 0) 헤더(있으면)
+    try:
+        if "render_header" in globals():
+            render_header()
+    except Exception:
+        pass
 
-    local_prompts_path = os.path.expanduser("~/.maic/prompts.yaml")
-    folder_id = os.getenv("PROMPTS_DRIVE_FOLDER_ID") or getattr(st, "secrets", {}).get("PROMPTS_DRIVE_FOLDER_ID")
-    file_name = os.getenv("PROMPTS_FILE_NAME") or getattr(st, "secrets", {}).get("PROMPTS_FILE_NAME") or "prompts.yaml"
+    # 1) 관리자 툴바(있으면)
+    try:
+        if "render_admin_toolbar" in globals():
+            render_admin_toolbar()
+    except Exception:
+        pass
 
-    if auto_sync:
+    # 2) 관리자 패널들
+    # 2-1) 고급 진단 섹션은 기본 숨김(환경변수로만 노출)
+    show_diag = str(os.environ.get("SHOW_ADMIN_DIAGNOSTICS", "0")).lower() in ("1","true","yes","on")
+    if show_diag and "_render_admin_diagnostics_section" in globals():
         try:
-            ok, msg = sync_prompts_from_drive(
-                local_path=local_prompts_path, file_name=file_name,
-                folder_id=folder_id, prefer_folder_name="prompts", verbose=True
-            )
-            if ok:
-                st.session_state["prompts_path"] = local_prompts_path
-                st.toast("프롬프트 동기화 완료 ✅")
-            else:
-                st.session_state.setdefault("prompts_path", local_prompts_path)
-                st.warning(f"프롬프트 동기화 실패: {msg}")
+            _render_admin_diagnostics_section()
         except Exception as e:
-            st.session_state.setdefault("prompts_path", local_prompts_path)
-            st.warning(f"프롬프트 동기화 예외: {type(e).__name__}: {e}")
-    else:
-        st.session_state.setdefault("prompts_path", local_prompts_path)
+            st.error(f"관리자 진단 패널 오류: {type(e).__name__}: {e}")
+            st.code(traceback.format_exc(), language="python")
 
-    # (선택) 헤더
+    # 2-2) ★ 자료 최적화/백업(인덱싱 버튼 포함) — 항상 노출
+    if "render_brain_prep_main" in globals():
+        try:
+            render_brain_prep_main()
+        except Exception as e:
+            # 예외를 숨기지 말고 보여줍니다 → 버튼이 왜 안 보이는지 즉시 파악 가능
+            st.error(f"자료 최적화/백업 패널 오류: {type(e).__name__}: {e}")
+            st.code(traceback.format_exc(), language="python")
+
+    # 2-3) 레거시 패널(경로 테스트/이 경로 사용/자동 인덱스 토글 등)은 기본 숨김
+    show_legacy = str(os.environ.get("SHOW_LEGACY_ADMIN_SECTIONS", "0")).lower() in ("1","true","yes","on")
+    if show_legacy:
+        for name in ("render_prepared_dir_admin", "render_auto_index_admin", "render_legacy_index_panel"):
+            if name in globals():
+                try:
+                    globals()[name]()  # type: ignore[index]
+                except Exception as e:
+                    st.warning(f"{name} 오류: {type(e).__name__}: {e}")
+
+    # 3) Q&A 패널
     try:
-        if "render_header" in globals(): render_header()
-    except Exception:
-        pass
+        if "_render_qa_panel" in globals():
+            _render_qa_panel()
+        elif "render_qa_panel" in globals():
+            render_qa_panel()
+        else:
+            st.error("Q&A 패널 함수가 없습니다: _render_qa_panel / render_qa_panel")
+    except Exception as e:
+        st.error(f"질문 패널 렌더 중 오류: {type(e).__name__}: {e}")
+        st.code(traceback.format_exc(), language="python")
 
-    # ✅ 관리자 도구 렌더(정의가 위에 있어야 함)
-    try:
-        if "render_admin_tools" in globals(): render_admin_tools()
-    except Exception:
-        pass
-
-    _render_qa_panel()
-
+# 진입점
 _boot_and_render()
 # ===== [07] MAIN — END =======================================================
 
