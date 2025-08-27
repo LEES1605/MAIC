@@ -1092,8 +1092,9 @@ except Exception:
 # ===== [05A] 자료 최적화/백업 패널 ==========================================
 def render_brain_prep_main():
     """
-    인덱스(두뇌) 최적화/복구/백업을 위한 관리자 패널
-    - 강제 부착, 최신 백업 복원, 인덱스 재빌드, 백업 생성/업로드
+    인덱스(두뇌) 최적화/복구/백업 관리자 패널
+    - 경로 표기/검사를 config 기반으로 통일
+    - 재빌드 버튼이 Drive-first 빌더(build_index_with_checkpoint)를 폴더 ID와 함께 직접 호출
     - 모든 동작은 [05B] 타임라인 로그(_log_attach)와 연계
     """
     import os
@@ -1121,41 +1122,61 @@ def render_brain_prep_main():
         except Exception:
             pass
 
-    # 기본 경로 추정
-    PERSIST_DIR = Path.home() / ".maic" / "persist"
-    BACKUP_DIR  = Path.home() / ".maic" / "backup"
-    QUALITY_REPORT_PATH = Path.home() / ".maic" / "quality_report.json"
+    # === 경로: config 우선 ===
+    try:
+        from src.config import PERSIST_DIR as CFG_PERSIST_DIR, QUALITY_REPORT_PATH as CFG_QUALITY_REPORT_PATH, APP_DATA_DIR as CFG_APP_DATA_DIR
+    except Exception:
+        CFG_PERSIST_DIR = Path.home() / ".maic" / "persist"
+        CFG_QUALITY_REPORT_PATH = Path.home() / ".maic" / "quality_report.json"
+        CFG_APP_DATA_DIR = Path.home() / ".maic"
 
-    # src.rag.index_build 의 경로 상수/함수들 (있으면 사용)
+    PERSIST_DIR = Path(CFG_PERSIST_DIR)
+    QUALITY_REPORT_PATH = Path(CFG_QUALITY_REPORT_PATH)
+    BACKUP_DIR = (Path(CFG_APP_DATA_DIR) / "backup").resolve()
+
+    # src.rag.index_build 의 경로/함수들 (있으면 사용)
     idx_mod = None
     try:
         idx_mod = importlib.import_module("src.rag.index_build")
-        PERSIST_DIR = getattr(idx_mod, "PERSIST_DIR", PERSIST_DIR)
-        BACKUP_DIR  = getattr(idx_mod, "BACKUP_DIR",  BACKUP_DIR)
-        QUALITY_REPORT_PATH = getattr(idx_mod, "QUALITY_REPORT_PATH", QUALITY_REPORT_PATH)
+        PERSIST_DIR = Path(getattr(idx_mod, "PERSIST_DIR", PERSIST_DIR))
+        BACKUP_DIR  = Path(getattr(idx_mod, "BACKUP_DIR",  BACKUP_DIR))
+        QUALITY_REPORT_PATH = Path(getattr(idx_mod, "QUALITY_REPORT_PATH", QUALITY_REPORT_PATH))
     except Exception as e:
         _log("index_module_import_warn", error=f"{type(e).__name__}: {e}")
 
     # 관련 함수 핸들(없으면 None)
     precheck_fn   = globals().get("precheck_build_needed") or globals().get("quick_precheck")
-    build_fn      = globals().get("build_index_with_checkpoint")
+    build_fn      = globals().get("build_index_with_checkpoint")   # ✅ Drive-first 엔트리
     restore_fn    = globals().get("restore_latest_backup_to_local")
     backup_fn     = globals().get("_make_and_upload_backup_zip")
     attach_fn     = globals().get("_attach_from_local")
     auto_restore  = globals().get("_auto_attach_or_restore_silently")
     force_persist = globals().get("_force_persist_dir")
 
+    # Drive prepared 폴더 ID 취득(시크릿 → ENV → 기본값)
+    def _prepared_folder_id() -> str:
+        fid = os.environ.get("GDRIVE_PREPARED_FOLDER_ID", "").strip()
+        if not fid:
+            try:
+                fid = str(st.secrets.get("GDRIVE_PREPARED_FOLDER_ID", "")).strip()
+            except Exception:
+                fid = ""
+        if not fid:
+            # 프로젝트 합의 기본값(메모리에 고정): prepared 폴더 ID
+            fid = "1bltOvqYsifPtmcx-epwJTq-hYAklNp2j"
+        return fid
+
     with st.expander("🧩 자료 최적화 · 백업(관리자)", expanded=_expand_all):
         st.subheader("자료 최적화 · 백업", anchor=False)
 
-        # 경로/상태 요약
+        # 경로/상태 요약 (config 기반)
         with st.container(border=True):
             st.markdown("### 경로 및 상태")
-            st.write("• Persist 디렉터리:", f"`{Path(PERSIST_DIR)}`")
-            st.write("• Backup 디렉터리:", f"`{Path(BACKUP_DIR)}`")
+            st.write("• Persist 디렉터리:", f"`{PERSIST_DIR}`")
+            st.write("• Backup 디렉터리:", f"`{BACKUP_DIR}`")
             qr_exists = Path(QUALITY_REPORT_PATH).exists()
             st.markdown(f"• 품질 리포트(quality_report.json): {'✅ 있음' if qr_exists else '❌ 없음'} "
-                        f"(`{Path(QUALITY_REPORT_PATH)}`)")
+                        f"(`{QUALITY_REPORT_PATH}`)")
 
             if callable(precheck_fn):
                 try:
@@ -1163,19 +1184,19 @@ def render_brain_prep_main():
                     badge = "🟡 재빌드 권장" if need else "🟢 양호"
                     st.write("• 사전점검 결과:", badge)
                 except Exception as e:
-                    st.write("• 사전점검 결과: ⚠ 오류",
-                             f"(`{type(e).__name__}: {e}`)")
+                    st.write("• 사전점검 결과: ⚠ 오류", f"(`{type(e).__name__}: {e}`)")
             else:
                 st.caption("사전점검 함수가 없어 건너뜁니다(선택 기능).")
 
         # 액션 버튼들
         col1, col2, col3, col4 = st.columns([1,1,1,1])
+
+        # 1) 두뇌 연결(강제)
         with col1:
             if st.button("🧠 두뇌 연결(강제)", use_container_width=True):
                 with st.status("강제 연결 중…", state="running") as s:
                     try:
-                        if callable(force_persist):
-                            force_persist()
+                        if callable(force_persist): force_persist()
                         ok = False
                         if callable(attach_fn):
                             _log("manual_local_attach_try")
@@ -1196,6 +1217,7 @@ def render_brain_prep_main():
                         st.error(f"연결 중 오류: {type(e).__name__}: {e}")
                         _log("manual_attach_exception", error=f"{type(e).__name__}: {e}")
 
+        # 2) 최신 백업 복원
         with col2:
             if st.button("⬇ 최신 백업 복원", use_container_width=True, disabled=not callable(restore_fn)):
                 with st.status("최신 백업 복원 중…", state="running") as s:
@@ -1209,12 +1231,10 @@ def render_brain_prep_main():
                             ok = bool(r.get("ok"))
                             _log("drive_restore_result", ok=ok)
                             if ok and callable(attach_fn):
-                                if callable(force_persist):
-                                    force_persist()
+                                if callable(force_persist): force_persist()
                                 _log("local_attach_try")
                                 ok = bool(attach_fn())
-                                if ok:
-                                    _log("local_attach_ok")
+                                if ok: _log("local_attach_ok")
                             if ok:
                                 s.update(label="복원 및 연결 완료", state="complete")
                                 st.success("최신 백업 복원 완료(연결됨).")
@@ -1226,8 +1246,9 @@ def render_brain_prep_main():
                         st.error(f"복원 중 오류: {type(e).__name__}: {e}")
                         _log("drive_restore_exception", error=f"{type(e).__name__}: {e}")
 
+        # 3) 인덱스 재빌드(Drive-first)
         with col3:
-            if st.button("♻ 인덱스 재빌드(최소 옵션)", use_container_width=True, disabled=not callable(build_fn)):
+            if st.button("♻ 인덱스 재빌드(Drive 우선)", use_container_width=True, disabled=not callable(build_fn)):
                 with st.status("인덱스 재빌드 중…", state="running") as s:
                     try:
                         if not callable(build_fn):
@@ -1235,28 +1256,32 @@ def render_brain_prep_main():
                             st.error("build_index_with_checkpoint 함수가 없습니다.")
                             _log("rebuild_skip", reason="build_fn_not_callable")
                         else:
+                            # 준비: 폴더 ID/경로
+                            folder_id = _prepared_folder_id()
                             persist_dir = str(PERSIST_DIR)
-                            _log("rebuild_try", persist_dir=persist_dir)
+
+                            _log("rebuild_try", persist_dir=persist_dir, folder_id=folder_id)
                             try:
                                 build_fn(
                                     update_pct=lambda *_a, **_k: None,
                                     update_msg=lambda *_a, **_k: None,
-                                    gdrive_folder_id="",
-                                    gcp_creds={},
+                                    gdrive_folder_id=folder_id,
+                                    gcp_creds={},                  # 모듈 내부에서 secrets 사용 가능
                                     persist_dir=persist_dir,
-                                    remote_manifest={},
+                                    remote_manifest={},            # 우선 빈 dict
                                 )
                             except TypeError:
+                                # 서명 차이가 있는 레거시용
                                 build_fn()
+
                             _log("rebuild_ok")
                             ok_attach = False
-                            if callable(force_persist):
-                                force_persist()
+                            if callable(force_persist): force_persist()
                             if callable(attach_fn):
                                 _log("local_attach_try")
                                 ok_attach = bool(attach_fn())
-                                if ok_attach:
-                                    _log("local_attach_ok")
+                                if ok_attach: _log("local_attach_ok")
+
                             s.update(label="재빌드 완료", state="complete")
                             st.success("인덱스 재빌드가 완료되었습니다.")
                     except Exception as e:
@@ -1264,6 +1289,7 @@ def render_brain_prep_main():
                         st.error(f"재빌드 실패: {type(e).__name__}: {e}")
                         _log("rebuild_fail", error=f"{type(e).__name__}: {e}")
 
+        # 4) 백업 만들기/업로드
         with col4:
             if st.button("⬆ 백업 만들기/업로드", use_container_width=True, disabled=not callable(backup_fn)):
                 with st.status("백업 생성/업로드 중…", state="running") as s:
@@ -1286,7 +1312,9 @@ def render_brain_prep_main():
                         s.update(label="백업 중 예외", state="error")
                         st.error(f"백업 중 오류: {type(e).__name__}: {e}")
                         _log("backup_exception", error=f"{type(e).__name__}: {e}")
+
 # ===== [05A] END =============================================================
+
 
 # ===== [05B] 간단 진단 패널(전역 토글 연동) ==================================
 def render_tag_diagnostics():
