@@ -1317,8 +1317,8 @@ def render_brain_prep_main():
 # <<<<< END [05A] 자료 최적화/백업 패널
 # ===== [05A] END =============================================================
 
-
 # ===== [05B] 간단 진단 패널(전역 토글 연동) ==================================
+# >>>>> START [05B] 간단 진단 패널
 def render_tag_diagnostics():
     """
     한 화면에서 모든 진단 확인:
@@ -1326,39 +1326,44 @@ def render_tag_diagnostics():
     - 임포트 오류(_import_errors)
     - Attach/Restore 타임라인 (+복사/다운로드)
     - 자동 복구 상태 스냅샷
-    - rag_index Persist 경로 추정
-    - 품질 리포트 존재 여부
+    - rag_index Persist 경로/품질 리포트 존재 여부
     (모든 섹션 expander가 전역 토글 `_admin_expand_all`과 연동됨)
     """
     import importlib, json as _json
     from datetime import datetime
     from pathlib import Path
 
-    # 🔽 전역 토글 상태 반영
+    # 전역 토글 상태
     _expand_all = bool(st.session_state.get("_admin_expand_all", True))
 
-    # 기본 경로
-    PERSIST_DIR = Path.home() / ".maic" / "persist"
-    BACKUP_DIR = Path.home() / ".maic" / "backup"
-    QUALITY_REPORT_PATH = Path.home() / ".maic" / "quality_report.json"
-
-    # src.rag.index_build 값 우선
+    # === 경로: config 기준으로 통일 ===
     try:
-        _m = importlib.import_module("src.rag.index_build")
-        PERSIST_DIR = getattr(_m, "PERSIST_DIR", PERSIST_DIR)
-        BACKUP_DIR = getattr(_m, "BACKUP_DIR", BACKUP_DIR)
-        QUALITY_REPORT_PATH = getattr(_m, "QUALITY_REPORT_PATH", QUALITY_REPORT_PATH)
+        from src.config import (
+            PERSIST_DIR as CFG_PERSIST_DIR,
+            QUALITY_REPORT_PATH as CFG_QUALITY_REPORT_PATH,
+            MANIFEST_PATH as CFG_MANIFEST_PATH,
+            APP_DATA_DIR as CFG_APP_DATA_DIR,
+        )
+        PERSIST_DIR = Path(CFG_PERSIST_DIR)
+        QUALITY_REPORT_PATH = Path(CFG_QUALITY_REPORT_PATH)
+        MANIFEST_PATH = Path(CFG_MANIFEST_PATH)
+        BACKUP_DIR = (Path(CFG_APP_DATA_DIR) / "backup").resolve()
     except Exception:
-        _m = None
+        # 최후 폴백(레거시) — 정상 환경에서는 도달하지 않아야 함
+        base = Path.home() / ".maic"
+        PERSIST_DIR = (base / "persist").resolve()
+        QUALITY_REPORT_PATH = (base / "quality_report.json").resolve()
+        MANIFEST_PATH = (base / "manifest.json").resolve()
+        BACKUP_DIR = (base / "backup").resolve()
+
+    # 수집 데이터
+    boot_warns = globals().get("_BOOT_WARNINGS") or []
+    import_errs = globals().get("_import_errors") or []
+    logs = st.session_state.get("_attach_log") or []
+    auto_info = st.session_state.get("_auto_restore_last")
 
     with st.expander("🧪 간단 진단(관리자)", expanded=_expand_all):
-        st.subheader("진단(간단)", anchor=False)
-
-        # 수집 데이터
-        boot_warns = globals().get("_BOOT_WARNINGS") or []
-        import_errs = globals().get("_import_errors") or []
-        logs = st.session_state.get("_attach_log") or []
-        auto_info = st.session_state.get("_auto_restore_last")
+        st.subheader("진단 요약", anchor=False)
 
         # A) BOOT-WARN
         with st.expander("부팅 경고(BOOT-WARN)", expanded=_expand_all):
@@ -1370,80 +1375,55 @@ def render_tag_diagnostics():
                         st.markdown(msg)
 
         # B) 임포트 오류
-        with st.expander("임포트 오류 원문(_import_errors)", expanded=_expand_all):
+        with st.expander("임포트 오류(Import Errors)", expanded=_expand_all):
             if not import_errs:
-                st.caption("기록된 임포트 오류 없음.")
+                st.caption("임포트 오류 없음.")
             else:
-                for i, err in enumerate(import_errs, 1):
-                    st.write(f"• `{err}`")
+                for i, rec in enumerate(import_errs, 1):
+                    st.code(str(rec), language="text")
 
-        # C) 타임라인 + 복사/다운로드
+        # C) Attach/Restore 타임라인
         with st.expander("Attach/Restore 타임라인", expanded=_expand_all):
-            colL, colR = st.columns([0.75, 0.25])
-            with colR:
-                if st.button("🧹 로그 비우기", use_container_width=True):
-                    st.session_state["_attach_log"] = []
-                    st.toast("로그를 비웠습니다.")
-                    st.rerun()  # ← 변경: experimental_rerun → rerun
-
             if not logs:
-                st.caption("아직 기록된 로그가 없습니다. 자동 연결 또는 복구를 수행하면 여기에 단계별 로그가 표시됩니다.")
+                st.caption("타임라인 없음.")
             else:
-                for item in reversed(logs[-100:]):
-                    ts = item.get("ts")
-                    step = item.get("step")
-                    rest = {k: v for k, v in item.items() if k not in ("ts", "step")}
-                    st.write(f"• **{ts}** — `{step}`", (f" · `{_json.dumps(rest, ensure_ascii=False)}`" if rest else ""))
+                for rec in logs[-200:]:
+                    st.write(f"- {rec}")
 
-                merged_lines = []
-                for item in logs:
-                    ts = item.get("ts", "")
-                    step = item.get("step", "")
-                    rest = {k: v for k, v in item.items() if k not in ("ts", "step")}
-                    merged_lines.append(f"{ts}\t{step}\t{_json.dumps(rest, ensure_ascii=False)}")
-                merged_txt = "\n".join(merged_lines) if merged_lines else "(no logs)"
+        # D) 자동 복구 상태
+        with st.expander("자동 복구 상태 스냅샷", expanded=_expand_all):
+            st.json(auto_info or {"info": "no auto-restore snapshot"})
 
-                st.markdown("---")
-                st.caption("▼ 로그 복사/다운로드")
-                st.code(merged_txt, language="text")
-                st.download_button(
-                    "⬇ 로그 텍스트 다운로드",
-                    data=merged_txt.encode("utf-8"),
-                    file_name="maic_attach_logs.txt",
-                    mime="text/plain",
-                    use_container_width=True,
-                )
+        # E) 경로/파일 상태 (config 기준)
+        with st.expander("경로/파일 상태", expanded=_expand_all):
+            st.write("• Persist 디렉터리:", f"`{PERSIST_DIR}`")
+            st.write("• Backup 디렉터리:", f"`{BACKUP_DIR}`")
+            st.write("• Manifest 경로:", f"`{MANIFEST_PATH}`")
+            st.write("• 품질 리포트:", f"`{QUALITY_REPORT_PATH}`")
 
-        # D) 자동 복구 상태 스냅샷
-        with st.expander("자동 복구 상태", expanded=_expand_all):
-            if not auto_info:
-                st.caption("아직 자동 복구 시도 기록이 없습니다.")
-            else:
-                st.code(_json.dumps(auto_info, ensure_ascii=False, indent=2), language="json")
+            # 핵심 산출물 존재/크기 확인
+            chunks = PERSIST_DIR / "chunks.jsonl"
+            qr_ok = QUALITY_REPORT_PATH.exists()
+            mf_ok = MANIFEST_PATH.exists()
+            ch_ok = chunks.exists() and chunks.stat().st_size > 0
 
-        # E) rag_index Persist 경로 추정
-        with st.expander("rag_index Persist 경로 추정", expanded=_expand_all):
-            rag = st.session_state.get("rag_index")
-            if rag is None:
-                st.caption("rag_index 객체가 세션에 없습니다.")
-            else:
-                cand = None
-                for attr in ("persist_dir", "storage_context", "vector_store", "index_struct"):
-                    try:
-                        val = getattr(rag, attr, None)
-                        if val:
-                            cand = str(val); break
-                    except Exception:
-                        continue
-                st.write("🔍 rag_index 내부 persist_dir/유사 속성:", cand or "(발견되지 않음)")
+            st.markdown(f"• chunks.jsonl: {'✅' if ch_ok else '❌'} ({chunks})")
+            st.markdown(f"• quality_report.json: {'✅' if qr_ok else '❌'} ({QUALITY_REPORT_PATH})")
+            st.markdown(f"• manifest.json: {'✅' if mf_ok else '❌'} ({MANIFEST_PATH})")
 
-        # F) 품질 리포트
-        with st.expander("품질 리포트 존재 여부", expanded=_expand_all):
-            QUALITY_REPORT_PATH = QUALITY_REPORT_PATH  # keep reference
-            qr_exists = QUALITY_REPORT_PATH.exists()
-            qr_badge = "✅ 있음" if qr_exists else "❌ 없음"
-            st.markdown(f"- **품질 리포트(quality_report.json)**: {qr_badge}  (`{QUALITY_REPORT_PATH.as_posix()}`)")
+            # 빠른 원본 열람(있을 때만)
+            if qr_ok:
+                try:
+                    with open(QUALITY_REPORT_PATH, "r", encoding="utf-8") as f:
+                        data = _json.load(f)
+                    st.caption("quality_report.json (요약)")
+                    st.json(data if isinstance(data, dict) else {"value": data})
+                except Exception as e:
+                    st.warning(f"품질 리포트 열람 실패: {type(e).__name__}: {e}")
+
+# <<<<< END [05B] 간단 진단 패널
 # ===== [05B] END =============================================================
+
 
 # ===== [05C] 인덱스 스냅샷 — 최소/전체·안전 커밋/롤백(관리자) =============== START
 def render_index_snapshots_admin():
