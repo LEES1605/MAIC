@@ -460,7 +460,6 @@ def render_admin_toolbar():
 # 전역 토글 바 렌더(관리자에게만 보임)
 render_admin_toolbar()
 # ===== [04B] END ==============================================================
-
 # ===== [04C] 프롬프트 소스/드라이브 진단 패널(고급) — START =================
 import importlib
 import json
@@ -569,9 +568,12 @@ with st.expander("🧪 프롬프트 소스/드라이브 진단(고급)", expande
 
     with colB:
         if st.button("Drive 연결 재점검"):
-            st.experimental_rerun()
+            # Streamlit 1.32+ 호환: experimental_rerun 대신 rerun 사용
+            if hasattr(st, "rerun"):
+                st.rerun()
+            else:
+                st.experimental_rerun()
 # ===== [04C] 프롬프트 소스/드라이브 진단 패널(고급) — END ===================
-
 
 # ===== [04D] 인덱스 스냅샷/전체 재빌드/롤백 — 유틸리티 (세션/ENV/멀티루트) == START
 import os, io, json, time, shutil, hashlib, importlib
