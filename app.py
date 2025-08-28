@@ -460,7 +460,8 @@ def render_admin_toolbar():
 # 전역 토글 바 렌더(관리자에게만 보임)
 render_admin_toolbar()
 # ===== [04B] END ==============================================================
-# ===== [04C] 프롬프트 소스/드라이브 진단 패널(고급) — START =================
+
+# ===== [04C] 프롬프트 소스/드라이브 진단 패널(간단, 서비스계정 전용) — START
 import importlib
 import json
 import os
@@ -468,95 +469,62 @@ import textwrap
 import streamlit as st
 
 def _mask(s: str | None, head: int = 6, tail: int = 4) -> str:
-    """민감정보 마스킹(간단)."""
     if not s:
         return "—"
     if len(s) <= head + tail:
         return s
     return f"{s[:head]}…{s[-tail:]}"
 
-with st.expander("🧪 프롬프트 소스/드라이브 진단(고급)", expanded=False):
-    st.caption("Drive 연동 상태, prompts.yaml 동기화, 자격 구성( OAuth/서비스계정 )을 점검합니다.")
+with st.expander("🔧 프롬프트/드라이브 진단(간단)", expanded=False):
+    st.caption("서비스 계정 기반의 Drive 연결 및 prompts.yaml 동기화를 점검합니다.")
 
-    # 1) 폴더/설정 정보
-    gcp_sa_exists = bool(st.secrets.get("gcp_service_account"))
-    oauth_blob = st.secrets.get("gdrive_oauth", {})
-    folder_id = st.secrets.get("GDRIVE_FOLDER_ID") or os.getenv("GDRIVE_FOLDER_ID") or "prepared"
-    st.write("• Drive 폴더 ID:", _mask(str(folder_id)))
-    st.write("• 서비스 계정 설정:", "✅ 있음" if gcp_sa_exists else "❌ 없음")
-    st.write("• OAuth 토큰 저장:", "✅ 있음" if oauth_blob else "❌ 없음")
+    # 1) 폴더/설정 정보 (ID는 합의된 키 사용)
+    folder_id = (
+        os.getenv("GDRIVE_PREPARED_FOLDER_ID", "").strip()
+        or str(st.secrets.get("GDRIVE_PREPARED_FOLDER_ID", "")).strip()
+        or "prepared"
+    )
+    sa_blob = st.secrets.get("gcp_service_account")
+    sa_info = None
+    if isinstance(sa_blob, str):
+        try: sa_info = json.loads(sa_blob)
+        except Exception: sa_info = None
+    elif isinstance(sa_blob, dict):
+        sa_info = dict(sa_blob)
 
-    # 2) Drive 연결 및 계정 이메일 확인
+    st.write("• Drive 폴더 ID:", _mask(folder_id))
+    st.write("• 서비스 계정 설정:", "✅ 있음" if sa_info else "❌ 없음")
+    st.write("• OAuth 토큰 설정:", "— (사용 안 함)")
+
+    # 2) Drive 연결 및 서비스계정 메일 확인
     drive_ok, drive_email, drive_err = False, None, None
-    try:
-        from google.auth.exceptions import RefreshError as _RefreshError
-        from google.oauth2 import service_account as _sa
-        from googleapiclient.discovery import build as _build
-
-        # 2-1) 기본 경로: 기존 팩토리(보유 중인 OAuth 또는 내부 경로) 사용
-        svc = None
+    if sa_info:
         try:
-            im = importlib.import_module("src.rag.index_build")
-            svc_factory = getattr(im, "_drive_service", None)
-            svc = svc_factory() if callable(svc_factory) else None
-        except Exception as e_outer:
-            # OAuth 갱신 실패(RefreshError/invalid_grant) → 서비스 계정 자동 폴백 시도
-            if isinstance(e_outer, _RefreshError) or "invalid_grant" in str(e_outer):
-                st.warning("OAuth 토큰이 만료/취소되어 드라이브 연결에 실패했습니다. 서비스 계정으로 자동 폴백을 시도합니다.")
-                try:
-                    sa_info = st.secrets.get("gcp_service_account")
-                    if sa_info:
-                        creds = _sa.Credentials.from_service_account_info(
-                            dict(sa_info),
-                            scopes=["https://www.googleapis.com/auth/drive.readonly"],
-                        )
-                        svc = _build("drive", "v3", credentials=creds)
-                    else:
-                        drive_err = "gcp_service_account 비어있음(폴백 불가)"
-                except Exception as ef:
-                    drive_err = f"ServiceAccount 폴백 실패: {type(ef).__name__}: {ef}"
-            else:
-                # 다른 예외는 아래 공통 처리로 전달
-                drive_err = f"{type(e_outer).__name__}: {e_outer}"
-
-        # 2-2) 연결/이메일 조회
-        if svc:
-            try:
-                about = svc.about().get(fields="user").execute()
-                drive_email = (about or {}).get("user", {}).get("emailAddress")
-                drive_ok = True
-            except Exception as e:
-                drive_err = f"{type(e).__name__}: {e}"
-
-    except Exception as e:
-        drive_err = f"{type(e).__name__}: {e}"
+            from google.oauth2 import service_account as _sa
+            from googleapiclient.discovery import build as _build
+            scopes = ["https://www.googleapis.com/auth/drive.readonly", "https://www.googleapis.com/auth/drive.metadata.readonly"]
+            creds = _sa.Credentials.from_service_account_info(sa_info, scopes=scopes)
+            svc = _build("drive", "v3", credentials=creds)
+            about = svc.about().get(fields="user").execute()
+            drive_email = (about or {}).get("user", {}).get("emailAddress")
+            drive_ok = True
+        except Exception as e:
+            drive_err = f"{type(e).__name__}: {e}"
+    else:
+        drive_err = "gcp_service_account 비어있음"
 
     st.write("• Drive 연결:", "✅ 연결됨" if drive_ok else "❌ 없음")
     if drive_email:
         st.write("• 연결 계정:", f"`{drive_email}`")
+    if drive_err and not drive_ok:
+        st.warning(f"Drive 연결 실패: {drive_err}")
 
-    if not drive_ok:
-        # 복구 가이드
-        st.info(
-            textwrap.dedent(
-                """
-                🔧 복구 안내:
-                1) **서비스 계정 권장** — GCP에서 서비스 계정 JSON 발급 후, prepared 폴더를 해당 이메일에 공유,
-                   `st.secrets['gcp_service_account']`에 JSON 전체 저장.
-                2) **OAuth 계속 사용할 경우** — OAuth Playground에서 *Use your own OAuth credentials*를 켜고
-                   앱과 동일한 Client ID/Secret으로 **Access type=offline + Prompt=consent**로 새 refresh_token 발급 후,
-                   `st.secrets['gdrive_oauth']` 값을 교체 저장.
-                3) 서버/호스팅의 **시간 동기화(NTP)** 확인(큰 오차는 invalid_grant를 유발할 수 있음).
-                """
-            ).strip()
-        )
-
-    # 3) prompts.yaml 동기화 점검 버튼
+    # 3) prompts.yaml 동기화
     colA, colB = st.columns(2)
     with colA:
         if st.button("prompts.yaml 동기화 재시도"):
             try:
-                mod = importlib.import_module("src.prompts_loader")  # 존재 시
+                mod = importlib.import_module("src.prompts_loader")
                 do_sync = getattr(mod, "sync_prompts_from_drive", None)
                 if callable(do_sync):
                     ok, detail = do_sync(folder_id=str(folder_id))
@@ -565,15 +533,14 @@ with st.expander("🧪 프롬프트 소스/드라이브 진단(고급)", expande
                     st.warning("동기화 함수가 모듈에 없습니다: src.prompts_loader.sync_prompts_from_drive")
             except Exception as e:
                 st.error(f"동기화 중 예외: {type(e).__name__}: {e}")
-
     with colB:
         if st.button("Drive 연결 재점검"):
-            # Streamlit 1.32+ 호환: experimental_rerun 대신 rerun 사용
             if hasattr(st, "rerun"):
                 st.rerun()
             else:
                 st.experimental_rerun()
-# ===== [04C] 프롬프트 소스/드라이브 진단 패널(고급) — END ===================
+# ===== [04C] 프롬프트 소스/드라이브 진단 패널(간단) — END
+
 
 # ===== [04D] 인덱스 스냅샷/전체 재빌드/롤백 — 유틸리티 (세션/ENV/멀티루트) == START
 import os, io, json, time, shutil, hashlib, importlib
