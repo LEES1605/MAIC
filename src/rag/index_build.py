@@ -1013,6 +1013,40 @@ def build_index_with_checkpoint(
 
     _msg("⬆️ Uploading backup zip…")
     uploaded_id = _make_and_upload_backup_zip(svc, backup_id)
+    _pct(92, "backup-zip-uploaded")
+
+    # === NEW: GitHub Releases 업로드(최신 2개만 보존) ==========================
+    try:
+        from pathlib import Path as _P
+        manifest_path = _P(PERSIST_DIR) / "manifest.json"
+        chunks_path   = _P(PERSIST_DIR) / "chunks.jsonl"
+        if manifest_path.exists() and chunks_path.exists():
+            from src.backup.github_release import upload_index_release, GitHubReleaseError
+            _msg("🚀 Publishing index to GitHub Releases…")
+            res = upload_index_release(
+                manifest_path=manifest_path,
+                chunks_jsonl_path=chunks_path,
+                include_zip=False,   # 필요 시 True로 변경 가능
+                keep=2,
+                build_meta={
+                    "processed_files": processed,
+                    "generated_chunks": chunks,
+                    "prepared_folder_id": prepared_id,
+                },
+            )
+            _msg(f"✅ GitHub Releases 완료: {res.get('tag')} / {res.get('assets')}")
+        else:
+            _msg("⚠️ manifest/chunks 누락으로 GitHub 업로드 생략")
+    except ModuleNotFoundError as e:
+        _msg(f"⚠️ 업로더 모듈 누락: {e}")
+    except Exception as e:
+        # 정책: 업로드 실패해도 인덱싱은 성공 처리 (다음 단계에서 UI 배너/재시도 연결)
+        try:
+            from src.backup.github_release import GitHubReleaseError  # noqa
+            _msg(f"⚠️ GitHub 업로드 실패: {type(e).__name__}")
+        except Exception:
+            _msg(f"⚠️ GitHub 업로드 예외: {type(e).__name__}")
+
     _pct(100, "done")
 
     return {
@@ -1026,6 +1060,8 @@ def build_index_with_checkpoint(
         "backup_folder_id": backup_id,
         "auth_mode": "oauth-first"
     }
+# ===== [10] END ==============================================================
+
 
 # ===== [10A] QUALITY REPORTER (품질 리포트 생성/저장/업로드) =====================
 from pathlib import Path as _QPath
