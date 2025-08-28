@@ -1660,6 +1660,172 @@ def _is_brain_ready() -> bool:
         return False
 # ===== [05] 두뇌 준비 상태 헬퍼(RAG readiness) — END =========================
 
+# ===== [05F] LLM STREAM CALL HELPERS — START ================================
+# OpenAI/Gemini 스트리밍 호출 헬퍼
+# - 규약: (ok: bool, text_or_msg: Optional[str], provider: str) 튜플 반환
+# - 원칙: 빈 응답/예외/타임아웃은 반드시 ok=False (폴백 유도)
+# - on_delta(str) 콜백을 넘기면 스트리밍 중간 텍스트를 점진 반영할 수 있음
+
+from typing import Optional, Callable, List, Dict, Tuple
+import os, time
+
+def _normalize_messages(parts_or_messages) -> List[Dict[str, str]]:
+    """
+    다양한 입력(parts dict, messages list, 단일 str)을 OpenAI 호환 messages로 정규화.
+    허용 예:
+      - [{"role":"system","content":"..."}, {"role":"user","content":"..."}]
+      - {"system":"...", "user":"..."}  # prompts.yaml 전개 등
+      - "one-shot user prompt"
+    """
+    if parts_or_messages is None:
+        return [{"role": "user", "content": ""}]
+    # messages(list[dict]) 형태
+    if isinstance(parts_or_messages, list):
+        msgs = []
+        for m in parts_or_messages:
+            if isinstance(m, dict) and "role" in m and "content" in m:
+                msgs.append({"role": m["role"], "content": str(m["content"])})
+        if msgs:
+            return msgs
+    # dict(parts) 형태
+    if isinstance(parts_or_messages, dict):
+        sys = str(parts_or_messages.get("system", "")).strip()
+        usr = str(parts_or_messages.get("user", "")).strip()
+        msgs: List[Dict[str, str]] = []
+        if sys:
+            msgs.append({"role": "system", "content": sys})
+        msgs.append({"role": "user", "content": usr})
+        return msgs
+    # 단일 문자열
+    return [{"role": "user", "content": str(parts_or_messages)}]
+
+
+def _call_openai_stream(
+    parts_or_messages,
+    model_name: Optional[str] = None,
+    temperature: float = 0.3,
+    max_tokens: Optional[int] = None,
+    on_delta: Optional[Callable[[str], None]] = None,
+    timeout_s: int = 60,
+) -> Tuple[bool, Optional[str], str]:
+    """
+    OpenAI ChatCompletion 스트리밍 호출.
+    - 반환: (ok, out_or_msg, "OpenAI")
+    - 빈 응답/예외/타임아웃은 ok=False
+    """
+    messages = _normalize_messages(parts_or_messages)
+
+    # 키 취득: st.secrets 우선 → ENV 폴백
+    api_key = None
+    try:
+        import streamlit as st
+        api_key = st.secrets.get("OPENAI_API_KEY", None)
+    except Exception:
+        pass
+    api_key = api_key or os.getenv("OPENAI_API_KEY", "")
+
+    if not api_key:
+        return False, "OPENAI_API_KEY가 설정되지 않았습니다.", "OpenAI"
+
+    model = model_name or os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+
+    out_buf: List[str] = []
+    try:
+        # 구 SDK 호환(많이 쓰이는 방식)
+        import openai
+        openai.api_key = api_key
+
+        resp = openai.ChatCompletion.create(
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            stream=True,
+            request_timeout=timeout_s,
+        )
+        for ev in resp:
+            try:
+                delta = ev["choices"][0]["delta"].get("content", "")
+            except Exception:
+                delta = ""
+            if delta:
+                out_buf.append(delta)
+                if on_delta:
+                    on_delta(delta)
+
+        full_text = "".join(out_buf).strip()
+        if not full_text:
+            # ✅ 핵심: 빈 응답은 성공으로 간주하지 않음
+            return False, "OpenAI가 빈 응답을 반환했습니다.", "OpenAI"
+        return True, full_text, "OpenAI"
+
+    except Exception as e:
+        return False, f"OpenAI 예외: {type(e).__name__}: {e}", "OpenAI"
+
+
+def _call_gemini_stream(
+    parts_or_messages,
+    model_name: Optional[str] = None,
+    temperature: float = 0.3,
+    max_tokens: Optional[int] = None,
+    on_delta: Optional[Callable[[str], None]] = None,
+    timeout_s: int = 60,
+) -> Tuple[bool, Optional[str], str]:
+    """
+    Gemini generate_content 스트리밍 호출.
+    - 반환: (ok, out_or_msg, "Gemini")
+    - **빈 응답/예외/타임아웃은 ok=False** ← (버그 픽스)
+    """
+    messages = _normalize_messages(parts_or_messages)
+    user_text = "\n\n".join([m["content"] for m in messages if m["role"] in ("system", "user")]).strip() or " "
+
+    api_key = None
+    try:
+        import streamlit as st
+        api_key = st.secrets.get("GEMINI_API_KEY", None) or st.secrets.get("GOOGLE_API_KEY", None)
+    except Exception:
+        pass
+    api_key = api_key or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+
+    if not api_key:
+        return False, "GEMINI_API_KEY/GOOGLE_API_KEY가 설정되지 않았습니다.", "Gemini"
+
+    model_id = model_name or os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+
+    out_buf: List[str] = []
+    try:
+        import google.generativeai as genai
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel(model_id)
+
+        # 스트림 시작
+        resp = model.generate_content(
+            user_text,
+            stream=True,
+            generation_config={
+                "temperature": float(temperature),
+                # "max_output_tokens": max_tokens or 1024,
+            },
+            safety_settings=None,
+            request_options={"timeout": timeout_s} if hasattr(genai, "request_options") else None,
+        )
+        for chunk in resp:
+            piece = getattr(chunk, "text", None)
+            if piece:
+                out_buf.append(piece)
+                if on_delta:
+                    on_delta(piece)
+
+        full_text = "".join(out_buf).strip()
+        if not full_text:
+            # ✅ 핵심: 빈 응답은 성공으로 간주하지 않음
+            return False, "Gemini가 빈 응답을 반환했습니다.", "Gemini"
+        return True, full_text, "Gemini"
+
+    except Exception as e:
+        return False, f"Gemini 예외: {type(e).__name__}: {e}", "Gemini"
+# ===== [05F] LLM STREAM CALL HELPERS — END ==================================
+
 
 # ===== [06] 질문/답변 패널 — 학생 화면 최소화 지원(모드ON/OFF/에러로그 연동) — START
 def _render_qa_panel():
