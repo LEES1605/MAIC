@@ -1,2 +1,12 @@
 [server]
+# 운영 환경에서는 파일 변경 감시를 완전히 꺼서 inotify 경고를 방지
 fileWatcherType = "none"
+runOnSave = false
+
+[logger]
+# 불필요한 debug/info 로그 억제 (필요시 "info"로 조정 가능)
+level = "warning"
+
+[client]
+# 클라이언트 측 캐시 안정화 (필요시 해제 가능)
+caching = true
