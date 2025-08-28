@@ -85,6 +85,9 @@ def _drive_client():
 
 
 # [03] DRIVE HELPERS — START
+from typing import Any, Dict, List
+import io
+
 def _find_folder_id(kind: str, *, fallback: Optional[str] = None) -> Optional[str]:
     """
     kind: "PREPARED" | "BACKUP" | "DEFAULT"
@@ -104,13 +107,59 @@ def _list_files_in_folder(svc, folder_id: str) -> List[Dict[str, Any]]:
     return res.get("files", [])
 
 def _download_file_bytes(svc, file_id: str) -> bytes:
-    req = svc.files().get_media(fileId=file_id)
-    buf = io.BytesIO()
-    downloader = MediaIoBaseDownload(buf, req)
-    done = False
-    while not done:
-        status, done = downloader.next_chunk()
-    return buf.getvalue()
+    """
+    Google Docs Editors 파일(문서/스프레드시트/프리젠테이션)은
+    `files().get_media(...)`로는 받을 수 없습니다.
+    → 반드시 `files().export(fileId=..., mimeType=...)`로 처리합니다.
+
+    일반 바이너리 파일(pdf, docx, txt 등)은 기존대로 get_media로 처리합니다.
+    """
+    # 1) 파일 MIME 조회
+    meta = svc.files().get(fileId=file_id, fields="mimeType,name").execute()
+    mime = meta.get("mimeType", "")
+    name = meta.get("name", file_id)
+
+    # 2) Google Docs Editors 분기
+    #    https://developers.google.com/drive/api/guides/ref-export-formats
+    if mime.startswith("application/vnd.google-apps."):
+        subtype = mime.split(".")[-1]  # document / spreadsheet / presentation / ...
+        # 텍스트 인덱싱에 적합한 내보내기 포맷 매핑
+        export_map = {
+            "document":     "text/plain",  # Google Docs → TXT
+            "spreadsheet":  "text/csv",    # Sheets → CSV
+            "presentation": "text/plain",  # Slides → Speaker notes 텍스트가 아니라 본문 텍스트를 단순화해 받음
+            # 필요시 "drawing": "image/png" 등 추가 가능 (텍스트 인덱싱 목적이라 기본 제외)
+        }
+        exp = export_map.get(subtype)
+        if exp is None:
+            # 텍스트 인덱싱 대상이 아니거나 미지원 형식이면 빈 바이트 반환(스킵)
+            print(f"[drive][info] skip unsupported google-apps file: {name} ({mime})")
+            return b""
+
+        try:
+            data = svc.files().export(fileId=file_id, mimeType=exp).execute()
+            # 일부 라이브러리 버전에서 bytes가 아닌 str로 올 수 있어 보정
+            if isinstance(data, str):
+                data = data.encode("utf-8", errors="ignore")
+            print(f"[drive] exported {name} as {exp}")
+            return data
+        except Exception as e:
+            print(f"[drive][warn] export failed for {name} ({mime}): {type(e).__name__}: {e}")
+            return b""
+
+    # 3) 일반 바이너리 파일은 get_media로 다운로드
+    try:
+        req = svc.files().get_media(fileId=file_id)
+        buf = io.BytesIO()
+        from googleapiclient.http import MediaIoBaseDownload  # 지연 임포트
+        downloader = MediaIoBaseDownload(buf, req)
+        done = False
+        while not done:
+            status, done = downloader.next_chunk()
+        return buf.getvalue()
+    except Exception as e:
+        print(f"[drive][warn] get_media failed for {name} ({mime}): {type(e).__name__}: {e}")
+        return b""
 # [03] DRIVE HELPERS — END
 
 
