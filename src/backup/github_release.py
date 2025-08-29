@@ -1,18 +1,24 @@
-# [01]===== src/backup/github_release.py — START =================================
+# ===================== src/backup/github_release.py — START ==================
 from __future__ import annotations
-import os, io, json, gzip, shutil
+import os, io, json, gzip, shutil, time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional, List
 import requests
-import streamlit as st  # type: ignore
+
+try:
+    import streamlit as st  # type: ignore
+except Exception:
+    st = None
 
 API = "https://api.github.com"
 
 def _secret(name: str, default: Optional[str] = None) -> Optional[str]:
     try:
-        val = st.secrets.get(name)  # type: ignore[attr-defined]
-        if val is None: return os.getenv(name, default)
-        if isinstance(val, (str,)): return val
+        val = st.secrets.get(name) if st else None  # type: ignore
+        if val is None:
+            return os.getenv(name, default)
+        if isinstance(val, str):
+            return val
         return json.dumps(val, ensure_ascii=False)
     except Exception:
         return os.getenv(name, default)
@@ -27,7 +33,14 @@ def _headers(binary: bool = False) -> Dict[str, str]:
         h["Accept"] = "application/octet-stream"
     return h
 
-# ── 업로드 유틸(기존) ────────────────────────────────────────────────────────
+def _log(msg: str) -> None:
+    try:
+        if st: st.write(msg)  # type: ignore
+    except Exception:
+        pass
+    print(msg)
+
+# ── Upload release ───────────────────────────────────────────────────────────
 def upload_index_release(
     manifest_path: Path,
     chunks_jsonl_path: Path,
@@ -35,17 +48,12 @@ def upload_index_release(
     keep: int = 2,
     build_meta: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """
-    manifest.json + chunks.jsonl.gz 업로드, 최신 keep개만 보존.
-    """
     repo = _repo()
-    tag  = f"index-{__import__('time').strftime('%Y%m%d-%H%M%S')}"
-    name = f"MAIC Index {__import__('time').strftime('%Y-%m-%d %H:%M')}"
-    body = json.dumps({
-        "meta": build_meta or {},
-    }, ensure_ascii=False, indent=2)
+    tag  = f"index-{time.strftime('%Y%m%d-%H%M%S')}"
+    name = f"MAIC Index {time.strftime('%Y-%m-%d %H:%M')}"
+    body = json.dumps({"meta": build_meta or {}}, ensure_ascii=False, indent=2)
 
-    # 1) 릴리스 생성
+    _log(f"[release] creating: {repo} tag={tag}")
     res = requests.post(f"{API}/repos/{repo}/releases", headers=_headers(), json={
         "tag_name": tag, "name": name, "body": body, "draft": False, "prerelease": False
     })
@@ -53,41 +61,38 @@ def upload_index_release(
     release = res.json()
     upload_url = release["upload_url"].split("{")[0]
 
-    # 2) 자산 업로드
-    assets = []
+    assets: List[str] = []
 
     # manifest.json
+    _log("[release] uploading asset: manifest.json")
     with open(manifest_path, "rb") as f:
-        r = requests.post(
-            f"{upload_url}?name=manifest.json", headers=_headers(binary=True), data=f.read()
-        )
+        r = requests.post(f"{upload_url}?name=manifest.json", headers=_headers(True), data=f.read())
         r.raise_for_status(); assets.append("manifest.json")
 
-    # chunks.jsonl.gz (필요 시 gz 생성)
+    # chunks.jsonl.gz
     gz_path = chunks_jsonl_path.with_suffix(chunks_jsonl_path.suffix + ".gz")
     if not gz_path.exists() or gz_path.stat().st_mtime < chunks_jsonl_path.stat().st_mtime:
+        _log("[release] gzipping chunks.jsonl → chunks.jsonl.gz")
         with open(chunks_jsonl_path, "rb") as fr, gzip.open(gz_path, "wb", compresslevel=6) as fw:
             shutil.copyfileobj(fr, fw)
+    _log("[release] uploading asset: chunks.jsonl.gz")
     with open(gz_path, "rb") as f:
-        r = requests.post(
-            f"{upload_url}?name=chunks.jsonl.gz", headers=_headers(binary=True), data=f.read()
-        )
+        r = requests.post(f"{upload_url}?name=chunks.jsonl.gz", headers=_headers(True), data=f.read())
         r.raise_for_status(); assets.append("chunks.jsonl.gz")
 
-    # (옵션) zip 자산
+    # (optional) additional zip
     if include_zip:
-        zip_file = Path(PERSIST_DIR) / f"{tag}.zip"  # PERSIST_DIR가 없다면 스킵
-        if zip_file.exists():
-            with open(zip_file, "rb") as f:
-                r = requests.post(
-                    f"{upload_url}?name={zip_file.name}",
-                    headers=_headers(binary=True), data=f.read()
-                )
-                r.raise_for_status(); assets.append(zip_file.name)
+        zip_path = chunks_jsonl_path.parent / f"{tag}.zip"
+        if zip_path.exists():
+            _log(f"[release] uploading asset: {zip_path.name}")
+            with open(zip_path, "rb") as f:
+                r = requests.post(f"{upload_url}?name={zip_path.name}", headers=_headers(True), data=f.read())
+                r.raise_for_status(); assets.append(zip_path.name)
 
-    # 3) keep 정책: 오래된 릴리스 삭제
+    # keep policy
     _apply_keep_policy(repo, keep)
 
+    _log(f"[release] ✅ done: {tag} / {assets}")
     return {"ok": True, "tag": tag, "assets": assets}
 
 def _apply_keep_policy(repo: str, keep: int) -> None:
@@ -95,26 +100,30 @@ def _apply_keep_policy(repo: str, keep: int) -> None:
         res = requests.get(f"{API}/repos/{repo}/releases", headers=_headers())
         res.raise_for_status()
         releases = res.json()
-        for rel in releases[keep:]:
-            try:
-                requests.delete(f"{API}/repos/{repo}/releases/{rel['id']}", headers=_headers())
-                # 태그도 삭제
-                tag = rel.get("tag_name")
+        if len(releases) > keep:
+            for rel in releases[keep:]:
+                rid = rel.get("id"); tag = rel.get("tag_name")
+                _log(f"[release] deleting old release: {tag} ({rid})")
+                try:
+                    requests.delete(f"{API}/repos/{repo}/releases/{rid}", headers=_headers())
+                except Exception as e:
+                    _log(f"[release][warn] delete release failed: {e}")
                 if tag:
-                    requests.delete(f"{API}/repos/{repo}/git/refs/tags/{tag}", headers=_headers())
-            except Exception:
-                pass
-    except Exception:
-        pass
+                    try:
+                        requests.delete(f"{API}/repos/{repo}/git/refs/tags/{tag}", headers=_headers())
+                    except Exception as e:
+                        _log(f"[release][warn] delete tag failed: {e}")
+    except Exception as e:
+        _log(f"[release][warn] keep-policy failed: {e}")
 
-# ── 조회/복원 유틸(신규) ────────────────────────────────────────────────────
+# ── Fetch/restore ────────────────────────────────────────────────────────────
 def get_latest_release() -> Optional[Dict[str, Any]]:
     repo = _repo()
-    res = requests.get(f"{API}/repos/{repo}/releases/latest", headers=_headers())
-    if res.status_code == 404:
+    r = requests.get(f"{API}/repos/{repo}/releases/latest", headers=_headers())
+    if r.status_code == 404:
         return None
-    res.raise_for_status()
-    return res.json()
+    r.raise_for_status()
+    return r.json()
 
 def _find_asset(release: Dict[str, Any], name: str) -> Optional[Dict[str, Any]]:
     for a in release.get("assets", []) or []:
@@ -123,9 +132,8 @@ def _find_asset(release: Dict[str, Any], name: str) -> Optional[Dict[str, Any]]:
     return None
 
 def _download_asset(asset: Dict[str, Any]) -> bytes:
-    # assets_url 대신 "url"(assets API)로 Accept: application/octet-stream
     url = asset.get("url")
-    r = requests.get(url, headers=_headers(binary=True), allow_redirects=True)
+    r = requests.get(url, headers=_headers(True), allow_redirects=True, timeout=60)
     r.raise_for_status()
     return r.content
 
@@ -139,31 +147,32 @@ def fetch_manifest_from_release(release: Dict[str, Any]) -> Optional[Dict[str, A
         return None
 
 def restore_latest(dest_dir: Path) -> bool:
-    """
-    최신 릴리스의 manifest.json, chunks.jsonl.gz를 내려받아 로컬 persist에 복원.
-    """
     dest_dir.mkdir(parents=True, exist_ok=True)
     rel = get_latest_release()
-    if not rel: return False
+    if not rel: 
+        _log("[restore] no releases")
+        return False
 
-    a_manifest = _find_asset(rel, "manifest.json")
-    a_chunks_gz = _find_asset(rel, "chunks.jsonl.gz")
-    if not (a_manifest and a_chunks_gz): return False
+    a_m = _find_asset(rel, "manifest.json")
+    a_c = _find_asset(rel, "chunks.jsonl.gz")
+    if not (a_m and a_c):
+        _log("[restore] missing assets in latest release")
+        return False
 
     # manifest
-    m_bytes = _download_asset(a_manifest)
+    m_bytes = _download_asset(a_m)
     (dest_dir / "manifest.json").write_bytes(m_bytes)
 
     # chunks.gz → chunks.jsonl
-    gz_bytes = _download_asset(a_chunks_gz)
+    gz_bytes = _download_asset(a_c)
     (dest_dir / "chunks.jsonl.gz").write_bytes(gz_bytes)
     try:
-        with gzip.open(io.BytesIO(gz_bytes), "rb") as fr:
+        import io as _io
+        with gzip.open(_io.BytesIO(gz_bytes), "rb") as fr:
             (dest_dir / "chunks.jsonl").write_bytes(fr.read())
-    except Exception:
-        # gz 해제가 안 되면 gz 파일만 남겨두고 실패 처리
+    except Exception as e:
+        _log(f"[restore][warn] gunzip failed: {e}")
         return False
 
-    # .ready 마커는 호출측에서 찍음
     return True
-# [01]===== src/backup/github_release.py — END ===================================
+# ====================== src/backup/github_release.py — END ===================
