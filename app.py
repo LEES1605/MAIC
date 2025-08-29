@@ -117,7 +117,7 @@ _llm      = _try_import("src.llm.providers", ["call_with_fallback"])
 
 # ==== [06] 페이지 설정 & 헤더 + 로그인 토글 =================================
 if st:
-    st.set_page_config(page_title="LEES AI Teacher", layout="wide")  # ← (5) 제목 교체
+    st.set_page_config(page_title="LEES AI Teacher", layout="wide")  # (5)
 
 def _is_admin_view() -> bool:
     env = (os.getenv("APP_MODE") or _from_secrets("APP_MODE","student") or "student").lower()
@@ -128,21 +128,23 @@ def _toggle_login_flag():
 
 def _header():
     if st is None: return
-    left, right = st.columns([0.75, 0.25])  # 버튼 영역을 더 좁게 → 시각적으로 작아짐
+    left, right = st.columns([0.8, 0.2])
     with left:
-        st.markdown("### LEES AI Teacher")               # ← (5) 제목 교체
-        # st.caption 제거                                   # ← (6) 캡션 제거
+        st.markdown("### LEES AI Teacher")     # (5)
+        # caption 제거 (6)
     with right:
-        status = "🟢 답변 준비 완료" if _is_brain_ready() else "🟡 두뇌 연결 대기"   # ← (3)
-        st.markdown(f"**{status}**")
-        if not _is_admin_view():
-            st.button("관리자", on_click=_toggle_login_flag, use_container_width=True)  # ← (4)
+        if _is_admin_view():
+            status = "🟢 준비완료" if _is_brain_ready() else "🟡 준비중"   # (3)
+            st.markdown(f"**{status}**")
+            st.button("관리자", on_click=_toggle_login_flag, use_container_width=True)  # 관리자일 때만 노출
         else:
-            st.caption("관리자 모드")
+            # (2) 학생 화면: 상태 텍스트 + '관리자' 버튼 모두 숨김
+            st.empty()
     if _import_warns:
         with st.expander("임포트 경고", expanded=False):
             for w in _import_warns: st.code(w, language="text")
     st.divider()
+
 
 
 def _login_panel_if_needed():
@@ -153,53 +155,7 @@ def _login_panel_if_needed():
         return
     pwd_set = os.getenv("APP_ADMIN_PASSWORD") or _from_secrets("APP_ADMIN_PASSWORD","0000") or "0000"
     with st.container(border=True):
-        st.write("### 관리자 로그인")
-        with st.form("admin_login_form", clear_on_submit=True):
-            pwd_in = st.text_input("비밀번호", type="password")
-            submitted = st.form_submit_button("Login", use_container_width=True)
-        if submitted:
-            if pwd_in and pwd_in == pwd_set:
-                st.session_state["is_admin"] = True
-                st.session_state["admin_login_ts"] = time.strftime("%Y-%m-%d %H:%M:%S")
-                st.session_state["_show_admin_login"] = False
-                st.success("로그인 성공")
-                st.rerun()
-            else:
-                st.error("비밀번호가 틀렸습니다.")
-
-# ==== [07] 시작 오케스트레이션(+수동 복원 버튼: 관리자 전용) =================
-def _auto_start_once() -> None:
-    if st is None: return
-    if st.session_state.get("_auto_started"): return
-    st.session_state["_auto_started"] = True
-
-    if _is_brain_ready():  # 이미 준비됨
-        return
-
-    mode = (os.getenv("AUTO_START_MODE") or _from_secrets("AUTO_START_MODE","detect") or "detect").lower()
-    try:
-        if mode == "restore" and _gh.get("restore_latest"):
-            ok = bool(_gh["restore_latest"](dest_dir=PERSIST_DIR))
-            if ok: _mark_ready()
-        elif mode == "full" and _rag.get("build_index_with_checkpoint"):
-            _rag["build_index_with_checkpoint"](
-                update_pct=lambda *_: None, update_msg=lambda *_: None,
-                gdrive_folder_id=os.getenv("GDRIVE_PREPARED_FOLDER_ID","prepared"),
-                gcp_creds={}, persist_dir=str(PERSIST_DIR), remote_manifest={}
-            )
-            _mark_ready()
-        # detect 모드: 수동 복원 버튼으로 처리(아래), 학생은 버튼 미노출
-    except Exception as e:
-        _errlog(f"AUTO_START_MODE 실행 오류: {e}", where="[auto_start]", exc=e)
-
-def _manual_restore_cta():
-    """복원 버튼은 **관리자 전용**. 학생은 안내 문구 없이 숨김."""
-    if st is None or _is_brain_ready() or (not _is_admin_view()):
-        return
-    if _gh.get("restore_latest"):
-        c1, c2 = st.columns([0.72, 0.28])
-        with c1:
-            st.info("두뇌가 아직 준비되지 않았어요. 최신 GitHub Releases에서 복원할 수 있어요.")
+     요. 최신 GitHub Releases에서 복원할 수 있어요.")
         with c2:
             if st.button("최신 릴리스에서 복원", type="primary", use_container_width=True):
                 try:
@@ -222,10 +178,10 @@ def _load_modes_cfg() -> Dict[str, Any]:
     try:
         p = _modes_cfg_path()
         if not p.exists():
-            return {"allowed": ["문법설명","문장구조분석","지문분석"], "default": "문법설명"}
+            return {"allowed": ["문법","문장","지문"], "default": "문법"}
         return json.loads(p.read_text(encoding="utf-8") or "{}")
     except Exception:
-        return {"allowed": ["문법설명","문장구조분석","지문분석"], "default": "문법설명"}
+        return {"allowed": ["문법","문장","지문"], "default": "문법"}
 
 def _save_modes_cfg(cfg: Dict[str, Any]) -> None:
     try:
@@ -235,13 +191,13 @@ def _save_modes_cfg(cfg: Dict[str, Any]) -> None:
         _errlog(f"save modes cfg failed: {e}", where="[modes_save]", exc=e)
 
 def _sanitize_modes_cfg(cfg: Dict[str, Any]) -> Dict[str, Any]:
-    modes = ["문법설명","문장구조분석","지문분석"]
+    modes = ["문법","문장","지문"]
     allowed = [m for m in (cfg.get("allowed") or []) if m in modes]
     if not allowed:
         allowed = []  # 전부 끌 수도 있게 허용
-    default = cfg.get("default") or "문법설명"
+    default = cfg.get("default") or "문법"
     if default not in modes:
-        default = "문법설명"
+        default = "문법"
     # default가 허용되지 않았어도 유지(학생은 선택 불가 → 버튼 회색)
     return {"allowed": allowed, "default": default}
 
@@ -267,17 +223,17 @@ def _render_admin_panels() -> None:
     cfg = _sanitize_modes_cfg(_load_modes_cfg())
     a = set(cfg["allowed"])
     c1,c2,c3 = st.columns(3)
-    with c1:  g = st.checkbox("문법설명",      value=("문법설명" in a))
-    with c2:  s = st.checkbox("문장구조분석",  value=("문장구조분석" in a))
-    with c3:  p = st.checkbox("지문분석",      value=("지문분석" in a))
+    with c1:  g = st.checkbox("문법",      value=("문법" in a))
+    with c2:  s = st.checkbox("문장",  value=("문장" in a))
+    with c3:  p = st.checkbox("지문",      value=("지문" in a))
 
     # 기본 모드 선택(관리자용) — 전체 모드 중 선택
-    base_modes = ["문법설명","문장구조분석","지문분석"]
+    base_modes = ["문법","문장","지문"]
     default_sel = st.selectbox("기본 모드(학생 초기값)", base_modes, index=base_modes.index(cfg["default"]))
 
     if st.button("허용 설정 저장", type="primary"):
         new_cfg = _sanitize_modes_cfg({"allowed": [m for m, v in [
-            ("문법설명", g), ("문장구조분석", s), ("지문분석", p)
+            ("문법", g), ("문장", s), ("지문", p)
         ] if v], "default": default_sel})
         _save_modes_cfg(new_cfg)
         st.success("저장 완료")
@@ -328,8 +284,8 @@ def _inject_minimal_styles_once():
     """, unsafe_allow_html=True)
 
 # 내부 키 ↔ 표시 라벨(단순화) 매핑
-_MODE_KEYS   = ["문법설명","문장구조분석","지문분석"]   # 내부 로직용
-_MODE_LABELS = {"문법설명":"어법", "문장구조분석":"문장", "지문분석":"지문"}  # ← (1) 단순화 라벨
+_MODE_KEYS   = ["문법","문장","지문"]   # 내부 로직용
+_MODE_LABELS = {"문법":"어법", "문장":"문장", "지문":"지문"}  # ← (1) 단순화 라벨
 
 def _load_modes_cfg_safe() -> Dict[str, Any]:
     defaults = {"allowed": _MODE_KEYS[:], "default": "문법설명"}
@@ -342,8 +298,8 @@ def _load_modes_cfg_safe() -> Dict[str, Any]:
         if not p.exists(): return defaults
         obj = json.loads(p.read_text(encoding="utf-8") or "{}")
         allowed = [m for m in (obj.get("allowed") or []) if m in _MODE_KEYS]
-        default = obj.get("default") or "문법설명"
-        if default not in _MODE_KEYS: default = "문법설명"
+        default = obj.get("default") or "문법"
+        if default not in _MODE_KEYS: default = "문법"
         return {"allowed": allowed, "default": default}
     except Exception:
         return defaults
@@ -400,7 +356,7 @@ def _render_chat_panel() -> None:
     with st.container(border=True):
         c1, c2 = st.columns([0.65, 0.35])
         with c1:
-            st.markdown(f"**{'🟢 답변 준비 완료' if ready else '🟡 두뇌 연결 대기'}**")  # (3)와 일치
+            st.markdown(f"**{'🟢 준비완료' if ready else '🟡 준비중'}**")  # (3)와 일치
         with c2:
             _ = _render_mode_controls_minimal(admin=admin)
 
