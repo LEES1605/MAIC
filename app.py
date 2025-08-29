@@ -409,7 +409,7 @@ def _render_body() -> None:
     _auto_start_once()
     if _is_admin_view():
         _render_admin_panels()
-    st.markdown("## Q&A")
+    st.markdown("## 질문은 천재들의 공부 방법이다.")
     _render_chat_panel()
 
 # ==== [12] main ==============================================================
