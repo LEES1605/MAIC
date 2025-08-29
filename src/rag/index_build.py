@@ -79,7 +79,7 @@ def _find_folder_id(kind: str, *, fallback: Optional[str] = None) -> Optional[st
 def _list_files_in_folder(svc, folder_id: str) -> List[Dict[str, Any]]:
     q = f"'{folder_id}' in parents and trashed=false"
     fields = "files(id, name, mimeType, modifiedTime, size, md5Checksum)"
-    res = svc.files().list(q=q, fields=fields, pageSize=1000).execute()
+    res = svc.files().list(q=q, fields=fields, orderBy="modifiedTime desc", pageSize=1000).execute()
     return res.get("files", [])
 
 def _download_file_bytes(svc, file_id: str) -> bytes:
@@ -140,10 +140,8 @@ def _gzip_file(src: Path, dst: Optional[Path] = None, compresslevel: int = 6) ->
 
 # ── Text & chunk builders (ZIP 지원 추가) ────────────────────────────────────
 def _extract_text_from_bytes(name: str, data: bytes) -> str:
-    # 간단 텍스트 추출기(UTF-8). 필요 시 PDF 등 확장 가능.
     if not data:
         return ""
-    # 매우 큰 바이너리는 잘라서 방어
     if len(data) > 64 * 1024 * 1024:
         data = data[:64 * 1024 * 1024]
     try:
@@ -157,15 +155,11 @@ def _extract_texts_from_zip(zip_bytes: bytes, zip_name: str) -> List[Dict[str, A
         return out
     with zipfile.ZipFile(io.BytesIO(zip_bytes)) as z:
         for info in z.infolist():
-            if info.is_dir():
-                continue
+            if info.is_dir(): continue
             inner = info.filename
             inner_lower = inner.lower()
-            if not (inner_lower.endswith(".txt")
-                    or inner_lower.endswith(".md")
-                    or inner_lower.endswith(".csv")
-                    or inner_lower.endswith(".pdf")):
-                # 텍스트/문서 외는 스킵
+            if not (inner_lower.endswith(".txt") or inner_lower.endswith(".md")
+                    or inner_lower.endswith(".csv") or inner_lower.endswith(".pdf")):
                 continue
             try:
                 data = z.read(info)
@@ -173,7 +167,6 @@ def _extract_texts_from_zip(zip_bytes: bytes, zip_name: str) -> List[Dict[str, A
                 continue
             text = ""
             if inner_lower.endswith(".pdf"):
-                # PDF는 가능하면 PyPDF2로 추출, 없으면 스킵
                 try:
                     from PyPDF2 import PdfReader  # type: ignore
                     import io as _io
@@ -186,16 +179,12 @@ def _extract_texts_from_zip(zip_bytes: bytes, zip_name: str) -> List[Dict[str, A
                             pages.append("")
                     text = "\n".join(pages)
                 except Exception:
-                    # 의존성 없으면 텍스트 추출 생략
                     text = ""
             else:
                 text = _extract_text_from_bytes(inner, data)
             if not text.strip():
                 continue
-            out.append({
-                "name": f"{zip_name}::{inner}",
-                "text": text
-            })
+            out.append({"name": f"{zip_name}::{inner}", "text": text})
     return out
 
 def _to_chunks(name: str, text: str, meta: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -204,32 +193,22 @@ def _to_chunks(name: str, text: str, meta: Dict[str, Any]) -> List[Dict[str, Any
         line = line.strip()
         if not line:
             continue
-        out.append({
-            "text": line,
-            "meta": {**meta, "line_index": i},
-        })
+        out.append({"text": line, "meta": {**meta, "line_index": i}})
     return out
 
 # ── Quality report ───────────────────────────────────────────────────────────
 def _quality_report(docs: List[Dict[str, Any]], chunks_rows: List[Dict[str, Any]], *,
                     extra_counts: Dict[str, Any]) -> Dict[str, Any]:
-    meta_fields = {
-        "file_name": 0, "file_id": 0, "mimeType": 0, "page_approx": 0
-    }
+    meta_fields = {"file_name": 0, "file_id": 0, "mimeType": 0, "page_approx": 0}
     for c in chunks_rows:
         m = c.get("meta", {})
-        if "file_name" in m: meta_fields["file_name"] += 1
-        if "file_id"   in m: meta_fields["file_id"]   += 1
-        if "mimeType"  in m: meta_fields["mimeType"]  += 1
+        if "file_name" in m:   meta_fields["file_name"] += 1
+        if "file_id"   in m:   meta_fields["file_id"]   += 1
+        if "mimeType"  in m:   meta_fields["mimeType"]  += 1
         if "page_approx" in m: meta_fields["page_approx"] += 1
-    return {
-        "stats": {
-            "documents": len(docs),
-            "chunks": len(chunks_rows),
-            **{f"meta_has_{k}": v for k, v in meta_fields.items()},
-        },
-        "extra": extra_counts or {},
-    }
+    return {"stats": {"documents": len(docs), "chunks": len(chunks_rows),
+                      **{f"meta_has_{k}": v for k, v in meta_fields.items()}},
+            "extra": extra_counts or {}}
 
 # ── Backup ZIP to Drive (optional) ───────────────────────────────────────────
 def _make_and_upload_backup_zip(svc, backup_folder_id: Optional[str]) -> Optional[str]:
@@ -262,28 +241,22 @@ def _build_from_prepared(svc, prepared_folder_id: str) -> Tuple[int, int, Dict[s
         data = _download_file_bytes(svc, fid)
 
         if (mime == "application/zip") or name.lower().endswith(".zip"):
-            # ZIP → 내부 텍스트/문서 추출
             extracted = _extract_texts_from_zip(data, name)
             for item in extracted:
                 meta = {"file_id": f"{fid}:{item['name']}", "file_name": item["name"], "mimeType": "text/plain", "page_approx": None}
                 chunk_rows.extend(_to_chunks(item["name"], item["text"], meta))
-            docs_summary.append({
-                "id": fid, "name": name, "mimeType": mime, "size": f.get("size"), "md5": f.get("md5Checksum"),
-                "expanded_from_zip": len(extracted)
-            })
+            docs_summary.append({"id": fid, "name": name, "mimeType": mime,
+                                 "size": f.get("size"), "md5": f.get("md5Checksum"),
+                                 "expanded_from_zip": len(extracted)})
             continue
 
         text = _extract_text_from_bytes(name, data)
         meta = {"file_id": fid, "file_name": name, "mimeType": mime, "page_approx": None}
         chunk_rows.extend(_to_chunks(name, text, meta))
-        docs_summary.append({
-            "id": fid, "name": name, "mimeType": mime, "size": f.get("size"), "md5": f.get("md5Checksum"),
-        })
+        docs_summary.append({"id": fid, "name": name, "mimeType": mime,
+                             "size": f.get("size"), "md5": f.get("md5Checksum")})
 
-    manifest = {
-        "built_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
-        "docs": docs_summary,
-    }
+    manifest = {"built_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()), "docs": docs_summary}
     extra = {"processed_files": len(docs_summary), "generated_chunks": len(chunk_rows)}
     return len(docs_summary), len(chunk_rows), manifest, extra, chunk_rows
 
@@ -379,25 +352,10 @@ def build_index_with_checkpoint(
         "auth_mode": "service-account",
         "persist_dir": str(PERSIST_DIR),
     }
-# ======= [APPEND] compatibility shim for ui_orchestrator =====================
-def quick_precheck() -> dict:
-    """
-    간단 사전 점검: 로컬 persist 디렉토리와 준비 상태 반환.
-    ui_orchestrator가 임포트만 해도 안전하게 동작하도록 호환 제공.
-    """
-    try:
-        persist = str(PERSIST_DIR)
-        ready = (PERSIST_DIR / "chunks.jsonl").exists() or (PERSIST_DIR / ".ready").exists()
-        return {"ok": True, "persist_dir": persist, "ready": bool(ready)}
-    except Exception as e:
-        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
-# ============================================================================ 
+
 # ======= [APPEND] compatibility shims for ui_orchestrator ====================
 def quick_precheck() -> dict:
-    """
-    간단 사전 점검: 로컬 persist 디렉토리와 준비 상태 반환.
-    ui_orchestrator가 임포트만 해도 안전하게 동작하도록 호환 제공.
-    """
+    """로컬 persist 상태 간단 점검(임포트용 안전 함수)."""
     try:
         persist = str(PERSIST_DIR)
         ready = (PERSIST_DIR / "chunks.jsonl").exists() or (PERSIST_DIR / ".ready").exists()
@@ -406,22 +364,68 @@ def quick_precheck() -> dict:
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
 def scan_drive_listing(folder_id: str | None = None, limit: int = 50) -> list[dict]:
-    """
-    ui_orchestrator가 요구하는 드라이브 파일 간단 조회.
-    서비스계정으로 prepared 폴더의 최신 파일 일부를 반환한다.
-    """
+    """prepared 폴더의 최신 파일 일부를 서비스계정으로 조회."""
     try:
         svc = _drive_client()
         fid = folder_id or _find_folder_id("PREPARED")
         if not fid:
             return []
         q = f"'{fid}' in parents and trashed=false"
-        fields = "files(id, name, mimeType, modifiedTime, size)"
+        fields = "files(id, name, mimeType, modifiedTime, size, md5Checksum)"
         res = svc.files().list(q=q, fields=fields, orderBy="modifiedTime desc", pageSize=limit).execute()
         return res.get("files", [])
     except Exception:
         return []
-# ============================================================================ 
 
+def diff_with_manifest(folder_id: str | None = None, limit: int = 1000) -> dict:
+    """
+    prepared 폴더 목록과 로컬 manifest.json을 비교하여
+    added/changed/removed 통계를 반환(간단 비교: id 우선, md5/size 기준).
+    """
+    try:
+        mpath = PERSIST_DIR / "manifest.json"
+        if not mpath.exists():
+            return {"ok": False, "reason": "no_manifest"}
+        man = json.loads(mpath.read_text(encoding="utf-8") or "{}")
+        mdocs = {d.get("id"): d for d in (man.get("docs") or []) if d.get("id")}
+        svc = _drive_client()
+        fid = folder_id or _find_folder_id("PREPARED")
+        if not fid:
+            return {"ok": False, "reason": "no_prepared_id"}
+        cur = _list_files_in_folder(svc, fid)[:limit]
+        cdocs = {f.get("id"): f for f in cur if f.get("id")}
+
+        ids_m = set(mdocs.keys()); ids_c = set(cdocs.keys())
+        added   = list(ids_c - ids_m)
+        removed = list(ids_m - ids_c)
+        common  = ids_m & ids_c
+
+        changed: List[str] = []
+        for i in common:
+            m = mdocs[i]; c = cdocs[i]
+            md5_m, md5_c = m.get("md5"), c.get("md5Checksum")
+            sz_m, sz_c   = str(m.get("size")), str(c.get("size"))
+            if (md5_m and md5_c and md5_m != md5_c) or (sz_m and sz_c and sz_m != sz_c):
+                changed.append(i)
+
+        def _names(ids: List[str]) -> List[str]:
+            out = []
+            for _id in ids:
+                if _id in cdocs:
+                    out.append(cdocs[_id].get("name"))
+                elif _id in mdocs:
+                    out.append(mdocs[_id].get("name"))
+            return out
+
+        return {
+            "ok": True,
+            "stats": {"added": len(added), "changed": len(changed), "removed": len(removed)},
+            "added": _names(added),
+            "changed": _names(changed),
+            "removed": _names(removed),
+        }
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+# ============================================================================
 
 # ===================== src/rag/index_build.py — END ==========================
