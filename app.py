@@ -27,24 +27,15 @@ def _from_secrets(name: str, default: Optional[str] = None) -> Optional[str]:
 
 def _bootstrap_env() -> None:
     keys = [
-        # LLM
         "OPENAI_API_KEY","OPENAI_MODEL","GEMINI_API_KEY","GEMINI_MODEL",
-        # GitHub
         "GITHUB_TOKEN","GITHUB_REPO",
-        # Drive
         "GDRIVE_PREPARED_FOLDER_ID","GDRIVE_BACKUP_FOLDER_ID",
-        # App
-        "APP_MODE",          # admin|student
-        "AUTO_START_MODE",   # detect|restore|full
-        "LOCK_MODE_FOR_STUDENTS",  # true → 학생은 라디오 숨김
-        "APP_ADMIN_PASSWORD",
+        "APP_MODE", "AUTO_START_MODE", "LOCK_MODE_FOR_STUDENTS", "APP_ADMIN_PASSWORD",
     ]
     for k in keys:
         v = _from_secrets(k)
         if v and not os.getenv(k):
             os.environ[k] = str(v)
-
-    # 서버 안정 설정
     os.environ.setdefault("STREAMLIT_SERVER_FILE_WATCHER_TYPE", "none")
     os.environ.setdefault("STREAMLIT_RUN_ON_SAVE", "false")
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
@@ -55,7 +46,7 @@ _bootstrap_env()
 # ==== [04] 경로/상태 & 에러로그 ==============================================
 def _persist_dir() -> Path:
     try:
-        from src.config import PERSIST_DIR as CFG  # 프로젝트 표준 경로
+        from src.config import PERSIST_DIR as CFG
         return Path(CFG).expanduser()
     except Exception:
         return Path.home() / ".maic" / "persist"
@@ -99,7 +90,7 @@ def _errlog_text() -> str:
         out.write("-"*60 + "\n")
     return out.getvalue()
 
-# ==== [05] 동적 임포트 바인딩(있는 것만 사용) ===============================
+# ==== [05] 동적 임포트 바인딩 ===============================================
 _import_warns: List[str] = []
 
 def _try_import(mod: str, attrs: List[str]) -> Dict[str, Any]:
@@ -116,45 +107,21 @@ def _try_import(mod: str, attrs: List[str]) -> Dict[str, Any]:
             pass
     return out
 
-# 관리자/오케스트레이터/백업/RAG/LLM
 _ui_admin = _try_import("src.ui_admin", [
     "ensure_admin_session_keys", "render_admin_controls", "render_role_caption", "render_mode_radio_admin"
 ])
 _ui_orch  = _try_import("src.ui_orchestrator", ["render_index_orchestrator_panel"])
 _gh       = _try_import("src.backup.github_release", ["restore_latest"])
 _rag      = _try_import("src.rag.index_build", ["build_index_with_checkpoint"])
-_llm      = _try_import("src.llm.providers", ["call_with_fallback","call_openai","call_gemini"])
+_llm      = _try_import("src.llm.providers", ["call_with_fallback"])
 
-# ==== [06] 페이지 설정 & 헤더(학생 화면에서도 로그인 가능) ===================
+# ==== [06] 페이지 설정 & 헤더 ===============================================
 if st:
     st.set_page_config(page_title="AI Teacher", layout="wide")
 
 def _is_admin_view() -> bool:
     env = (os.getenv("APP_MODE") or _from_secrets("APP_MODE","student") or "student").lower()
     return bool(env == "admin" or (st and (st.session_state.get("is_admin") or st.session_state.get("admin_mode"))))
-
-def _admin_login_inline():
-    """학생/관리자 공통 헤더에서 항상 노출되는 간단 로그인."""
-    if st is None: return
-    ss = st.session_state
-    ss.setdefault("is_admin", False)
-    pwd_set = os.getenv("APP_ADMIN_PASSWORD") or _from_secrets("APP_ADMIN_PASSWORD","0000") or "0000"
-    if ss.get("is_admin"):
-        if st.button("로그아웃", use_container_width=True):
-            ss["is_admin"] = False
-            ss["admin_login_ts"] = ""
-            st.experimental_rerun()
-    else:
-        with st.popover("관리자 로그인", use_container_width=True):
-            pwd_in = st.text_input("비밀번호", type="password")
-            if st.button("Login", type="primary"):
-                if pwd_in and pwd_in == pwd_set:
-                    ss["is_admin"] = True
-                    ss["admin_login_ts"] = time.strftime("%Y-%m-%d %H:%M:%S")
-                    st.success("로그인 성공")
-                    st.experimental_rerun()
-                else:
-                    st.error("비밀번호가 틀렸습니다.")
 
 def _header():
     if st is None: return
@@ -165,7 +132,6 @@ def _header():
     with right:
         status = "🟢 두뇌 준비됨" if _is_brain_ready() else "🟡 두뇌 연결 대기"
         st.markdown(f"**{status}**")
-        _admin_login_inline()  # ← 항상 보이도록
     if _import_warns:
         with st.expander("임포트 경고", expanded=False):
             for w in _import_warns: st.code(w, language="text")
@@ -192,14 +158,12 @@ def _auto_start_once() -> None:
                 gcp_creds={}, persist_dir=str(PERSIST_DIR), remote_manifest={}
             )
             _mark_ready()
-        # detect 모드: 화면 오케스트레이터에서 질문 진행
+        # detect 모드: 수동 복원 버튼으로 처리
     except Exception as e:
         _errlog(f"AUTO_START_MODE 실행 오류: {e}", where="[auto_start]", exc=e)
 
 def _manual_restore_cta():
-    """준비되지 않았을 때 상단에 보여주는 원클릭 복원 버튼."""
-    if st is None: return
-    if _is_brain_ready(): return
+    if st is None or _is_brain_ready(): return
     if _gh.get("restore_latest"):
         c1, c2 = st.columns([0.72, 0.28])
         with c1:
@@ -211,46 +175,37 @@ def _manual_restore_cta():
                     if ok:
                         _mark_ready()
                         st.success("복원 완료! 잠시 후 새로고침됩니다.")
-                        st.experimental_rerun()
+                        st.rerun()
                     else:
-                        st.error("복원에 실패했습니다. Releases에 manifest/chunks가 있는지 확인하세요.")
+                        st.error("복원 실패: Releases의 manifest/chunks를 확인하세요.")
                 except Exception as e:
                     _errlog(f"manual restore failed: {e}", where="[manual_restore]", exc=e)
                     st.error(f"예외: {type(e).__name__}: {e}")
 
-# ==== [08] 관리자 패널(오케스트레이터/모드/로그) ============================
+# ==== [08] 관리자 패널 =======================================================
 def _render_admin_panels() -> None:
     if st is None or not _is_admin_view(): return
-
-    # 상단 공통 컨트롤 (관리자 전용 확장판)
     if _ui_admin.get("ensure_admin_session_keys"): _ui_admin["ensure_admin_session_keys"]()
     if _ui_admin.get("render_admin_controls"):     _ui_admin["render_admin_controls"]()
     if _ui_admin.get("render_role_caption"):       _ui_admin["render_role_caption"]()
     st.divider()
 
-    # 자료/인덱스 오케스트레이터
     st.markdown("## 관리자: 자료/인덱스 관리")
     if _ui_orch.get("render_index_orchestrator_panel"):
         _ui_orch["render_index_orchestrator_panel"]()
     else:
         st.info("오케스트레이터 모듈이 없습니다: src.ui_orchestrator")
 
-    # 설명 모드 라디오(관리자 전용)
     st.markdown("### 설명 모드 설정")
     if _ui_admin.get("render_mode_radio_admin"):
         _ui_admin["render_mode_radio_admin"]()
-    else:
-        default = st.session_state.get("qa_mode_radio","문법설명")
-        st.session_state["qa_mode_radio"] = st.radio("설명 모드", ["문법설명","문장구조분석","지문분석"],
-                                                     index=["문법설명","문장구조분석","지문분석"].index(default))
 
-    # 오류 로그
     with st.expander("오류 로그", expanded=False):
         txt = _errlog_text()
         st.text_area("최근 오류", value=txt, height=180)
         st.download_button("로그 다운로드", data=txt.encode("utf-8"), file_name="app_error_log.txt")
 
-# ==== [09] 채팅 패널(학생도 모드 라디오 사용 가능) ==========================
+# ==== [09] 채팅 패널 =========================================================
 def _llm_call(prompt: str, system: Optional[str] = None) -> Dict[str, Any]:
     if _llm.get("call_with_fallback"):
         return _llm["call_with_fallback"](prompt=prompt, system=system,
@@ -265,7 +220,6 @@ def _render_chat_panel() -> None:
     ss.setdefault("_chat_next_id", 1)
     ready = _is_brain_ready()
 
-    # 상단 상태 + 모드 라디오(학생도 허용; 필요시 secrets로 잠금)
     with st.container(border=True):
         c1, c2 = st.columns([0.65, 0.35])
         with c1:
@@ -279,11 +233,9 @@ def _render_chat_panel() -> None:
             else:
                 st.markdown(f"모드: **{default}**")
 
-    # 두뇌 준비 안 됐으면 수동 복원 CTA 표시
     if not ready:
         _manual_restore_cta()
 
-    # 대화 이력
     with st.container(border=True):
         for m in ss["chat"]:
             if m["role"] == "user":
@@ -291,7 +243,6 @@ def _render_chat_panel() -> None:
             else:
                 with st.chat_message("assistant", avatar="🤖"): st.markdown(m["text"])
 
-    # 입력
     user_q = st.chat_input("질문을 입력하세요")
     if not user_q: return
 
@@ -322,10 +273,8 @@ def _render_body() -> None:
     if st is None: return
     _header()
     _auto_start_once()
-
     if _is_admin_view():
         _render_admin_panels()
-
     st.markdown("## Q&A")
     _render_chat_panel()
 
