@@ -392,5 +392,36 @@ def quick_precheck() -> dict:
     except Exception as e:
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 # ============================================================================ 
+# ======= [APPEND] compatibility shims for ui_orchestrator ====================
+def quick_precheck() -> dict:
+    """
+    간단 사전 점검: 로컬 persist 디렉토리와 준비 상태 반환.
+    ui_orchestrator가 임포트만 해도 안전하게 동작하도록 호환 제공.
+    """
+    try:
+        persist = str(PERSIST_DIR)
+        ready = (PERSIST_DIR / "chunks.jsonl").exists() or (PERSIST_DIR / ".ready").exists()
+        return {"ok": True, "persist_dir": persist, "ready": bool(ready)}
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+def scan_drive_listing(folder_id: str | None = None, limit: int = 50) -> list[dict]:
+    """
+    ui_orchestrator가 요구하는 드라이브 파일 간단 조회.
+    서비스계정으로 prepared 폴더의 최신 파일 일부를 반환한다.
+    """
+    try:
+        svc = _drive_client()
+        fid = folder_id or _find_folder_id("PREPARED")
+        if not fid:
+            return []
+        q = f"'{fid}' in parents and trashed=false"
+        fields = "files(id, name, mimeType, modifiedTime, size)"
+        res = svc.files().list(q=q, fields=fields, orderBy="modifiedTime desc", pageSize=limit).execute()
+        return res.get("files", [])
+    except Exception:
+        return []
+# ============================================================================ 
+
 
 # ===================== src/rag/index_build.py — END ==========================
