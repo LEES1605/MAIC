@@ -380,18 +380,35 @@ def scan_drive_listing(folder_id: str | None = None, limit: int = 50) -> list[di
 def diff_with_manifest(folder_id: str | None = None, limit: int = 1000) -> dict:
     """
     prepared 폴더 목록과 로컬 manifest.json을 비교하여
-    added/changed/removed 통계를 반환(간단 비교: id 우선, md5/size 기준).
+    added/changed/removed 통계를 반환한다.
+    실패/비정상 상황에서도 항상 동일 스키마를 보장한다.
     """
+    # 항상 반환할 기본 골격 (UI 안전)
+    out = {
+        "ok": False,
+        "reason": "",
+        "stats": {"added": 0, "changed": 0, "removed": 0},
+        "added": [],
+        "changed": [],
+        "removed": [],
+    }
+
     try:
         mpath = PERSIST_DIR / "manifest.json"
         if not mpath.exists():
-            return {"ok": False, "reason": "no_manifest"}
+            out["reason"] = "no_manifest"
+            # manifest 없어도 스키마는 유지
+            return out
+
         man = json.loads(mpath.read_text(encoding="utf-8") or "{}")
         mdocs = {d.get("id"): d for d in (man.get("docs") or []) if d.get("id")}
+
         svc = _drive_client()
         fid = folder_id or _find_folder_id("PREPARED")
         if not fid:
-            return {"ok": False, "reason": "no_prepared_id"}
+            out["reason"] = "no_prepared_id"
+            return out
+
         cur = _list_files_in_folder(svc, fid)[:limit]
         cdocs = {f.get("id"): f for f in cur if f.get("id")}
 
@@ -404,28 +421,34 @@ def diff_with_manifest(folder_id: str | None = None, limit: int = 1000) -> dict:
         for i in common:
             m = mdocs[i]; c = cdocs[i]
             md5_m, md5_c = m.get("md5"), c.get("md5Checksum")
-            sz_m, sz_c   = str(m.get("size")), str(c.get("size"))
+            sz_m,  sz_c  = str(m.get("size")), str(c.get("size"))
             if (md5_m and md5_c and md5_m != md5_c) or (sz_m and sz_c and sz_m != sz_c):
                 changed.append(i)
 
         def _names(ids: List[str]) -> List[str]:
-            out = []
+            out_names: List[str] = []
             for _id in ids:
                 if _id in cdocs:
-                    out.append(cdocs[_id].get("name"))
+                    out_names.append(cdocs[_id].get("name"))
                 elif _id in mdocs:
-                    out.append(mdocs[_id].get("name"))
-            return out
+                    out_names.append(mdocs[_id].get("name"))
+            return out_names
 
-        return {
-            "ok": True,
-            "stats": {"added": len(added), "changed": len(changed), "removed": len(removed)},
-            "added": _names(added),
-            "changed": _names(changed),
-            "removed": _names(removed),
+        out["ok"] = True
+        out["added"]   = _names(added)
+        out["changed"] = _names(changed)
+        out["removed"] = _names(removed)
+        out["stats"] = {
+            "added": len(out["added"]),
+            "changed": len(out["changed"]),
+            "removed": len(out["removed"]),
         }
+        return out
+
     except Exception as e:
-        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        out["reason"] = f"{type(e).__name__}: {e}"
+        return out
+
 # ============================================================================
 
 # ===================== src/rag/index_build.py — END ==========================
