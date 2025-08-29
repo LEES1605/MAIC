@@ -291,66 +291,44 @@ def _render_admin_panels() -> None:
         st.text_area("최근 오류", value=txt, height=180)
         st.download_button("로그 다운로드", data=txt.encode("utf-8"), file_name="app_error_log.txt")
 
-# ==== [10] 설명 모드 UI(세그먼트 버튼) + 채팅 패널 ===========================
-def _modes_cfg_path() -> Path:
-    # 관리자 허용 모드 영속 저장 파일 위치
-    return PERSIST_DIR / "explain_modes.json"
-
-def _load_modes_cfg_safe() -> Dict[str, Any]:
-    """도우미가 앱에 없더라도 안전하게 기본값을 반환."""
-    defaults = {"allowed": ["문법설명","문장구조분석","지문분석"], "default": "문법설명"}
-    try:
-        if '_load_modes_cfg' in globals() and callable(globals()['_load_modes_cfg']):
-            # 우리 앱에 이미 있는 헬퍼가 있으면 그것을 그대로 사용
-            try:
-                if '_sanitize_modes_cfg' in globals() and callable(globals()['_sanitize_modes_cfg']):
-                    return globals()['_sanitize_modes_cfg'](globals()['_load_modes_cfg']())
-                return globals()['_load_modes_cfg']()
-            except Exception:
-                return defaults
-        # 헬퍼가 없다면 json 직접 로드
-        p = _modes_cfg_path()
-        if not p.exists():
-            return defaults
-        obj = json.loads(p.read_text(encoding="utf-8") or "{}")
-        modes = ["문법설명","문장구조분석","지문분석"]
-        allowed = [m for m in (obj.get("allowed") or []) if m in modes]
-        default = obj.get("default") or "문법설명"
-        if default not in modes:
-            default = "문법설명"
-        return {"allowed": allowed, "default": default}
-    except Exception:
-        return defaults
-
-def _render_mode_controls(*, admin: bool) -> str:
+# ==== [10] 설명 모드: 미니멀 세그먼트 버튼 + 채팅 패널 =======================
+def _render_mode_controls_minimal(*, admin: bool) -> str:
     """
-    세 모드는 항상 보이되, 학생은 관리자에서 끈 모드만 회색/비활성.
-    반환값: 현재 선택된 모드
+    - 학생: 세 모드 모두 보이되, 관리자가 끈 모드는 비활성(회색).
+    - 관리자: 항상 세 모드 모두 활성.
+    - 라벨/아이콘 없음. 선택된 버튼은 ' · 선택' 접미사로만 표시(미니멀).
+    반환: 현재 선택된 모드 문자열.
     """
     ss = st.session_state
-    cfg = _load_modes_cfg_safe()
-    allowed = set(cfg["allowed"])
-    modes   = ["문법설명","문장구조분석","지문분석"]
 
-    # 현재 선택이 없다면 내부 폴백(default)
-    cur = ss.get("qa_mode_radio") or cfg["default"]
+    # 관리자 허용 설정 로드 (기존 헬퍼 사용 가정)
+    try:
+        cfg = _sanitize_modes_cfg(_load_modes_cfg())  # allowed, default 포함
+    except Exception:
+        cfg = {"allowed": ["문법설명","문장구조분석","지문분석"], "default": "문법설명"}
 
-    # 학생이 금지 모드에 머물러 있다면 폴백으로 교정
+    allowed: set[str] = set(cfg.get("allowed", []))
+    modes = ["문법설명","문장구조분석","지문분석"]
+
+    # 현재 선택 모드
+    cur = ss.get("qa_mode_radio") or cfg.get("default", "문법설명")
+
+    # 학생이 비허용 모드에 있으면 폴백(default)으로 교정
     if (not admin) and (cur not in allowed) and allowed:
-        cur = cfg["default"]
+        cur = cfg.get("default", "문법설명")
         ss["qa_mode_radio"] = cur
 
-    st.caption("설명 모드")
-    col1, col2, col3 = st.columns(3)
-    layout = [(col1, "문법설명"), (col2, "문장구조분석"), (col3, "지문분석")]
-
+    # 3분할 미니멀 버튼(라벨/아이콘/캡션 없음)
+    c1, c2, c3 = st.columns(3)
+    layout = [(c1, "문법설명"), (c2, "문장구조분석"), (c3, "지문분석")]
     clicked = None
+
     for col, label in layout:
         disabled = False if admin else (label not in allowed)
+        # 선택된 항목만 ' · 선택' 접미사로 아주 최소한의 시각 피드백
+        btn_text = f"{label} · 선택" if cur == label else label
         with col:
-            # 선택된 항목은 시각적으로 강조(프리픽스)
-            btn_label = f"✅ {label}" if cur == label else label
-            if st.button(btn_label, key=f"mode_btn_{label}", use_container_width=True, disabled=disabled):
+            if st.button(btn_text, key=f"mode_btn_{label}", use_container_width=True, disabled=disabled):
                 clicked = label
 
     if clicked:
@@ -358,28 +336,34 @@ def _render_mode_controls(*, admin: bool) -> str:
         cur = clicked
     return cur
 
+
 def _llm_call(prompt: str, system: Optional[str] = None) -> Dict[str, Any]:
     if _llm.get("call_with_fallback"):
-        return _llm["call_with_fallback"](prompt=prompt, system=system,
-                                          primary="gemini", secondary="openai",
-                                          temperature=0.3, max_tokens=800)
+        return _llm["call_with_fallback"](
+            prompt=prompt, system=system,
+            primary="gemini", secondary="openai",
+            temperature=0.3, max_tokens=800
+        )
     return {"ok": False, "error": "LLM providers 모듈 미탑재"}
 
+
 def _render_chat_panel() -> None:
-    if st is None: return
+    if st is None:
+        return
     ss = st.session_state
     ss.setdefault("chat", [])
     ss.setdefault("_chat_next_id", 1)
+
     ready = _is_brain_ready()
     admin = _is_admin_view()
 
-    # 상단 상태 + (세그먼트 버튼) 모드 컨트롤
+    # 상단 상태 + (미니멀 세그먼트 버튼) 모드 컨트롤
     with st.container(border=True):
         c1, c2 = st.columns([0.65, 0.35])
         with c1:
             st.markdown(f"**{'🟢 두뇌 준비됨' if ready else '🟡 두뇌 연결 대기'}**")
         with c2:
-            _ = _render_mode_controls(admin=admin)
+            _ = _render_mode_controls_minimal(admin=admin)
 
     # 두뇌 준비 전에는 (관리자만) 최신 릴리스 복원 CTA
     if not ready:
@@ -403,9 +387,14 @@ def _render_chat_panel() -> None:
     msg_id = ss["_chat_next_id"]; ss["_chat_next_id"] += 1
     ss["chat"].append({"id": msg_id, "role": "user", "text": user_q})
 
+    # 현재 모드(없으면 default)
+    try:
+        cfg = _sanitize_modes_cfg(_load_modes_cfg())
+    except Exception:
+        cfg = {"allowed": ["문법설명","문장구조분석","지문분석"], "default": "문법설명"}
+
+    mode = ss.get("qa_mode_radio") or cfg.get("default", "문법설명")
     system_prompt = "너는 한국의 영어학원 원장처럼, 따뜻하고 명확하게 설명한다."
-    cfg = _load_modes_cfg_safe()
-    mode = ss.get("qa_mode_radio") or cfg["default"]
     prompt = f"[모드:{mode}]\n{user_q}"
 
     with st.chat_message("assistant", avatar="🤖"):
