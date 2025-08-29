@@ -1,5 +1,4 @@
-# ========================== index_build.py — START ===========================
-# [00] IMPORTS & GLOBALS — START
+# ==================== src/rag/index_build.py — START =========================
 from __future__ import annotations
 import os, io, json, gzip, shutil, zipfile, time
 from pathlib import Path
@@ -7,13 +6,11 @@ from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Tuple
 
 # 외부
 import streamlit as st  # type: ignore
-
-# 구글 드라이브 (서비스계정 전용)
 from google.oauth2 import service_account
 from googleapiclient.discovery import build as gbuild
 from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 
-# 내부 의존 (경로/설정)
+# 내부 설정 경로
 try:
     from src.config import PERSIST_DIR as _PERSIST_DIR, APP_DATA_DIR as _APP_DATA_DIR
 except Exception:
@@ -24,41 +21,32 @@ PERSIST_DIR = Path(_PERSIST_DIR).expanduser()
 BACKUP_DIR  = (Path(_APP_DATA_DIR).expanduser() / "backup")
 PERSIST_DIR.mkdir(parents=True, exist_ok=True)
 BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-# [00] IMPORTS & GLOBALS — END
 
-
-# [01] UTILS — START
-def _msg(update_msg: Callable[[str], None], s: str) -> None:
-    try: update_msg(str(s))
-    except Exception: pass
-
-def _pct(update_pct: Callable[[int, Optional[str]], None], v: int, msg: Optional[str] = None) -> None:
-    try: update_pct(int(v), msg)
-    except Exception: pass
-
-def _now_tag() -> str:
-    return time.strftime("%Y%m%d-%H%M%S", time.localtime())
-
+# ── Utils ────────────────────────────────────────────────────────────────────
 def _read_secret(key: str, default: Optional[str] = None) -> Optional[str]:
     try:
         val = st.secrets.get(key)  # type: ignore[attr-defined]
         if val is None:
             return os.getenv(key, default)
-        if isinstance(val, (str,)):
+        if isinstance(val, str):
             return val
         return json.dumps(val, ensure_ascii=False)
     except Exception:
         return os.getenv(key, default)
-# [01] UTILS — END
 
+def _now_tag() -> str:
+    return time.strftime("%Y%m%d-%H%M%S", time.localtime())
 
-# [02] GOOGLE DRIVE AUTH (SERVICE ACCOUNT ONLY) — START
+def _msg(update_msg: Callable[[str], None], s: str) -> None:
+    try: update_msg(str(s))
+    except Exception: pass
+
+def _pct(update_pct: Callable[[int, Optional[str]], None], v: int, m: Optional[str] = None) -> None:
+    try: update_pct(int(v), m)
+    except Exception: pass
+
+# ── Auth (Service Account only) ──────────────────────────────────────────────
 def _drive_client():
-    """
-    서비스계정 전용 클라이언트.
-    - secrets['gcp_service_account']를 문자열(JSON) 또는 객체로 허용
-    - 스코프: read-only
-    """
     raw = st.secrets.get("gcp_service_account") if hasattr(st, "secrets") else None  # type: ignore
     if isinstance(raw, str):
         info = json.loads(raw)
@@ -69,30 +57,18 @@ def _drive_client():
 
     scopes = st.secrets.get("GDRIVE_SCOPES") if hasattr(st, "secrets") else None  # type: ignore
     if isinstance(scopes, str):
-        try:
-            scopes = json.loads(scopes)
-        except Exception:
-            scopes = [scopes]
+        try: scopes = json.loads(scopes)
+        except Exception: scopes = [scopes]
     if not scopes:
         scopes = [
             "https://www.googleapis.com/auth/drive.readonly",
             "https://www.googleapis.com/auth/drive.metadata.readonly",
         ]
-
     creds = service_account.Credentials.from_service_account_info(info, scopes=scopes)
     return gbuild("drive", "v3", credentials=creds, cache_discovery=False)
-# [02] GOOGLE DRIVE AUTH — END
 
-
-# [03] DRIVE HELPERS — START
-from typing import Any, Dict, List
-import io
-
+# ── Drive helpers ────────────────────────────────────────────────────────────
 def _find_folder_id(kind: str, *, fallback: Optional[str] = None) -> Optional[str]:
-    """
-    kind: "PREPARED" | "BACKUP" | "DEFAULT"
-    기본은 시크릿 키를 우선 사용하고, 없으면 fallback.
-    """
     key = {
         "PREPARED": "GDRIVE_PREPARED_FOLDER_ID",
         "BACKUP":   "GDRIVE_BACKUP_FOLDER_ID",
@@ -107,38 +83,23 @@ def _list_files_in_folder(svc, folder_id: str) -> List[Dict[str, Any]]:
     return res.get("files", [])
 
 def _download_file_bytes(svc, file_id: str) -> bytes:
-    """
-    Google Docs Editors 파일(문서/스프레드시트/프리젠테이션)은
-    `files().get_media(...)`로는 받을 수 없습니다.
-    → 반드시 `files().export(fileId=..., mimeType=...)`로 처리합니다.
-
-    일반 바이너리 파일(pdf, docx, txt 등)은 기존대로 get_media로 처리합니다.
-    """
-    # 1) 파일 MIME 조회
     meta = svc.files().get(fileId=file_id, fields="mimeType,name").execute()
     mime = meta.get("mimeType", "")
     name = meta.get("name", file_id)
-
-    # 2) Google Docs Editors 분기
-    #    https://developers.google.com/drive/api/guides/ref-export-formats
+    # Google Docs Editors → export
     if mime.startswith("application/vnd.google-apps."):
-        subtype = mime.split(".")[-1]  # document / spreadsheet / presentation / ...
-        # 텍스트 인덱싱에 적합한 내보내기 포맷 매핑
+        subtype = mime.split(".")[-1]
         export_map = {
-            "document":     "text/plain",  # Google Docs → TXT
-            "spreadsheet":  "text/csv",    # Sheets → CSV
-            "presentation": "text/plain",  # Slides → Speaker notes 텍스트가 아니라 본문 텍스트를 단순화해 받음
-            # 필요시 "drawing": "image/png" 등 추가 가능 (텍스트 인덱싱 목적이라 기본 제외)
+            "document":     "text/plain",
+            "spreadsheet":  "text/csv",
+            "presentation": "text/plain",
         }
         exp = export_map.get(subtype)
-        if exp is None:
-            # 텍스트 인덱싱 대상이 아니거나 미지원 형식이면 빈 바이트 반환(스킵)
+        if not exp:
             print(f"[drive][info] skip unsupported google-apps file: {name} ({mime})")
             return b""
-
         try:
             data = svc.files().export(fileId=file_id, mimeType=exp).execute()
-            # 일부 라이브러리 버전에서 bytes가 아닌 str로 올 수 있어 보정
             if isinstance(data, str):
                 data = data.encode("utf-8", errors="ignore")
             print(f"[drive] exported {name} as {exp}")
@@ -146,56 +107,20 @@ def _download_file_bytes(svc, file_id: str) -> bytes:
         except Exception as e:
             print(f"[drive][warn] export failed for {name} ({mime}): {type(e).__name__}: {e}")
             return b""
-
-    # 3) 일반 바이너리 파일은 get_media로 다운로드
+    # 일반 바이너리
     try:
         req = svc.files().get_media(fileId=file_id)
         buf = io.BytesIO()
-        from googleapiclient.http import MediaIoBaseDownload  # 지연 임포트
-        downloader = MediaIoBaseDownload(buf, req)
+        dl = MediaIoBaseDownload(buf, req)
         done = False
         while not done:
-            status, done = downloader.next_chunk()
+            status, done = dl.next_chunk()
         return buf.getvalue()
     except Exception as e:
         print(f"[drive][warn] get_media failed for {name} ({mime}): {type(e).__name__}: {e}")
         return b""
-# [03] DRIVE HELPERS — END
 
-
-# [04] TEXT & CHUNK BUILDERS (PLACEHOLDER / YOUR PIPELINE) — START
-def _extract_text_from_bytes(name: str, data: bytes) -> str:
-    """
-    실제 구현체에 맞게 교체하세요.
-    여기서는 단순 UTF-8 디코딩 시도 -> 실패 시 빈 문자열.
-    """
-    try:
-        return data.decode("utf-8", errors="ignore")
-    except Exception:
-        return ""
-
-def _to_chunks(name: str, text: str, meta: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """
-    실제 청크 분해 규칙에 맞게 교체하세요.
-    여기서는 간단히 줄 단위 분해 예시.
-    """
-    out: List[Dict[str, Any]] = []
-    for i, line in enumerate(text.splitlines()):
-        line = line.strip()
-        if not line:
-            continue
-        out.append({
-            "text": line,
-            "meta": {
-                **meta,
-                "line_index": i,
-            }
-        })
-    return out
-# [04] TEXT & CHUNK BUILDERS — END
-
-
-# [05] LOCAL STORE HELPERS — START
+# ── Local store helpers ──────────────────────────────────────────────────────
 def _persist_write_json(obj: Any, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -212,50 +137,102 @@ def _gzip_file(src: Path, dst: Optional[Path] = None, compresslevel: int = 6) ->
     with src.open("rb") as fr, gzip.open(dst, "wb", compresslevel=compresslevel) as fw:
         shutil.copyfileobj(fr, fw)
     return dst
-# [05] LOCAL STORE HELPERS — END
 
+# ── Text & chunk builders (ZIP 지원 추가) ────────────────────────────────────
+def _extract_text_from_bytes(name: str, data: bytes) -> str:
+    # 간단 텍스트 추출기(UTF-8). 필요 시 PDF 등 확장 가능.
+    if not data:
+        return ""
+    # 매우 큰 바이너리는 잘라서 방어
+    if len(data) > 64 * 1024 * 1024:
+        data = data[:64 * 1024 * 1024]
+    try:
+        return data.decode("utf-8", errors="ignore")
+    except Exception:
+        return ""
 
-# [06] QUALITY REPORT (CURRENT SCHEMA) — START
-def _quality_report(manifest: Dict[str, Any], *, extra_counts: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    현재 청크 구조(meta.*)에 맞춘 간단 리포트.
-    - 문서 수, 청크 수, 파일명/파일ID 분포, meta.page_approx 유무 등
-    """
-    docs = manifest.get("docs", [])
-    chunks = manifest.get("chunks", [])
-    doc_count = len(docs)
-    chunk_count = len(chunks)
+def _extract_texts_from_zip(zip_bytes: bytes, zip_name: str) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    if not zip_bytes:
+        return out
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as z:
+        for info in z.infolist():
+            if info.is_dir():
+                continue
+            inner = info.filename
+            inner_lower = inner.lower()
+            if not (inner_lower.endswith(".txt")
+                    or inner_lower.endswith(".md")
+                    or inner_lower.endswith(".csv")
+                    or inner_lower.endswith(".pdf")):
+                # 텍스트/문서 외는 스킵
+                continue
+            try:
+                data = z.read(info)
+            except Exception:
+                continue
+            text = ""
+            if inner_lower.endswith(".pdf"):
+                # PDF는 가능하면 PyPDF2로 추출, 없으면 스킵
+                try:
+                    from PyPDF2 import PdfReader  # type: ignore
+                    import io as _io
+                    reader = PdfReader(_io.BytesIO(data))
+                    pages = []
+                    for p in reader.pages:
+                        try:
+                            pages.append(p.extract_text() or "")
+                        except Exception:
+                            pages.append("")
+                    text = "\n".join(pages)
+                except Exception:
+                    # 의존성 없으면 텍스트 추출 생략
+                    text = ""
+            else:
+                text = _extract_text_from_bytes(inner, data)
+            if not text.strip():
+                continue
+            out.append({
+                "name": f"{zip_name}::{inner}",
+                "text": text
+            })
+    return out
 
+def _to_chunks(name: str, text: str, meta: Dict[str, Any]) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for i, line in enumerate(text.splitlines()):
+        line = line.strip()
+        if not line:
+            continue
+        out.append({
+            "text": line,
+            "meta": {**meta, "line_index": i},
+        })
+    return out
+
+# ── Quality report ───────────────────────────────────────────────────────────
+def _quality_report(docs: List[Dict[str, Any]], chunks_rows: List[Dict[str, Any]], *,
+                    extra_counts: Dict[str, Any]) -> Dict[str, Any]:
     meta_fields = {
-        "file_name": 0,
-        "file_id": 0,
-        "mimeType": 0,
-        "page_approx": 0,
+        "file_name": 0, "file_id": 0, "mimeType": 0, "page_approx": 0
     }
-    for c in chunks:
+    for c in chunks_rows:
         m = c.get("meta", {})
         if "file_name" in m: meta_fields["file_name"] += 1
         if "file_id"   in m: meta_fields["file_id"]   += 1
         if "mimeType"  in m: meta_fields["mimeType"]  += 1
         if "page_approx" in m: meta_fields["page_approx"] += 1
-
     return {
         "stats": {
-            "documents": doc_count,
-            "chunks": chunk_count,
+            "documents": len(docs),
+            "chunks": len(chunks_rows),
             **{f"meta_has_{k}": v for k, v in meta_fields.items()},
         },
         "extra": extra_counts or {},
     }
-# [06] QUALITY REPORT — END
 
-
-# [07] BACKUP ZIP (DRIVE-AGNOSTIC LOCAL + (선택)REMOTE) — START
+# ── Backup ZIP to Drive (optional) ───────────────────────────────────────────
 def _make_and_upload_backup_zip(svc, backup_folder_id: Optional[str]) -> Optional[str]:
-    """
-    로컬 백업 zip 생성 후, (있다면) Drive에 업로드합니다.
-    GitHub Releases 백업 정책은 별도 모듈(src.backup.github_release)에서 처리합니다.
-    """
     ts = _now_tag()
     zip_path = BACKUP_DIR / f"maic_backup_{ts}.zip"
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as z:
@@ -266,177 +243,118 @@ def _make_and_upload_backup_zip(svc, backup_folder_id: Optional[str]) -> Optiona
     uploaded_id = None
     try:
         if svc and backup_folder_id:
-            media = MediaIoBaseUpload(
-                io.BytesIO(zip_path.read_bytes()), mimetype="application/zip", resumable=True
-            )
+            media = MediaIoBaseUpload(io.BytesIO(zip_path.read_bytes()), mimetype="application/zip", resumable=True)
             meta = {"name": zip_path.name, "parents": [backup_folder_id]}
             f = svc.files().create(body=meta, media_body=media, fields="id").execute()
             uploaded_id = f.get("id")
     except Exception as e:
-        # 업로드 실패는 치명적이지 않음 — 로컬 zip만 있어도 OK
         print(f"[backup][warn] drive upload failed: {type(e).__name__}: {e}")
     return uploaded_id
-# [07] BACKUP ZIP — END
 
-
-# [08] BUILD PIPELINE CORE — START
-def _build_from_prepared(svc, prepared_folder_id: str) -> Tuple[int, int, Dict[str, Any], Dict[str, Any]]:
-    """
-    prepared 폴더의 모든 파일을 스캔 → 텍스트 추출 → 청크 생성 → manifest/chunks 반환.
-    실제 구현에서는 변경 감지(delta)·MIME별 처리·PDF 페이지수 계산 등을 적용하세요.
-    """
+# ── Build core (ZIP 지원 포함) ───────────────────────────────────────────────
+def _build_from_prepared(svc, prepared_folder_id: str) -> Tuple[int, int, Dict[str, Any], Dict[str, Any], List[Dict[str, Any]]]:
     files = _list_files_in_folder(svc, prepared_folder_id)
     docs_summary: List[Dict[str, Any]] = []
-    all_chunks: List[Dict[str, Any]] = []
+    chunk_rows: List[Dict[str, Any]] = []
 
     for f in files:
-        fid = f["id"]
-        name = f.get("name", fid)
-        mime = f.get("mimeType", "")
+        fid = f["id"]; name = f.get("name", fid); mime = f.get("mimeType", "")
         data = _download_file_bytes(svc, fid)
+
+        if (mime == "application/zip") or name.lower().endswith(".zip"):
+            # ZIP → 내부 텍스트/문서 추출
+            extracted = _extract_texts_from_zip(data, name)
+            for item in extracted:
+                meta = {"file_id": f"{fid}:{item['name']}", "file_name": item["name"], "mimeType": "text/plain", "page_approx": None}
+                chunk_rows.extend(_to_chunks(item["name"], item["text"], meta))
+            docs_summary.append({
+                "id": fid, "name": name, "mimeType": mime, "size": f.get("size"), "md5": f.get("md5Checksum"),
+                "expanded_from_zip": len(extracted)
+            })
+            continue
+
         text = _extract_text_from_bytes(name, data)
-        meta = {
-            "file_id": fid,
-            "file_name": name,
-            "mimeType": mime,
-            "page_approx": None,  # 필요 시 빠른 페이지수 추정 로직 연결
-        }
-        chunks = _to_chunks(name, text, meta)
-        if chunks:
-            all_chunks.extend(chunks)
+        meta = {"file_id": fid, "file_name": name, "mimeType": mime, "page_approx": None}
+        chunk_rows.extend(_to_chunks(name, text, meta))
         docs_summary.append({
-            "id": fid, "name": name, "mimeType": mime, "size": f.get("size"), "md5": f.get("md5Checksum")
+            "id": fid, "name": name, "mimeType": mime, "size": f.get("size"), "md5": f.get("md5Checksum"),
         })
 
     manifest = {
         "built_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
         "docs": docs_summary,
-        "stats": {"documents": len(docs_summary), "chunks": len(all_chunks)},
     }
-    extra = {"processed_files": len(docs_summary), "generated_chunks": len(all_chunks)}
-    return len(docs_summary), len(all_chunks), manifest, extra
-# [08] BUILD PIPELINE CORE — END
-# ===== [08A] DELTA DETECTION UTILS — START ==================================
-from typing import Any, Dict, List, Tuple
+    extra = {"processed_files": len(docs_summary), "generated_chunks": len(chunk_rows)}
+    return len(docs_summary), len(chunk_rows), manifest, extra, chunk_rows
 
-def scan_drive_listing(svc, folder_id: str) -> List[Dict[str, Any]]:
-    """
-    prepared 폴더의 파일 목록을 id/name/mimeType/modifiedTime/md5Checksum 중심으로 스냅샷.
-    """
-    files: List[Dict[str, Any]] = []
-    page_token = None
-    while True:
-        res = svc.files().list(
-            q=f"'{folder_id}' in parents and trashed=false",
-            fields="nextPageToken, files(id,name,mimeType,modifiedTime,md5Checksum,size)",
-            pageSize=1000,
-            pageToken=page_token
-        ).execute()
-        files.extend(res.get("files", []))
-        page_token = res.get("nextPageToken")
-        if not page_token:
-            break
-    return files
-
-def diff_with_manifest(snapshot: List[Dict[str, Any]], manifest_docs: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
-    """
-    Drive 스냅샷 vs manifest.docs 비교 → added/changed/removed
-    비교 키: id, md5Checksum(없으면 modifiedTime)
-    """
-    by_id_snap = {f["id"]: f for f in snapshot if "id" in f}
-    by_id_man  = {d.get("id"): d for d in manifest_docs if d.get("id")}
-
-    added, changed, removed = [], [], []
-    # added/changed
-    for fid, f in by_id_snap.items():
-        m = by_id_man.get(fid)
-        if not m:
-            added.append(f); continue
-        # 변경 판단: md5 또는 modifiedTime 비교
-        if (f.get("md5Checksum") and m.get("md5") and f.get("md5Checksum") != m.get("md5")) \
-           or (f.get("modifiedTime") and m.get("modifiedTime") and f.get("modifiedTime") != m.get("modifiedTime")):
-            changed.append(f)
-    # removed
-    for fid, m in by_id_man.items():
-        if fid not in by_id_snap:
-            removed.append(m)
-
-    return {"added": added, "changed": changed, "removed": removed}
-# ===== [08A] DELTA DETECTION UTILS — END ====================================
-
-
-# [09] FOLDER RESOLUTION — START
 def _resolve_ids(svc, gdrive_folder_id: str) -> Tuple[str, str]:
     prepared_id = _find_folder_id("PREPARED", fallback=gdrive_folder_id)
     backup_id   = _find_folder_id("BACKUP") or prepared_id
     if not prepared_id:
         raise KeyError("prepared 폴더 ID를 찾지 못했습니다.")
     return prepared_id, backup_id
-# [09] FOLDER RESOLUTION — END
 
-
-# [10] PUBLIC ENTRY (빌드 실행; 서비스계정 + GitHub Release 업로드) — START
+# ── Public entry ─────────────────────────────────────────────────────────────
 def build_index_with_checkpoint(
     update_pct: Callable[[int, Optional[str]], None],
     update_msg: Callable[[str], None],
     gdrive_folder_id: str,
-    gcp_creds: Mapping[str, object],          # 호환성 유지용 (미사용)
-    persist_dir: str,                          # 호환성 유지용 (사용하되 기본은 PERSIST_DIR)
+    gcp_creds: Mapping[str, object],
+    persist_dir: str,
     remote_manifest: Dict[str, Dict[str, object]],
     should_stop: Optional[Callable[[], bool]] = None,
 ) -> Dict[str, Any]:
-
-    # 메시지/퍼센트 헬퍼
     def pct(v: int, m: Optional[str] = None): _pct(update_pct, v, m)
     def msg(s: str): _msg(update_msg, s)
 
-    # 준비
     msg("🔐 Connecting Google Drive (service account)…")
     svc = _drive_client()
     pct(5, "drive-ready")
 
     prepared_id, backup_id = _resolve_ids(svc, gdrive_folder_id)
 
-    # 빌드
     msg("📦 Scanning prepared folder and building chunks…")
-    processed, chunks, manifest, stats = _build_from_prepared(svc, prepared_id)
-    pct(70, f"processed={processed}, chunks={chunks}")
+    processed, chunks_cnt, manifest, stats, chunk_rows = _build_from_prepared(svc, prepared_id)
+    pct(70, f"processed={processed}, chunks={chunks_cnt}")
 
     if should_stop and should_stop():
         return {"ok": False, "stopped": True}
 
-    # 로컬 저장
+    # write local
     msg("🧮 Writing manifest/chunks locally…")
     out_dir = PERSIST_DIR
     out_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = out_dir / "manifest.json"
     chunks_path   = out_dir / "chunks.jsonl"
     _persist_write_json(manifest, manifest_path)
-    _persist_write_jsonl(manifest.get("chunks", []) or [], chunks_path)  # 현재 예시에서는 빈 리스트
+    _persist_write_jsonl(chunk_rows, chunks_path)
 
-    # 품질 리포트
+    # quality report
     msg("📊 Building quality report…")
-    report = _quality_report({"docs": manifest.get("docs", []), "chunks": manifest.get("chunks", []) or []}, extra_counts=stats)
+    report = _quality_report(manifest.get("docs", []), chunk_rows, extra_counts=stats)
     pct(85, "report-ready")
 
-    # 로컬/드라이브 백업 ZIP
+    # backup to Drive (optional)
     msg("⬆️ Uploading backup zip…")
     uploaded_id = _make_and_upload_backup_zip(svc, backup_id)
     pct(92, "backup-zip-uploaded")
 
-    # GitHub Releases 업로드 (항상 .gz 생성 후 업로드)
+    # GitHub Releases upload
     try:
-        gz_path = _gzip_file(chunks_path)  # chunks.jsonl.gz 생성/갱신
         from src.backup.github_release import upload_index_release
+        # ensure gzip
+        _ = (chunks_path.with_suffix(chunks_path.suffix + ".gz"))
+        if (not _.exists()) or (_.stat().st_mtime < chunks_path.stat().st_mtime):
+            _gzip_file(chunks_path, _)
         msg("🚀 Publishing index to GitHub Releases…")
         res = upload_index_release(
             manifest_path=manifest_path,
-            chunks_jsonl_path=chunks_path,  # 함수 내부에서 .gz 생성하지만, 이미 우리가 생성했음
+            chunks_jsonl_path=chunks_path,
             include_zip=False,
             keep=2,
             build_meta={
                 "processed_files": processed,
-                "generated_chunks": chunks,
+                "generated_chunks": chunks_cnt,
                 "prepared_folder_id": prepared_id,
             },
         )
@@ -445,11 +363,10 @@ def build_index_with_checkpoint(
         msg(f"⚠️ GitHub 업로드 실패: {type(e).__name__}: {e}")
 
     pct(100, "done")
-
     return {
         "ok": True,
         "processed_files": processed,
-        "generated_chunks": chunks,
+        "generated_chunks": chunks_cnt,
         "stats": stats,
         "report": report,
         "backup_zip_id": uploaded_id,
@@ -458,6 +375,4 @@ def build_index_with_checkpoint(
         "auth_mode": "service-account",
         "persist_dir": str(PERSIST_DIR),
     }
-# [10] PUBLIC ENTRY — END
-
-# =========================== index_build.py — END ============================
+# ===================== src/rag/index_build.py — END ==========================
