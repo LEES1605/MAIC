@@ -291,51 +291,132 @@ def _render_admin_panels() -> None:
         st.text_area("최근 오류", value=txt, height=180)
         st.download_button("로그 다운로드", data=txt.encode("utf-8"), file_name="app_error_log.txt")
 
-# ==== [10] 설명 모드: 미니멀 세그먼트 버튼 + 채팅 패널 =======================
+# ==== [10] 설명 모드: 미니멀 세그먼트 버튼(파스텔) + 커스텀 채팅 UI ==========
+def _inject_minimal_styles_once():
+    if st.session_state.get("_minimal_styles_injected"):
+        return
+    st.session_state["_minimal_styles_injected"] = True
+    st.markdown("""
+    <style>
+      /* --- 세그먼트 버튼 컨테이너 --- */
+      .seg-wrap { display:flex; gap:8px; justify-content:space-between; }
+      .seg-btn {
+        flex:1; text-align:center; padding:10px 12px;
+        border:2px solid #bcdcff; border-radius:14px;
+        background:#ffffff; color:#111; font-weight:600;
+        text-decoration:none; user-select:none; display:block;
+      }
+      .seg-btn:hover { background:#f5fbff; }
+      .seg-btn.selected {
+        background:#a7d8ff;              /* 선택: 파스텔 하늘색 */
+        border-color:#89c8ff;
+      }
+      .seg-btn.disabled {
+        background:#eeeeee; color:#888; border-color:#dddddd; pointer-events:none;
+      }
+
+      /* --- 채팅 박스(학생 화면 전체) --- */
+      .chat-box {
+        border:2px solid #bcdcff;
+        background:#e6f7ff;              /* 연한 파스텔 하늘색 */
+        padding:12px; border-radius:16px;
+      }
+      .bubble { 
+        max-width:92%; padding:10px 12px; border-radius:14px; margin:6px 0; 
+        line-height:1.5; font-size:1rem; 
+      }
+      .user  { background:#fff7cc; margin-left:auto; }  /* 학생(오른쪽): 연한 노랑 */
+      .ai    { background:#d9f7d9;  margin-right:auto; } /* AI(왼쪽): 연한 초록 */
+      .row   { display:flex; }
+      .row.user { justify-content:flex-end; }
+      .row.ai   { justify-content:flex-start; }
+    </style>
+    """, unsafe_allow_html=True)
+
+def _load_modes_cfg_safe() -> Dict[str, Any]:
+    """허용/기본 모드 설정 로드(헬퍼가 있으면 사용, 없으면 기본값)."""
+    defaults = {"allowed": ["문법설명","문장구조분석","지문분석"], "default": "문법설명"}
+    try:
+        if '_load_modes_cfg' in globals() and callable(globals()['_load_modes_cfg']):
+            if '_sanitize_modes_cfg' in globals() and callable(globals()['_sanitize_modes_cfg']):
+                return globals()['_sanitize_modes_cfg'](globals()['_load_modes_cfg']())
+            return globals()['_load_modes_cfg']()
+        # 헬퍼 부재 시 파일 직접 로드
+        p = PERSIST_DIR / "explain_modes.json"
+        if not p.exists(): return defaults
+        obj = json.loads(p.read_text(encoding="utf-8") or "{}")
+        modes = ["문법설명","문장구조분석","지문분석"]
+        allowed = [m for m in (obj.get("allowed") or []) if m in modes]
+        default = obj.get("default") or "문법설명"
+        if default not in modes: default = "문법설명"
+        return {"allowed": allowed, "default": default}
+    except Exception:
+        return defaults
+
+def _apply_mode_from_query(admin: bool, allowed: set[str], default_mode: str):
+    """?mode= 파라미터로 들어온 선택을 반영(학생은 허용 모드만)."""
+    try:
+        qp = st.query_params
+        if "mode" not in qp: 
+            return
+        wanted = qp.get("mode")
+        if isinstance(wanted, list): wanted = wanted[-1] if wanted else None
+        if not wanted: 
+            return
+        # 허용 여부 체크
+        if admin or (wanted in allowed):
+            st.session_state["qa_mode_radio"] = wanted
+        # 파라미터 정리(화면 깔끔 유지)
+        try:
+            del qp["mode"]
+        except Exception:
+            pass
+    except Exception:
+        pass
+
 def _render_mode_controls_minimal(*, admin: bool) -> str:
     """
-    - 학생: 세 모드 모두 보이되, 관리자가 끈 모드는 비활성(회색).
-    - 관리자: 항상 세 모드 모두 활성.
-    - 라벨/아이콘 없음. 선택된 버튼은 ' · 선택' 접미사로만 표시(미니멀).
-    반환: 현재 선택된 모드 문자열.
+    세 모드 모두 노출, 관리자가 끈 모드는 회색/비활성.
+    선택은 pastel 하늘색 버튼으로 강조. (라벨/아이콘 없음)
     """
+    _inject_minimal_styles_once()
     ss = st.session_state
-
-    # 관리자 허용 설정 로드 (기존 헬퍼 사용 가정)
-    try:
-        cfg = _sanitize_modes_cfg(_load_modes_cfg())  # allowed, default 포함
-    except Exception:
-        cfg = {"allowed": ["문법설명","문장구조분석","지문분석"], "default": "문법설명"}
-
+    cfg = _load_modes_cfg_safe()
     allowed: set[str] = set(cfg.get("allowed", []))
-    modes = ["문법설명","문장구조분석","지문분석"]
+    default_mode = cfg.get("default", "문법설명")
+    cur = ss.get("qa_mode_radio") or default_mode
 
-    # 현재 선택 모드
-    cur = ss.get("qa_mode_radio") or cfg.get("default", "문법설명")
+    # 쿼리 파라미터에 모드가 온 경우 반영
+    _apply_mode_from_query(admin, allowed, default_mode)
 
-    # 학생이 비허용 모드에 있으면 폴백(default)으로 교정
+    # 학생이 비허용 모드에 있다면 폴백
+    cur = ss.get("qa_mode_radio") or default_mode
     if (not admin) and (cur not in allowed) and allowed:
-        cur = cfg.get("default", "문법설명")
+        cur = default_mode
         ss["qa_mode_radio"] = cur
 
-    # 3분할 미니멀 버튼(라벨/아이콘/캡션 없음)
-    c1, c2, c3 = st.columns(3)
-    layout = [(c1, "문법설명"), (c2, "문장구조분석"), (c3, "지문분석")]
-    clicked = None
-
-    for col, label in layout:
-        disabled = False if admin else (label not in allowed)
-        # 선택된 항목만 ' · 선택' 접미사로 아주 최소한의 시각 피드백
-        btn_text = f"{label} · 선택" if cur == label else label
+    # 세그먼트 버튼 렌더(링크 방식으로 클릭 처리)
+    base_url = ""  # 현재 페이지 그대로
+    modes = ["문법설명","문장구조분석","지문분석"]
+    cols = st.columns(3)
+    html_segments = []
+    for col, label in zip(cols, modes):
+        selected = (cur == label)
+        is_disabled = False if admin else (label not in allowed)
+        cls = "seg-btn"
+        if selected:   cls += " selected"
+        if is_disabled: cls += " disabled"
+        # 허용/관리자일 때만 클릭 가능 링크로 렌더
+        if not is_disabled:
+            href = f"{base_url}?mode={label}"
+            btn_html = f'<a class="{cls}" href="{href}">{label}</a>'
+        else:
+            btn_html = f'<span class="{cls} disabled">{label}</span>'
         with col:
-            if st.button(btn_text, key=f"mode_btn_{label}", use_container_width=True, disabled=disabled):
-                clicked = label
+            st.markdown(f'<div class="seg-wrap">{btn_html}</div>', unsafe_allow_html=True)
 
-    if clicked:
-        ss["qa_mode_radio"] = clicked
-        cur = clicked
-    return cur
-
+    # 최종 현재 모드 반환
+    return ss.get("qa_mode_radio", default_mode)
 
 def _llm_call(prompt: str, system: Optional[str] = None) -> Dict[str, Any]:
     if _llm.get("call_with_fallback"):
@@ -345,7 +426,6 @@ def _llm_call(prompt: str, system: Optional[str] = None) -> Dict[str, Any]:
             temperature=0.3, max_tokens=800
         )
     return {"ok": False, "error": "LLM providers 모듈 미탑재"}
-
 
 def _render_chat_panel() -> None:
     if st is None:
@@ -369,15 +449,14 @@ def _render_chat_panel() -> None:
     if not ready:
         _manual_restore_cta()
 
-    # 대화 히스토리
-    with st.container(border=True):
-        for m in ss["chat"]:
-            if m["role"] == "user":
-                with st.chat_message("user", avatar="🧑"):
-                    st.markdown(m["text"])
-            else:
-                with st.chat_message("assistant", avatar="🤖"):
-                    st.markdown(m["text"])
+    # === 커스텀 채팅 상자(테두리 + 파스텔 하늘색 배경) ===
+    st.markdown('<div class="chat-box">', unsafe_allow_html=True)
+    for m in ss["chat"]:
+        if m["role"] == "user":
+            st.markdown(f'<div class="row user"><div class="bubble user">{m["text"]}</div></div>', unsafe_allow_html=True)
+        else:
+            st.markdown(f'<div class="row ai"><div class="bubble ai">{m["text"]}</div></div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
 
     # 입력 + 호출
     user_q = st.chat_input("질문을 입력하세요")
@@ -388,29 +467,26 @@ def _render_chat_panel() -> None:
     ss["chat"].append({"id": msg_id, "role": "user", "text": user_q})
 
     # 현재 모드(없으면 default)
-    try:
-        cfg = _sanitize_modes_cfg(_load_modes_cfg())
-    except Exception:
-        cfg = {"allowed": ["문법설명","문장구조분석","지문분석"], "default": "문법설명"}
-
+    cfg = _load_modes_cfg_safe()
     mode = ss.get("qa_mode_radio") or cfg.get("default", "문법설명")
     system_prompt = "너는 한국의 영어학원 원장처럼, 따뜻하고 명확하게 설명한다."
     prompt = f"[모드:{mode}]\n{user_q}"
 
-    with st.chat_message("assistant", avatar="🤖"):
-        slot = st.empty()
+    with st.spinner("생성 중..."):
         try:
             res = _llm_call(prompt, system_prompt)
             if res.get("ok"):
                 text = (res.get("text") or "").strip()
                 ss["chat"].append({"id": msg_id+1, "role":"assistant", "text": text, "provider": res.get("provider")})
-                slot.markdown(text)
             else:
-                slot.error(f"생성 실패: {res.get('error')}")
+                ss["chat"].append({"id": msg_id+1, "role":"assistant", "text": f"생성 실패: {res.get('error')}"})
                 _errlog(f"LLM 실패: {res.get('error')}", where="[qa_llm]")
         except Exception as e:
-            slot.error(f"예외: {type(e).__name__}: {e}")
+            ss["chat"].append({"id": msg_id+1, "role":"assistant", "text": f"예외: {type(e).__name__}: {e}"})
             _errlog(f"LLM 예외: {e}", where="[qa_llm]", exc=e)
+
+    # 새로 그려서 말풍선 반영
+    st.rerun()
 # =========================== [10] END =======================================
 
 
