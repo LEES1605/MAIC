@@ -379,4 +379,18 @@ def build_index_with_checkpoint(
         "auth_mode": "service-account",
         "persist_dir": str(PERSIST_DIR),
     }
+# ======= [APPEND] compatibility shim for ui_orchestrator =====================
+def quick_precheck() -> dict:
+    """
+    간단 사전 점검: 로컬 persist 디렉토리와 준비 상태 반환.
+    ui_orchestrator가 임포트만 해도 안전하게 동작하도록 호환 제공.
+    """
+    try:
+        persist = str(PERSIST_DIR)
+        ready = (PERSIST_DIR / "chunks.jsonl").exists() or (PERSIST_DIR / ".ready").exists()
+        return {"ok": True, "persist_dir": persist, "ready": bool(ready)}
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+# ============================================================================ 
+
 # ===================== src/rag/index_build.py — END ==========================
