@@ -224,7 +224,11 @@ def _render_admin_panels() -> None:
 
     st.markdown("## 관리자: 자료/인덱스 관리")
     if _ui_orch.get("render_index_orchestrator_panel"):
-        _ui_orch["render_index_orchestrator_panel"]()
+        try:
+            _ui_orch["render_index_orchestrator_panel"]()
+        except Exception as e:
+            st.error(f"오케스트레이터 패널 오류: {type(e).__name__}: {e}")
+            _errlog(f"ui_orchestrator error: {e}", where="[admin_panel]", exc=e)
     else:
         st.info("오케스트레이터 모듈이 없습니다: src.ui_orchestrator")
 
