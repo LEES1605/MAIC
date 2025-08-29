@@ -123,7 +123,7 @@ _gh      = _try_import("src.backup.github_release", ["restore_latest"])
 _rag     = _try_import("src.rag.index_build", ["build_index_with_checkpoint"])
 _llm     = _try_import("src.llm.providers", ["call_with_fallback"])
 
-# [06] 페이지 설정 & 헤더/로그인 토글 =========================================
+# ==== [06] 페이지 설정 & 헤더 + 로그인 토글 =================================
 if st:
     st.set_page_config(page_title="LEES AI Teacher", layout="wide")
 
@@ -139,67 +139,20 @@ def _header():
         return
     left, right = st.columns([0.8, 0.2])
     with left:
-        st.markdown("### LEES AI Teacher")  # 타이틀
+        st.markdown("### LEES AI Teacher")
     with right:
         if _is_admin_view():
             status = "🟢 준비완료" if _is_brain_ready() else "🟡 준비중"
             st.markdown(f"**{status}**")
             st.button("관리자", on_click=_toggle_login_flag, use_container_width=True)
         else:
-            # 학생 화면은 상태/버튼 모두 숨김(요청 반영)
-            st.empty()
+            # 학생 화면: 상태 텍스트는 감추되 '관리자' 진입 버튼은 유지
+            st.button("관리자", on_click=_toggle_login_flag, use_container_width=True)
     if _import_warns:
         with st.expander("임포트 경고", expanded=False):
             for w in _import_warns:
                 st.code(w, language="text")
     st.divider()
-
-def _login_panel_if_needed():
-    """학생 화면에서도 열 수 있는 고정형 로그인 패널(헤더 아래)."""
-    if st is None:
-        return
-    if not st.session_state.get("_show_admin_login", False):
-        return
-    pwd_set = os.getenv("APP_ADMIN_PASSWORD") or _from_secrets("APP_ADMIN_PASSWORD", "0000") or "0000"
-    with st.container(border=True):
-        st.markdown("#### 관리자 로그인")
-        pw = st.text_input("비밀번호", type="password")
-        col_a, col_b = st.columns([0.2, 0.8])
-        with col_a:
-            if st.button("로그인", type="primary"):
-                if pw and pw == str(pwd_set):
-                    st.session_state["admin_mode"] = True
-                    st.session_state["_show_admin_login"] = False
-                    st.success("로그인 성공")
-                    st.rerun()
-                else:
-                    st.error("비밀번호가 올바르지 않습니다.")
-        with col_b:
-            st.caption("")
-
-def _manual_restore_cta():
-    """두뇌가 준비되지 않았을 때, 관리자에게만 복원 버튼 제공."""
-    if st is None or not _is_admin_view():
-        return
-    if _is_brain_ready():
-        return
-    with st.container(border=True):
-        c1, c2 = st.columns([0.65, 0.35])
-        with c1:
-            st.info("두뇌가 아직 준비되지 않았어요. 최신 GitHub Releases에서 복원할 수 있어요.")
-        with c2:
-            if st.button("최신 릴리스에서 복원", type="primary", use_container_width=True):
-                try:
-                    ok = bool(_gh.get("restore_latest") and _gh["restore_latest"](dest_dir=PERSIST_DIR))
-                    if ok:
-                        _mark_ready()
-                        st.success("복원 완료! 잠시 후 새로고침됩니다.")
-                        st.rerun()
-                    else:
-                        st.error("복원 실패: Releases의 manifest/chunks를 확인하세요.")
-                except Exception as e:
-                    _errlog(f"manual restore failed: {e}", where="[manual_restore]", exc=e)
-                    st.error(f"예외: {type(e).__name__}: {e}")
 
 # [07] 자동 시작(선택) =========================================================
 def _auto_start_once():
