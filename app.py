@@ -123,7 +123,7 @@ _gh      = _try_import("src.backup.github_release", ["restore_latest"])
 _rag     = _try_import("src.rag.index_build", ["build_index_with_checkpoint"])
 _llm     = _try_import("src.llm.providers", ["call_with_fallback"])
 
-# ==== [06] 페이지 설정 & 헤더 + 로그인 토글 =================================
+# [06] 페이지 설정 & 헤더 + 로그인 토글 =========================================
 if st:
     st.set_page_config(page_title="LEES AI Teacher", layout="wide")
 
@@ -139,20 +139,68 @@ def _header():
         return
     left, right = st.columns([0.8, 0.2])
     with left:
-        st.markdown("### LEES AI Teacher")
+        st.markdown("### LEES AI Teacher")  # 타이틀
     with right:
-        if _is_admin_view():
-            status = "🟢 준비완료" if _is_brain_ready() else "🟡 준비중"
-            st.markdown(f"**{status}**")
-            st.button("관리자", on_click=_toggle_login_flag, use_container_width=True)
-        else:
-            # 학생 화면: 상태 텍스트는 감추되 '관리자' 진입 버튼은 유지
-            st.button("관리자", on_click=_toggle_login_flag, use_container_width=True)
+        # 학생 화면에도 '관리자' 버튼은 항상 노출
+        if _is_brain_ready() and _is_admin_view():
+            st.markdown("**🟢 준비완료**")
+        elif _is_admin_view():
+            st.markdown("**🟡 준비중**")
+        st.button("관리자", on_click=_toggle_login_flag, use_container_width=True)
     if _import_warns:
         with st.expander("임포트 경고", expanded=False):
             for w in _import_warns:
                 st.code(w, language="text")
     st.divider()
+
+def _login_panel_if_needed():
+    """헤더 아래 관리자 로그인 패널(학생/관리자 공통 토글)."""
+    if st is None:
+        return
+    if not st.session_state.get("_show_admin_login", False):
+        return
+    pwd_set = os.getenv("APP_ADMIN_PASSWORD") or _from_secrets("APP_ADMIN_PASSWORD", "0000") or "0000"
+    with st.container(border=True):
+        st.markdown("#### 관리자 로그인")
+        pw = st.text_input("비밀번호", type="password")
+        c1, c2 = st.columns([0.18, 0.82])
+        with c1:
+            if st.button("로그인", type="primary", use_container_width=True):
+                if pw and pw == str(pwd_set):
+                    st.session_state["admin_mode"] = True
+                    st.session_state["_show_admin_login"] = False
+                    st.success("로그인 성공")
+                    st.rerun()
+                else:
+                    st.error("비밀번호가 올바르지 않습니다.")
+        with c2:
+            if st.button("닫기", use_container_width=True):
+                st.session_state["_show_admin_login"] = False
+                st.rerun()
+
+def _manual_restore_cta():
+    """두뇌가 준비되지 않았을 때, 관리자에게만 복원 버튼 제공."""
+    if st is None or not _is_admin_view():
+        return
+    if _is_brain_ready():
+        return
+    with st.container(border=True):
+        c1, c2 = st.columns([0.65, 0.35])
+        with c1:
+            st.info("두뇌가 아직 준비되지 않았어요. 최신 GitHub Releases에서 복원할 수 있어요.")
+        with c2:
+            if st.button("최신 릴리스에서 복원", type="primary", use_container_width=True):
+                try:
+                    ok = bool(_gh.get("restore_latest") and _gh["restore_latest"](dest_dir=PERSIST_DIR))
+                    if ok:
+                        _mark_ready()
+                        st.success("복원 완료! 잠시 후 새로고침됩니다.")
+                        st.rerun()
+                    else:
+                        st.error("복원 실패: Releases의 manifest/chunks를 확인하세요.")
+                except Exception as e:
+                    _errlog(f"manual restore failed: {e}", where="[manual_restore]", exc=e)
+                    st.error(f"예외: {type(e).__name__}: {e}")
 
 # [07] 자동 시작(선택) =========================================================
 def _auto_start_once():
@@ -174,7 +222,7 @@ def _auto_start_once():
         except Exception as e:
             _errlog(f"auto restore failed: {e}", where="[auto_start]", exc=e)
 
-# [08] 설명 모드 허용/기본값: 영속 설정(키=문법/문장/지문) =======================
+# [08] 설명 모드 허용/기본값(내부키=문법/문장/지문, 표시=어법/문장/지문, LLM토큰 매핑) ===
 def _modes_cfg_path() -> Path:
     return PERSIST_DIR / "explain_modes.json"
 
@@ -200,6 +248,9 @@ def _sanitize_modes_cfg(cfg: Dict[str, Any]) -> Dict[str, Any]:
     if default not in modes:
         default = "문법"
     return {"allowed": allowed, "default": default}
+
+_LABELS    = {"문법": "어법", "문장": "문장", "지문": "지문"}             # 표시 라벨
+_LLM_TOKEN = {"문법": "문법설명", "문장": "문장구조분석", "지문": "지문분석"}  # LLM 호출 토큰
 
 # [09] 관리자 패널 ==============================================================
 def _render_admin_panels() -> None:
@@ -250,13 +301,14 @@ def _render_admin_panels() -> None:
         st.text_area("최근 오류", value=txt, height=180)
         st.download_button("로그 다운로드", data=txt.encode("utf-8"), file_name="app_error_log.txt")
 
-# ==== [10] 학생 UI: 미니멀 모드 버튼 + 큰 파스텔 채팅(입력=chat_input) =========
+# [10] 학생 UI: 미니멀 모드 버튼 + 큰 파스텔 채팅(입력=chat_input) ==============
 def _inject_minimal_styles_once():
     if st.session_state.get("_minimal_styles_injected"):
         return
     st.session_state["_minimal_styles_injected"] = True
     st.markdown("""
     <style>
+      /* 세그먼트 버튼 스타일 */
       .seg-zone .stButton>button{
         width:100%; border:2px solid #bcdcff; border-radius:16px;
         background:#fff; color:#111; font-weight:700; padding:10px 12px;
@@ -265,19 +317,16 @@ def _inject_minimal_styles_once():
       .seg-zone .stButton>button:disabled{
         background:#eeeeee !important; color:#888 !important; border-color:#ddd !important;
       }
+      /* 채팅 박스 (대화 + 입력 포함) */
       .chat-box{ border:2px solid #bcdcff; background:#e6f7ff; padding:14px; border-radius:16px; min-height:360px; }
       .bubble{ max-width:92%; padding:10px 12px; border-radius:14px; margin:6px 0; line-height:1.55; font-size:1rem; }
-      .user{ background:#fff7cc; margin-left:auto; }
-      .ai{   background:#d9f7d9;  margin-right:auto; }
+      .user{ background:#fff7cc; margin-left:auto; }   /* 학생: 연노랑 */
+      .ai{   background:#d9f7d9;  margin-right:auto; }/* AI: 연초록 */
       .row{ display:flex; }
       .row.user{ justify-content:flex-end; }
       .row.ai{   justify-content:flex-start; }
     </style>
     """, unsafe_allow_html=True)
-
-_MODE_KEYS = ["문법", "문장", "지문"]
-_LABELS    = {"문법":"어법","문장":"문장","지문":"지문"}
-_LLM_TOKEN = {"문법":"문법설명","문장":"문장구조분석","지문":"지문분석"}
 
 def _render_mode_controls_minimal(*, admin: bool) -> str:
     _inject_minimal_styles_once()
@@ -285,42 +334,58 @@ def _render_mode_controls_minimal(*, admin: bool) -> str:
     cfg = _sanitize_modes_cfg(_load_modes_cfg())
     allowed: set[str] = set(cfg["allowed"])
     default_mode = cfg["default"]
+
+    # 현재 선택
     cur = ss.get("qa_mode_radio") or default_mode
     if (not admin) and (cur not in allowed) and allowed:
-        cur = default_mode; ss["qa_mode_radio"] = cur
+        cur = default_mode
+        ss["qa_mode_radio"] = cur
 
     with st.container():
         st.markdown('<div class="seg-zone"></div>', unsafe_allow_html=True)
         c1, c2, c3 = st.columns(3)
-        for col, key in zip([c1, c2, c3], _MODE_KEYS):
+        for col, key in zip([c1, c2, c3], ["문법", "문장", "지문"]):
             disabled = False if admin else (key not in allowed)
             with col:
-                btn = st.button(_LABELS[key], key=f"mode_btn_{key}", disabled=disabled,
+                btn = st.button({"문법":"어법","문장":"문장","지문":"지문"}[key],
+                                key=f"mode_btn_{key}",
+                                disabled=disabled,
                                 type=("primary" if cur == key else "secondary"))
                 if btn and (admin or (key in allowed)):
-                    ss["qa_mode_radio"] = key; cur = key; st.rerun()
+                    ss["qa_mode_radio"] = key
+                    cur = key
+                    st.rerun()
     return cur
 
 def _llm_call(prompt: str, system: Optional[str] = None) -> Dict[str, Any]:
     if _llm.get("call_with_fallback"):
-        return _llm["call_with_fallback"](prompt=prompt, system=system,
-                                          primary="gemini", secondary="openai",
-                                          temperature=0.3, max_tokens=800)
+        return _llm["call_with_fallback"](
+            prompt=prompt, system=system,
+            primary="gemini", secondary="openai",
+            temperature=0.3, max_tokens=800
+        )
     return {"ok": False, "error": "LLM providers 모듈 미탑재"}
 
 def _render_chat_panel() -> None:
-    if st is None: return
+    if st is None:
+        return
     ss = st.session_state
-    ss.setdefault("chat", []); ss.setdefault("_chat_next_id", 1)
+    ss.setdefault("chat", [])
+    ss.setdefault("_chat_next_id", 1)
 
-    ready = _is_brain_ready(); admin = _is_admin_view()
+    ready = _is_brain_ready()
+    admin = _is_admin_view()
 
+    # 상단 상태 + 모드 컨트롤
     with st.container(border=True):
         c1, c2 = st.columns([0.65, 0.35])
-        with c1: st.markdown(f"**{'🟢 준비완료' if ready else '🟡 준비중'}**")
-        with c2: _ = _render_mode_controls_minimal(admin=admin)
+        with c1:
+            st.markdown(f"**{'🟢 준비완료' if ready else '🟡 준비중'}**")
+        with c2:
+            _ = _render_mode_controls_minimal(admin=admin)
 
-    if not ready: _manual_restore_cta()
+    if not ready:
+        _manual_restore_cta()
 
     # 대화 영역 (큰 파스텔 박스)
     st.markdown('<div class="chat-box">', unsafe_allow_html=True)
@@ -333,28 +398,28 @@ def _render_chat_panel() -> None:
 
     # 입력: chat_input (엔터 전송 + 화살표 아이콘)
     user_q = st.chat_input("질문을 입력하세요")
-    if not user_q: return
+    if not user_q:
+        return
 
-    # 기록 + LLM 호출
+    # 사용자 메시지 저장
     msg_id = ss["_chat_next_id"]; ss["_chat_next_id"] += 1
-    ss["chat"].append({"id": msg_id, "role":"user", "text": user_q})
+    ss["chat"].append({"id": msg_id, "role": "user", "text": user_q})
 
+    # LLM 호출
     cfg = _sanitize_modes_cfg(_load_modes_cfg())
     cur = ss.get("qa_mode_radio") or cfg["default"]
     system_prompt = "너는 한국의 영어학원 원장처럼, 따뜻하고 명확하게 설명한다."
-    prompt = f"[모드:{_LLM_TOKEN.get(cur,'문법설명')}]\n{user_q}"
+    prompt = f"[모드:{_LLM_TOKEN.get(cur, '문법설명')}]\n{user_q}"
 
     try:
         res = _llm_call(prompt, system_prompt)
         text = (res.get("text") or f"생성 실패: {res.get('error')}").strip() if res.get("ok") else (res.get("error") or "생성 실패")
-        ss["chat"].append({"id": msg_id+1, "role":"assistant","text": text, "provider": res.get("provider")})
+        ss["chat"].append({"id": msg_id + 1, "role": "assistant", "text": text, "provider": res.get("provider")})
     except Exception as e:
-        ss["chat"].append({"id": msg_id+1, "role":"assistant","text": f"예외: {type(e).__name__}: {e}"})
+        ss["chat"].append({"id": msg_id + 1, "role": "assistant", "text": f"예외: {type(e).__name__}: {e}"})
         _errlog(f"LLM 예외: {e}", where="[qa_llm]", exc=e)
 
     st.rerun()
-# =========================== [10] END =======================================
-
 
 # [11] 본문 렌더 ===============================================================
 def _header_and_login():
@@ -368,7 +433,7 @@ def _render_body() -> None:
     _auto_start_once()
     if _is_admin_view():
         _render_admin_panels()
-    # 본문 타이틀(요청안)
+    # 본문 타이틀(요청 카피)
     st.markdown("## 질문은 천재들의 공부 방법이다.")
     _render_chat_panel()
 
