@@ -123,7 +123,7 @@ _gh      = _try_import("src.backup.github_release", ["restore_latest"])
 _rag     = _try_import("src.rag.index_build", ["build_index_with_checkpoint"])
 _llm     = _try_import("src.llm.providers", ["call_with_fallback"])
 
-# [06] 페이지 설정 & 헤더 + 로그인 토글 =========================================
+# ==== [06] 페이지 설정 & 헤더 + 로그인 토글 =================================
 if st:
     st.set_page_config(page_title="LEES AI Teacher", layout="wide")
 
@@ -134,24 +134,41 @@ def _is_admin_view() -> bool:
 def _toggle_login_flag():
     st.session_state["_show_admin_login"] = not st.session_state.get("_show_admin_login", False)
 
+def _llm_health() -> tuple[str, str]:
+    """(라벨, 아이콘) 반환: Gemini/OpenAI/둘다/키없음/미탑재"""
+    has_cb = bool(_llm.get("call_with_fallback"))
+    has_g  = bool(os.getenv("GEMINI_API_KEY") or _from_secrets("GEMINI_API_KEY"))
+    has_o  = bool(os.getenv("OPENAI_API_KEY") or _from_secrets("OPENAI_API_KEY"))
+    if not has_cb:
+        return ("미탑재", "⚠️")
+    if not (has_g or has_o):
+        return ("키없음", "⚠️")
+    if has_g and has_o:
+        return ("Gemini/OpenAI", "✅")
+    return ("Gemini", "✅") if has_g else ("OpenAI", "✅")
+
 def _header():
     if st is None:
         return
     left, right = st.columns([0.8, 0.2])
     with left:
-        st.markdown("### LEES AI Teacher")  # 타이틀
+        st.markdown("### LEES AI Teacher")
     with right:
-        # 학생 화면에도 '관리자' 버튼은 항상 노출
-        if _is_brain_ready() and _is_admin_view():
-            st.markdown("**🟢 준비완료**")
-        elif _is_admin_view():
-            st.markdown("**🟡 준비중**")
+        # 상태 배지
+        if _is_admin_view():
+            st.markdown("**🟢 준비완료**" if _is_brain_ready() else "**🟡 준비중**")
+        # LLM 연결 상태 (학생/관리자 공통 노출)
+        label, icon = _llm_health()
+        st.caption(f"LLM: {icon} {label}")
+        # 관리자 버튼 (학생/관리자 모두 노출 → 클릭 시 패널 토글)
         st.button("관리자", on_click=_toggle_login_flag, use_container_width=True)
+
     if _import_warns:
         with st.expander("임포트 경고", expanded=False):
             for w in _import_warns:
                 st.code(w, language="text")
     st.divider()
+
 
 def _login_panel_if_needed():
     """헤더 아래 관리자 로그인 패널(학생/관리자 공통 토글)."""
@@ -301,14 +318,13 @@ def _render_admin_panels() -> None:
         st.text_area("최근 오류", value=txt, height=180)
         st.download_button("로그 다운로드", data=txt.encode("utf-8"), file_name="app_error_log.txt")
 
-# [10] 학생 UI: 미니멀 모드 버튼 + 큰 파스텔 채팅(입력=chat_input) ==============
+# ==== [10] 학생 UI: 미니멀 모드 버튼 + 큰 파스텔 채팅(입력=chat_input) ==============
 def _inject_minimal_styles_once():
     if st.session_state.get("_minimal_styles_injected"):
         return
     st.session_state["_minimal_styles_injected"] = True
     st.markdown("""
     <style>
-      /* 세그먼트 버튼 스타일 */
       .seg-zone .stButton>button{
         width:100%; border:2px solid #bcdcff; border-radius:16px;
         background:#fff; color:#111; font-weight:700; padding:10px 12px;
@@ -317,7 +333,6 @@ def _inject_minimal_styles_once():
       .seg-zone .stButton>button:disabled{
         background:#eeeeee !important; color:#888 !important; border-color:#ddd !important;
       }
-      /* 채팅 박스 (대화 + 입력 포함) */
       .chat-box{ border:2px solid #bcdcff; background:#e6f7ff; padding:14px; border-radius:16px; min-height:360px; }
       .bubble{ max-width:92%; padding:10px 12px; border-radius:14px; margin:6px 0; line-height:1.55; font-size:1rem; }
       .user{ background:#fff7cc; margin-left:auto; }   /* 학생: 연노랑 */
@@ -328,64 +343,52 @@ def _inject_minimal_styles_once():
     </style>
     """, unsafe_allow_html=True)
 
+_MODE_KEYS = ["문법", "문장", "지문"]
+_LABELS    = {"문법":"어법","문장":"문장","지문":"지문"}
+_LLM_TOKEN = {"문법":"문법설명","문장":"문장구조분석","지문":"지문분석"}
+
 def _render_mode_controls_minimal(*, admin: bool) -> str:
     _inject_minimal_styles_once()
     ss = st.session_state
     cfg = _sanitize_modes_cfg(_load_modes_cfg())
     allowed: set[str] = set(cfg["allowed"])
     default_mode = cfg["default"]
-
-    # 현재 선택
     cur = ss.get("qa_mode_radio") or default_mode
     if (not admin) and (cur not in allowed) and allowed:
-        cur = default_mode
-        ss["qa_mode_radio"] = cur
+        cur = default_mode; ss["qa_mode_radio"] = cur
 
     with st.container():
         st.markdown('<div class="seg-zone"></div>', unsafe_allow_html=True)
         c1, c2, c3 = st.columns(3)
-        for col, key in zip([c1, c2, c3], ["문법", "문장", "지문"]):
+        for col, key in zip([c1, c2, c3], _MODE_KEYS):
             disabled = False if admin else (key not in allowed)
             with col:
-                btn = st.button({"문법":"어법","문장":"문장","지문":"지문"}[key],
-                                key=f"mode_btn_{key}",
-                                disabled=disabled,
+                btn = st.button(_LABELS[key], key=f"mode_btn_{key}", disabled=disabled,
                                 type=("primary" if cur == key else "secondary"))
                 if btn and (admin or (key in allowed)):
-                    ss["qa_mode_radio"] = key
-                    cur = key
-                    st.rerun()
+                    ss["qa_mode_radio"] = key; cur = key; st.rerun()
     return cur
 
 def _llm_call(prompt: str, system: Optional[str] = None) -> Dict[str, Any]:
     if _llm.get("call_with_fallback"):
-        return _llm["call_with_fallback"](
-            prompt=prompt, system=system,
-            primary="gemini", secondary="openai",
-            temperature=0.3, max_tokens=800
-        )
+        return _llm["call_with_fallback"](prompt=prompt, system=system,
+                                          primary="gemini", secondary="openai",
+                                          temperature=0.3, max_tokens=800)
     return {"ok": False, "error": "LLM providers 모듈 미탑재"}
 
 def _render_chat_panel() -> None:
-    if st is None:
-        return
+    if st is None: return
     ss = st.session_state
-    ss.setdefault("chat", [])
-    ss.setdefault("_chat_next_id", 1)
+    ss.setdefault("chat", []); ss.setdefault("_chat_next_id", 1)
 
-    ready = _is_brain_ready()
-    admin = _is_admin_view()
+    ready = _is_brain_ready(); admin = _is_admin_view()
 
-    # 상단 상태 + 모드 컨트롤
     with st.container(border=True):
         c1, c2 = st.columns([0.65, 0.35])
-        with c1:
-            st.markdown(f"**{'🟢 준비완료' if ready else '🟡 준비중'}**")
-        with c2:
-            _ = _render_mode_controls_minimal(admin=admin)
+        with c1: st.markdown(f"**{'🟢 준비완료' if ready else '🟡 준비중'}**")
+        with c2: _ = _render_mode_controls_minimal(admin=admin)
 
-    if not ready:
-        _manual_restore_cta()
+    if not ready: _manual_restore_cta()
 
     # 대화 영역 (큰 파스텔 박스)
     st.markdown('<div class="chat-box">', unsafe_allow_html=True)
@@ -398,28 +401,30 @@ def _render_chat_panel() -> None:
 
     # 입력: chat_input (엔터 전송 + 화살표 아이콘)
     user_q = st.chat_input("질문을 입력하세요")
-    if not user_q:
-        return
+    if not user_q: return
 
     # 사용자 메시지 저장
     msg_id = ss["_chat_next_id"]; ss["_chat_next_id"] += 1
-    ss["chat"].append({"id": msg_id, "role": "user", "text": user_q})
+    ss["chat"].append({"id": msg_id, "role":"user", "text": user_q})
 
-    # LLM 호출
+    # LLM 호출 (로딩 스피너)  ← 패치 B
     cfg = _sanitize_modes_cfg(_load_modes_cfg())
     cur = ss.get("qa_mode_radio") or cfg["default"]
     system_prompt = "너는 한국의 영어학원 원장처럼, 따뜻하고 명확하게 설명한다."
-    prompt = f"[모드:{_LLM_TOKEN.get(cur, '문법설명')}]\n{user_q}"
+    prompt = f"[모드:{_LLM_TOKEN.get(cur,'문법설명')}]\n{user_q}"
 
     try:
-        res = _llm_call(prompt, system_prompt)
+        with st.spinner("답변 생성 중..."):
+            res = _llm_call(prompt, system_prompt)
         text = (res.get("text") or f"생성 실패: {res.get('error')}").strip() if res.get("ok") else (res.get("error") or "생성 실패")
-        ss["chat"].append({"id": msg_id + 1, "role": "assistant", "text": text, "provider": res.get("provider")})
+        ss["chat"].append({"id": msg_id+1, "role":"assistant","text": text, "provider": res.get("provider")})
     except Exception as e:
-        ss["chat"].append({"id": msg_id + 1, "role": "assistant", "text": f"예외: {type(e).__name__}: {e}"})
+        ss["chat"].append({"id": msg_id+1, "role":"assistant","text": f"예외: {type(e).__name__}: {e}"})
         _errlog(f"LLM 예외: {e}", where="[qa_llm]", exc=e)
 
-    st.rerun()
+    # 패치 A: 여기서 추가 rerun을 호출하지 않습니다. (chat_input이 이미 rerun을 트리거)
+    # st.rerun()  ← 제거
+# =========================== [10] END =======================================
 
 # [11] 본문 렌더 ===============================================================
 def _header_and_login():
