@@ -326,8 +326,11 @@ def build_index_with_checkpoint(
     out_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = out_dir / "manifest.json"
     chunks_path   = out_dir / "chunks.jsonl"
-    _persist_write_json(manifest, manifest_path)
-    _persist_write_jsonl(chunk_rows, chunks_path)
+    with open(manifest_path, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, ensure_ascii=False, indent=2)
+    with open(chunks_path, "w", encoding="utf-8") as f:
+        for r in chunk_rows:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
 
     # quality report
     msg("📊 Building quality report…")
@@ -345,7 +348,8 @@ def build_index_with_checkpoint(
         # ensure gzip
         _ = (chunks_path.with_suffix(chunks_path.suffix + ".gz"))
         if (not _.exists()) or (_.stat().st_mtime < chunks_path.stat().st_mtime):
-            _gzip_file(chunks_path, _)
+            with open(chunks_path, "rb") as fr, gzip.open(_, "wb", compresslevel=6) as fw:
+                shutil.copyfileobj(fr, fw)
         msg("🚀 Publishing index to GitHub Releases…")
         res = upload_index_release(
             manifest_path=manifest_path,
