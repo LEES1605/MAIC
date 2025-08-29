@@ -115,7 +115,7 @@ _gh       = _try_import("src.backup.github_release", ["restore_latest"])
 _rag      = _try_import("src.rag.index_build", ["build_index_with_checkpoint"])
 _llm      = _try_import("src.llm.providers", ["call_with_fallback"])
 
-# ==== [06] 페이지 설정 & 헤더 ===============================================
+# ==== [06] 페이지 설정 & 헤더 + 로그인 토글 =================================
 if st:
     st.set_page_config(page_title="AI Teacher", layout="wide")
 
@@ -123,8 +123,12 @@ def _is_admin_view() -> bool:
     env = (os.getenv("APP_MODE") or _from_secrets("APP_MODE","student") or "student").lower()
     return bool(env == "admin" or (st and (st.session_state.get("is_admin") or st.session_state.get("admin_mode"))))
 
+def _toggle_login_flag():
+    st.session_state["_show_admin_login"] = not st.session_state.get("_show_admin_login", False)
+
 def _header():
     if st is None: return
+    ss = st.session_state
     left, right = st.columns([0.65, 0.35])
     with left:
         st.markdown("### AI Teacher")
@@ -132,12 +136,38 @@ def _header():
     with right:
         status = "🟢 두뇌 준비됨" if _is_brain_ready() else "🟡 두뇌 연결 대기"
         st.markdown(f"**{status}**")
+        if not _is_admin_view():
+            st.button("관리자 로그인", on_click=_toggle_login_flag, use_container_width=True)
+        else:
+            st.caption("관리자 모드")
     if _import_warns:
         with st.expander("임포트 경고", expanded=False):
             for w in _import_warns: st.code(w, language="text")
     st.divider()
 
-# ==== [07] 시작 오케스트레이션(+수동 복원 버튼) ==============================
+def _login_panel_if_needed():
+    """학생 화면에서도 열 수 있는 고정형 로그인 패널(헤더 아래)."""
+    if st is None or _is_admin_view() is True:
+        return
+    if not st.session_state.get("_show_admin_login", False):
+        return
+    pwd_set = os.getenv("APP_ADMIN_PASSWORD") or _from_secrets("APP_ADMIN_PASSWORD","0000") or "0000"
+    with st.container(border=True):
+        st.write("### 관리자 로그인")
+        with st.form("admin_login_form", clear_on_submit=True):
+            pwd_in = st.text_input("비밀번호", type="password")
+            submitted = st.form_submit_button("Login", use_container_width=True)
+        if submitted:
+            if pwd_in and pwd_in == pwd_set:
+                st.session_state["is_admin"] = True
+                st.session_state["admin_login_ts"] = time.strftime("%Y-%m-%d %H:%M:%S")
+                st.session_state["_show_admin_login"] = False
+                st.success("로그인 성공")
+                st.rerun()
+            else:
+                st.error("비밀번호가 틀렸습니다.")
+
+# ==== [07] 시작 오케스트레이션(+수동 복원 버튼: 관리자 전용) =================
 def _auto_start_once() -> None:
     if st is None: return
     if st.session_state.get("_auto_started"): return
@@ -158,12 +188,14 @@ def _auto_start_once() -> None:
                 gcp_creds={}, persist_dir=str(PERSIST_DIR), remote_manifest={}
             )
             _mark_ready()
-        # detect 모드: 수동 복원 버튼으로 처리
+        # detect 모드: 수동 복원 버튼으로 처리(아래), 학생은 버튼 미노출
     except Exception as e:
         _errlog(f"AUTO_START_MODE 실행 오류: {e}", where="[auto_start]", exc=e)
 
 def _manual_restore_cta():
-    if st is None or _is_brain_ready(): return
+    """복원 버튼은 **관리자 전용**. 학생은 안내 문구 없이 숨김."""
+    if st is None or _is_brain_ready() or (not _is_admin_view()):
+        return
     if _gh.get("restore_latest"):
         c1, c2 = st.columns([0.72, 0.28])
         with c1:
@@ -272,6 +304,7 @@ def _render_chat_panel() -> None:
 def _render_body() -> None:
     if st is None: return
     _header()
+    _login_panel_if_needed()     # ← 학생 화면에서도 로그인 가능
     _auto_start_once()
     if _is_admin_view():
         _render_admin_panels()
