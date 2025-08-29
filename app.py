@@ -36,6 +36,8 @@ def _bootstrap_env() -> None:
         # App
         "APP_MODE",          # admin|student
         "AUTO_START_MODE",   # detect|restore|full
+        "LOCK_MODE_FOR_STUDENTS",  # true → 학생은 라디오 숨김
+        "APP_ADMIN_PASSWORD",
     ]
     for k in keys:
         v = _from_secrets(k)
@@ -123,7 +125,7 @@ _gh       = _try_import("src.backup.github_release", ["restore_latest"])
 _rag      = _try_import("src.rag.index_build", ["build_index_with_checkpoint"])
 _llm      = _try_import("src.llm.providers", ["call_with_fallback","call_openai","call_gemini"])
 
-# ==== [06] 페이지 설정 & 헤더 =================================================
+# ==== [06] 페이지 설정 & 헤더(학생 화면에서도 로그인 가능) ===================
 if st:
     st.set_page_config(page_title="AI Teacher", layout="wide")
 
@@ -131,20 +133,45 @@ def _is_admin_view() -> bool:
     env = (os.getenv("APP_MODE") or _from_secrets("APP_MODE","student") or "student").lower()
     return bool(env == "admin" or (st and (st.session_state.get("is_admin") or st.session_state.get("admin_mode"))))
 
+def _admin_login_inline():
+    """학생/관리자 공통 헤더에서 항상 노출되는 간단 로그인."""
+    if st is None: return
+    ss = st.session_state
+    ss.setdefault("is_admin", False)
+    pwd_set = os.getenv("APP_ADMIN_PASSWORD") or _from_secrets("APP_ADMIN_PASSWORD","0000") or "0000"
+    if ss.get("is_admin"):
+        if st.button("로그아웃", use_container_width=True):
+            ss["is_admin"] = False
+            ss["admin_login_ts"] = ""
+            st.experimental_rerun()
+    else:
+        with st.popover("관리자 로그인", use_container_width=True):
+            pwd_in = st.text_input("비밀번호", type="password")
+            if st.button("Login", type="primary"):
+                if pwd_in and pwd_in == pwd_set:
+                    ss["is_admin"] = True
+                    ss["admin_login_ts"] = time.strftime("%Y-%m-%d %H:%M:%S")
+                    st.success("로그인 성공")
+                    st.experimental_rerun()
+                else:
+                    st.error("비밀번호가 틀렸습니다.")
+
 def _header():
     if st is None: return
-    left, right = st.columns([0.7, 0.3])
+    left, right = st.columns([0.65, 0.35])
     with left:
         st.markdown("### AI Teacher")
         st.caption("MAIC · Streamlit 기반 24/7 Q&A")
     with right:
-        st.markdown(f"**{'🟢 두뇌 준비됨' if _is_brain_ready() else '🟡 두뇌 연결 대기'}**")
-        if _import_warns:
-            with st.expander("임포트 경고", expanded=False):
-                for w in _import_warns: st.code(w, language="text")
+        status = "🟢 두뇌 준비됨" if _is_brain_ready() else "🟡 두뇌 연결 대기"
+        st.markdown(f"**{status}**")
+        _admin_login_inline()  # ← 항상 보이도록
+    if _import_warns:
+        with st.expander("임포트 경고", expanded=False):
+            for w in _import_warns: st.code(w, language="text")
     st.divider()
 
-# ==== [07] 시작 오케스트레이션 ==============================================
+# ==== [07] 시작 오케스트레이션(+수동 복원 버튼) ==============================
 def _auto_start_once() -> None:
     if st is None: return
     if st.session_state.get("_auto_started"): return
@@ -169,11 +196,33 @@ def _auto_start_once() -> None:
     except Exception as e:
         _errlog(f"AUTO_START_MODE 실행 오류: {e}", where="[auto_start]", exc=e)
 
+def _manual_restore_cta():
+    """준비되지 않았을 때 상단에 보여주는 원클릭 복원 버튼."""
+    if st is None: return
+    if _is_brain_ready(): return
+    if _gh.get("restore_latest"):
+        c1, c2 = st.columns([0.72, 0.28])
+        with c1:
+            st.info("두뇌가 아직 준비되지 않았어요. 최신 GitHub Releases에서 복원할 수 있어요.")
+        with c2:
+            if st.button("최신 릴리스에서 복원", type="primary", use_container_width=True):
+                try:
+                    ok = bool(_gh["restore_latest"](dest_dir=PERSIST_DIR))
+                    if ok:
+                        _mark_ready()
+                        st.success("복원 완료! 잠시 후 새로고침됩니다.")
+                        st.experimental_rerun()
+                    else:
+                        st.error("복원에 실패했습니다. Releases에 manifest/chunks가 있는지 확인하세요.")
+                except Exception as e:
+                    _errlog(f"manual restore failed: {e}", where="[manual_restore]", exc=e)
+                    st.error(f"예외: {type(e).__name__}: {e}")
+
 # ==== [08] 관리자 패널(오케스트레이터/모드/로그) ============================
 def _render_admin_panels() -> None:
     if st is None or not _is_admin_view(): return
 
-    # 상단 공통 컨트롤
+    # 상단 공통 컨트롤 (관리자 전용 확장판)
     if _ui_admin.get("ensure_admin_session_keys"): _ui_admin["ensure_admin_session_keys"]()
     if _ui_admin.get("render_admin_controls"):     _ui_admin["render_admin_controls"]()
     if _ui_admin.get("render_role_caption"):       _ui_admin["render_role_caption"]()
@@ -201,12 +250,8 @@ def _render_admin_panels() -> None:
         st.text_area("최근 오류", value=txt, height=180)
         st.download_button("로그 다운로드", data=txt.encode("utf-8"), file_name="app_error_log.txt")
 
-# ==== [09] 채팅 패널(학생/관리자 공통) ======================================
+# ==== [09] 채팅 패널(학생도 모드 라디오 사용 가능) ==========================
 def _llm_call(prompt: str, system: Optional[str] = None) -> Dict[str, Any]:
-    """
-    통일 LLM 호출: Gemini → 실패 시 OpenAI 폴백.
-    providers 모듈이 없으면 간단 에러 반환.
-    """
     if _llm.get("call_with_fallback"):
         return _llm["call_with_fallback"](prompt=prompt, system=system,
                                           primary="gemini", secondary="openai",
@@ -220,14 +265,23 @@ def _render_chat_panel() -> None:
     ss.setdefault("_chat_next_id", 1)
     ready = _is_brain_ready()
 
-    # 상단 배지
+    # 상단 상태 + 모드 라디오(학생도 허용; 필요시 secrets로 잠금)
     with st.container(border=True):
-        left, right = st.columns([0.7, 0.3])
-        with left:
+        c1, c2 = st.columns([0.65, 0.35])
+        with c1:
             st.markdown(f"**{'🟢 두뇌 준비됨' if ready else '🟡 두뇌 연결 대기'}**")
-        with right:
-            mode = ss.get("qa_mode_radio","문법설명")
-            st.markdown(f"모드: **{mode}**")
+        with c2:
+            locked = (os.getenv("LOCK_MODE_FOR_STUDENTS","false").lower() == "true")
+            default = ss.get("qa_mode_radio","문법설명")
+            if _is_admin_view() or not locked:
+                ss["qa_mode_radio"] = st.radio("설명 모드", ["문법설명","문장구조분석","지문분석"],
+                                               index=["문법설명","문장구조분석","지문분석"].index(default))
+            else:
+                st.markdown(f"모드: **{default}**")
+
+    # 두뇌 준비 안 됐으면 수동 복원 CTA 표시
+    if not ready:
+        _manual_restore_cta()
 
     # 대화 이력
     with st.container(border=True):
@@ -263,18 +317,15 @@ def _render_chat_panel() -> None:
             slot.error(f"예외: {type(e).__name__}: {e}")
             _errlog(f"LLM 예외: {e}", where="[qa_llm]", exc=e)
 
-# ==== [10] 학생/관리자 뷰 게이팅 ============================================
+# ==== [10] 본문 렌더 =========================================================
 def _render_body() -> None:
     if st is None: return
-    # 헤더 + 자동 시작 훅
     _header()
     _auto_start_once()
 
-    # 관리자에게만 관리자 패널 노출
     if _is_admin_view():
         _render_admin_panels()
 
-    # Q&A는 공통
     st.markdown("## Q&A")
     _render_chat_panel()
 
