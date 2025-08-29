@@ -213,24 +213,36 @@ def _manual_restore_cta():
                     _errlog(f"manual restore failed: {e}", where="[manual_restore]", exc=e)
                     st.error(f"예외: {type(e).__name__}: {e}")
 
-# ==== [08] 설명 모드: 영속 플래그 & 헬퍼 =====================================
-def _explain_flag_path() -> Path:
-    return PERSIST_DIR / ".explain_mode.on"
+# ==== [08] 설명 모드 허용/기본값: 영속 설정 ==================================
+def _modes_cfg_path() -> Path:
+    return PERSIST_DIR / "explain_modes.json"
 
-def _is_explain_enabled() -> bool:
-    try: return _explain_flag_path().exists()
-    except Exception: return False
-
-def _set_explain_enabled(on: bool) -> None:
+def _load_modes_cfg() -> Dict[str, Any]:
     try:
-        p = _explain_flag_path()
-        if on:
-            p.write_text("on", encoding="utf-8")
-        else:
-            if p.exists(): p.unlink()
-        if st: st.rerun()
+        p = _modes_cfg_path()
+        if not p.exists():
+            return {"allowed": ["문법설명","문장구조분석","지문분석"], "default": "문법설명"}
+        return json.loads(p.read_text(encoding="utf-8") or "{}")
+    except Exception:
+        return {"allowed": ["문법설명","문장구조분석","지문분석"], "default": "문법설명"}
+
+def _save_modes_cfg(cfg: Dict[str, Any]) -> None:
+    try:
+        p = _modes_cfg_path()
+        p.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception as e:
-        _errlog(f"explain toggle failed: {e}", where="[explain_toggle]", exc=e)
+        _errlog(f"save modes cfg failed: {e}", where="[modes_save]", exc=e)
+
+def _sanitize_modes_cfg(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    modes = ["문법설명","문장구조분석","지문분석"]
+    allowed = [m for m in (cfg.get("allowed") or []) if m in modes]
+    if not allowed:
+        allowed = []  # 전부 끌 수도 있게 허용
+    default = cfg.get("default") or "문법설명"
+    if default not in modes:
+        default = "문법설명"
+    # default가 허용되지 않았어도 유지(학생은 선택 불가 → 버튼 회색)
+    return {"allowed": allowed, "default": default}
 
 # ==== [09] 관리자 패널 =======================================================
 def _render_admin_panels() -> None:
@@ -250,15 +262,28 @@ def _render_admin_panels() -> None:
     else:
         st.info("오케스트레이터 모듈이 없습니다: src.ui_orchestrator")
 
-    st.markdown("### 설명 모드 설정")
-    # ① 학생 라디오 허용 토글(영속)
-    current = _is_explain_enabled()
-    new_val = st.checkbox("학생에게 설명 모드 선택 허용", value=current, help="켜면 학생 화면에 라디오버튼이 표시됩니다.")
-    if new_val != current:
-        _set_explain_enabled(new_val)
+    st.markdown("### 설명 모드 허용 설정")
+    cfg = _sanitize_modes_cfg(_load_modes_cfg())
+    a = set(cfg["allowed"])
+    c1,c2,c3 = st.columns(3)
+    with c1:  g = st.checkbox("문법설명",      value=("문법설명" in a))
+    with c2:  s = st.checkbox("문장구조분석",  value=("문장구조분석" in a))
+    with c3:  p = st.checkbox("지문분석",      value=("지문분석" in a))
 
-    # ② (선택) 관리자용 설명 모드 라디오 (ui_admin이 제공하는 경우)
+    # 기본 모드 선택(관리자용) — 전체 모드 중 선택
+    base_modes = ["문법설명","문장구조분석","지문분석"]
+    default_sel = st.selectbox("기본 모드(학생 초기값)", base_modes, index=base_modes.index(cfg["default"]))
+
+    if st.button("허용 설정 저장", type="primary"):
+        new_cfg = _sanitize_modes_cfg({"allowed": [m for m, v in [
+            ("문법설명", g), ("문장구조분석", s), ("지문분석", p)
+        ] if v], "default": default_sel})
+        _save_modes_cfg(new_cfg)
+        st.success("저장 완료")
+        st.rerun()
+
     if _ui_admin.get("render_mode_radio_admin"):
+        st.markdown("#### (관리자 전용) 미리보기용 모드 선택")
         _ui_admin["render_mode_radio_admin"]()
 
     with st.expander("오류 로그", expanded=False):
@@ -274,26 +299,49 @@ def _llm_call(prompt: str, system: Optional[str] = None) -> Dict[str, Any]:
                                           temperature=0.3, max_tokens=800)
     return {"ok": False, "error": "LLM providers 모듈 미탑재"}
 
+def _render_mode_controls(*, admin: bool) -> str:
+    """세 모드를 모두 보여주되, 학생은 끈 모드는 비활성(회색). 선택 결과를 반환."""
+    ss = st.session_state
+    cfg = _sanitize_modes_cfg(_load_modes_cfg())
+    allowed = set(cfg["allowed"])
+    modes = ["문법설명","문장구조분석","지문분석"]
+
+    # 현재 선택이 없으면 기본값으로
+    cur = ss.get("qa_mode_radio") or cfg["default"]
+    if (not admin) and (cur not in allowed) and allowed:
+        # 학생이 금지 모드에 머물러 있으면 기본값으로 교정
+        cur = cfg["default"]
+        ss["qa_mode_radio"] = cur
+
+    st.caption("설명 모드")
+    b1,b2,b3 = st.columns(3)
+    clicked = None
+    for i,(col, label) in enumerate([(b1,"문법설명"),(b2,"문장구조분석"),(b3,"지문분석")]):
+        disabled = False if admin else (label not in allowed)
+        button_label = f"✅ {label}" if cur == label else label
+        with col:
+            if st.button(button_label, use_container_width=True, disabled=disabled):
+                clicked = label
+
+    if clicked:
+        ss["qa_mode_radio"] = clicked
+        cur = clicked
+    return cur
+
 def _render_chat_panel() -> None:
     if st is None: return
     ss = st.session_state
     ss.setdefault("chat", [])
     ss.setdefault("_chat_next_id", 1)
     ready = _is_brain_ready()
+    admin = _is_admin_view()
 
     with st.container(border=True):
         c1, c2 = st.columns([0.65, 0.35])
         with c1:
             st.markdown(f"**{'🟢 두뇌 준비됨' if ready else '🟡 두뇌 연결 대기'}**")
         with c2:
-            # 학생 라디오 노출 조건: 관리자 또는 설명 모드 허용 ON
-            show_radio = _is_admin_view() or _is_explain_enabled()
-            default = ss.get("qa_mode_radio","문법설명")
-            if show_radio:
-                ss["qa_mode_radio"] = st.radio("설명 모드", ["문법설명","문장구조분석","지문분석"],
-                                               index=["문법설명","문장구조분석","지문분석"].index(default))
-            else:
-                st.markdown(f"모드: **{default}**")
+            _ = _render_mode_controls(admin=admin)
 
     if not ready:
         _manual_restore_cta()
@@ -312,7 +360,7 @@ def _render_chat_panel() -> None:
     ss["chat"].append({"id": msg_id, "role":"user", "text": user_q})
 
     system_prompt = "너는 한국의 영어학원 원장처럼, 따뜻하고 명확하게 설명한다."
-    mode = ss.get("qa_mode_radio","문법설명")
+    mode = ss.get("qa_mode_radio") or _sanitize_modes_cfg(_load_modes_cfg())["default"]
     prompt = f"[모드:{mode}]\n{user_q}"
 
     with st.chat_message("assistant", avatar="🤖"):
@@ -331,10 +379,13 @@ def _render_chat_panel() -> None:
             _errlog(f"LLM 예외: {e}", where="[qa_llm]", exc=e)
 
 # ==== [11] 본문 렌더 =========================================================
-def _render_body() -> None:
-    if st is None: return
+def _header_and_login():
     _header()
     _login_panel_if_needed()     # ← 학생 화면에서도 로그인 가능
+
+def _render_body() -> None:
+    if st is None: return
+    _header_and_login()
     _auto_start_once()
     if _is_admin_view():
         _render_admin_panels()
