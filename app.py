@@ -128,7 +128,6 @@ def _toggle_login_flag():
 
 def _header():
     if st is None: return
-    ss = st.session_state
     left, right = st.columns([0.65, 0.35])
     with left:
         st.markdown("### AI Teacher")
@@ -214,7 +213,26 @@ def _manual_restore_cta():
                     _errlog(f"manual restore failed: {e}", where="[manual_restore]", exc=e)
                     st.error(f"예외: {type(e).__name__}: {e}")
 
-# ==== [08] 관리자 패널 =======================================================
+# ==== [08] 설명 모드: 영속 플래그 & 헬퍼 =====================================
+def _explain_flag_path() -> Path:
+    return PERSIST_DIR / ".explain_mode.on"
+
+def _is_explain_enabled() -> bool:
+    try: return _explain_flag_path().exists()
+    except Exception: return False
+
+def _set_explain_enabled(on: bool) -> None:
+    try:
+        p = _explain_flag_path()
+        if on:
+            p.write_text("on", encoding="utf-8")
+        else:
+            if p.exists(): p.unlink()
+        if st: st.rerun()
+    except Exception as e:
+        _errlog(f"explain toggle failed: {e}", where="[explain_toggle]", exc=e)
+
+# ==== [09] 관리자 패널 =======================================================
 def _render_admin_panels() -> None:
     if st is None or not _is_admin_view(): return
     if _ui_admin.get("ensure_admin_session_keys"): _ui_admin["ensure_admin_session_keys"]()
@@ -233,6 +251,13 @@ def _render_admin_panels() -> None:
         st.info("오케스트레이터 모듈이 없습니다: src.ui_orchestrator")
 
     st.markdown("### 설명 모드 설정")
+    # ① 학생 라디오 허용 토글(영속)
+    current = _is_explain_enabled()
+    new_val = st.checkbox("학생에게 설명 모드 선택 허용", value=current, help="켜면 학생 화면에 라디오버튼이 표시됩니다.")
+    if new_val != current:
+        _set_explain_enabled(new_val)
+
+    # ② (선택) 관리자용 설명 모드 라디오 (ui_admin이 제공하는 경우)
     if _ui_admin.get("render_mode_radio_admin"):
         _ui_admin["render_mode_radio_admin"]()
 
@@ -241,7 +266,7 @@ def _render_admin_panels() -> None:
         st.text_area("최근 오류", value=txt, height=180)
         st.download_button("로그 다운로드", data=txt.encode("utf-8"), file_name="app_error_log.txt")
 
-# ==== [09] 채팅 패널 =========================================================
+# ==== [10] 채팅 패널 =========================================================
 def _llm_call(prompt: str, system: Optional[str] = None) -> Dict[str, Any]:
     if _llm.get("call_with_fallback"):
         return _llm["call_with_fallback"](prompt=prompt, system=system,
@@ -261,9 +286,10 @@ def _render_chat_panel() -> None:
         with c1:
             st.markdown(f"**{'🟢 두뇌 준비됨' if ready else '🟡 두뇌 연결 대기'}**")
         with c2:
-            locked = (os.getenv("LOCK_MODE_FOR_STUDENTS","false").lower() == "true")
+            # 학생 라디오 노출 조건: 관리자 또는 설명 모드 허용 ON
+            show_radio = _is_admin_view() or _is_explain_enabled()
             default = ss.get("qa_mode_radio","문법설명")
-            if _is_admin_view() or not locked:
+            if show_radio:
                 ss["qa_mode_radio"] = st.radio("설명 모드", ["문법설명","문장구조분석","지문분석"],
                                                index=["문법설명","문장구조분석","지문분석"].index(default))
             else:
@@ -304,7 +330,7 @@ def _render_chat_panel() -> None:
             slot.error(f"예외: {type(e).__name__}: {e}")
             _errlog(f"LLM 예외: {e}", where="[qa_llm]", exc=e)
 
-# ==== [10] 본문 렌더 =========================================================
+# ==== [11] 본문 렌더 =========================================================
 def _render_body() -> None:
     if st is None: return
     _header()
@@ -315,7 +341,7 @@ def _render_body() -> None:
     st.markdown("## Q&A")
     _render_chat_panel()
 
-# ==== [11] main ==============================================================
+# ==== [12] main ==============================================================
 def main():
     if st is None:
         print("Streamlit 환경이 아닙니다.")
@@ -324,3 +350,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+# =============================== [END] =======================================
