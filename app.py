@@ -150,24 +150,65 @@ def _llm_health() -> tuple[str, str]:
 def _header():
     if st is None:
         return
-    left, right = st.columns([0.8, 0.2])
+
+    # 상태 보관 기본값
+    ss = st.session_state
+    ss.setdefault("_show_admin_login", False)
+
+    left, right = st.columns([0.78, 0.22])
     with left:
         st.markdown("### LEES AI Teacher")
     with right:
-        # 상태 배지
+        # 상태/LLM 배지
         if _is_admin_view():
             st.markdown("**🟢 준비완료**" if _is_brain_ready() else "**🟡 준비중**")
-        # LLM 연결 상태 (학생/관리자 공통 노출)
         label, icon = _llm_health()
         st.caption(f"LLM: {icon} {label}")
-        # 관리자 버튼 (학생/관리자 모두 노출 → 클릭 시 패널 토글)
-        st.button("관리자", on_click=_toggle_login_flag, use_container_width=True)
 
+        # 버튼 영역
+        if _is_admin_view():
+            # 관리자 모드일 때: '관리자 해제' 버튼
+            if st.button("관리자 해제", use_container_width=True):
+                ss["admin_mode"] = False
+                ss["_show_admin_login"] = False
+                st.rerun()
+        else:
+            # 학생 화면: '관리자' → 인라인 로그인 폼 토글
+            if st.button("관리자", use_container_width=True):
+                _toggle_login_flag()
+
+            # 인라인 로그인 폼 (버튼 바로 아래 펼침)
+            if ss.get("_show_admin_login", False):
+                pwd_set = os.getenv("APP_ADMIN_PASSWORD") or _from_secrets("APP_ADMIN_PASSWORD", "0000") or "0000"
+                with st.container(border=True):
+                    pw = st.text_input("관리자 비밀번호", type="password", label_visibility="collapsed")
+                    c1, c2 = st.columns([0.5, 0.5])
+                    with c1:
+                        if st.button("로그인", type="primary", use_container_width=True, key="admin_login_btn"):
+                            if pw and pw == str(pwd_set):
+                                ss["admin_mode"] = True
+                                ss["_show_admin_login"] = False
+                                st.success("로그인 성공")
+                                st.rerun()
+                            else:
+                                st.error("비밀번호가 올바르지 않습니다.")
+                    with c2:
+                        if st.button("닫기", use_container_width=True, key="admin_login_close"):
+                            ss["_show_admin_login"] = False
+                            st.rerun()
+
+    # 임포트 경고
     if _import_warns:
         with st.expander("임포트 경고", expanded=False):
             for w in _import_warns:
                 st.code(w, language="text")
+
     st.divider()
+
+# 더 이상 사용하지 않지만 호환을 위해 남겨둠 (빈 구현)
+def _login_panel_if_needed():
+    return
+
 
 
 def _login_panel_if_needed():
