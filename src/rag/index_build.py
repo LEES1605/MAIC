@@ -316,6 +316,53 @@ def _build_from_prepared(svc, prepared_folder_id: str) -> Tuple[int, int, Dict[s
     extra = {"processed_files": len(docs_summary), "generated_chunks": len(all_chunks)}
     return len(docs_summary), len(all_chunks), manifest, extra
 # [08] BUILD PIPELINE CORE — END
+# ===== [08A] DELTA DETECTION UTILS — START ==================================
+from typing import Any, Dict, List, Tuple
+
+def scan_drive_listing(svc, folder_id: str) -> List[Dict[str, Any]]:
+    """
+    prepared 폴더의 파일 목록을 id/name/mimeType/modifiedTime/md5Checksum 중심으로 스냅샷.
+    """
+    files: List[Dict[str, Any]] = []
+    page_token = None
+    while True:
+        res = svc.files().list(
+            q=f"'{folder_id}' in parents and trashed=false",
+            fields="nextPageToken, files(id,name,mimeType,modifiedTime,md5Checksum,size)",
+            pageSize=1000,
+            pageToken=page_token
+        ).execute()
+        files.extend(res.get("files", []))
+        page_token = res.get("nextPageToken")
+        if not page_token:
+            break
+    return files
+
+def diff_with_manifest(snapshot: List[Dict[str, Any]], manifest_docs: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+    """
+    Drive 스냅샷 vs manifest.docs 비교 → added/changed/removed
+    비교 키: id, md5Checksum(없으면 modifiedTime)
+    """
+    by_id_snap = {f["id"]: f for f in snapshot if "id" in f}
+    by_id_man  = {d.get("id"): d for d in manifest_docs if d.get("id")}
+
+    added, changed, removed = [], [], []
+    # added/changed
+    for fid, f in by_id_snap.items():
+        m = by_id_man.get(fid)
+        if not m:
+            added.append(f); continue
+        # 변경 판단: md5 또는 modifiedTime 비교
+        if (f.get("md5Checksum") and m.get("md5") and f.get("md5Checksum") != m.get("md5")) \
+           or (f.get("modifiedTime") and m.get("modifiedTime") and f.get("modifiedTime") != m.get("modifiedTime")):
+            changed.append(f)
+    # removed
+    for fid, m in by_id_man.items():
+        if fid not in by_id_snap:
+            removed.append(m)
+
+    return {"added": added, "changed": changed, "removed": removed}
+# ===== [08A] DELTA DETECTION UTILS — END ====================================
 
 
 # [09] FOLDER RESOLUTION — START
@@ -412,4 +459,5 @@ def build_index_with_checkpoint(
         "persist_dir": str(PERSIST_DIR),
     }
 # [10] PUBLIC ENTRY — END
+
 # =========================== index_build.py — END ============================
