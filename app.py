@@ -1978,216 +1978,28 @@ def _boot_and_render():
 _boot_and_render()
 # ===== [07] MAIN — END =======================================================
 
+# ===== [08] ADMIN PANEL — CONSOLIDATED/REMOVED — START
+# 본 패널의 기능은 [05A] "자료/인덱스 관리" 섹션과 ui_admin.py로 통합되었습니다.
+# 중복 버튼/설정을 방지하기 위해 이 구획은 더 이상 UI를 렌더링하지 않습니다.
 
-# ===== [08] ADMIN — 인덱싱/강제 동기화·모드ON/OFF·에러로그 — START ============
-def _load_modes_from_yaml(path: str) -> list[str]:
-    """로컬 prompts.yaml에서 modes 키 목록을 읽어온다."""
+def render_admin_panel_legacy() -> None:
+    """
+    호환성을 위한 더미. 과거 코드에서 [08]을 직접 호출하더라도 오류가 나지 않도록 유지합니다.
+    실제 관리자 기능은:
+      - ui_admin.render_admin_controls() / render_quick_diagnostics_anyrole()
+      - [05A] 자료/인덱스 관리 섹션
+    에서 제공됩니다.
+    """
     try:
-        import yaml, pathlib
-        p = pathlib.Path(path)
-        if not p.exists(): return []
-        data = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
-        modes = list((data.get("modes") or {}).keys())
-        return [m for m in modes if isinstance(m, str)]
-    except Exception as e:
-        _errlog(f"prompts.yaml 파싱 실패: {e}", where="[ADMIN]_load_modes_from_yaml", exc=e)
-        return []
+        import streamlit as st  # 지연 임포트
+        st.caption("관리자 패널은 통합되었습니다. 상단 컨트롤과 [자료/인덱스 관리] 섹션을 사용하세요.")
+    except Exception:
+        pass
 
-def _load_enabled_modes(defaults: list[str]) -> list[str]:
-    """~/.maic/mode_enabled.json 에 저장된 on/off 목록 로드, 없으면 defaults 전체 사용."""
-    import json, os, pathlib
-    path = pathlib.Path(os.path.expanduser("~/.maic/mode_enabled.json"))
-    if not path.exists(): return list(defaults)
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        enabled = [m for m, on in data.items() if on]
-        return enabled or list(defaults)
-    except Exception as e:
-        _errlog(f"mode_enabled.json 로드 실패: {e}", where="[ADMIN]_load_enabled_modes", exc=e)
-        return list(defaults)
-
-def _save_enabled_modes(state: dict[str, bool]) -> tuple[bool, str]:
-    """모드 on/off 저장."""
-    import json, os, pathlib
-    try:
-        path = pathlib.Path(os.path.expanduser("~/.maic/mode_enabled.json"))
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
-        return True, f"저장됨: {path}"
-    except Exception as e:
-        _errlog(f"mode_enabled 저장 실패: {e}", where="[ADMIN]_save_enabled_modes", exc=e)
-        return False, f"{type(e).__name__}: {e}"
-
-def _run_index_job(mode: str) -> tuple[bool, str]:
-    """
-    인덱스 실행(전체/증분). 프로젝트 인덱스 모듈을 자동 탐색해 호출.
-    우선 모듈: src.rag.index_build → src.index_build → index_build → rag.index_build
-    """
-    import importlib, importlib.util, inspect
-    from pathlib import Path
-
-    def _find_module(names: list[str]):
-        for n in names:
-            if importlib.util.find_spec(n) is not None:
-                return importlib.import_module(n)
-        return None
-
-    mod = _find_module(["src.rag.index_build","src.index_build","index_build","rag.index_build"])
-    if not mod:
-        return False, "인덱스 모듈을 찾지 못했습니다"
-
-    PERSIST_DIR = Path.home() / ".maic" / "persist"
-    PERSIST_DIR.mkdir(parents=True, exist_ok=True)
-
-    # prepared 폴더 ID (secrets에서 관대하게 탐색)
-    def _pick_folder_id():
-        for k in ["GDRIVE_PREPARED_FOLDER_ID","PREPARED_FOLDER_ID","APP_GDRIVE_FOLDER_ID","GDRIVE_FOLDER_ID"]:
-            v = getattr(st, "secrets", {}).get(k)
-            if v and str(v).strip(): return str(v).strip()
-        return ""
-
-    gdrive_folder_id = _pick_folder_id()
-
-    prog = st.progress(0, text="인덱싱 준비 중…")
-    msg_box = st.empty()
-    def _pct(v: int, msg: str|None=None):
-        try: prog.progress(max(0, min(100, int(v))), text=(msg or "인덱싱 중…"))
-        except Exception: pass
-    def _msg(s: str):
-        try: msg_box.write(s)
-        except Exception: pass
-
-    def _try(fn_name: str, **kw):
-        fn = getattr(mod, fn_name, None)
-        if not callable(fn): return False, None
-        try:
-            sig = inspect.signature(fn)
-            call_kw = {k:v for k,v in kw.items() if k in sig.parameters}
-            res = fn(**call_kw)
-            return True, res
-        except Exception as e:
-            _errlog(f"{fn_name} 실패: {e}", where="[ADMIN]_run_index_job", exc=e)
-            return False, f"{fn_name} 실패: {type(e).__name__}: {e}"
-
-    ok, res = _try("build_index_with_checkpoint",
-                   update_pct=_pct, update_msg=_msg, gdrive_folder_id=gdrive_folder_id,
-                   gcp_creds={}, persist_dir=str(PERSIST_DIR), remote_manifest={}, should_stop=None, mode=mode)
-    if ok:
-        try: st.cache_data.clear()
-        except Exception: pass
-        return True, "인덱싱 완료(build_index_with_checkpoint)"
-
-    ok, res = _try("build_index", mode=mode, persist_dir=str(PERSIST_DIR),
-                   gdrive_folder_id=gdrive_folder_id, update_pct=_pct, update_msg=_msg, should_stop=None)
-    if ok:
-        try: st.cache_data.clear()
-        except Exception: pass
-        return True, "인덱싱 완료(build_index)"
-
-    if mode=="full":
-        ok, res = _try("build_all", persist_dir=str(PERSIST_DIR))
-        if ok:
-            try: st.cache_data.clear()
-            except Exception: pass
-            return True, "인덱싱 완료(build_all)"
-    else:
-        ok, res = _try("build_incremental", persist_dir=str(PERSIST_DIR))
-        if ok:
-            try: st.cache_data.clear()
-            except Exception: pass
-            return True, "인덱싱 완료(build_incremental)"
-
-    ok, res = _try("main", argv=["--persist", str(PERSIST_DIR), "--mode", ("full" if mode=='full' else 'inc'), "--folder", gdrive_folder_id])
-    if ok:
-        try: st.cache_data.clear()
-        except Exception: pass
-        return True, "인덱싱 완료(main)"
-
-    return False, (res or "인덱스 엔트리포인트 호출 실패")
-
-def render_admin_tools():
-    """
-    관리자 도구(모듈형, 모두 접기/펼치기 가능)
-      ① 프롬프트/연결 상태
-      ② 응답 모드 ON/OFF
-      ③ 인덱싱(전체/신규만)
-      ④ prompts.yaml 강제 동기화
-      ⑤ 에러 로그(복사/다운로드/초기화)
-    """
-    import os, json, pathlib
-    from pathlib import Path
-
-    with st.expander("관리자 도구", expanded=True):
-        # ① 상태
-        with st.expander("① 진단 · 프롬프트/연결 상태", expanded=True):
-            folder_id = os.getenv("PROMPTS_DRIVE_FOLDER_ID") or getattr(st, "secrets", {}).get("PROMPTS_DRIVE_FOLDER_ID")
-            oauth_info = getattr(st, "secrets", {}).get("gdrive_oauth")
-            who = None
-            try:
-                if isinstance(oauth_info, str): who = json.loads(oauth_info).get("email")
-                elif isinstance(oauth_info, dict): who = oauth_info.get("email")
-            except Exception: pass
-            local_prompts = os.path.expanduser("~/.maic/prompts.yaml")
-            exists = pathlib.Path(local_prompts).exists()
-            persist_dir = Path.home() / ".maic" / "persist"
-
-            st.write(f"• Drive 폴더 ID(프롬프트): `{folder_id or '미설정'}`")
-            st.write(f"• Drive 연결: {'🟢 연결됨' if bool(oauth_info) else '🔴 미연결'} — 계정: `{who or '알 수 없음'}`")
-            st.write(f"• 로컬 prompts 경로: `{local_prompts}` — 존재: {'✅ 있음' if exists else '❌ 없음'}")
-            st.write(f"• 인덱스 보관 경로: `{persist_dir}`")
-
-        # ② 모드 ON/OFF
-        with st.expander("② 응답 모드 ON/OFF", expanded=True):
-            prompts_path = st.session_state.get("prompts_path", os.path.expanduser("~/.maic/prompts.yaml"))
-            all_modes = _load_modes_from_yaml(prompts_path) or ["문법설명","문장구조분석","지문분석"]
-            st.caption(f"감지된 모드: {', '.join(all_modes)}")
-            current_on = _load_enabled_modes(all_modes)
-            state = {}
-            cols = st.columns(min(3, len(all_modes)) or 1)
-            for i, m in enumerate(all_modes):
-                with cols[i % len(cols)]:
-                    state[m] = st.toggle(m, value=(m in current_on), key=f"mode_on__{m}")
-            if st.button("저장(학생 화면 반영)", use_container_width=True):
-                ok, msg = _save_enabled_modes(state)
-                (st.success if ok else st.error)(msg)
-
-        # ③ 인덱싱
-        with st.expander("③ 인덱싱(전체/신규만)", expanded=False):
-            c1, c2 = st.columns(2)
-            with c1:
-                if st.button("전체 인덱스 다시 만들기", use_container_width=True):
-                    with st.spinner("전체 인덱싱 중… 시간이 걸릴 수 있어요"):
-                        ok, msg = _run_index_job("full")
-                    (st.success if ok else st.error)(msg)
-            with c2:
-                if st.button("신규 파일만 인덱스", use_container_width=True):
-                    with st.spinner("증분 인덱싱 중…"):
-                        ok, msg = _run_index_job("inc")
-                    (st.success if ok else st.error)(msg)
-
-        # ④ prompts.yaml 강제 동기화
-        with st.expander("④ 드라이브에서 prompts.yaml 당겨오기(강제)", expanded=False):
-            if st.button("동기화 실행", use_container_width=True):
-                ok, msg = sync_prompts_from_drive(
-                    local_path=os.path.expanduser("~/.maic/prompts.yaml"),
-                    file_name=(os.getenv("PROMPTS_FILE_NAME") or getattr(st, "secrets", {}).get("PROMPTS_FILE_NAME") or "prompts.yaml"),
-                    folder_id=(os.getenv("PROMPTS_DRIVE_FOLDER_ID") or getattr(st, "secrets", {}).get("PROMPTS_DRIVE_FOLDER_ID")),
-                    prefer_folder_name="prompts", verbose=True
-                )
-                (st.success if ok else st.error)(msg)
-
-        # ⑤ 에러 로그
-        with st.expander("⑤ 에러/오류 로그", expanded=False):
-            logs = _errlog_text()
-            st.text_area("세션 에러 로그 (복사 가능)", value=logs, height=200)
-            c1, c2 = st.columns(2)
-            with c1:
-                st.download_button("로그 내려받기", data=logs or "로그 없음", file_name="error_log.txt")
-            with c2:
-                if st.button("로그 초기화"):
-                    st.session_state["_error_log"] = []
-                    st.success("초기화 완료")
-# ===== [08] ADMIN — 인덱싱/강제 동기화·모드ON/OFF·에러로그 — END =============
+# (주의) 만약 과거 [08] 구획이 페이지 본문에서 직접 UI를 그렸다면,
+# 해당 호출부도 함께 정리되어야 합니다. 현재 파일 내에서 `render_admin_panel_legacy()`
+# 를 호출하도록 되어 있다면, 위의 경량 더미가 안전하게 동작합니다.
+# ===== [08] ADMIN PANEL — CONSOLIDATED/REMOVED — END
 
 
 # ===== [23] PROMPTS 동기화 (Google Drive → Local) — START =====================
