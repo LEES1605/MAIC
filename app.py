@@ -123,7 +123,7 @@ _gh      = _try_import("src.backup.github_release", ["restore_latest"])
 _rag     = _try_import("src.rag.index_build", ["build_index_with_checkpoint"])
 _llm     = _try_import("src.llm.providers", ["call_with_fallback"])
 
-# [06] 페이지 설정 & 헤더 + 인라인 로그인만 사용 ==============================
+# [06] 페이지 설정 & 헤더(인라인 로그인만 사용) ================================
 if st:
     st.set_page_config(page_title="LEES AI Teacher", layout="wide")
 
@@ -135,7 +135,6 @@ def _toggle_login_flag():
     st.session_state["_show_admin_login"] = not st.session_state.get("_show_admin_login", False)
 
 def _llm_health() -> tuple[str, str]:
-    """(라벨, 아이콘) 반환: Gemini/OpenAI/둘다/키없음/미탑재"""
     has_cb = bool(_llm.get("call_with_fallback"))
     has_g  = bool(os.getenv("GEMINI_API_KEY") or _from_secrets("GEMINI_API_KEY"))
     has_o  = bool(os.getenv("OPENAI_API_KEY") or _from_secrets("OPENAI_API_KEY"))
@@ -192,16 +191,35 @@ def _header():
                 st.code(w, language="text")
     st.divider()
 
-# 본문 로그인 패널은 더 이상 사용하지 않으므로 완전히 제거(호출도 제거)
+# 본문 로그인 패널은 **완전히 사용 중단** (호환용 빈 함수만 유지)
 def _login_panel_if_needed():
     return
 
-# [07] 자동 시작(선택) =========================================================
-def _auto_start_once():
-    """앱 첫 렌더에서 단 1회만 동작. AUTO_START_MODE=restore 인 경우 복원 시도."""
-    if st is None:
+# [07] 수동 복원 CTA(두뇌 미준비 시에만, 관리자에게만) ==========================
+def _manual_restore_cta():
+    if st is None or not _is_admin_view() or _is_brain_ready():
         return
-    if st.session_state.get("_auto_started"):
+    with st.container(border=True):
+        c1, c2 = st.columns([0.65, 0.35])
+        with c1:
+            st.info("두뇌가 아직 준비되지 않았어요. 최신 GitHub Releases에서 복원할 수 있어요.")
+        with c2:
+            if st.button("최신 릴리스에서 복원", type="primary", use_container_width=True):
+                try:
+                    ok = bool(_gh.get("restore_latest") and _gh["restore_latest"](dest_dir=PERSIST_DIR))
+                    if ok:
+                        _mark_ready()
+                        st.success("복원 완료! 잠시 후 새로고침됩니다.")
+                        st.rerun()
+                    else:
+                        st.error("복원 실패: Releases의 manifest/chunks를 확인하세요.")
+                except Exception as e:
+                    _errlog(f"manual restore failed: {e}", where="[manual_restore]", exc=e)
+                    st.error(f"예외: {type(e).__name__}: {e}")
+
+# [08] 자동 시작(선택) =========================================================
+def _auto_start_once():
+    if st is None or st.session_state.get("_auto_started"):
         return
     st.session_state["_auto_started"] = True
     if _is_brain_ready():
@@ -216,7 +234,7 @@ def _auto_start_once():
         except Exception as e:
             _errlog(f"auto restore failed: {e}", where="[auto_start]", exc=e)
 
-# [08] 설명 모드 허용/기본값 & 라벨/LLM 토큰 ====================================
+# [09] 설명 모드 허용/기본값 & 라벨/LLM 토큰 ====================================
 def _modes_cfg_path() -> Path:
     return PERSIST_DIR / "explain_modes.json"
 
@@ -246,55 +264,6 @@ def _sanitize_modes_cfg(cfg: Dict[str, Any]) -> Dict[str, Any]:
 _LABELS    = {"문법": "어법", "문장": "문장", "지문": "지문"}
 _LLM_TOKEN = {"문법": "문법설명", "문장": "문장구조분석", "지문": "지문분석"}
 
-# [09] 관리자 패널 ==============================================================
-def _render_admin_panels() -> None:
-    if st is None or not _is_admin_view():
-        return
-    # 외부 모듈 패널
-    if _ui_admin.get("ensure_admin_session_keys"): _ui_admin["ensure_admin_session_keys"]()
-    if _ui_admin.get("render_admin_controls"):     _ui_admin["render_admin_controls"]()
-    if _ui_admin.get("render_role_caption"):       _ui_admin["render_role_caption"]()
-    st.divider()
-
-    st.markdown("## 관리자: 자료/인덱스 관리")
-    if _ui_orch.get("render_index_orchestrator_panel"):
-        try:
-            _ui_orch["render_index_orchestrator_panel"]()
-        except Exception as e:
-            st.error(f"오케스트레이터 패널 오류: {type(e).__name__}: {e}")
-            _errlog(f"ui_orchestrator error: {e}", where="[admin_panel]", exc=e)
-    else:
-        st.info("오케스트레이터 모듈이 없습니다: src.ui_orchestrator")
-
-    st.markdown("### 설명 모드 허용 설정")
-    cfg = _sanitize_modes_cfg(_load_modes_cfg())
-    a = set(cfg["allowed"])
-    c1, c2, c3 = st.columns(3)
-    with c1: g = st.checkbox("문법", value=("문법" in a))
-    with c2: s = st.checkbox("문장", value=("문장" in a))
-    with c3: p = st.checkbox("지문", value=("지문" in a))
-
-    base_modes = ["문법", "문장", "지문"]
-    default_sel = st.selectbox("기본 모드(학생 초기값)", base_modes, index=base_modes.index(cfg["default"]))
-
-    if st.button("허용 설정 저장", type="primary"):
-        new_cfg = _sanitize_modes_cfg({
-            "allowed": [m for m, v in [("문법", g), ("문장", s), ("지문", p)] if v],
-            "default": default_sel
-        })
-        _save_modes_cfg(new_cfg)
-        st.success("저장 완료")
-        st.rerun()
-
-    if _ui_admin.get("render_mode_radio_admin"):
-        st.markdown("#### (관리자 전용) 미리보기용 모드 선택")
-        _ui_admin["render_mode_radio_admin"]()
-
-    with st.expander("오류 로그", expanded=False):
-        txt = _errlog_text()
-        st.text_area("최근 오류", value=txt, height=180)
-        st.download_button("로그 다운로드", data=txt.encode("utf-8"), file_name="app_error_log.txt")
-
 # [10] 학생 UI: 모드 버튼 + 파스텔 채팅 =======================================
 def _inject_minimal_styles_once():
     if st.session_state.get("_minimal_styles_injected"):
@@ -318,7 +287,7 @@ def _inject_minimal_styles_once():
       .row{ display:flex; }
       .row.user{ justify-content:flex-end; }
       .row.ai{   justify-content:flex-start; }
-      /* chat_input 자체에 테두리/배경 */
+      /* chat_input에 테두리/배경 직접 적용 */
       div[data-testid="stChatInput"]{
         border:2px solid #bcdcff !important;
         background:#e6f7ff !important;
@@ -329,8 +298,6 @@ def _inject_minimal_styles_once():
     """, unsafe_allow_html=True)
 
 _MODE_KEYS = ["문법", "문장", "지문"]
-_LABELS    = {"문법":"어법","문장":"문장","지문":"지문"}
-_LLM_TOKEN = {"문법":"문법설명","문장":"문장구조분석","지문":"지문분석"}
 
 def _render_mode_controls_minimal(*, admin: bool) -> str:
     _inject_minimal_styles_once()
@@ -348,7 +315,8 @@ def _render_mode_controls_minimal(*, admin: bool) -> str:
         for col, key in zip([c1, c2, c3], _MODE_KEYS):
             disabled = False if admin else (key not in allowed)
             with col:
-                btn = st.button(_LABELS[key], key=f"mode_btn_{key}", disabled=disabled,
+                label = {"문법":"어법","문장":"문장","지문":"지문"}[key]
+                btn = st.button(label, key=f"mode_btn_{key}", disabled=disabled,
                                 type=("primary" if cur == key else "secondary"))
                 if btn and (admin or (key in allowed)):
                     ss["qa_mode_radio"] = key; cur = key; st.rerun()
@@ -373,7 +341,8 @@ def _render_chat_panel() -> None:
         with c1: st.markdown(f"**{'🟢 준비완료' if ready else '🟡 준비중'}**")
         with c2: _ = _render_mode_controls_minimal(admin=admin)
 
-    if not ready: _manual_restore_cta()
+    if not ready:
+        _manual_restore_cta()
 
     # 대화 영역
     st.markdown('<div class="chat-box">', unsafe_allow_html=True)
@@ -392,11 +361,12 @@ def _render_chat_panel() -> None:
     msg_id = ss["_chat_next_id"]; ss["_chat_next_id"] += 1
     ss["chat"].append({"id": msg_id, "role":"user", "text": user_q})
 
-    # LLM 호출 (스피너로 로딩 표시)
+    # LLM 호출 (로딩 스피너)
     cfg = _sanitize_modes_cfg(_load_modes_cfg())
     cur = ss.get("qa_mode_radio") or cfg["default"]
     system_prompt = "너는 한국의 영어학원 원장처럼, 따뜻하고 명확하게 설명한다."
-    prompt = f"[모드:{_LLM_TOKEN.get(cur,'문법설명')}]\n{user_q}"
+    token = {"문법":"문법설명","문장":"문장구조분석","지문":"지문분석"}[cur]
+    prompt = f"[모드:{token}]\n{user_q}"
 
     try:
         with st.spinner("답변 생성 중..."):
@@ -406,15 +376,13 @@ def _render_chat_panel() -> None:
     except Exception as e:
         ss["chat"].append({"id": msg_id+1, "role":"assistant","text": f"예외: {type(e).__name__}: {e}"})
         _errlog(f"LLM 예외: {e}", where="[qa_llm]", exc=e)
-
-    # 추가 rerun 호출 불필요 (chat_input이 자동 rerun)
-    # st.rerun()
+    # 추가 st.rerun() 불필요
 
 # [11] 본문 렌더 ===============================================================
 def _render_body() -> None:
     if st is None:
         return
-    _header()            # ✅ 인라인 로그인만 사용
+    _header()           # 인라인 로그인만 사용
     _auto_start_once()
     if _is_admin_view():
         _render_admin_panels()
