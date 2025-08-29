@@ -291,42 +291,79 @@ def _render_admin_panels() -> None:
         st.text_area("최근 오류", value=txt, height=180)
         st.download_button("로그 다운로드", data=txt.encode("utf-8"), file_name="app_error_log.txt")
 
-# ==== [10] 채팅 패널 =========================================================
-def _llm_call(prompt: str, system: Optional[str] = None) -> Dict[str, Any]:
-    if _llm.get("call_with_fallback"):
-        return _llm["call_with_fallback"](prompt=prompt, system=system,
-                                          primary="gemini", secondary="openai",
-                                          temperature=0.3, max_tokens=800)
-    return {"ok": False, "error": "LLM providers 모듈 미탑재"}
+# ==== [10] 설명 모드 UI(세그먼트 버튼) + 채팅 패널 ===========================
+def _modes_cfg_path() -> Path:
+    # 관리자 허용 모드 영속 저장 파일 위치
+    return PERSIST_DIR / "explain_modes.json"
+
+def _load_modes_cfg_safe() -> Dict[str, Any]:
+    """도우미가 앱에 없더라도 안전하게 기본값을 반환."""
+    defaults = {"allowed": ["문법설명","문장구조분석","지문분석"], "default": "문법설명"}
+    try:
+        if '_load_modes_cfg' in globals() and callable(globals()['_load_modes_cfg']):
+            # 우리 앱에 이미 있는 헬퍼가 있으면 그것을 그대로 사용
+            try:
+                if '_sanitize_modes_cfg' in globals() and callable(globals()['_sanitize_modes_cfg']):
+                    return globals()['_sanitize_modes_cfg'](globals()['_load_modes_cfg']())
+                return globals()['_load_modes_cfg']()
+            except Exception:
+                return defaults
+        # 헬퍼가 없다면 json 직접 로드
+        p = _modes_cfg_path()
+        if not p.exists():
+            return defaults
+        obj = json.loads(p.read_text(encoding="utf-8") or "{}")
+        modes = ["문법설명","문장구조분석","지문분석"]
+        allowed = [m for m in (obj.get("allowed") or []) if m in modes]
+        default = obj.get("default") or "문법설명"
+        if default not in modes:
+            default = "문법설명"
+        return {"allowed": allowed, "default": default}
+    except Exception:
+        return defaults
 
 def _render_mode_controls(*, admin: bool) -> str:
-    """세 모드를 모두 보여주되, 학생은 끈 모드는 비활성(회색). 선택 결과를 반환."""
+    """
+    세 모드는 항상 보이되, 학생은 관리자에서 끈 모드만 회색/비활성.
+    반환값: 현재 선택된 모드
+    """
     ss = st.session_state
-    cfg = _sanitize_modes_cfg(_load_modes_cfg())
+    cfg = _load_modes_cfg_safe()
     allowed = set(cfg["allowed"])
-    modes = ["문법설명","문장구조분석","지문분석"]
+    modes   = ["문법설명","문장구조분석","지문분석"]
 
-    # 현재 선택이 없으면 기본값으로
+    # 현재 선택이 없다면 내부 폴백(default)
     cur = ss.get("qa_mode_radio") or cfg["default"]
+
+    # 학생이 금지 모드에 머물러 있다면 폴백으로 교정
     if (not admin) and (cur not in allowed) and allowed:
-        # 학생이 금지 모드에 머물러 있으면 기본값으로 교정
         cur = cfg["default"]
         ss["qa_mode_radio"] = cur
 
     st.caption("설명 모드")
-    b1,b2,b3 = st.columns(3)
+    col1, col2, col3 = st.columns(3)
+    layout = [(col1, "문법설명"), (col2, "문장구조분석"), (col3, "지문분석")]
+
     clicked = None
-    for i,(col, label) in enumerate([(b1,"문법설명"),(b2,"문장구조분석"),(b3,"지문분석")]):
+    for col, label in layout:
         disabled = False if admin else (label not in allowed)
-        button_label = f"✅ {label}" if cur == label else label
         with col:
-            if st.button(button_label, use_container_width=True, disabled=disabled):
+            # 선택된 항목은 시각적으로 강조(프리픽스)
+            btn_label = f"✅ {label}" if cur == label else label
+            if st.button(btn_label, key=f"mode_btn_{label}", use_container_width=True, disabled=disabled):
                 clicked = label
 
     if clicked:
         ss["qa_mode_radio"] = clicked
         cur = clicked
     return cur
+
+def _llm_call(prompt: str, system: Optional[str] = None) -> Dict[str, Any]:
+    if _llm.get("call_with_fallback"):
+        return _llm["call_with_fallback"](prompt=prompt, system=system,
+                                          primary="gemini", secondary="openai",
+                                          temperature=0.3, max_tokens=800)
+    return {"ok": False, "error": "LLM providers 모듈 미탑재"}
 
 def _render_chat_panel() -> None:
     if st is None: return
@@ -336,6 +373,7 @@ def _render_chat_panel() -> None:
     ready = _is_brain_ready()
     admin = _is_admin_view()
 
+    # 상단 상태 + (세그먼트 버튼) 모드 컨트롤
     with st.container(border=True):
         c1, c2 = st.columns([0.65, 0.35])
         with c1:
@@ -343,24 +381,31 @@ def _render_chat_panel() -> None:
         with c2:
             _ = _render_mode_controls(admin=admin)
 
+    # 두뇌 준비 전에는 (관리자만) 최신 릴리스 복원 CTA
     if not ready:
         _manual_restore_cta()
 
+    # 대화 히스토리
     with st.container(border=True):
         for m in ss["chat"]:
             if m["role"] == "user":
-                with st.chat_message("user", avatar="🧑"): st.markdown(m["text"])
+                with st.chat_message("user", avatar="🧑"):
+                    st.markdown(m["text"])
             else:
-                with st.chat_message("assistant", avatar="🤖"): st.markdown(m["text"])
+                with st.chat_message("assistant", avatar="🤖"):
+                    st.markdown(m["text"])
 
+    # 입력 + 호출
     user_q = st.chat_input("질문을 입력하세요")
-    if not user_q: return
+    if not user_q:
+        return
 
     msg_id = ss["_chat_next_id"]; ss["_chat_next_id"] += 1
-    ss["chat"].append({"id": msg_id, "role":"user", "text": user_q})
+    ss["chat"].append({"id": msg_id, "role": "user", "text": user_q})
 
     system_prompt = "너는 한국의 영어학원 원장처럼, 따뜻하고 명확하게 설명한다."
-    mode = ss.get("qa_mode_radio") or _sanitize_modes_cfg(_load_modes_cfg())["default"]
+    cfg = _load_modes_cfg_safe()
+    mode = ss.get("qa_mode_radio") or cfg["default"]
     prompt = f"[모드:{mode}]\n{user_q}"
 
     with st.chat_message("assistant", avatar="🤖"):
@@ -377,6 +422,8 @@ def _render_chat_panel() -> None:
         except Exception as e:
             slot.error(f"예외: {type(e).__name__}: {e}")
             _errlog(f"LLM 예외: {e}", where="[qa_llm]", exc=e)
+# =========================== [10] END =======================================
+
 
 # ==== [11] 본문 렌더 =========================================================
 def _header_and_login():
