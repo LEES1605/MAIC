@@ -632,3 +632,65 @@ def ensure_index_ready(*, prefer_release_restore: bool = True, folder_id: Option
 def diff_status(*, folder_id: Optional[str] = None) -> Dict[str, Any]:
     return diff_with_manifest(folder_id=folder_id)
 # [11] END
+# [12] 빠른 사전 점검(quick_precheck)  # [12] START
+def quick_precheck() -> dict:
+    """
+    UI에서 초기 상태 뱃지/버튼 표시 전에 호출하는 빠른 점검.
+    반환 스키마(보수적):
+      {
+        "ok": bool,                    # 전체적으로 사용 가능 판단
+        "drive_ok": bool,              # Drive 읽기 인증 성공
+        "prepared_id": str | None,     # prepared 폴더 ID
+        "local_index_ok": bool,        # 로컬 manifest/chunks 존재 여부
+        "gh_ok": bool,                 # GitHub Releases 설정 존재 여부
+        "recursive": bool,             # 하위폴더 재귀 인덱싱 설정값
+        "detail": str                  # 간단 사유/메시지
+      }
+    """
+    info = {
+        "ok": False,
+        "drive_ok": False,
+        "prepared_id": None,
+        "local_index_ok": False,
+        "gh_ok": False,
+        "recursive": bool(DRIVE_RECURSIVE),
+        "detail": "",
+    }
+
+    # 1) 로컬 인덱스 존재 여부
+    try:
+        man_ok = MANIFEST_PATH.exists() and MANIFEST_PATH.stat().st_size > 0
+        chk_ok = (PERSIST_DIR / "chunks.jsonl").exists() and (PERSIST_DIR / "chunks.jsonl").stat().st_size > 0
+        info["local_index_ok"] = bool(man_ok and chk_ok)
+    except Exception:
+        info["local_index_ok"] = False
+
+    # 2) GitHub 설정
+    try:
+        info["gh_ok"] = bool(USE_GITHUB_RELEASES and _get_gh_conf())
+    except Exception:
+        info["gh_ok"] = False
+
+    # 3) Drive 인증 + prepared 폴더 ID
+    try:
+        svc = _drive_client()
+        info["drive_ok"] = True
+        fid = _find_folder_id(svc, prefer_id=PREPARED_FOLDER_ID, name=PREPARED_FOLDER_NAME)
+        info["prepared_id"] = fid
+        if not fid:
+            info["detail"] = "prepared 폴더 ID를 찾지 못했습니다."
+    except Exception as e:
+        info["drive_ok"] = False
+        info["detail"] = f"Drive 인증 실패: {e}"
+
+    # 4) 종합 판단: Drive OK & prepared 존재 & (로컬인덱스 or GitHub복원가능) 이면 사용 가능
+    if info["drive_ok"] and info["prepared_id"]:
+        if info["local_index_ok"] or info["gh_ok"]:
+            info["ok"] = True
+            if not info["detail"]:
+                info["detail"] = "정상"
+        else:
+            info["detail"] = "인덱스 없음 및 GitHub 복원 설정 없음"
+    return info
+# [12] END
+
