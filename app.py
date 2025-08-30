@@ -578,7 +578,7 @@ def _replace_assistant_text(aid: str, new_text: str):
             return True
     return False
 # [10A] 학생 UI (Stable): 스타일/세그먼트/버블 렌더러 ===============================  # [10A] END
-# [10B] 학생 로직: 입력 → 준비중 버블 → 답변 치환 + 관리자 컨트롤 ====================  # [10B] START
+# [10B] 학생 로직: 2-스텝(버블 먼저 렌더 → 자동 재실행 → LLM 호출) + 관리자 컨트롤  # [10B] START
 def _render_admin_index_controls():
     """관리자 전용: 인덱싱하기/백업 쓰기/재빌드."""
     if not _is_admin_view():
@@ -604,17 +604,52 @@ def _render_admin_index_controls():
         st.info(f"변경 감지: +{stats.get('added',0)} / Δ{stats.get('changed',0)} / -{stats.get('removed',0)}")
 
 def _render_chat_panel():
-    import time, inspect
+    import time, inspect, html
     ss = st.session_state
     if "chat" not in ss:
         ss["chat"] = []
 
-    # 0) pending 콜 처리(2단계): 이번 런에서 LLM 호출 → '준비중' 버블 교체
+    # 1) 상단 상태 버튼 + (관리자) 컨트롤
+    _render_llm_status_minimal()
+    _render_admin_index_controls()
+
+    # 2) 모드 선택(세그먼트)
+    cur = _render_mode_controls_segmented(admin=_is_admin_view())
+
+    # 3) 채팅 로그 먼저 보여주기 (항상 화면에 보이도록)
+    _render_chat_log(ss["chat"])
+
+    # 4) 입력: chat_input (엔터/화살표 자동, 제출 시 자동 초기화)
+    user_q = st.chat_input("예) 분사구문이 뭐예요?  예) 이 문장 구조 분석해줘")
+
+    # 5) 새 질문 접수 → 즉시 버블 2개(오른쪽:질문 / 왼쪽:준비중) 추가 후, 'show' 단계로 설정
+    if user_q and user_q.strip():
+        uid = f"u{int(time.time()*1000)}"
+        aid = f"a{uid}"  # 답변 버블과 페어링
+        ss["chat"].append({"id": uid, "role":"user", "text": user_q.strip()})
+        ss["chat"].append({"id": aid, "role":"assistant", "text": "답변 준비중…"})
+        mode_token = _LLM_TOKEN.get(cur, "문법설명")
+        ss["_pending_call"] = {"q": user_q.strip(), "mode_key": cur, "mode_token": mode_token, "aid": aid}
+        ss["_llm_phase"] = "show"   # 1차 런: 버블 먼저 보여주는 단계
+        st.rerun()
+
+    # 6) 1차 런(show)일 때는 버블만 보여주고, 아주 짧게 대기 후 자동 재실행 → 2차 런(call)
+    if ss.get("_pending_call") and ss.get("_llm_phase") == "show":
+        # JS로 120ms 뒤 자동 재실행 (브라우저가 먼저 화면을 그리도록)
+        st.markdown(
+            "<script>setTimeout(function(){window.location.reload();},120);</script>",
+            unsafe_allow_html=True
+        )
+        ss["_llm_phase"] = "call"
+        return  # 여기서는 LLM 호출을 하지 않음
+
+    # 7) 2차 런(call)에서만 LLM 호출 → '준비중…' 버블 텍스트 교체 후 상태 정리
     pending = ss.get("_pending_call")
-    if pending:
+    if pending and ss.get("_llm_phase") == "call":
         try:
             user_q = pending["q"]; mode_token = pending["mode_token"]; aid = pending["aid"]; cur = pending["mode_key"]
-            # 프롬프트 빌드(Drive prompts.yaml 연결, 실패 시 폴백)
+
+            # prompts.yaml 연결 (실패 시 폴백)
             _prompt_mod = _try_import("src.prompt_modes", ["build_prompt"])
             _build_prompt = (_prompt_mod or {}).get("build_prompt")
             DEF_SYS = "너는 한국의 영어학원 원장처럼, 따뜻하고 명확하게 설명한다."
@@ -628,10 +663,10 @@ def _render_chat_panel():
             else:
                 system_prompt = DEF_SYS; prompt = f"[모드:{mode_token}]\n{user_q}"
 
+            # LLM 어댑터 시그니처 자동 매핑
             call = (_llm or {}).get("call_with_fallback") if "_llm" in globals() else None
             if not callable(call):
                 raise RuntimeError("LLM 어댑터(call_with_fallback)를 사용할 수 없습니다.")
-
             sig = inspect.signature(call); params = sig.parameters.keys(); kwargs = {}
             if "messages" in params:
                 kwargs["messages"] = [{"role":"system","content":system_prompt},{"role":"user","content":prompt}]
@@ -655,35 +690,10 @@ def _render_chat_panel():
             _replace_assistant_text(pending.get("aid",""), f"(오류) {type(e).__name__}: {e}")
             _errlog(f"LLM 예외: {e}", where="[qa_llm]", exc=e)
         finally:
-            ss["_pending_call"] = None  # 소모
-
-    # 1) 상단 상태 버튼
-    _render_llm_status_minimal()
-
-    # 1-1) (관리자 전용) 인덱스 컨트롤 패널
-    _render_admin_index_controls()
-
-    # 2) 모드 선택(세그먼트 → 강조)
-    cur = _render_mode_controls_segmented(admin=_is_admin_view())
-
-    # 3) 채팅 로그(파스텔 하늘색 배경) 먼저 보여주고,
-    _render_chat_log(ss["chat"])
-
-    # 4) 입력: chat_input (엔터/화살표 자동, 제출 시 자동 초기화)
-    user_q = st.chat_input("예) 분사구문이 뭐예요?  예) 이 문장 구조 분석해줘")
-
-    # 5) 전송 1단계: 즉시 오른쪽(학생) 버블 + 왼쪽 '준비중' 버블 추가 → rerun
-    if user_q and user_q.strip():
-        uid = f"u{int(time.time()*1000)}"
-        aid = f"a{uid}"  # 페어링
-        ss["chat"].append({"id": uid, "role":"user", "text": user_q.strip()})
-        ss["chat"].append({"id": aid, "role":"assistant", "text": "답변 준비중…"})
-        mode_token = _LLM_TOKEN.get(cur, "문법설명")
-        ss["_pending_call"] = {"q": user_q.strip(), "mode_key": cur, "mode_token": mode_token, "aid": aid}
-        st.rerun()
-# [10B] 학생 로직: 입력 → 준비중 버블 → 답변 치환 + 관리자 컨트롤 ====================  # [10B] END
-
-
+            ss["_pending_call"] = None
+            ss["_llm_phase"] = None
+            st.rerun()  # 텍스트가 교체된 버블을 즉시 반영
+# [10B] 학생 로직: 2-스텝(버블 먼저 렌더 → 자동 재실행 → LLM 호출) + 관리자 컨트롤  # [10B] END
 
 # [10] 학생 UI (Stable v1.5): 모드(세그먼트 강조) + 채팅(파스텔 하늘색) + 2단계 렌더(질문→준비중→답변)  # [10] END
 
