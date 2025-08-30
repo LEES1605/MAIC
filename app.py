@@ -267,13 +267,23 @@ def _sanitize_modes_cfg(cfg: Dict[str, Any]) -> Dict[str, Any]:
         default = "문법"
     return {"allowed": allowed, "default": default}
 
-_LABELS    = {"문법": "어법", "문장": "문장", "지문": "지문"}
-_LLM_TOKEN = {"문법": "문법설명", "문장": "문장구조분석", "지문": "지문분석"}
+_LABELS    = {"문법": "어법", "문장": "문장", "지문": "지문"}             # 표시 라벨
+_LLM_TOKEN = {"문법": "문법설명", "문장": "문장구조분석", "지문": "지문분석"}  # LLM 호출 토큰
+
+# 토큰↔메뉴 키 변환(호환 어댑터)
+def _mode_to_token(m: str) -> str:
+    return {"문법":"문법설명","문장":"문장구조분석","지문":"지문분석"}.get(m, m)
+
+def _token_to_mode(t: str) -> str:
+    inv = {"문법설명":"문법","문장구조분석":"문장","지문분석":"지문"}
+    return inv.get(t, t)
 
 def _render_admin_panels() -> None:
-    """관리자 패널(정의 보장)"""
+    """관리자 패널(정의 보장 + ui_admin과 키 호환)"""
     if st is None or not _is_admin_view():
         return
+
+    # 외부 모듈 패널
     if _ui_admin.get("ensure_admin_session_keys"): _ui_admin["ensure_admin_session_keys"]()
     if _ui_admin.get("render_admin_controls"):     _ui_admin["render_admin_controls"]()
     if _ui_admin.get("render_role_caption"):       _ui_admin["render_role_caption"]()
@@ -307,14 +317,33 @@ def _render_admin_panels() -> None:
         st.success("저장 완료")
         st.rerun()
 
+    # ---- 여기: ui_admin 호환 래핑 -------------------------------------------
     if _ui_admin.get("render_mode_radio_admin"):
         st.markdown("#### (관리자 전용) 미리보기용 모드 선택")
-        _ui_admin["render_mode_radio_admin"]()
+
+        # 1) 우리 세션 키(문법/문장/지문) → ui_admin 기대값(문법설명/…)으로 일시 변환
+        ss = st.session_state
+        cur_mode = ss.get("qa_mode_radio") or cfg["default"]
+        ss["_qa_mode_backup"] = cur_mode
+        ss["qa_mode_radio"] = _mode_to_token(cur_mode)
+
+        # 2) 외부 패널 호출 (내부는 토큰 문자열을 사용)
+        try:
+            _ui_admin["render_mode_radio_admin"]()
+        except Exception as e:
+            st.warning(f"관리자 미리보기 패널 경고: {type(e).__name__}: {e}")
+        finally:
+            # 3) 사용자가 바꿨을 수 있으니, 토큰→우리 키로 복원/반영
+            sel_token = ss.get("qa_mode_radio", _mode_to_token(cur_mode))
+            ss["qa_mode_radio"] = _token_to_mode(sel_token)
+            ss.pop("_qa_mode_backup", None)
+    # ------------------------------------------------------------------------
 
     with st.expander("오류 로그", expanded=False):
         txt = _errlog_text()
         st.text_area("최근 오류", value=txt, height=180)
         st.download_button("로그 다운로드", data=txt.encode("utf-8"), file_name="app_error_log.txt")
+
 
 # [10] 학생 UI: 모드 버튼 + 파스텔 채팅(생각중·꼬리·간격·지연해결) ==============
 def _inject_minimal_styles_once():
