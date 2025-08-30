@@ -452,7 +452,7 @@ def _render_admin_panels() -> None:
 
 # [10] 학생 UI (Stable Chatbot v2): 파스텔 하늘 배경 + 말풍선 + 모드(Pill) + 2스텝 렌더  # [10] START
 # ──────────────────────────────────────────────────────────────────────────────
-# [10A] UI(고정): 스타일 / 모드(Pill) / 말풍선 렌더러 / 헬퍼
+# [10A] 학생 UI (Stable): 스타일/모드(작게·아이콘 제거·색만 변경)/챗봇 말풍선 + Q/A 태그  # [10A] START
 def _inject_chat_styles_once():
     if st.session_state.get("_chat_styles_injected"):
         return
@@ -465,37 +465,40 @@ def _inject_chat_styles_once():
       .status-btn.green{ background:#daf5cb; border-color:#bfe5ac; }
       .status-btn.yellow{ background:#fff3bf; border-color:#ffe08a; }
 
-      /* 모드 선택: 파스텔 하늘색 Pill */
-      .mode-zone{ margin:6px 0 2px 0; }
-      .mode-pill{
-        display:block; width:100%; text-align:center; padding:10px 12px;
-        border:2px solid #bcdcff; border-radius:16px; background:#ffffff;
-        color:#0a2540; font-weight:700;
+      /* ── 모드 선택: 라디오를 '작은 pill 버튼'처럼 보이게 ───────────────────────── */
+      div[data-testid="stRadio"] > div[role="radiogroup"]{
+        display:flex; gap:10px; align-items:center; flex-wrap:wrap;
       }
-      .mode-pill.active{
-        background:#eaf6ff;  /* 파스텔 하늘 */
-        border-color:#9fd1ff;
+      div[data-testid="stRadio"] [role="radio"]{
+        border:2px solid #bcdcff; border-radius:12px;
+        padding:6px 12px; background:#ffffff; color:#0a2540;
+        font-weight:700; font-size:14px; line-height:1; /* 작게, 균일 */
       }
-      .mode-pill:hover{ background:#f5fbff; }
+      /* 선택 시: 크기 그대로, 색만 파스텔 하늘 */
+      div[data-testid="stRadio"] [role="radio"][aria-checked="true"]{
+        background:#eaf6ff; border-color:#9fd1ff; color:#0a2540;
+      }
+      /* 기본 점(●) 아이콘 숨김 */
+      div[data-testid="stRadio"] svg{ display:none !important; }
 
-      /* 채팅 컨테이너 (파스텔 하늘 배경) */
+      /* ── 채팅 컨테이너(파스텔 하늘) ─────────────────────────────────────────────── */
       .chat-wrap{
         background:#eaf6ff; border:1px solid #cfe7ff; border-radius:18px;
         padding:10px 10px 8px; margin-top:10px;
       }
       .chat-box{
         min-height:240px; max-height:54vh; overflow-y:auto; padding:6px 6px 2px;
-        display:flex; flex-direction:column; justify-content:flex-end; /* 아래 정렬 */
+        display:flex; flex-direction:column; justify-content:flex-end;  /* 아래 정렬 */
       }
 
-      /* 챗봇 말풍선 */
+      /* ── 챗봇 말풍선 + Q/A 태그 ─────────────────────────────────────────────────── */
       .row{ display:flex; margin:8px 0; gap:10px; }
-      .row.user{ justify-content:flex-end; }   /* 학생 → 오른쪽 */
-      .row.ai{   justify-content:flex-start; } /* AI   → 왼쪽  */
+      .row.user{ justify-content:flex-end; }     /* 학생 → 오른쪽 */
+      .row.ai{   justify-content:flex-start; }   /* AI   → 왼쪽  */
       .bubble{
         max-width:88%; padding:12px 14px; border-radius:16px; line-height:1.6; font-size:15px;
-        box-shadow:0 1px 1px rgba(0,0,0,0.05); white-space:pre-wrap;
-        border:1px solid #e0eaff; position:relative;
+        box-shadow:0 1px 1px rgba(0,0,0,0.05); white-space:pre-wrap; position:relative;
+        border:1px solid #e0eaff;
       }
       .bubble.user{
         background:#ffffff; color:#0a2540; border-color:#d9eaff; border-top-right-radius:8px;
@@ -513,8 +516,23 @@ def _inject_chat_styles_once():
         border-width:8px 8px 8px 0; border-style:solid;
         border-color:transparent #e0eaff transparent transparent;
       }
+      /* 말풍선에 Q/A 칩(태그) 부착: 텍스트와 시각적으로 확실히 구분 */
+      .bubble.user::before{
+        content:"Q"; position:absolute; top:-10px; left:10px;
+        font-size:11px; font-weight:800; padding:2px 8px;
+        background:#fff1a6; border:1px solid #0001; border-radius:10px; color:#333;
+      }
+      .bubble.ai::after{
+        content:"A"; position:absolute; top:-10px; right:10px;
+        font-size:11px; font-weight:800; padding:2px 8px;
+        background:#dff0ff; border:1px solid #0001; border-radius:10px; color:#333;
+      }
     </style>
     """, unsafe_allow_html=True)
+
+_MODE_KEYS = ["문법", "문장", "지문"]
+_LABELS    = {"문법":"어법","문장":"문장","지문":"지문"}
+_LLM_TOKEN = {"문법":"문법설명","문장":"문장구조분석","지문":"지문분석"}
 
 def _llm_callable_ok() -> bool:
     try:
@@ -529,28 +547,31 @@ def _render_llm_status_minimal():
     st.markdown(html, unsafe_allow_html=True)
 
 def _render_mode_controls_pills() -> str:
-    """파스텔 하늘색 Pill UI로 모드 강조(세그먼트 대신)."""
+    """
+    버튼 대신 '수평 라디오'를 사용해 크기 고정 + 색상만 변경.
+    아이콘 제거, 텍스트만 사용.
+    """
     _inject_chat_styles_once()
     ss = st.session_state
     cfg = _sanitize_modes_cfg(_load_modes_cfg())
-    cur = ss.get("qa_mode_radio") or (cfg.get("default") or "문법")
-    st.markdown("#### 질문 모드 선택")
-    c1, c2, c3 = st.columns(3, gap="small")
-    def pill(col, mode, icon_label):
-        with col:
-            if cur == mode:
-                st.markdown(f'<div class="mode-zone"><div class="mode-pill active">{icon_label}</div></div>',
-                            unsafe_allow_html=True)
-            else:
-                if st.button(icon_label, key=f"mode_btn_{mode}", use_container_width=True):
-                    ss["qa_mode_radio"] = mode; st.rerun()
-    pill(c1, "문법", "🧩 어법")
-    pill(c2, "문장", "🧱 문장")
-    pill(c3, "지문", "📖 지문")
-    if cur not in ["문법","문장","지문"]:
+
+    # 현재/기본 모드
+    cur = ss.get("qa_mode_radio")
+    if cur not in _MODE_KEYS:
         cur = cfg.get("default") or "문법"
-    ss["qa_mode_radio"] = cur
-    return cur
+
+    # 표시 라벨(아이콘 제거)
+    labels = ["어법","문장","지문"]
+    to_key = {"어법":"문법","문장":"문장","지문":"지문"}
+    to_label = {"문법":"어법","문장":"문장","지문":"지문"}
+    idx = labels.index(to_label.get(cur,"어법"))
+
+    sel = st.radio("질문 모드 선택", options=labels, index=idx, horizontal=True)
+    new_key = to_key[sel]
+    if new_key != cur:
+        ss["qa_mode_radio"] = new_key
+        st.rerun()
+    return ss.get("qa_mode_radio", new_key)
 
 def _htmlize_text(s: str) -> str:
     import html, re
@@ -560,7 +581,7 @@ def _htmlize_text(s: str) -> str:
     return t
 
 def _render_chat_log(messages: list[dict]):
-    """파스텔 하늘색 영역에 챗봇 말풍선 렌더."""
+    """파스텔 하늘 배경 안에 챗봇 말풍선 렌더 + Q/A 칩."""
     st.markdown('<div class="chat-wrap"><div class="chat-box">', unsafe_allow_html=True)
     for m in messages or []:
         role = m.get("role","ai"); text = _htmlize_text(m.get("text",""))
@@ -576,8 +597,8 @@ def _replace_assistant_text(aid: str, new_text: str):
             m["text"] = new_text
             return True
     return False
+# [10A] 학생 UI (Stable): 스타일/모드(작게·아이콘 제거·색만 변경)/챗봇 말풍선 + Q/A 태그  # [10A] END
 
-# ──────────────────────────────────────────────────────────────────────────────
 # [10B] 학생 로직 (Safe v1.0.1): JS/타이머 제거, 즉시 호출, 오버레이 없음, prompt 참조 수정  # [10B] START
 def _render_chat_panel():
     import time, inspect
