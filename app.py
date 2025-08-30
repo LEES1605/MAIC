@@ -560,81 +560,153 @@ def _replace_assistant_text(aid:str,new_text:str):
     return False
 # [10A] END
 
-# [10B] 학생 로직 (Streaming v1.2): 모든 렌더를 chat-wrap 내부에서 처리해 배경 유지  # [10B] START
+# [10B] 학생 로직 (Streaming v1.3, GitHub prompts): chat-wrap 내부 렌더 + GitHub 우선 + 소스뱃지  # [10B] START
 def _render_chat_panel():
-    import time, inspect
+    import time, inspect, base64, json, urllib.request, yaml
     ss = st.session_state
-    if "chat" not in ss:
-        ss["chat"] = []
+    if "chat" not in ss: ss["chat"] = []
 
-    # 상단(아이콘/상태/모드)
+    # ── 상단(아이콘/상태/모드) ─────────────────────────────────────────────
     _render_top_right_admin_icon()
+    # 관리자 패널을 실제로 띄우려면(10C 사용 시): 아래 한 줄이 있어야 합니다.
+    if " _render_admin_prompts_panel" in globals():  # 안전 가드
+        try: _render_admin_prompts_panel()
+        except Exception: pass
+
     _inject_chat_styles_once()
     _render_llm_status_minimal()
     cur = _render_mode_controls_pills()
 
-    # 1) 입력 먼저 받되, 바로 그리진 않고 플래그만 세움
-    user_q = st.chat_input("예) 분사구문이 뭐예요?  예) 이 문장 구조 분석해줘")
-    do_stream = False
-    if user_q and user_q.strip():
-        qtxt = user_q.strip()
-        ts   = int(time.time()*1000)
-        uid, aid = f"u{ts}", f"a{ts}"
-        # 히스토리에 '질문'만 먼저 기록
-        ss["chat"].append({"id": uid, "role": "user", "text": qtxt})
-        do_stream = True
+    # ── GitHub prompts 로더(이 블록이 핵심) ─────────────────────────────────
+    def _github_fetch_prompts_text():
+        """GitHub Contents API로 prompts.yaml 텍스트 반환. 캐시 사용."""
+        cache = ss.get("__gh_prompts_cache") or {}
+        token  = st.secrets.get("GH_TOKEN")
+        repo   = st.secrets.get("GH_REPO")
+        branch = st.secrets.get("GH_BRANCH", "main")
+        path   = st.secrets.get("GH_PROMPTS_PATH", "prompts.yaml")
+        if not (token and repo):
+            return None
 
-    # 2) chat-wrap 내부에서 모든 렌더링 수행 (배경 유지의 핵심!)
+        url = f"https://api.github.com/repos/{repo}/contents/{path}?ref={branch}"
+        req = urllib.request.Request(
+            url,
+            headers={"Authorization": f"token {token}", "User-Agent": "maic-app"}
+        )
+        try:
+            with urllib.request.urlopen(req) as r:
+                meta = json.loads(r.read().decode("utf-8"))
+                content_b64 = meta.get("content") or ""
+                text = base64.b64decode(content_b64.encode("utf-8")).decode("utf-8")
+                sha  = meta.get("sha")
+        except Exception:
+            return None
+
+        ss["__gh_prompts_cache"] = {"sha": sha, "text": text}
+        return text
+
+    def _build_prompt_from_github(mode_token: str, user_q: str):
+        """
+        GitHub의 prompts.yaml을 다음 포맷으로 해석:
+        - dict 버전: modes.<mode_token>.system / .user
+        - 문자열 버전: modes.<mode_token> == user 프롬프트(plain)
+        둘 다 없으면 None.
+        """
+        txt = _github_fetch_prompts_text()
+        if not txt:
+            return None
+        try:
+            data = yaml.safe_load(txt) or {}
+            node = (data.get("modes") or {}).get(mode_token)
+            if not node:
+                return None
+            if isinstance(node, str):
+                return {"system": None, "user": node}
+            if isinstance(node, dict):
+                return {"system": node.get("system"), "user": node.get("user")}
+            return None
+        except Exception:
+            return None
+
+    # ── prompts 선택 로직: GitHub → (있다면) Drive build_prompt → Fallback ─────────
+    def _resolve_prompts(mode_token: str, user_q: str):
+        BASE = "너는 한국의 영어학원 원장처럼 따뜻하고 명확하게 설명한다. "
+        FALLBACK = {
+            "문법설명": BASE+"오직 해당 문법만: 정의→핵심 규칙 3~5개→예문3개(해석)→흔한 오류2개→두 문장 요약.",
+            "문장구조분석": BASE+"주어·동사·목적어·보어·수식어를 단계적으로 식별/설명. 군더더기 금지.",
+            "지문분석": BASE+"요지/구조/핵심어만 간결히. 문제풀이식 단계 제시. 장황한 배경 금지.",
+        }
+        GUARD = (
+            f"\n\n[질문]\n{user_q}\n\n[지시]\n- 현재 모드: {cur} ({mode_token})\n"
+            "- 반드시 질문 주제에만 답할 것. 벗어나면 '질문과 다른 주제입니다'라고 알림.\n"
+            "- 형식: (1) 한 줄 정의 (2) 핵심 bullet (3) 예문 3개 (4) 흔한 오류 2개 (5) 두 문장 요약.\n"
+        )
+        # 1) GitHub
+        gh = _build_prompt_from_github(mode_token, user_q)
+        if gh:
+            ss["__prompt_source"] = "GitHub"
+            sys_p = gh.get("system") or BASE
+            usr_p = (gh.get("user") or f"[모드:{mode_token}]\n{user_q}") + GUARD
+            return sys_p, usr_p
+
+        # 2) (선택) Drive 모듈
+        _prompt_mod = _try_import("src.prompt_modes", ["build_prompt"]) or {}
+        _build_prompt = _prompt_mod.get("build_prompt")
+        if callable(_build_prompt):
+            try:
+                parts = _build_prompt(mode_token, user_q) or {}
+                ss["__prompt_source"] = "Drive"
+                sys_p = parts.get("system") or BASE
+                usr_p = (parts.get("user") or f"[모드:{mode_token}]\n{user_q}") + GUARD
+                return sys_p, usr_p
+            except Exception:
+                pass
+
+        # 3) Fallback
+        ss["__prompt_source"] = "Fallback"
+        return FALLBACK[mode_token], f"[모드:{mode_token}]\n{user_q}"+GUARD
+
+    # ── chat-wrap 내부에서만 렌더(배경 유지) ────────────────────────────────────────
+    # 과거 로그 + 이번 질문/답변 모두 chat-wrap 안에서 처리
+    user_q = st.chat_input("예) 분사구문이 뭐예요?  예) 이 문장 구조 분석해줘")
+    qtxt = user_q.strip() if user_q and user_q.strip() else None
+    do_stream = qtxt is not None
+    if do_stream:
+        ts = int(time.time()*1000); uid, aid = f"u{ts}", f"a{ts}"
+        ss["chat"].append({"id": uid, "role": "user", "text": qtxt})
+
     with st.container():
         st.markdown('<div class="chat-wrap"><div class="chat-box">', unsafe_allow_html=True)
-
-        # 과거 로그(우리 커스텀 말풍선으로만 렌더 → 색상 고정)
+        # 과거 로그
         for m in ss["chat"]:
             _render_bubble(m.get("role","assistant"), m.get("text",""))
 
         text_final = ""
         if do_stream:
-            # (a) '준비중…' 말풍선도 chat-wrap 내부에서 표시
+            # 준비중
             ph = st.empty()
             ph.markdown(
                 f'<div class="row ai"><div class="bubble ai">{_esc_html("답변 준비중…")}</div></div>',
                 unsafe_allow_html=True
             )
-
-            # (b) prompts.yaml → 실패 시 모드별 폴백 + 가드
+            # prompts 준비(GitHub → Drive → Fallback)
             MODE_TOKEN = {"문법":"문법설명","문장":"문장구조분석","지문":"지문분석"}[cur]
-            _prompt_mod = _try_import("src.prompt_modes", ["build_prompt"]) or {}
-            _build_prompt = _prompt_mod.get("build_prompt")
-            BASE = "너는 한국의 영어학원 원장처럼 따뜻하고 명확하게 설명한다. "
-            FALLBACK = {
-                "문법설명": BASE+"오직 해당 문법만: 정의→핵심 규칙 3~5개→예문3개(해석)→흔한 오류2개→두 문장 요약.",
-                "문장구조분석": BASE+"주어·동사·목적어·보어·수식어를 단계적으로 식별/설명. 군더더기 금지.",
-                "지문분석": BASE+"요지/구조/핵심어만 간결히. 문제풀이식 단계 제시. 장황한 배경 금지.",
-            }
-            GUARD = (
-                f"\n\n[질문]\n{qtxt}\n\n[지시]\n- 현재 모드: {cur} ({MODE_TOKEN})\n"
-                "- 반드시 질문 주제에만 답할 것. 벗어나면 '질문과 다른 주제입니다'라고 알림.\n"
-                "- 형식: (1) 한 줄 정의 (2) 핵심 bullet (3) 예문 3개 (4) 흔한 오류 2개 (5) 두 문장 요약.\n"
-            )
-            if callable(_build_prompt):
-                try:
-                    parts = _build_prompt(MODE_TOKEN, qtxt) or {}
-                    system_prompt = parts.get("system") or FALLBACK[MODE_TOKEN]
-                    user_prompt   = (parts.get("user") or f"[모드:{MODE_TOKEN}]\n{qtxt}") + GUARD
-                except Exception:
-                    system_prompt, user_prompt = FALLBACK[MODE_TOKEN], f"[모드:{MODE_TOKEN}]\n{qtxt}"+GUARD
-            else:
-                system_prompt, user_prompt = FALLBACK[MODE_TOKEN], f"[모드:{MODE_TOKEN}]\n{qtxt}"+GUARD
+            system_prompt, user_prompt = _resolve_prompts(MODE_TOKEN, qtxt)
 
-            # (c) LLM 호출 준비 (스트리밍 지원 자동 탐지)
+            # 상단 상태줄에 소스 뱃지 보여주기(10A 보강과 연동)
+            # (_render_llm_status_minimal 안에서도 뱃지를 쓰지만, 여기서도 한번)
+            # st.caption(f"프롬프트 소스: {ss.get('__prompt_source')}")
+
+            # LLM 호출(스트리밍 지원 자동 탐지)
             call = (_llm or {}).get("call_with_fallback") if "_llm" in globals() else None
             if not callable(call):
                 text_final = "(오류) LLM 어댑터를 사용할 수 없습니다."
-                ph.markdown(f'<div class="row ai"><div class="bubble ai">{_esc_html(text_final)}</div></div>',
-                            unsafe_allow_html=True)
+                ph.markdown(
+                    f'<div class="row ai"><div class="bubble ai">{_esc_html(text_final)}</div></div>',
+                    unsafe_allow_html=True
+                )
             else:
                 sig = inspect.signature(call); params = sig.parameters.keys(); kwargs = {}
-
                 if "messages" in params:
                     kwargs["messages"] = [
                         {"role":"system","content":system_prompt},
@@ -689,14 +761,14 @@ def _render_chat_panel():
                     )
                     _errlog(f"LLM 예외: {e}", where="[qa_llm]", exc=e)
 
-        # chat-wrap 닫기 (← 스트리밍 중에도 항상 내부에 머무름)
         st.markdown('</div></div>', unsafe_allow_html=True)
 
-    # 3) 스트리밍이 있었다면 히스토리에 '최종 답변' 추가 후 새로고침
+    # 스트리밍 완료 → 히스토리 저장 + 새로고침
     if do_stream:
-        ss["chat"].append({"id": aid, "role": "assistant", "text": text_final})
+        ss["chat"].append({"id": f"a{int(time.time()*1000)}", "role": "assistant", "text": text_final})
         st.rerun()
-# [10B] 학생 로직 (Streaming v1.2): 모든 렌더를 chat-wrap 내부에서 처리해 배경 유지  # [10B] END
+# [10B] 학생 로직 (Streaming v1.3, GitHub prompts)  # [10B] END
+
 # [10C] 관리자: 모드별 prompts 편집 → GitHub 업로드(Contents API, 선택)  # [10C] START
 def _render_admin_prompts_panel():
     if not st.session_state.get("admin_panel_open"): return
