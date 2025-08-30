@@ -578,7 +578,7 @@ def _replace_assistant_text(aid: str, new_text: str):
     return False
 
 # ──────────────────────────────────────────────────────────────────────────────
-# [10B] 학생 로직 (Safe v1): JS/타이머 제거, 즉시 호출, 오버레이 없음, prompt 참조 수정  # [10B] START
+# [10B] 학생 로직 (Safe v1.0.1): JS/타이머 제거, 즉시 호출, 오버레이 없음, prompt 참조 수정  # [10B] START
 def _render_chat_panel():
     import time, inspect
     ss = st.session_state
@@ -663,9 +663,8 @@ def _render_chat_panel():
             _errlog(f"LLM 예외: {e}", where="[qa_llm]", exc=e)
 
         # (5) UI 갱신
-        st.experimental_rerun()
-# [10B] 학생 로직 (Safe v1): JS/타이머 제거, 즉시 호출, 오버레이 없음, prompt 참조 수정  # [10B] END
-
+        st.rerun()   # ← 여기만 변경 (experimental_rerun → rerun)
+# [10B] 학생 로직 (Safe v1.0.1): JS/타이머 제거, 즉시 호출, 오버레이 없음, prompt 참조 수정  # [10B] END
 
 # [10] 학생 UI (Stable Chatbot v2) ────────────────────────────────────────────  # [10] END
 
