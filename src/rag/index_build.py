@@ -1,424 +1,340 @@
-# ==================== src/rag/index_build.py — START =========================
-
-# [01] Imports & Paths — START
+# [01] 기본 설정 & 상수  # [01] START
 from __future__ import annotations
-import os, io, json, gzip, shutil, zipfile, time
+
+import os
+import io
+import json
+import time
+import hashlib
+import zipfile
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Tuple
+from typing import Any, Dict, List, Tuple, Iterable, Optional
 
-# 외부
-import streamlit as st  # type: ignore
-from google.oauth2 import service_account
-from googleapiclient.discovery import build as gbuild
-from googleapiclient.http import MediaIoBaseDownload
-
-# 내부 설정 경로
-try:
-    from src.config import PERSIST_DIR as _PERSIST_DIR, APP_DATA_DIR as _APP_DATA_DIR
-except Exception:
-    _PERSIST_DIR = str(Path.home() / ".maic" / "persist")
-    _APP_DATA_DIR = str(Path.home() / ".maic")
-
-PERSIST_DIR = Path(_PERSIST_DIR).expanduser()
-# 호환성 보존용(미사용): 과거 백업 경로 (Drive 백업 업로드 제거됨)
-BACKUP_DIR  = (Path(_APP_DATA_DIR).expanduser() / "backup")
-
+# ── 로컬 퍼시스트 경로(인덱스/매니페스트 저장소)
+PERSIST_DIR = Path.home() / ".maic" / "persist"
 PERSIST_DIR.mkdir(parents=True, exist_ok=True)
-BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-# [01] Imports & Paths — END
-# ============================================================================
+
+# ── 인덱싱 대상 확장자(감지/인덱싱 모두 동일 규칙 사용)
+ALLOWED_EXTS = (".md", ".txt", ".pdf", ".csv", ".zip")
+
+# ── manifest 파일 경로
+MANIFEST_PATH = PERSIST_DIR / "manifest.json"
+
+# ── 준비 폴더(Drive) 이름 기본값 또는 환경변수로 ID 직접 지정
+PREPARED_FOLDER_NAME = os.getenv("MAIC_PREPARED_FOLDER_NAME", "prepared")
+PREPARED_FOLDER_ID   = os.getenv("MAIC_PREPARED_FOLDER_ID")  # 있으면 이 ID를 직접 사용
+
+# ── Google API: SERVICE ACCOUNT JSON 경로 (환경변수 우선)
+GOOGLE_APPLICATION_CREDENTIALS = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "")
+
+# ── 최대 파일 크기 제한(안전)
+MAX_BYTES = 64 * 1024 * 1024  # 64MB
+# [01] END
 
 
-# [02] Small utils (secrets/time/progress) — START
-def _read_secret(key: str, default: Optional[str] = None) -> Optional[str]:
-    """st.secrets → env → default 순으로 읽기."""
-    try:
-        val = st.secrets.get(key)  # type: ignore[attr-defined]
-        if val is None:
-            return os.getenv(key, default)
-        if isinstance(val, str):
-            return val
-        return json.dumps(val, ensure_ascii=False)
-    except Exception:
-        return os.getenv(key, default)
-
-def _now_tag() -> str:
-    return time.strftime("%Y%m%d-%H%M%S", time.localtime())
-
-def _msg(update_msg: Callable[[str], None], s: str) -> None:
-    try: update_msg(str(s))
-    except Exception: pass
-
-def _pct(update_pct: Callable[[int, Optional[str]], None], v: int, m: Optional[str] = None) -> None:
-    try: update_pct(int(v), m)
-    except Exception: pass
-# [02] Small utils (secrets/time/progress) — END
-# ============================================================================
+# [02] 로깅 유틸  # [02] START
+def _log(msg: str):
+    ts = time.strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[index_build][{ts}] {msg}", flush=True)
+# [02] END
 
 
-# [03] Google Drive auth (Service Account only) — START
+# [03] Google Drive 클라이언트 & 헬퍼  # [03] START
 def _drive_client():
-    """Service Account 자격으로 Drive v3 클라이언트 생성."""
-    raw = st.secrets.get("gcp_service_account") if hasattr(st, "secrets") else None  # type: ignore
-    if isinstance(raw, str):
-        info = json.loads(raw)
-    elif isinstance(raw, dict):
-        info = dict(raw)
-    else:
-        raise RuntimeError("gcp_service_account 시크릿이 없습니다.")
+    """
+    Google Drive API v3 클라이언트 생성.
+    - 서비스 계정(JSON) 또는 ADC(Application Default Credentials) 사용.
+    """
+    from googleapiclient.discovery import build
+    from google.oauth2.service_account import Credentials
 
-    scopes = st.secrets.get("GDRIVE_SCOPES") if hasattr(st, "secrets") else None  # type: ignore
-    if isinstance(scopes, str):
-        try: scopes = json.loads(scopes)
-        except Exception: scopes = [scopes]
-    if not scopes:
-        scopes = [
-            "https://www.googleapis.com/auth/drive.readonly",
-            "https://www.googleapis.com/auth/drive.metadata.readonly",
-        ]
-    creds = service_account.Credentials.from_service_account_info(info, scopes=scopes)
-    return gbuild("drive", "v3", credentials=creds, cache_discovery=False)
-# [03] Google Drive auth (Service Account only) — END
-# ============================================================================
+    scopes = ["https://www.googleapis.com/auth/drive.readonly"]
+
+    if GOOGLE_APPLICATION_CREDENTIALS and Path(GOOGLE_APPLICATION_CREDENTIALS).exists():
+        creds = Credentials.from_service_account_file(GOOGLE_APPLICATION_CREDENTIALS, scopes=scopes)
+        return build("drive", "v3", credentials=creds, cache_discovery=False)
+
+    # ADC 시도(Cloud Run/GCE 등)
+    try:
+        import google.auth
+        creds, _ = google.auth.default(scopes=scopes)
+        return build("drive", "v3", credentials=creds, cache_discovery=False)
+    except Exception as e:
+        raise RuntimeError(f"Drive 인증 실패: {e}")
 
 
-# [04] Drive helpers (ids/list/download) — START
-def _find_folder_id(kind: str, *, fallback: Optional[str] = None) -> Optional[str]:
-    key = {
-        "PREPARED": "GDRIVE_PREPARED_FOLDER_ID",
-        "BACKUP":   "GDRIVE_BACKUP_FOLDER_ID",  # 미사용(정책상 제거), 호환 키만 남김
-        "DEFAULT":  "GDRIVE_PREPARED_FOLDER_ID",
-    }.get(kind.upper(), "GDRIVE_PREPARED_FOLDER_ID")
-    return _read_secret(key, fallback)
+def _find_folder_id(svc, prefer_id: Optional[str] = None, name: Optional[str] = None) -> Optional[str]:
+    """폴더 ID를 환경변수 또는 이름으로 탐색."""
+    if prefer_id:
+        return prefer_id
+    if not name:
+        name = PREPARED_FOLDER_NAME
+
+    q = f"name = '{name}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
+    res = svc.files().list(q=q, fields="files(id, name)", pageSize=50).execute()
+    files = res.get("files", [])
+    if not files:
+        # 이름 대소문자 변형으로 재시도
+        q2 = f"mimeType = 'application/vnd.google-apps.folder' and trashed = false"
+        res2 = svc.files().list(q=q2, fields="files(id, name)", pageSize=1000).execute()
+        for f in res2.get("files", []):
+            if f.get("name", "").lower() == name.lower():
+                return f.get("id")
+        return None
+    return files[0].get("id")
+
 
 def _list_files_in_folder(svc, folder_id: str) -> List[Dict[str, Any]]:
-    q = f"'{folder_id}' in parents and trashed=false"
-    fields = "files(id, name, mimeType, modifiedTime, size, md5Checksum)"
-    res = svc.files().list(q=q, fields=fields, orderBy="modifiedTime desc", pageSize=1000).execute()
-    return res.get("files", [])
+    """
+    prepared 폴더의 '직속 파일'을 모두 반환(페이지네이션 지원).
+    하위 폴더 재귀는 이 함수에서 하지 않는다(요구 시 확장).
+    """
+    q = f"'{folder_id}' in parents and trashed=false and mimeType != 'application/vnd.google-apps.folder'"
+    fields = "nextPageToken, files(id, name, mimeType, modifiedTime, size, md5Checksum)"
+    out, token = [], None
+    while True:
+        res = svc.files().list(
+            q=q, fields=fields, orderBy="modifiedTime desc", pageSize=1000, pageToken=token
+        ).execute()
+        out.extend(res.get("files", []))
+        token = res.get("nextPageToken")
+        if not token:
+            break
+    return out
 
-def _download_file_bytes(svc, file_id: str) -> bytes:
-    meta = svc.files().get(fileId=file_id, fields="mimeType,name").execute()
-    mime = meta.get("mimeType", "")
-    name = meta.get("name", file_id)
 
-    # Google Docs Editors → export
-    if mime.startswith("application/vnd.google-apps."):
-        subtype = mime.split(".")[-1]
-        export_map = {
-            "document":     "text/plain",
-            "spreadsheet":  "text/csv",
-            "presentation": "text/plain",
-        }
-        exp = export_map.get(subtype)
-        if not exp:
-            print(f"[drive][info] skip unsupported google-apps file: {name} ({mime})")
-            return b""
-        try:
-            data = svc.files().export(fileId=file_id, mimeType=exp).execute()
-            if isinstance(data, str):
-                data = data.encode("utf-8", errors="ignore")
-            print(f"[drive] exported {name} as {exp}")
-            return data
-        except Exception as e:
-            print(f"[drive][warn] export failed for {name} ({mime}): {type(e).__name__}: {e}")
-            return b""
+def _download_file_bytes(svc, file_id: str, mime_type: Optional[str] = None) -> bytes:
+    """
+    Drive 파일 바이트 다운로드.
+    - 일반 파일: files().get_media()
+    - Google Docs류: files().export_media() (텍스트/PDF 등으로)
+    """
+    from googleapiclient.http import MediaIoBaseDownload
+    from googleapiclient.errors import HttpError
 
-    # 일반 바이너리 다운로드
+    # 파일 메타 조회
+    meta = svc.files().get(fileId=file_id, fields="id, name, mimeType").execute()
+    m = meta.get("mimeType", "")
+    is_gdoc = m.startswith("application/vnd.google-apps")
+
     try:
-        req = svc.files().get_media(fileId=file_id)
-        buf = io.BytesIO()
-        dl = MediaIoBaseDownload(buf, req)
+        if not is_gdoc:
+            request = svc.files().get_media(fileId=file_id)
+        else:
+            # Google Docs/Sheets/Slides → 텍스트 우선, 안되면 PDF
+            export_mime = "text/plain"
+            if "spreadsheet" in m:
+                export_mime = "text/csv"
+            if "presentation" in m:
+                export_mime = "application/pdf"
+            request = svc.files().export_media(fileId=file_id, mimeType=export_mime)
+
+        fh = io.BytesIO()
+        downloader = MediaIoBaseDownload(fd=fh, request=request, chunksize=1024 * 1024)
         done = False
         while not done:
-            status, done = dl.next_chunk()
-        return buf.getvalue()
-    except Exception as e:
-        print(f"[drive][warn] get_media failed for {name} ({mime}): {type(e).__name__}: {e}")
+            status, done = downloader.next_chunk()
+        return fh.getvalue()
+    except HttpError:
         return b""
-# [04] Drive helpers (ids/list/download) — END
-# ============================================================================
+# [03] END
 
 
-# [05] Local store helpers — START
-def _persist_write_json(obj: Any, path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
-
-def _persist_write_jsonl(rows: Iterable[Dict[str, Any]], path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as f:
-        for r in rows:
-            f.write(json.dumps(r, ensure_ascii=False) + "\n")
-
-def _gzip_file(src: Path, dst: Optional[Path] = None, compresslevel: int = 6) -> Path:
-    if dst is None:
-        dst = src.with_suffix(src.suffix + ".gz")
-    with src.open("rb") as fr, gzip.open(dst, "wb", compresslevel=compresslevel) as fw:
-        shutil.copyfileobj(fr, fw)
-    return dst
-# [05] Local store helpers — END
-# ============================================================================
-
-
-# [06] Text & chunk builders (ZIP 지원 포함) — START
+# [04] 텍스트 추출기  # [04] START
 def _extract_text_from_bytes(name: str, data: bytes) -> str:
+    """텍스트/마크다운/CSV는 UTF-8로, PDF는 PyPDF2로 추출."""
     if not data:
         return ""
-    # 64MB 상한
-    if len(data) > 64 * 1024 * 1024:
-        data = data[:64 * 1024 * 1024]
+    if len(data) > MAX_BYTES:
+        data = data[:MAX_BYTES]
+
+    lower = (name or "").lower()
+    if lower.endswith(".pdf"):
+        # PDF → PyPDF2
+        try:
+            from PyPDF2 import PdfReader  # type: ignore
+            reader = PdfReader(io.BytesIO(data))
+            pages = []
+            for p in reader.pages:
+                try:
+                    pages.append(p.extract_text() or "")
+                except Exception:
+                    pages.append("")
+            return "\n".join(pages).strip()
+        except Exception:
+            return ""  # 추출 실패는 공백으로
+
+    # 텍스트/마크다운/CSV 등
     try:
         return data.decode("utf-8", errors="ignore")
     except Exception:
         return ""
 
-def _extract_texts_from_zip(zip_bytes: bytes, zip_name: str) -> List[Dict[str, Any]]:
-    out: List[Dict[str, Any]] = []
-    if not zip_bytes:
+
+def _extract_texts_from_zip(data: bytes, zip_name: str) -> List[Dict[str, str]]:
+    """
+    ZIP 내부의 파일 중 ALLOWED_EXTS(단, .zip 제외)만 펼쳐서 텍스트 추출.
+    """
+    out: List[Dict[str, str]] = []
+    if not data:
         return out
-    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as z:
-        for info in z.infolist():
-            if info.is_dir():
-                continue
-            inner = info.filename
-            inner_lower = inner.lower()
-            if not (inner_lower.endswith(".txt") or inner_lower.endswith(".md")
-                    or inner_lower.endswith(".csv") or inner_lower.endswith(".pdf")):
-                continue
-            try:
-                data = z.read(info)
-            except Exception:
-                continue
-
-            text = ""
-            if inner_lower.endswith(".pdf"):
+    if len(data) > MAX_BYTES:
+        data = data[:MAX_BYTES]
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as zf:
+            for info in zf.infolist():
+                if info.is_dir():
+                    continue
+                inner_name = info.filename
+                if not any(inner_name.lower().endswith(ext) for ext in ALLOWED_EXTS if ext != ".zip"):
+                    continue
                 try:
-                    from PyPDF2 import PdfReader  # type: ignore
-                    import io as _io
-                    reader = PdfReader(_io.BytesIO(data))
-                    pages = []
-                    for p in reader.pages:
-                        try:
-                            pages.append(p.extract_text() or "")
-                        except Exception:
-                            pages.append("")
-                    text = "\n".join(pages)
+                    b = zf.read(info)
                 except Exception:
-                    text = ""
-            else:
-                text = _extract_text_from_bytes(inner, data)
-
-            if not text.strip():
-                continue
-            out.append({"name": f"{zip_name}::{inner}", "text": text})
+                    continue
+                text = _extract_text_from_bytes(inner_name, b)
+                if text.strip():
+                    out.append({"name": inner_name, "text": text})
+    except Exception:
+        pass
     return out
-
-def _to_chunks(name: str, text: str, meta: Dict[str, Any]) -> List[Dict[str, Any]]:
-    out: List[Dict[str, Any]] = []
-    for i, line in enumerate(text.splitlines()):
-        line = line.strip()
-        if not line:
-            continue
-        out.append({"text": line, "meta": {**meta, "line_index": i}})
-    return out
-# [06] Text & chunk builders (ZIP 지원 포함) — END
-# ============================================================================
+# [04] END
 
 
-# [07] Quality report — START
-def _quality_report(docs: List[Dict[str, Any]], chunks_rows: List[Dict[str, Any]], *,
-                    extra_counts: Dict[str, Any]) -> Dict[str, Any]:
-    meta_fields = {"file_name": 0, "file_id": 0, "mimeType": 0, "page_approx": 0}
-    for c in chunks_rows:
-        m = c.get("meta", {})
-        if "file_name" in m:   meta_fields["file_name"] += 1
-        if "file_id"   in m:   meta_fields["file_id"]   += 1
-        if "mimeType"  in m:   meta_fields["mimeType"]  += 1
-        if "page_approx" in m: meta_fields["page_approx"] += 1
-    return {
-        "stats": {
-            "documents": len(docs),
-            "chunks": len(chunks_rows),
-            **{f"meta_has_{k}": v for k, v in meta_fields.items()},
-        },
-        "extra": extra_counts or {},
-    }
-# [07] Quality report — END
-# ============================================================================
+# [05] 청크 분할  # [05] START
+def _to_chunks(name: str, text: str, meta: Dict[str, Any],
+               chunk_size: int = 900, chunk_overlap: int = 120) -> List[Dict[str, Any]]:
+    """
+    간단한 토큰 유사 길이 청크(문자 기준). 모델/임베딩 전처리용.
+    """
+    chunks: List[Dict[str, Any]] = []
+    t = text.strip()
+    if not t:
+        return chunks
+    start = 0
+    n = len(t)
+    while start < n:
+        end = min(n, start + chunk_size)
+        chunk_text = t[start:end]
+        chunks.append({
+            "file_name": name,
+            "text": chunk_text,
+            "meta": meta,
+            "offset": start,
+            "length": len(chunk_text),
+        })
+        if end >= n:
+            break
+        start = end - chunk_overlap
+        if start < 0:
+            start = 0
+    return chunks
+# [05] END
 
 
-# [08] RESERVED — Drive backup upload helpers (REMOVED) — START
-# 이 구획은 과거 Drive 백업 업로드 헬퍼가 있었던 자리입니다.
-# 정책에 따라 완전히 제거되었습니다(쓰기 권한/동작 없음).
-# [08] RESERVED — Drive backup upload helpers (REMOVED) — END
-# ============================================================================
-
-
-# [09] Build core (scan prepared → chunks/manifest) — START
+# [06] 인덱스 빌드(Drive prepared 폴더)  # [06] START
 def _build_from_prepared(svc, prepared_folder_id: str) -> Tuple[int, int, Dict[str, Any], Dict[str, Any], List[Dict[str, Any]]]:
+    """
+    prepared 폴더의 '직속 파일'을 인덱싱해 청크와 매니페스트 요약을 생성.
+    - ZIP: 내부 텍스트류만 펼쳐서 처리
+    - PDF: PyPDF2로 텍스트 추출
+    - .md/.txt/.csv: UTF-8 decode
+    """
     files = _list_files_in_folder(svc, prepared_folder_id)
     docs_summary: List[Dict[str, Any]] = []
     chunk_rows: List[Dict[str, Any]] = []
 
     for f in files:
-        fid = f["id"]; name = f.get("name", fid); mime = f.get("mimeType", "")
-        data = _download_file_bytes(svc, fid)
+        fid = f["id"]
+        name = f.get("name", fid)
+        mime = f.get("mimeType", "")
+        lower = name.lower()
 
-        # ZIP이면 내부 텍스트류만 펼쳐서 처리
-        if (mime == "application/zip") or name.lower().endswith(".zip"):
-            extracted = _extract_texts_from_zip(data, name)
-            for item in extracted:
-                meta = {"file_id": f"{fid}:{item['name']}", "file_name": item["name"], "mimeType": "text/plain", "page_approx": None}
-                chunk_rows.extend(_to_chunks(item["name"], item["text"], meta))
-            docs_summary.append({"id": fid, "name": name, "mimeType": mime,
-                                 "size": f.get("size"), "md5": f.get("md5Checksum"),
-                                 "expanded_from_zip": len(extracted)})
+        # 인덱싱 대상 필터
+        if not any(lower.endswith(ext) for ext in ALLOWED_EXTS):
             continue
 
+        data = _download_file_bytes(svc, fid)
+
+        # ZIP → 내부 텍스트만
+        if lower.endswith(".zip") or mime == "application/zip":
+            extracted = _extract_texts_from_zip(data, name)
+            for item in extracted:
+                meta = {
+                    "file_id": f"{fid}:{item['name']}",
+                    "file_name": item["name"],
+                    "mimeType": "text/plain",
+                    "page_approx": None,
+                }
+                chunk_rows.extend(_to_chunks(item["name"], item["text"], meta))
+            docs_summary.append({
+                "id": fid,
+                "name": name,
+                "mimeType": mime,
+                "size": f.get("size"),
+                "md5": f.get("md5Checksum"),
+                "expanded_from_zip": len(extracted),
+            })
+            continue
+
+        # 단일 파일 텍스트 추출
         text = _extract_text_from_bytes(name, data)
-        meta = {"file_id": fid, "file_name": name, "mimeType": mime, "page_approx": None}
-        chunk_rows.extend(_to_chunks(name, text, meta))
-        docs_summary.append({"id": fid, "name": name, "mimeType": mime,
-                             "size": f.get("size"), "md5": f.get("md5Checksum")})
+        if text.strip():
+            meta = {
+                "file_id": fid,
+                "file_name": name,
+                "mimeType": mime,
+                "page_approx": None,
+            }
+            chunk_rows.extend(_to_chunks(name, text, meta))
 
-    manifest = {"built_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()), "docs": docs_summary}
-    extra = {"processed_files": len(docs_summary), "generated_chunks": len(chunk_rows)}
-    return len(docs_summary), len(chunk_rows), manifest, extra, chunk_rows
+        # 매니페스트 요약(텍스트가 비어도 기록)
+        docs_summary.append({
+            "id": fid,
+            "name": name,
+            "mimeType": mime,
+            "size": f.get("size"),
+            "md5": f.get("md5Checksum"),
+        })
 
-def _resolve_prepared_id(svc, gdrive_folder_id: str) -> str:
-    prepared_id = _find_folder_id("PREPARED", fallback=gdrive_folder_id)
-    if not prepared_id:
-        raise KeyError("prepared 폴더 ID를 찾지 못했습니다.")
-    return prepared_id
-
-# (호환용) 과거 시그니처 유지: (prepared_id, backup_id) 반환하되 backup_id=None
-def _resolve_ids(svc, gdrive_folder_id: str) -> Tuple[str, Optional[str]]:
-    return _resolve_prepared_id(svc, gdrive_folder_id), None
-# [09] Build core (scan prepared → chunks/manifest) — END
-# ============================================================================
-
-
-# [10] Public entry: build_index_with_checkpoint — START
-def build_index_with_checkpoint(
-    update_pct: Callable[[int, Optional[str]], None],
-    update_msg: Callable[[str], None],
-    gdrive_folder_id: str,
-    gcp_creds: Mapping[str, object],
-    persist_dir: str,
-    remote_manifest: Dict[str, Dict[str, object]],
-    should_stop: Optional[Callable[[], bool]] = None,
-) -> Dict[str, Any]:
-    """prepared 폴더에서 자료를 읽어 chunks.jsonl/manifest.json 생성 후
-    정책에 따라 GitHub Releases에 게시한다. (Drive 백업 업로드 경로 제거됨)
-    """
-    def pct(v: int, m: Optional[str] = None): _pct(update_pct, v, m)
-    def msg(s: str): _msg(update_msg, s)
-
-    msg("🔐 Connecting Google Drive (service account)…")
-    svc = _drive_client()
-    pct(5, "drive-ready")
-
-    prepared_id = _resolve_prepared_id(svc, gdrive_folder_id)
-
-    msg("📦 Scanning prepared folder and building chunks…")
-    processed, chunks_cnt, manifest, stats, chunk_rows = _build_from_prepared(svc, prepared_id)
-    pct(70, f"processed={processed}, chunks={chunks_cnt}")
-
-    if should_stop and should_stop():
-        return {"ok": False, "stopped": True}
-
-    # write local
-    msg("🧮 Writing manifest/chunks locally…")
-    out_dir = PERSIST_DIR
-    out_dir.mkdir(parents=True, exist_ok=True)
-    manifest_path = out_dir / "manifest.json"
-    chunks_path   = out_dir / "chunks.jsonl"
-    with open(manifest_path, "w", encoding="utf-8") as f:
-        json.dump(manifest, f, ensure_ascii=False, indent=2)
-    with open(chunks_path, "w", encoding="utf-8") as f:
-        for r in chunk_rows:
-            f.write(json.dumps(r, ensure_ascii=False) + "\n")
-
-    # quality report
-    msg("📊 Building quality report…")
-    report = _quality_report(manifest.get("docs", []), chunk_rows, extra_counts=stats)
-    pct(85, "report-ready")
-
-    # GitHub Releases upload (항상 수행 — 릴리스 기반 복구 정책)
-    try:
-        from src.backup.github_release import upload_index_release
-        # ensure gzip alongside chunks.jsonl
-        gz_path = chunks_path.with_suffix(chunks_path.suffix + ".gz")
-        if (not gz_path.exists()) or (gz_path.stat().st_mtime < chunks_path.stat().st_mtime):
-            with open(chunks_path, "rb") as fr, gzip.open(gz_path, "wb", compresslevel=6) as fw:
-                shutil.copyfileobj(fr, fw)
-
-        msg("🚀 Publishing index to GitHub Releases…")
-        res = upload_index_release(
-            manifest_path=manifest_path,
-            chunks_jsonl_path=chunks_path,
-            include_zip=False,  # ZIP은 필요 시 다른 경로로
-            keep=2,
-            build_meta={
-                "processed_files": processed,
-                "generated_chunks": chunks_cnt,
-                "prepared_folder_id": prepared_id,
-            },
-        )
-        msg(f"✅ GitHub Releases 완료: {res.get('tag')} / {res.get('assets')}")
-    except Exception as e:
-        msg(f"⚠️ GitHub 업로드 실패: {type(e).__name__}: {e}")
-
-    pct(100, "done")
-    return {
-        "ok": True,
-        "processed_files": processed,
-        "generated_chunks": chunks_cnt,
-        "stats": stats,
-        "report": report,
-        # 정책상 Drive 백업 업로드 제거 → 항상 None
-        "backup_zip_id": None,
-        "prepared_folder_id": prepared_id,
-        "backup_folder_id": None,
-        "auth_mode": "service-account",
-        "persist_dir": str(PERSIST_DIR),
+    manifest = {
+        "built_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
+        "docs": docs_summary,
     }
-# [10] Public entry: build_index_with_checkpoint — END
-# ============================================================================
+    extra = {
+        "processed_files": len(docs_summary),
+        "generated_chunks": len(chunk_rows),
+    }
+    return len(docs_summary), len(chunk_rows), manifest, extra, chunk_rows
+# [06] END
 
 
-# [11] Compatibility shims (for UI & prompts loader) — START
-def quick_precheck() -> dict:
-    """로컬 persist 상태 간단 점검(임포트용 안전 함수)."""
-    try:
-        persist = str(PERSIST_DIR)
-        ready = (PERSIST_DIR / "chunks.jsonl").exists() or (PERSIST_DIR / ".ready").exists()
-        return {"ok": True, "persist_dir": persist, "ready": bool(ready)}
-    except Exception as e:
-        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+# [07] 디스크 저장  # [07] START
+def _write_manifest(manifest: Dict[str, Any]):
+    MANIFEST_PATH.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    _log(f"manifest 저장: {MANIFEST_PATH}")
 
-def scan_drive_listing(folder_id: str | None = None, limit: int = 50) -> list[dict]:
-    """prepared 폴더의 최신 파일 일부를 서비스계정으로 조회."""
-    try:
-        svc = _drive_client()
-        fid = folder_id or _find_folder_id("PREPARED")
-        if not fid:
-            return []
-        q = f"'{fid}' in parents and trashed=false"
-        fields = "files(id, name, mimeType, modifiedTime, size, md5Checksum)"
-        res = svc.files().list(q=q, fields=fields, orderBy="modifiedTime desc", pageSize=limit).execute()
-        return res.get("files", [])
-    except Exception:
-        return []
+def _write_chunks_jsonl(chunks: List[Dict[str, Any]]):
+    out_path = PERSIST_DIR / "chunks.jsonl"
+    with out_path.open("w", encoding="utf-8") as f:
+        for row in chunks:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    _log(f"chunks 저장: {out_path} (rows={len(chunks)})")
+# [07] END
 
-def diff_with_manifest(folder_id: str | None = None, limit: int = 1000) -> dict:
+
+# [08] 변경 감지(diff) — 인덱싱 대상만 비교, 최초 실행은 '전부 추가'  # [08] START
+def _ingestible(name: str) -> bool:
+    n = (name or "").lower()
+    return any(n.endswith(ext) for ext in ALLOWED_EXTS)
+
+def diff_with_manifest(folder_id: str | None = None, limit: int = 5000) -> dict:
     """
     prepared 폴더 목록과 로컬 manifest.json을 비교하여
     added/changed/removed 통계를 반환한다.
-    실패/비정상 상황에서도 항상 동일 스키마를 보장한다.
+    - 인덱싱 대상 확장자만 비교(.md/.txt/.pdf/.csv/.zip)
+    - 최초 실행(no_manifest) 시 현재 대상 파일을 모두 'added'로 간주
     """
-    # 항상 반환할 기본 골격 (UI 안전)
     out = {
         "ok": False,
         "reason": "",
@@ -429,35 +345,44 @@ def diff_with_manifest(folder_id: str | None = None, limit: int = 1000) -> dict:
     }
 
     try:
-        mpath = PERSIST_DIR / "manifest.json"
-        if not mpath.exists():
-            out["reason"] = "no_manifest"
-            return out
-
-        man = json.loads(mpath.read_text(encoding="utf-8") or "{}")
-        mdocs = {d.get("id"): d for d in (man.get("docs") or []) if d.get("id")}
-
         svc = _drive_client()
-        fid = folder_id or _find_folder_id("PREPARED")
+        fid = folder_id or _find_folder_id(svc, prefer_id=PREPARED_FOLDER_ID, name=PREPARED_FOLDER_NAME)
         if not fid:
             out["reason"] = "no_prepared_id"
             return out
 
-        cur = _list_files_in_folder(svc, fid)[:limit]
+        # 현재 목록(인덱싱 대상만)
+        cur_all = _list_files_in_folder(svc, fid)
+        cur = [f for f in cur_all if _ingestible(f.get("name", ""))][:limit]
         cdocs = {f.get("id"): f for f in cur if f.get("id")}
 
-        ids_m = set(mdocs.keys()); ids_c = set(cdocs.keys())
-        added   = list(ids_c - ids_m)
-        removed = list(ids_m - ids_c)
-        common  = ids_m & ids_c
+        # manifest가 없으면: 현재 대상 파일을 전부 added로 보고 종료
+        if not MANIFEST_PATH.exists():
+            out["ok"] = True
+            out["reason"] = "no_manifest"
+            out["added"] = [f.get("name") for f in cur]
+            out["stats"] = {"added": len(out["added"]), "changed": 0, "removed": 0}
+            return out
 
-        changed: List[str] = []
-        for i in common:
-            m = mdocs[i]; c = cdocs[i]
+        man = json.loads(MANIFEST_PATH.read_text(encoding="utf-8") or "{}")
+        mdocs_src = {d.get("id"): d for d in (man.get("docs") or []) if d.get("id")}
+        # manifest 쪽도 인덱싱 대상만 비교
+        mdocs = {i: d for i, d in mdocs_src.items() if _ingestible(d.get("name", ""))}
+
+        ids_m = set(mdocs.keys())
+        ids_c = set(cdocs.keys())
+        added_ids = list(ids_c - ids_m)
+        removed_ids = list(ids_m - ids_c)
+        common_ids = ids_m & ids_c
+
+        changed_ids: List[str] = []
+        for i in common_ids:
+            m = mdocs[i]
+            c = cdocs[i]
             md5_m, md5_c = m.get("md5"), c.get("md5Checksum")
-            sz_m,  sz_c  = str(m.get("size")), str(c.get("size"))
+            sz_m, sz_c = str(m.get("size")), str(c.get("size"))
             if (md5_m and md5_c and md5_m != md5_c) or (sz_m and sz_c and sz_m != sz_c):
-                changed.append(i)
+                changed_ids.append(i)
 
         def _names(ids: List[str]) -> List[str]:
             out_names: List[str] = []
@@ -469,9 +394,9 @@ def diff_with_manifest(folder_id: str | None = None, limit: int = 1000) -> dict:
             return out_names
 
         out["ok"] = True
-        out["added"]   = _names(added)
-        out["changed"] = _names(changed)
-        out["removed"] = _names(removed)
+        out["added"] = _names(added_ids)
+        out["changed"] = _names(changed_ids)
+        out["removed"] = _names(removed_ids)
         out["stats"] = {
             "added": len(out["added"]),
             "changed": len(out["changed"]),
@@ -482,15 +407,70 @@ def diff_with_manifest(folder_id: str | None = None, limit: int = 1000) -> dict:
     except Exception as e:
         out["reason"] = f"{type(e).__name__}: {e}"
         return out
-
-def _drive_service():
-    """Compatibility alias for prompt_modes: returns Drive service or None."""
-    try:
-        return _drive_client()
-    except Exception:
-        return None
-# [11] Compatibility shims (for UI & prompts loader) — END
-# ============================================================================
+# [08] END
 
 
-# ===================== src/rag/index_build.py — END ==========================
+# [09] 전체 파이프라인 실행(빌드)  # [09] START
+def run_index_pipeline(folder_id: str | None = None) -> Dict[str, Any]:
+    """
+    prepared 폴더에서 문서를 인덱싱해 manifest/chunks를 저장.
+    반환: {"files": n_files, "chunks": n_chunks, "manifest_path": ..., "chunks_path": ...}
+    """
+    svc = _drive_client()
+    fid = folder_id or _find_folder_id(svc, prefer_id=PREPARED_FOLDER_ID, name=PREPARED_FOLDER_NAME)
+    if not fid:
+        raise RuntimeError("prepared 폴더 ID를 찾을 수 없습니다.")
+
+    n_files, n_chunks, manifest, extra, chunks = _build_from_prepared(svc, fid)
+
+    _write_manifest(manifest)
+    _write_chunks_jsonl(chunks)
+
+    result = {
+        "files": n_files,
+        "chunks": n_chunks,
+        "manifest_path": str(MANIFEST_PATH),
+        "chunks_path": str(PERSIST_DIR / "chunks.jsonl"),
+        "extra": extra,
+    }
+    _log(f"인덱싱 완료: files={n_files}, chunks={n_chunks}")
+    return result
+# [09] END
+
+
+# [10] CLI 진입점  # [10] START
+def main():
+    import argparse
+    p = argparse.ArgumentParser(description="MAIC Index Builder (Drive prepared 폴더)")
+    p.add_argument("--build", action="store_true", help="변경 여부와 무관하게 인덱싱 수행")
+    p.add_argument("--diff", action="store_true", help="변경 감지만 수행(added/changed/removed 출력)")
+    p.add_argument("--folder-id", type=str, default=None, help="prepared 폴더 ID를 직접 지정")
+    args = p.parse_args()
+
+    if args.diff and not args.build:
+        d = diff_with_manifest(folder_id=args.folder_id)
+        print(json.dumps(d, ensure_ascii=False, indent=2))
+        return
+
+    if args.build:
+        res = run_index_pipeline(folder_id=args.folder_id)
+        print(json.dumps(res, ensure_ascii=False, indent=2))
+        return
+
+    # 기본 동작: diff 후, 변경 있으면 build / 없으면 종료
+    d = diff_with_manifest(folder_id=args.folder_id)
+    if not d.get("ok"):
+        _log(f"변경 감지 실패: {d.get('reason')}")
+        return
+
+    st = d.get("stats", {})
+    if st.get("added", 0) or st.get("changed", 0):
+        _log(f"변경 감지됨: added={st.get('added')} changed={st.get('changed')} → 인덱싱 수행")
+        run_index_pipeline(folder_id=args.folder_id)
+    else:
+        _log("변경 없음: 인덱싱 생략")
+
+
+if __name__ == "__main__":
+    main()
+# [10] END
