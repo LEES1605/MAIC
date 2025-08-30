@@ -697,6 +697,72 @@ def _render_chat_panel():
         ss["chat"].append({"id": aid, "role": "assistant", "text": text_final})
         st.rerun()
 # [10B] 학생 로직 (Streaming v1.2): 모든 렌더를 chat-wrap 내부에서 처리해 배경 유지  # [10B] END
+# [10C] 관리자: 모드별 prompts 편집 → GitHub 업로드(Contents API, 선택)  # [10C] START
+def _render_admin_prompts_panel():
+    if not st.session_state.get("admin_panel_open"): return
+    st.subheader("관리자 · prompts 편집")
+    tabs = st.tabs(["어법(문법)", "문장", "지문"])
+
+    # 현재 캐시된 값 불러오기(없으면 빈값)
+    cache = st.session_state.get("__admin_prompts_cache") or {"문법":"", "문장":"", "지문":""}
+
+    with tabs[0]:
+        cache["문법"] = st.text_area("어법 프롬프트", value=cache.get("문법",""), height=200)
+    with tabs[1]:
+        cache["문장"] = st.text_area("문장 프롬프트", value=cache.get("문장",""), height=200)
+    with tabs[2]:
+        cache["지문"] = st.text_area("지문 프롬프트", value=cache.get("지문",""), height=200)
+
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("💾 로컬 저장", use_container_width=True):
+            import yaml
+            from pathlib import Path
+            y = {"modes":{"문법설명":cache["문법"],"문장구조분석":cache["문장"],"지문분석":cache["지문"]}}
+            p = (PERSIST_DIR / "prompts.yaml"); p.write_text(yaml.safe_dump(y, allow_unicode=True), encoding="utf-8")
+            st.session_state["__admin_prompts_cache"] = cache
+            st.success(f"로컬에 저장됨: {p}")
+
+    with col2:
+        if st.button("⬆️ GitHub에 업로드", use_container_width=True):
+            import base64, json, urllib.request
+            token = st.secrets.get("GH_TOKEN"); repo = st.secrets.get("GH_REPO"); branch = st.secrets.get("GH_BRANCH","main")
+            if not (token and repo):
+                st.error("GH_TOKEN / GH_REPO (owner/repo) 가 필요합니다.")
+            else:
+                try:
+                    # 1) 현재 SHA 조회
+                    path = "prompts.yaml"
+                    url_get = f"https://api.github.com/repos/{repo}/contents/{path}?ref={branch}"
+                    req = urllib.request.Request(url_get, headers={"Authorization": f"token {token}", "User-Agent": "maic-app"})
+                    try:
+                        with urllib.request.urlopen(req) as r:
+                            meta = json.loads(r.read().decode("utf-8"))
+                            sha = meta.get("sha")
+                    except Exception:
+                        sha = None  # 파일이 없을 수도 있음(첫 업로드)
+
+                    # 2) 본문 생성
+                    y = {"modes":{"문법설명":cache["문법"],"문장구조분석":cache["문장"],"지문분석":cache["지문"]}}
+                    content_b64 = base64.b64encode(json.dumps(y, ensure_ascii=False).encode("utf-8")).decode("utf-8")
+
+                    # 3) PUT (생성/갱신)
+                    url_put = f"https://api.github.com/repos/{repo}/contents/{path}"
+                    body = json.dumps({
+                        "message": "chore: update prompts.yaml from admin panel",
+                        "content": content_b64,
+                        "branch": branch,
+                        **({"sha": sha} if sha else {})
+                    }).encode("utf-8")
+                    req2 = urllib.request.Request(url_put, data=body, method="PUT",
+                            headers={"Authorization": f"token {token}","User-Agent":"maic-app","Content-Type":"application/json"})
+                    with urllib.request.urlopen(req2) as r2:
+                        _ = r2.read()
+                    st.success("GitHub 업로드 완료 (contents API)")
+                    st.session_state["__prompt_source"] = "GitHub"  # 소스 표기
+                except Exception as e:
+                    st.error(f"업로드 실패: {type(e).__name__}: {e}")
+# [10C] END
 
 
 # [11] 본문 렌더 ===============================================================
