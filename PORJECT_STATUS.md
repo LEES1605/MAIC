@@ -111,3 +111,89 @@ runOnSave = false
 
 [logger]
 level = "warning"
+
+# LLM
+OPENAI_API_KEY = "…"
+GEMINI_API_KEY = "…"
+
+# GitHub prompts
+GH_TOKEN = "…"
+GH_REPO  = "owner/repo"
+GH_BRANCH = "main"
+GH_PROMPTS_PATH = "prompts.yaml"
+
+# App
+APP_MODE = "student"          # or "admin"
+APP_ADMIN_PASSWORD = "0000"
+AUTO_START_MODE = "off"       # "restore" | "on" | "off"
+DISABLE_BG = "false"          # "true"로 끄기
+
+7) 운영 로직 (결정 트리)
+
+앱 시작 → _quick_local_attach_only()
+
+로컬 인덱스 있으면 READY로 붙임
+
+없으면 관리자에게 깊은 점검 유도
+
+관리자 · 깊은 점검 클릭 → _run_deep_check_and_attach()
+
+Drive 점검(가능할 때) → GitHub Release 복구 → diff로 변경 감지
+
+변경 있음: 재빌드 의사결정 표출, 변경 없음: READY
+
+질문 입력
+
+prompts.yaml GitHub → Drive → Fallback 순으로 생성 후 LLM 호출(스트리밍)
+
+8) 앞으로 할 일 (Next Actions)
+
+ 프롬프트 에디터([10C]): 관리자 화면에서 모드별 텍스트 편집 → GitHub 업로드 안정화
+
+ 증거 주입 자동화: ‘이유문법/깨알문법’·영문 PDF를 자동 스니펫 추출해 EVIDENCE_*에 주입
+
+ Deep Check UI: 변경 통계 카드 + “재빌드/유지” 버튼
+
+ 인덱스 빌더: 하위폴더 스캔·Markdown 우선, 증분 빌드(+체크포인트)
+
+ 오류 메시지 개선: 학생에게 친절 메시지, 관리자에게 상세 로그
+
+ 회귀 테스트: 말풍선/스트리밍/모드 UI 스냅샷 테스트
+
+ 릴리즈 플로우: GitHub Actions로 prompts.yaml 유효성 + 인덱스 산출물 업로드 자동화
+
+9) 배포/릴리즈 체크리스트
+
+ .streamlit/secrets.toml 채움(키/토큰/모드)
+
+ AUTO_START_MODE="off"로 최초 부팅 확인 → 건강 체크 OK
+
+ 관리자 로그인 → “🔎 자료 자동 점검(깊은 검사)” 수행 → READY
+
+ prompts.yaml GitHub 경로/브랜치 확인
+
+ 샘플 질문 3종 테스트(어법/문장/지문)
+
+ Release 업로드(인덱스 산출물) 후 복구·부팅 재검증
+
+10) 부록 — 문제해결 히스토리(요약)
+
+무한 로딩: 초기에 네트워크 I/O → 빠른 부팅 + 수동 깊은 점검
+
+LLM 인자 불일치: 인자 자동 탐지로 호환
+
+UI 불안정: 스타일 1회 주입으로 리런 호환
+
+배경 토글: DISABLE_BG는 secrets에서만 제어
+
+11) 메모
+
+프롬프트·인덱스 소스는 GitHub 단일 소스 지향. Drive는 읽기 전용 보조.
+
+학생 경험을 우선하여 지연·에러 시에도 즉시 피드백 제공.
+""").strip() + "\n"
+
+out_path = "/mnt/data/PROJECT_STATUS.md"
+pathlib.Path(out_path).write_text(content, encoding="utf-8")
+
+print(out_path, "written:", os.path.exists(out_path))
