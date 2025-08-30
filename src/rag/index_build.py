@@ -310,10 +310,17 @@ def build_index_with_checkpoint(
     report = _quality_report(manifest.get("docs", []), chunk_rows, extra_counts=stats)
     pct(85, "report-ready")
 
-    # backup to Drive (optional)
-    msg("⬆️ Uploading backup zip…")
+# [01] L313–L317 START
+# backup to Drive (optional, disabled by default)
+enable_gdrive_backup = str(_read_secret("ENABLE_GDRIVE_BACKUP", "false")).lower() in ("1", "true", "yes", "y")
+if enable_gdrive_backup:
+    msg("⬆️ Uploading backup zip to Google Drive…")
     uploaded_id = _make_and_upload_backup_zip(svc, backup_id)
-    pct(92, "backup-zip-uploaded")
+else:
+    msg("⏭️ Skipping Drive backup upload (ENABLE_GDRIVE_BACKUP=false).")
+    uploaded_id = None
+pct(92, "backup-zip-ready")
+# [01] L313–L317 END
 
     # GitHub Releases upload
     try:
