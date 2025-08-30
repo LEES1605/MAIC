@@ -12,4 +12,3 @@ gatherUsageStats = false
 
 [theme]
 base = "light"  # 또는 "dark"
-DISABLE_BG="true"
