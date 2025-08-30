@@ -10,7 +10,7 @@ from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Tuple
 import streamlit as st  # type: ignore
 from google.oauth2 import service_account
 from googleapiclient.discovery import build as gbuild
-from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
+from googleapiclient.http import MediaIoBaseDownload
 
 # 내부 설정 경로
 try:
@@ -20,7 +20,9 @@ except Exception:
     _APP_DATA_DIR = str(Path.home() / ".maic")
 
 PERSIST_DIR = Path(_PERSIST_DIR).expanduser()
+# 호환성 보존용(미사용): 과거 백업 경로 (Drive 백업 업로드 제거됨)
 BACKUP_DIR  = (Path(_APP_DATA_DIR).expanduser() / "backup")
+
 PERSIST_DIR.mkdir(parents=True, exist_ok=True)
 BACKUP_DIR.mkdir(parents=True, exist_ok=True)
 # [01] Imports & Paths — END
@@ -84,7 +86,7 @@ def _drive_client():
 def _find_folder_id(kind: str, *, fallback: Optional[str] = None) -> Optional[str]:
     key = {
         "PREPARED": "GDRIVE_PREPARED_FOLDER_ID",
-        "BACKUP":   "GDRIVE_BACKUP_FOLDER_ID",
+        "BACKUP":   "GDRIVE_BACKUP_FOLDER_ID",  # 미사용(정책상 제거), 호환 키만 남김
         "DEFAULT":  "GDRIVE_PREPARED_FOLDER_ID",
     }.get(kind.upper(), "GDRIVE_PREPARED_FOLDER_ID")
     return _read_secret(key, fallback)
@@ -246,27 +248,10 @@ def _quality_report(docs: List[Dict[str, Any]], chunks_rows: List[Dict[str, Any]
 # ============================================================================
 
 
-# [08] Backup ZIP → Drive (optional helper) — START
-def _make_and_upload_backup_zip(svc, backup_folder_id: Optional[str]) -> Optional[str]:
-    """로컬 persist 전체를 zip으로 묶어 Drive에 업로드(옵션). 실패는 경고만."""
-    ts = _now_tag()
-    zip_path = BACKUP_DIR / f"maic_backup_{ts}.zip"
-    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as z:
-        for p in PERSIST_DIR.rglob("*"):
-            if p.is_file():
-                z.write(p, arcname=p.relative_to(PERSIST_DIR))
-        z.writestr(".backup_info.txt", json.dumps({"created_at": ts}, ensure_ascii=False))
-    uploaded_id = None
-    try:
-        if svc and backup_folder_id:
-            media = MediaIoBaseUpload(io.BytesIO(zip_path.read_bytes()), mimetype="application/zip", resumable=True)
-            meta = {"name": zip_path.name, "parents": [backup_folder_id]}
-            f = svc.files().create(body=meta, media_body=media, fields="id").execute()
-            uploaded_id = f.get("id")
-    except Exception as e:
-        print(f"[backup][warn] drive upload failed: {type(e).__name__}: {e}")
-    return uploaded_id
-# [08] Backup ZIP → Drive (optional helper) — END
+# [08] RESERVED — Drive backup upload helpers (REMOVED) — START
+# 이 구획은 과거 Drive 백업 업로드 헬퍼가 있었던 자리입니다.
+# 정책에 따라 완전히 제거되었습니다(쓰기 권한/동작 없음).
+# [08] RESERVED — Drive backup upload helpers (REMOVED) — END
 # ============================================================================
 
 
@@ -301,12 +286,15 @@ def _build_from_prepared(svc, prepared_folder_id: str) -> Tuple[int, int, Dict[s
     extra = {"processed_files": len(docs_summary), "generated_chunks": len(chunk_rows)}
     return len(docs_summary), len(chunk_rows), manifest, extra, chunk_rows
 
-def _resolve_ids(svc, gdrive_folder_id: str) -> Tuple[str, str]:
+def _resolve_prepared_id(svc, gdrive_folder_id: str) -> str:
     prepared_id = _find_folder_id("PREPARED", fallback=gdrive_folder_id)
-    backup_id   = _find_folder_id("BACKUP") or prepared_id
     if not prepared_id:
         raise KeyError("prepared 폴더 ID를 찾지 못했습니다.")
-    return prepared_id, backup_id
+    return prepared_id
+
+# (호환용) 과거 시그니처 유지: (prepared_id, backup_id) 반환하되 backup_id=None
+def _resolve_ids(svc, gdrive_folder_id: str) -> Tuple[str, Optional[str]]:
+    return _resolve_prepared_id(svc, gdrive_folder_id), None
 # [09] Build core (scan prepared → chunks/manifest) — END
 # ============================================================================
 
@@ -322,7 +310,7 @@ def build_index_with_checkpoint(
     should_stop: Optional[Callable[[], bool]] = None,
 ) -> Dict[str, Any]:
     """prepared 폴더에서 자료를 읽어 chunks.jsonl/manifest.json 생성 후
-    (정책상 기본) GitHub Releases에 게시한다.
+    정책에 따라 GitHub Releases에 게시한다. (Drive 백업 업로드 경로 제거됨)
     """
     def pct(v: int, m: Optional[str] = None): _pct(update_pct, v, m)
     def msg(s: str): _msg(update_msg, s)
@@ -331,7 +319,7 @@ def build_index_with_checkpoint(
     svc = _drive_client()
     pct(5, "drive-ready")
 
-    prepared_id, backup_id = _resolve_ids(svc, gdrive_folder_id)
+    prepared_id = _resolve_prepared_id(svc, gdrive_folder_id)
 
     msg("📦 Scanning prepared folder and building chunks…")
     processed, chunks_cnt, manifest, stats, chunk_rows = _build_from_prepared(svc, prepared_id)
@@ -355,4 +343,154 @@ def build_index_with_checkpoint(
     # quality report
     msg("📊 Building quality report…")
     report = _quality_report(manifest.get("docs", []), chunk_rows, extra_counts=stats)
-    pct(85, "report-rea
+    pct(85, "report-ready")
+
+    # GitHub Releases upload (항상 수행 — 릴리스 기반 복구 정책)
+    try:
+        from src.backup.github_release import upload_index_release
+        # ensure gzip alongside chunks.jsonl
+        gz_path = chunks_path.with_suffix(chunks_path.suffix + ".gz")
+        if (not gz_path.exists()) or (gz_path.stat().st_mtime < chunks_path.stat().st_mtime):
+            with open(chunks_path, "rb") as fr, gzip.open(gz_path, "wb", compresslevel=6) as fw:
+                shutil.copyfileobj(fr, fw)
+
+        msg("🚀 Publishing index to GitHub Releases…")
+        res = upload_index_release(
+            manifest_path=manifest_path,
+            chunks_jsonl_path=chunks_path,
+            include_zip=False,  # ZIP은 필요 시 다른 경로로
+            keep=2,
+            build_meta={
+                "processed_files": processed,
+                "generated_chunks": chunks_cnt,
+                "prepared_folder_id": prepared_id,
+            },
+        )
+        msg(f"✅ GitHub Releases 완료: {res.get('tag')} / {res.get('assets')}")
+    except Exception as e:
+        msg(f"⚠️ GitHub 업로드 실패: {type(e).__name__}: {e}")
+
+    pct(100, "done")
+    return {
+        "ok": True,
+        "processed_files": processed,
+        "generated_chunks": chunks_cnt,
+        "stats": stats,
+        "report": report,
+        # 정책상 Drive 백업 업로드 제거 → 항상 None
+        "backup_zip_id": None,
+        "prepared_folder_id": prepared_id,
+        "backup_folder_id": None,
+        "auth_mode": "service-account",
+        "persist_dir": str(PERSIST_DIR),
+    }
+# [10] Public entry: build_index_with_checkpoint — END
+# ============================================================================
+
+
+# [11] Compatibility shims (for UI & prompts loader) — START
+def quick_precheck() -> dict:
+    """로컬 persist 상태 간단 점검(임포트용 안전 함수)."""
+    try:
+        persist = str(PERSIST_DIR)
+        ready = (PERSIST_DIR / "chunks.jsonl").exists() or (PERSIST_DIR / ".ready").exists()
+        return {"ok": True, "persist_dir": persist, "ready": bool(ready)}
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+def scan_drive_listing(folder_id: str | None = None, limit: int = 50) -> list[dict]:
+    """prepared 폴더의 최신 파일 일부를 서비스계정으로 조회."""
+    try:
+        svc = _drive_client()
+        fid = folder_id or _find_folder_id("PREPARED")
+        if not fid:
+            return []
+        q = f"'{fid}' in parents and trashed=false"
+        fields = "files(id, name, mimeType, modifiedTime, size, md5Checksum)"
+        res = svc.files().list(q=q, fields=fields, orderBy="modifiedTime desc", pageSize=limit).execute()
+        return res.get("files", [])
+    except Exception:
+        return []
+
+def diff_with_manifest(folder_id: str | None = None, limit: int = 1000) -> dict:
+    """
+    prepared 폴더 목록과 로컬 manifest.json을 비교하여
+    added/changed/removed 통계를 반환한다.
+    실패/비정상 상황에서도 항상 동일 스키마를 보장한다.
+    """
+    # 항상 반환할 기본 골격 (UI 안전)
+    out = {
+        "ok": False,
+        "reason": "",
+        "stats": {"added": 0, "changed": 0, "removed": 0},
+        "added": [],
+        "changed": [],
+        "removed": [],
+    }
+
+    try:
+        mpath = PERSIST_DIR / "manifest.json"
+        if not mpath.exists():
+            out["reason"] = "no_manifest"
+            return out
+
+        man = json.loads(mpath.read_text(encoding="utf-8") or "{}")
+        mdocs = {d.get("id"): d for d in (man.get("docs") or []) if d.get("id")}
+
+        svc = _drive_client()
+        fid = folder_id or _find_folder_id("PREPARED")
+        if not fid:
+            out["reason"] = "no_prepared_id"
+            return out
+
+        cur = _list_files_in_folder(svc, fid)[:limit]
+        cdocs = {f.get("id"): f for f in cur if f.get("id")}
+
+        ids_m = set(mdocs.keys()); ids_c = set(cdocs.keys())
+        added   = list(ids_c - ids_m)
+        removed = list(ids_m - ids_c)
+        common  = ids_m & ids_c
+
+        changed: List[str] = []
+        for i in common:
+            m = mdocs[i]; c = cdocs[i]
+            md5_m, md5_c = m.get("md5"), c.get("md5Checksum")
+            sz_m,  sz_c  = str(m.get("size")), str(c.get("size"))
+            if (md5_m and md5_c and md5_m != md5_c) or (sz_m and sz_c and sz_m != sz_c):
+                changed.append(i)
+
+        def _names(ids: List[str]) -> List[str]:
+            out_names: List[str] = []
+            for _id in ids:
+                if _id in cdocs:
+                    out_names.append(cdocs[_id].get("name"))
+                elif _id in mdocs:
+                    out_names.append(mdocs[_id].get("name"))
+            return out_names
+
+        out["ok"] = True
+        out["added"]   = _names(added)
+        out["changed"] = _names(changed)
+        out["removed"] = _names(removed)
+        out["stats"] = {
+            "added": len(out["added"]),
+            "changed": len(out["changed"]),
+            "removed": len(out["removed"]),
+        }
+        return out
+
+    except Exception as e:
+        out["reason"] = f"{type(e).__name__}: {e}"
+        return out
+
+def _drive_service():
+    """Compatibility alias for prompt_modes: returns Drive service or None."""
+    try:
+        return _drive_client()
+    except Exception:
+        return None
+# [11] Compatibility shims (for UI & prompts loader) — END
+# ============================================================================
+
+
+# ===================== src/rag/index_build.py — END ==========================
