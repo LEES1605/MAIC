@@ -204,41 +204,46 @@ def _header():
 def _login_panel_if_needed():
     return
 
-# [07] MAIN: 자동 연결(attach) / 변경 없으면 릴리스 복구 / 필요 시 빌드 ============  # [07] START
+# [07] MAIN: 자동 연결(attach) / 변경 없으면 릴리스 복구 / 변경 있으면 선택대기 =======  # [07] START
 def _auto_attach_or_build_index():
     """
     우선순위:
-    1) 로컬 인덱스(chunks.jsonl/.ready) 존재 → Drive diff 검사 → 변경 없으면 즉시 attach
-    2) 로컬 없으면 → GitHub Releases에서 복구(restore) → diff 검사 → 변경 없으면 attach
-    3) 변경이 있거나 복구 실패 시에만 Drive에서 빌드 실행
+    1) 로컬 인덱스(chunks.jsonl/.ready) 존재 → Drive diff 검사
+       - 변경 없음(False) 또는 판단 불가(None): 곧바로 attach(READY)
+       - 변경 있음(True): 현재 로컬로 attach(READY) + 관리자 선택 대기(index_decision_needed=True)
+    2) 로컬 없으면 → GitHub Releases에서 복구(restore) → diff 검사
+       - 변경 없음(False) 또는 판단 불가(None): attach(READY)
+       - 변경 있음(True): Releases로 attach(READY) + 관리자 선택 대기(index_decision_needed=True)
+    3) 빌드는 관리자가 명시적으로 요청할 때만 수행(재빌드/인덱싱하기 버튼)
     모든 성공 경로에서 UI 상태 플래그와 `.ready` 파일을 보장한다.
     """
-    import json, pathlib, inspect
+    import json, pathlib
     ss = st.session_state
-    if ss.get("_index_boot_ran_v3"):
+    if ss.get("_index_boot_ran_v5"):
         return
-    ss["_index_boot_ran_v3"] = True
+    ss["_index_boot_ran_v5"] = True
 
-    # 기본 상태
+    # 상태 기본값
     ss.setdefault("brain_attached", False)
     ss.setdefault("brain_status_msg", "초기화 중…")
     ss.setdefault("index_status_code", "INIT")
     ss.setdefault("index_source", "")
-    ss.setdefault("restore_recommend", True)
+    ss.setdefault("restore_recommend", False)
+    ss.setdefault("index_decision_needed", False)
+    ss.setdefault("index_change_stats", {})
 
     # 필요한 모듈(동적 임포트)
     idx = _try_import("src.rag.index_build", [
-        "quick_precheck", "build_index_with_checkpoint", "diff_with_manifest"
+        "quick_precheck", "diff_with_manifest"
     ]) or {}
     rel = _try_import("src.backup.github_release", ["restore_latest"]) or {}
 
     quick = idx.get("quick_precheck")
-    build = idx.get("build_index_with_checkpoint")
     diff  = idx.get("diff_with_manifest")
     restore_latest = rel.get("restore_latest")
 
-    # 공통 경로/헬퍼
-    persist_path = pathlib.Path.home() / ".maic" / "persist"
+    # 표준 경로
+    persist_path = PERSIST_DIR
     chunks_path  = persist_path / "chunks.jsonl"
     ready_flag   = persist_path / ".ready"
 
@@ -257,113 +262,77 @@ def _auto_attach_or_build_index():
         ss["index_source"] = source
         ss["restore_recommend"] = False
 
-    def _attach_fail(msg: str):
-        ss["brain_attached"] = False
-        ss["brain_status_msg"] = msg
-        ss["index_status_code"] = "MISSING"
-        ss["restore_recommend"] = True
+    def _set_decision(wait: bool, stats: dict | None = None):
+        ss["index_decision_needed"] = bool(wait)
+        ss["index_change_stats"] = stats or {}
 
-    def _has_changes() -> Optional[bool]:
-        """Drive prepared와 로컬 manifest 비교 → 변경 유무(bool) 또는 None(판단 불가)."""
+    def _try_diff() -> tuple[bool|None, dict]:
+        """(changed_flag, stats_dict) 반환. 실패 시 (None, {})."""
         if not callable(diff):
-            return None
+            return None, {}
         try:
             d = diff() or {}
             if not d.get("ok"):
-                return None
+                return None, {}
             stts = d.get("stats") or {}
             changed_total = int(stts.get("added", 0)) + int(stts.get("changed", 0)) + int(stts.get("removed", 0))
-            return changed_total > 0
+            return (changed_total > 0), stts
         except Exception as e:
             _errlog(f"diff 실패: {e}", where="[index_boot]")
-            return None
+            return None, {}
 
-    # 0) quick_precheck
+    # 0) 로컬 인덱스 빠른 점검
     if not callable(quick):
-        return _attach_fail("인덱스 모듈(quick_precheck) 미탑재")
+        ss["index_status_code"] = "MISSING"
+        return
+
     try:
         pre = quick() or {}
     except Exception as e:
         _errlog(f"precheck 예외: {e}", where="[index_boot]")
         pre = {}
 
-    # 1) 로컬 인덱스가 이미 있으면: 변경 없으면 즉시 attach
+    # 1) 로컬 인덱스가 이미 있으면: attach 후 diff 판단
     if pre.get("ok") and pre.get("ready"):
-        ch = _has_changes()
-        if ch is False:
-            return _attach_success("local", "로컬 인덱스 연결됨(변경 없음)")
-        # 변경 존재(True) 또는 판단 불가(None)면 다음 단계 진행
+        ch, stts = _try_diff()
+        if ch is True:
+            _attach_success("local", "로컬 인덱스 연결됨(신규/변경 감지)")
+            _set_decision(True, stts)
+            return
+        else:
+            _attach_success("local", "로컬 인덱스 연결됨(변경 없음/판단 불가)")
+            _set_decision(False, stts)
+            return
 
-    # 2) 로컬이 없으면: Releases에서 복구 시도(자동)
+    # 2) 로컬이 없으면: Releases에서 복구(자동)
     restored = False
     if callable(restore_latest):
         try:
             restored = bool(restore_latest(persist_path))
         except Exception as e:
             _errlog(f"restore 실패: {e}", where="[index_boot]")
-            restored = False
 
     if restored and chunks_path.exists():
-        # 복구 후 diff 검사: 변경 없으면 수동 안내 없이 바로 attach
-        ch2 = _has_changes()
-        if ch2 is False or ch2 is None:  # 판단 불가여도 보수적으로 attach 후 사용 가능
-            return _attach_success("release", "Releases에서 복구·연결(변경 없음)")
-        # 변경 있음(True)이면 빌드로 진행
-
-    # 3) 여기까지 왔으면 빌드 필요(변경 존재/판단 불가/복구 실패/모듈 미흡 등)
-    if not callable(build):
-        return _attach_fail("빌드 엔트리(build_index_with_checkpoint) 없음")
-
-    prog = st.progress(0, text="두뇌 준비중…")
-    msgbox = st.empty()
-
-    def _pct(p, m=None):
-        try:
-            prog.progress(int(p), text=("두뇌 준비중… " + (m or "")).strip())
-        except Exception:
-            pass
-
-    def _msg(s):
-        try:
-            msgbox.info(str(s))
-        except Exception:
-            pass
-
-    try:
-        gdrive_folder_id = st.secrets.get("GDRIVE_PREPARED_FOLDER_ID") or ""
-        gcp_creds = st.secrets.get("gcp_service_account") or {}
-        if isinstance(gcp_creds, str):
-            try: gcp_creds = json.loads(gcp_creds)
-            except Exception: gcp_creds = {}
-
-        res = build(
-            _pct, _msg,
-            gdrive_folder_id=gdrive_folder_id,
-            gcp_creds=gcp_creds,
-            persist_dir="",         # index_build 내부 기본 경로 사용
-            remote_manifest={},     # 간소화
-            should_stop=None,
-        ) or {}
-
-        if chunks_path.exists():
-            return _attach_success("build", "로컬 인덱스 빌드·연결 완료")
+        ch2, stts2 = _try_diff()
+        if ch2 is True:
+            _attach_success("release", "Releases에서 복구·연결(신규/변경 감지)")
+            _set_decision(True, stts2)
+            return
         else:
-            return _attach_fail("로컬 인덱스 생성 실패")
+            _attach_success("release", "Releases에서 복구·연결(변경 없음/판단 불가)")
+            _set_decision(False, stts2)
+            return
 
-    except Exception as e:
-        _attach_fail(f"인덱스 빌드 오류: {type(e).__name__}: {e}")
-        _errlog(f"build 실패: {e}", where="[index_boot]", exc=e)
-    finally:
-        try:
-            prog.empty(); msgbox.empty()
-        except Exception:
-            pass
+    # 3) 여기까지 왔으면 로컬/릴리스 모두 실패 — 상태만 남김(관리자 재빌드 버튼으로 해결)
+    ss["brain_attached"] = False
+    ss["brain_status_msg"] = "인덱스 없음(관리자에서 재빌드 필요)"
+    ss["index_status_code"] = "MISSING"
+    _set_decision(False, {})
+    return
 
 # 모듈 초기화 시 1회 자동 실행
 _auto_attach_or_build_index()
-# [07] MAIN: 자동 연결(attach) / 변경 없으면 릴리스 복구 / 필요 시 빌드 ============  # [07] END
-
-
+# [07] MAIN: 자동 연결(attach) / 변경 없으면 릴리스 복구 / 변경 있으면 선택대기 =======  # [07] END
 
 # [08] 자동 시작(선택) =========================================================
 def _auto_start_once():
@@ -481,16 +450,23 @@ def _render_admin_panels() -> None:
         st.text_area("최근 오류", value=txt, height=180)
         st.download_button("로그 다운로드", data=txt.encode("utf-8"), file_name="app_error_log.txt")
 
-# [10] 학생 UI: 모드 버튼 + 미니멀 상태버튼 + 파스텔 채팅 =====================  # [10] START
-def _inject_minimal_styles_once():
-    if st.session_state.get("_minimal_styles_injected"):
+# [10] 학생 UI (Stable v1.1): 상태버튼 + 모드 + 채팅 + 관리자 컨트롤 ==================  # [10] START
+def _inject_chat_styles_once():
+    if st.session_state.get("_chat_styles_injected"):
         return
-    st.session_state["_minimal_styles_injected"] = True
+    st.session_state["_chat_styles_injected"] = True
     st.markdown("""
     <style>
+      .status-btn{display:inline-block; padding:6px 10px; border-radius:14px;
+        font-size:12px; font-weight:700; color:#111; border:1px solid transparent;}
+      .status-btn.green{ background:#daf5cb; border-color:#bfe5ac; }
+      .status-btn.yellow{ background:#fff3bf; border-color:#ffe08a; }
+
+      .seg-zone{ gap:8px; }
+      .seg-zone .stButton{ width:100%; }
       .seg-zone .stButton>button{
         width:100%; border:2px solid #bcdcff; border-radius:16px;
-        background:#fff; color:#111; font-weight:700; padding:10px 12px;
+        background:#fff; color:#111; font-weight:700; padding:8px 10px;
       }
       .seg-zone .stButton>button:hover{ background:#f5fbff; }
 
@@ -505,32 +481,25 @@ def _inject_minimal_styles_once():
       }
       .chat-box .bubble.user{
         background:#eaf4ff; color:#0a2540; border:1px solid #cfe7ff;
-        border-top-right-radius:8px;
+        border-top-right-radius:8px; position:relative;
       }
       .chat-box .bubble.ai{
         background:#f7f7ff; color:#14121f; border:1px solid #e6e6ff;
-        border-top-left-radius:8px;
+        border-top-left-radius:8px; position:relative;
       }
-      .chat-box .row.user .bubble{ position:relative; }
       .chat-box .row.user .bubble:after{
         content:""; position:absolute; right:-8px; top:10px;
         border-width:8px 0 8px 8px; border-style:solid;
         border-color:transparent transparent transparent #cfe7ff;
       }
-      .chat-box .row.ai .bubble{ position:relative; }
       .chat-box .row.ai .bubble:before{
         content:""; position:absolute; left:-8px; top:10px;
         border-width:8px 8px 8px 0; border-style:solid;
         border-color:transparent #e6e6ff transparent transparent;
       }
 
-      /* 상태 버튼 (미니멀) */
-      .status-btn{
-        display:inline-block; padding:6px 10px; border-radius:14px;
-        font-size:12px; font-weight:700; color:#111; border:1px solid transparent;
-      }
-      .status-btn.green{ background:#daf5cb; border-color:#bfe5ac; }
-      .status-btn.yellow{ background:#fff3bf; border-color:#ffe08a; }
+      /* 관리자 컨트롤 패널 */
+      .admin-panel .stButton>button{ padding:6px 10px; border-radius:10px; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -551,7 +520,7 @@ def _render_llm_status_minimal():
     st.markdown(html, unsafe_allow_html=True)
 
 def _render_mode_controls_minimal(*, admin: bool) -> str:
-    _inject_minimal_styles_once()
+    _inject_chat_styles_once()
     ss = st.session_state
     cfg = _sanitize_modes_cfg(_load_modes_cfg())
 
@@ -567,12 +536,121 @@ def _render_mode_controls_minimal(*, admin: bool) -> str:
         if st.button(f"📖 {_LABELS['지문']}", key="mode_btn_pass", use_container_width=True):
             ss["qa_mode_radio"] = "지문"; st.rerun()
 
-    # 사용자가 누른 값이 있으면 그대로 사용. 없으면 기본값.
-    cur = ss.get("qa_mode_radio")
+    cur = st.session_state.get("qa_mode_radio")
     if cur not in _MODE_KEYS:
         cur = cfg.get("default") or "문법"
-    ss["qa_mode_radio"] = cur
+    st.session_state["qa_mode_radio"] = cur
     return cur
+
+def _render_admin_index_controls():
+    """관리자 전용: 인덱싱하기/백업 쓰기/재빌드."""
+    if not _is_admin_view():
+        return
+    import json, inspect, pathlib
+    ss = st.session_state
+
+    # 상단 상태 한 줄 (소스 표시)
+    src = ss.get("index_source") or "unknown"
+    st.caption(f"인덱스 소스: **{src}**  |  상태: {ss.get('brain_status_msg','')}")
+    need = bool(ss.get("index_decision_needed"))
+    stats = ss.get("index_change_stats") or {}
+
+    # 버튼 행
+    c1, c2, c3 = st.columns(3, gap="small")
+    with c1:
+        if st.button("🚀 재빌드", key="btn_rebuild", use_container_width=True):
+            _admin_trigger_build()
+    with c2:
+        if need and st.button("🧱 인덱싱하기(신규반영)", key="btn_index_now", use_container_width=True):
+            _admin_trigger_build()
+    with c3:
+        if need and st.button("📦 백업 쓰기(현상유지)", key="btn_use_release", use_container_width=True):
+            _admin_use_release()
+
+    # 변경 통계(있을 때만 노출)
+    if need and stats:
+        st.info(f"변경 감지: +{stats.get('added',0)} / Δ{stats.get('changed',0)} / -{stats.get('removed',0)}")
+
+def _admin_trigger_build():
+    """관리자: 즉시 전체 인덱싱 실행 → attach."""
+    import json
+    mod = _try_import("src.rag.index_build", ["build_index_with_checkpoint"]) or {}
+    build = mod.get("build_index_with_checkpoint")
+    if not callable(build):
+        st.error("빌드 엔트리를 찾을 수 없습니다.")
+        return
+
+    prog = st.progress(0, text="인덱싱 중…")
+    msgbox = st.empty()
+    def _pct(p, m=None):
+        try: prog.progress(int(p), text=("인덱싱 중… " + (m or "")).strip())
+        except Exception: pass
+    def _msg(s): 
+        try: msgbox.info(str(s))
+        except Exception: pass
+
+    try:
+        gdrive_folder_id = st.secrets.get("GDRIVE_PREPARED_FOLDER_ID") or ""
+        gcp_creds = st.secrets.get("gcp_service_account") or {}
+        if isinstance(gcp_creds, str):
+            try: gcp_creds = json.loads(gcp_creds)
+            except Exception: gcp_creds = {}
+        res = build(_pct, _msg, gdrive_folder_id, gcp_creds, "", {}, None) or {}
+        st.success("인덱싱 완료. 최신 인덱스로 전환했습니다.")
+        ss = st.session_state
+        ss["brain_attached"] = True
+        ss["brain_status_msg"] = "로컬 인덱스 빌드·연결 완료"
+        ss["index_status_code"] = "READY"
+        ss["index_source"] = "build"
+        ss["index_decision_needed"] = False
+        ss["index_change_stats"] = {}
+        st.rerun()
+    except Exception as e:
+        st.error(f"인덱싱 실패: {type(e).__name__}: {e}")
+    finally:
+        try: prog.empty(); msgbox.empty()
+        except Exception: pass
+
+def _admin_use_release():
+    """관리자: Releases에서 복구하여 현 상태 유지로 전환."""
+    import pathlib
+    mod = _try_import("src.backup.github_release", ["restore_latest"]) or {}
+    rest = mod.get("restore_latest")
+    if not callable(rest):
+        st.error("Releases 복구 엔트리를 찾을 수 없습니다.")
+        return
+
+    ok = False
+    try:
+        ok = bool(rest(PERSIST_DIR))
+    except Exception as e:
+        st.error(f"복구 실패: {type(e).__name__}: {e}")
+        return
+
+    if ok and (PERSIST_DIR / "chunks.jsonl").exists():
+        ss = st.session_state
+        ss["brain_attached"] = True
+        ss["brain_status_msg"] = "Releases에서 복구·연결 완료"
+        ss["index_status_code"] = "READY"
+        ss["index_source"] = "release"
+        ss["index_decision_needed"] = False
+        ss["index_change_stats"] = {}
+        st.success("백업(릴리스) 기준으로 연결했습니다.")
+        st.rerun()
+    else:
+        st.error("복구 결과가 유효하지 않습니다(파일 없음).")
+
+def _render_chat_log(messages: list[dict]):
+    st.markdown('<div class="chat-box">', unsafe_allow_html=True)
+    for m in messages:
+        role = m.get("role", "ai")
+        text = m.get("text", "")
+        klass = "user" if role == "user" else "ai"
+        st.markdown(
+            f'<div class="row {klass}"><div class="bubble {klass}">{text}</div></div>',
+            unsafe_allow_html=True
+        )
+    st.markdown('</div>', unsafe_allow_html=True)
 
 def _render_chat_panel():
     import time, inspect
@@ -580,13 +658,16 @@ def _render_chat_panel():
     if "chat" not in ss:
         ss["chat"] = []
 
-    # 상단 미니멀 상태 표시 (녹/노)
+    # 1) 상단 상태 버튼
     _render_llm_status_minimal()
 
-    # 모드 버튼
+    # 1-1) (관리자 전용) 인덱스 컨트롤 패널
+    _render_admin_index_controls()
+
+    # 2) 모드 선택
     cur = _render_mode_controls_minimal(admin=_is_admin_view())
 
-    # 입력창 + 전송
+    # 3) 입력창 + 전송
     qcol1, qcol2 = st.columns([8, 2], gap="small")
     with qcol1:
         user_q = st.text_input("무엇이 궁금한가요?", key="user_q", label_visibility="collapsed",
@@ -594,16 +675,16 @@ def _render_chat_panel():
     with qcol2:
         send = st.button("보내기", use_container_width=True)
 
-    # 전송 처리
+    # 4) 전송 처리
     if (user_q and user_q.strip()) and send:
         uid = f"u{int(time.time()*1000)}"
         ss["chat"].append({"id": uid, "role":"user", "text": user_q.strip()})
 
-        # 생각중 표시(즉시 피드백)
+        # 즉시 피드백(생각중)
         aid = f"a{int(time.time()*1000)}"
         ss["chat"].append({"id": aid, "role":"assistant", "text": "생각중…"})
 
-        # 모드 토큰 + prompts.yaml 연결 (실패 시 안전 폴백)
+        # prompts.yaml 연결 (실패 시 안전 폴백)
         mode_token = _LLM_TOKEN.get(cur, "문법설명")
         _prompt_mod = _try_import("src.prompt_modes", ["build_prompt"])
         _build_prompt = (_prompt_mod or {}).get("build_prompt")
@@ -631,7 +712,6 @@ def _render_chat_panel():
             params = sig.parameters.keys()
             kwargs = {}
 
-            # messages 방식 우선 지원
             if "messages" in params:
                 msgs = []
                 if system_prompt:
@@ -644,7 +724,6 @@ def _render_chat_panel():
                 if "system_prompt" in params: kwargs["system_prompt"] = system_prompt
                 elif "system" in params: kwargs["system"] = system_prompt
 
-            # 부가 인자 자동 매핑
             if "mode_token" in params: kwargs["mode_token"] = mode_token
             elif "mode" in params: kwargs["mode"] = mode_token
             if "timeout_s" in params: kwargs["timeout_s"] = 90
@@ -661,16 +740,9 @@ def _render_chat_panel():
 
         st.rerun()
 
-    # 대화 로그 렌더
-    st.markdown('<div class="chat-box">', unsafe_allow_html=True)
-    for m in ss["chat"]:
-        klass = "user" if m["role"] == "user" else "ai"
-        st.markdown(
-            f'<div class="row {klass}"><div class="bubble {klass}">{m["text"]}</div></div>',
-            unsafe_allow_html=True
-        )
-    st.markdown('</div>', unsafe_allow_html=True)
-# [10] 학생 UI: 모드 버튼 + 미니멀 상태버튼 + 파스텔 채팅 =====================  # [10] END
+    # 5) 채팅 로그 렌더
+    _render_chat_log(ss["chat"])
+# [10] 학생 UI (Stable v1.1): 상태버튼 + 모드 + 채팅 + 관리자 컨트롤 ==================  # [10] END
 
 
 # [11] 본문 렌더 ===============================================================
