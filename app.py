@@ -519,89 +519,111 @@ def _replace_assistant_text(aid:str,new_text:str):
             m["text"]=new_text; return True
     return False
 # [10A] END====================================================
-
-# [10B] 학생 로직 (ChatMessage版 + 안전 폴백)  # [10B] START
+# [10B] 학생 로직 (Safe v1.0.2): ID 생성 버그 수정 + 폴백 강화 + temperature=0.2  # [10B] START
 def _render_chat_panel():
     import time, inspect
-    ss=st.session_state
-    if "chat" not in ss: ss["chat"]=[]
+    ss = st.session_state
+    if "chat" not in ss:
+        ss["chat"] = []
 
+    # 스타일/상태/모드
     _inject_chat_styles_once()
     _render_llm_status_minimal()
-    cur=_render_mode_controls_pills()
+    cur = _render_mode_controls_pills()
 
-    # 1) 과거 대화 로그(항상 챗봇 스타일로)
+    # 이전 대화 표시
     _render_chat_log(ss["chat"])
 
-    # 2) 입력
-    user_q=st.chat_input("예) 분사구문이 뭐예요?  예) 이 문장 구조 분석해줘")
-    if not (user_q and user_q.strip()): return
+    # 입력
+    user_q = st.chat_input("예) 분사구문이 뭐예요?  예) 이 문장 구조 분석해줘")
+    if not (user_q and user_q.strip()):
+        return
 
-    qtxt=user_q.strip()
+    qtxt = user_q.strip()
+    ts   = int(time.time()*1000)  # ← FIX: 1000() 아님!
+    uid  = f"u{ts}"
+    aid  = f"a{ts}"
 
-    # 3) 이번 질문은 즉시 '실시간 렌더' + 같은 런에서 LLM 호출
-    with st.chat_message("user"): st.markdown(qtxt)
-    with st.chat_message("assistant"):
-        ph=st.empty(); ph.markdown("답변 준비중…")
+    # 말풍선 상태 먼저 기록 (준비중)
+    ss["chat"].append({"id": uid, "role": "user", "text": qtxt})
+    ss["chat"].append({"id": aid, "role": "assistant", "text": "답변 준비중…"})
 
-    # 4) prompts.yaml → 실패 시 모드별 폴백
-    MODE_TOKEN={"문법":"문법설명","문장":"문장구조분석","지문":"지문분석"}[cur]
-    _prompt_mod=_try_import("src.prompt_modes",["build_prompt"]) or {}
-    _build_prompt=_prompt_mod.get("build_prompt")
-    BASE="너는 한국의 영어학원 원장처럼 따뜻하고 명확하게 설명한다. "
-    FALLBACK_BY_MODE={
-        "문법설명": BASE+"오직 문법 규칙과 예문으로 단계별로 설명해라. 불필요한 서론 금지.",
-        "문장구조분석": BASE+"문장 성분(주어·동사·목적어…)과 구문을 표로 정리하고 핵심만 답해라.",
-        "지문분석": BASE+"지문 요지·구조·핵심어만 간결히 정리해라. 문제풀이식 단계 제시."
+    # prompts.yaml → 실패 시 모드별 폴백 + '질문-집중' 가드
+    MODE_TOKEN = {"문법": "문법설명", "문장": "문장구조분석", "지문": "지문분석"}[cur]
+    _prompt_mod = _try_import("src.prompt_modes", ["build_prompt"]) or {}
+    _build_prompt = _prompt_mod.get("build_prompt")
+
+    BASE = "너는 한국의 영어학원 원장처럼 따뜻하고 명확하게 설명한다. "
+    FALLBACK_BY_MODE = {
+        "문법설명": BASE + "오직 질문된 문법 주제에만 답하고, 정의→핵심 규칙 bullet 3~5개→예문 3개(해석 포함)→자주 틀리는 포인트→두 문장 요약 순으로 간결히 설명해라. 다른 주제는 금지.",
+        "문장구조분석": BASE + "주어·동사·목적어·보어·수식어를 식별해 표/리스트로 구조를 단계별로 설명하라. 불필요한 서론 금지.",
+        "지문분석": BASE + "지문 요지/구조/핵심어·핵심문장만 간결히 정리하고, 문제풀이식 단계 제시. 장황한 배경설명 금지.",
     }
+    GUARD_USER_APPEND = (
+        f"\n\n[질문]\n{qtxt}\n\n"
+        "[지시]\n"
+        f"- 현재 모드: {cur} ({MODE_TOKEN})\n"
+        "- 반드시 질문 주제에만 답할 것. 주제와 무관하면 '질문과 다른 주제입니다'라고 알리고 재질문을 요청.\n"
+        "- 형식: (1) 한 줄 정의 (2) 핵심 규칙/핵심 요지 bullet (3) 예문 3개 (4) 흔한 오류 2개 (5) 두 문장 요약.\n"
+    )
+
     if callable(_build_prompt):
         try:
-            parts=_build_prompt(MODE_TOKEN,qtxt) or {}
-            system_prompt=parts.get("system") or FALLBACK_BY_MODE[MODE_TOKEN]
-            user_prompt =parts.get("user")   or f"[모드:{MODE_TOKEN}]\n{qtxt}"
+            parts = _build_prompt(MODE_TOKEN, qtxt) or {}
+            system_prompt = parts.get("system") or FALLBACK_BY_MODE[MODE_TOKEN]
+            user_prompt   = (parts.get("user") or f"[모드:{MODE_TOKEN}]\n{qtxt}") + GUARD_USER_APPEND
         except Exception:
-            system_prompt,user_prompt=FALLBACK_BY_MODE[MODE_TOKEN],f"[모드:{MODE_TOKEN}]\n{qtxt}"
+            system_prompt, user_prompt = FALLBACK_BY_MODE[MODE_TOKEN], f"[모드:{MODE_TOKEN}]\n{qtxt}" + GUARD_USER_APPEND
     else:
-        system_prompt,user_prompt=FALLBACK_BY_MODE[MODE_TOKEN],f"[모드:{MODE_TOKEN}]\n{qtxt}"
+        system_prompt, user_prompt = FALLBACK_BY_MODE[MODE_TOKEN], f"[모드:{MODE_TOKEN}]\n{qtxt}" + GUARD_USER_APPEND
 
-    # 5) 어댑터 시그니처 자동 매핑 → 'messages' 우선
-    call=(_llm or {}).get("call_with_fallback") if "_llm" in globals() else None
-    if not callable(call):
-        ph.markdown("(오류) LLM 어댑터를 사용할 수 없습니다."); return
-
-    sig=inspect.signature(call); params=sig.parameters.keys(); kwargs={}
-    if "messages" in params:
-        kwargs["messages"]=[{"role":"system","content":system_prompt},
-                            {"role":"user","content":user_prompt}]
-    else:
-        if "prompt" in params: kwargs["prompt"]=user_prompt
-        elif "user_prompt" in params: kwargs["user_prompt"]=user_prompt
-        if "system_prompt" in params: kwargs["system_prompt"]=system_prompt
-        elif "system" in params: kwargs["system"]=system_prompt
-    if "mode_token" in params: kwargs["mode_token"]=MODE_TOKEN
-    elif "mode" in params: kwargs["mode"]=MODE_TOKEN
-    if "timeout_s" in params: kwargs["timeout_s"]=90
-    elif "timeout" in params: kwargs["timeout"]=90
-    if "extra" in params: kwargs["extra"]={"question":qtxt,"mode_key":cur}
-
+    # 어댑터 시그니처 자동 매핑 (+temperature=0.2로 엉뚱 답변 완화)
     try:
-        res=call(**kwargs)
-        text = res.get("text") if isinstance(res,dict) else str(res)
-        if not text: text="(응답이 비어있어요)"
-        ph.markdown(text)
-    except Exception as e:
-        ph.markdown(f"(오류) {type(e).__name__}: {e}")
-        _errlog(f"LLM 예외: {e}", where="[qa_llm]", exc=e)
-        text=f"(오류) {type(e).__name__}: {e}"
+        call = (_llm or {}).get("call_with_fallback") if "_llm" in globals() else None
+        if not callable(call):
+            raise RuntimeError("LLM 어댑터(call_with_fallback)를 사용할 수 없습니다.")
 
-    # 6) 히스토리에 최종본만 저장(준비중 문구는 저장하지 않음)
-    ss["chat"].append({"id":f"u{int(time.time()*1000())}","role":"user","text":qtxt})
-    ss["chat"].append({"id":f"a{int(time.time()*1000())}","role":"assistant","text":text})
-# [10B] END
+        sig = inspect.signature(call)
+        params = sig.parameters.keys()
+        kwargs = {}
+
+        if "messages" in params:
+            kwargs["messages"] = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user",   "content": user_prompt},
+            ]
+        else:
+            if "prompt" in params: kwargs["prompt"] = user_prompt
+            elif "user_prompt" in params: kwargs["user_prompt"] = user_prompt
+            if "system_prompt" in params: kwargs["system_prompt"] = system_prompt
+            elif "system" in params: kwargs["system"] = system_prompt
+
+        if "mode_token" in params: kwargs["mode_token"] = MODE_TOKEN
+        elif "mode" in params: kwargs["mode"] = MODE_TOKEN
+
+        if "temperature" in params: kwargs["temperature"] = 0.2
+        elif "temp" in params:      kwargs["temp"] = 0.2
+
+        if "timeout_s" in params: kwargs["timeout_s"] = 90
+        elif "timeout" in params: kwargs["timeout"] = 90
+
+        if "extra" in params: kwargs["extra"] = {"question": qtxt, "mode_key": cur}
+
+        res  = call(**kwargs)
+        text = res.get("text") if isinstance(res, dict) else str(res)
+        if not text: text = "(응답이 비어있어요)"
+        _replace_assistant_text(aid, text)
+
+    except Exception as e:
+        _replace_assistant_text(aid, f"(오류) {type(e).__name__}: {e}")
+        _errlog(f"LLM 예외: {e}", where="[qa_llm]", exc=e)
+
+    # 최종 히스토리 저장 (준비중 문구가 아닌 최종 답변 기준)
+    # 이미 위에서 ai 버블 텍스트를 교체했으므로, 히스토리는 그대로 둡니다.
+    st.rerun()
+# [10B] 학생 로직 (Safe v1.0.2): ID 생성 버그 수정 + 폴백 강화 + temperature=0.2  # [10B] END
 
 # [10] 학생 UI (Stable Chatbot v2) ────────────────────────────────────────────  # [10] END
-
-
 
 # [11] 본문 렌더 ===============================================================
 def _render_body() -> None:
