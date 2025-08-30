@@ -122,6 +122,8 @@ _ui_orch = _try_import("src.ui_orchestrator", ["render_index_orchestrator_panel"
 _gh      = _try_import("src.backup.github_release", ["restore_latest"])
 _rag     = _try_import("src.rag.index_build", ["build_index_with_checkpoint"])
 _llm     = _try_import("src.llm.providers", ["call_with_fallback"])
+_prompt = _try_import("src.prompt_modes", ["build_prompt"])
+
 
 # [06] 페이지 설정 & 헤더(인라인 로그인만 사용, Enter 제출 지원) ================
 if st:
@@ -341,7 +343,7 @@ def _render_admin_panels() -> None:
         st.download_button("로그 다운로드", data=txt.encode("utf-8"), file_name="app_error_log.txt")
 
 
-# [10] 학생 UI: 모드 버튼 + 파스텔 채팅(지연해결/생각중/말풍선 꼬리/간격) ==========
+# [10] 학생 UI: 모드 버튼 + 파스텔 채팅(지연해결/생각중/말풍선 꼬리/간격) ==========  # [10] START
 def _inject_minimal_styles_once():
     if st.session_state.get("_minimal_styles_injected"):
         return
@@ -353,29 +355,42 @@ def _inject_minimal_styles_once():
         background:#fff; color:#111; font-weight:700; padding:10px 12px;
       }
       .seg-zone .stButton>button:hover{ background:#f5fbff; }
-      .seg-zone .stButton>button:disabled{
-        background:#eeeeee !important; color:#888 !important; border-color:#ddd !important;
+  
+      .chat-box{margin-top:12px;}
+      .chat-box .row{ display:flex; margin:6px 0; }
+      .chat-box .row.user{ justify-content: flex-end; }
+      .chat-box .row.ai{ justify-content: flex-start; }
+      .chat-box .bubble{
+        max-width: 88%;
+        padding:12px 14px; border-radius:16px; line-height:1.6; font-size:15px;
+        box-shadow: 0 1px 1px rgba(0,0,0,0.05);
       }
-      .chat-box{ border:2px solid #bcdcff; background:#e6f7ff; padding:16px; border-radius:16px; min-height:360px; }
-      .bubble{ position:relative; max-width:92%; padding:10px 12px; border-radius:14px; margin:10px 0; line-height:1.55; font-size:1rem; }
-      .user{ background:#fff7cc; margin-left:auto; }    /* 학생: 연노랑 */
-      .ai{   background:#d9f7d9;  margin-right:auto; }  /* AI: 연초록 */
-      .row{ display:flex; }
-      .row.user{ justify-content:flex-end; }
-      .row.ai{   justify-content:flex-start; }
-      /* 꼬리 */
-      .bubble.user:after{
-        content:""; position:absolute; right:-8px; top:14px; border-width:8px 0 8px 8px; border-style:solid;
-        border-color:transparent transparent transparent #fff7cc;
+      .chat-box .bubble.user{
+        background:#eaf4ff; color:#0a2540; border:1px solid #cfe7ff;
+        border-top-right-radius:8px;
       }
-      .bubble.ai:after{
-        content:""; position:absolute; left:-8px; top:14px; border-width:8px 8px 8px 0; border-style:solid;
-        border-color:transparent #d9f7d9 transparent transparent;
+      .chat-box .bubble.ai{
+        background:#f7f7ff; color:#14121f; border:1px solid #e6e6ff;
+        border-top-left-radius:8px;
       }
-      /* chat_input 테두리/배경 */
-      div[data-testid="stChatInput"]{
-        border:2px solid #bcdcff !important;
-        background:#e6f7ff !important;
+      /* 말풍선 꼬리 (간단) */
+      .chat-box .row.user .bubble{ position:relative; }
+      .chat-box .row.user .bubble:after{
+        content:""; position:absolute; right:-8px; top:10px;
+        border-width:8px 0 8px 8px; border-style:solid;
+        border-color:transparent transparent transparent #cfe7ff;
+      }
+      .chat-box .row.ai .bubble{ position:relative; }
+      .chat-box .row.ai .bubble:before{
+        content:""; position:absolute; left:-8px; top:10px;
+        border-width:8px 8px 8px 0; border-style:solid;
+        border-color:transparent #e6e6ff transparent transparent;
+      }
+
+      /* 모드 버튼 영역 여백/간격 미세조정 */
+      .seg-zone{ gap:8px; }
+      .seg-zone .stButton{ width:100%; }
+      .seg-zone .stButton>button{
         border-radius:16px !important;
         padding:8px 10px !important;
       }
@@ -390,71 +405,88 @@ def _render_mode_controls_minimal(*, admin: bool) -> str:
     _inject_minimal_styles_once()
     ss = st.session_state
     cfg = _sanitize_modes_cfg(_load_modes_cfg())
-    allowed: set[str] = set(cfg["allowed"])
-    default_mode = cfg["default"]
-    cur = ss.get("qa_mode_radio") or default_mode
-    if (not admin) and (cur not in allowed) and allowed:
-        cur = default_mode; ss["qa_mode_radio"] = cur
 
-    with st.container():
-        st.markdown('<div class="seg-zone"></div>', unsafe_allow_html=True)
-        c1, c2, c3 = st.columns(3)
-        for col, key in zip([c1, c2, c3], _MODE_KEYS):
-            disabled = False if admin else (key not in allowed)
-            with col:
-                btn = st.button(_LABELS[key], key=f"mode_btn_{key}", disabled=disabled,
-                                type=("primary" if cur == key else "secondary"))
-                if btn and (admin or (key in allowed)):
-                    ss["qa_mode_radio"] = key; cur = key; st.rerun()
+    def _btn(label: str, key: str):
+        if st.button(label, key=key, use_container_width=True):
+            ss["qa_mode_radio"] = key
+            st.rerun()
+
+    col1, col2, col3 = st.columns(3, gap="small")
+    with col1:
+        _btn(f"🧩 {_LABELS['문법']}", "문법")
+    with col2:
+        _btn(f"🧱 {_LABELS['문장']}", "문장")
+    with col3:
+        _btn(f"📖 {_LABELS['지문']}", "지문")
+
+    cur = ss.get("qa_mode_radio")
+    if cur not in cfg["allowed"]:
+        cur = cfg["default"]
+    ss["qa_mode_radio"] = cur
     return cur
 
-def _llm_call(prompt: str, system: Optional[str] = None) -> Dict[str, Any]:
-    if _llm.get("call_with_fallback"):
-        return _llm["call_with_fallback"](prompt=prompt, system=system,
-                                          primary="gemini", secondary="openai",
-                                          temperature=0.3, max_tokens=800)
-    return {"ok": False, "error": "LLM providers 모듈 미탑재"}
-
-def _render_chat_panel() -> None:
-    if st is None: return
+def _render_chat_panel():
     ss = st.session_state
-    ss.setdefault("chat", []); ss.setdefault("_chat_next_id", 1)
+    if "chat" not in ss:
+        ss["chat"] = []
 
-    ready = _is_brain_ready(); admin = _is_admin_view()
+    # 1) 모드 버튼(학생 뷰 기본, 관리자도 동일 UI 유지)
+    st.markdown("#### 질문 모드 선택")
+    cur = _render_mode_controls_minimal(admin=_is_admin_view())
 
-    with st.container(border=True):
-        c1, c2 = st.columns([0.65, 0.35])
-        with c1: st.markdown(f"**{'🟢 준비완료' if ready else '🟡 준비중'}**")
-        with c2: _ = _render_mode_controls_minimal(admin=admin)
+    # 2) 입력창 + 전송
+    qcol1, qcol2 = st.columns([8, 2])
+    with qcol1:
+        user_q = st.text_input("무엇이 궁금한가요?", key="user_q", label_visibility="collapsed",
+                               placeholder="예) 분사구문이 뭐예요? 예) 이 문장 구조 분석해줘")
+    with qcol2:
+        send = st.button("보내기", use_container_width=True)
 
-    if not ready:
-        _manual_restore_cta()
+    # 3) 전송 처리
+    if (user_q and user_q.strip()) and send:
+        uid = f"u{int(time.time()*1000)}"
+        ss["chat"].append({"id": uid, "role":"user", "text": user_q.strip()})
 
-    # ✅ 1) 입력 먼저 처리(같은 프레임에서 '생각중'→응답까지 반영)
-    user_q = st.chat_input("질문을 입력하세요")
-    if user_q:
-        uid = ss["_chat_next_id"]; ss["_chat_next_id"] += 1
-        ss["chat"].append({"id": uid, "role":"user", "text": user_q})
-
-        # '생각중…' 플레이스홀더
-        aid = ss["_chat_next_id"]; ss["_chat_next_id"] += 1
-        thinking_idx = len(ss["chat"])
+        # 생각중 표시(즉시 피드백)
+        aid = f"a{int(time.time()*1000)}"
         ss["chat"].append({"id": aid, "role":"assistant", "text": "생각중…"})
 
         cfg = _sanitize_modes_cfg(_load_modes_cfg())
         cur = ss.get("qa_mode_radio") or cfg["default"]
-        system_prompt = "너는 한국의 영어학원 원장처럼, 따뜻하고 명확하게 설명한다."
-        prompt = f"[모드:{_LLM_TOKEN.get(cur,'문법설명')}]\n{user_q}"
+        mode_token = _LLM_TOKEN.get(cur, "문법설명")
+        _prompt_mod = _try_import("src.prompt_modes", ["build_prompt"])
+        _build_prompt = (_prompt_mod or {}).get("build_prompt")
+        DEFAULT_SYSTEM_PROMPT = "너는 한국의 영어학원 원장처럼, 따뜻하고 명확하게 설명한다."
+        if callable(_build_prompt):
+            try:
+                parts = _build_prompt(mode_token, user_q)
+                system_prompt = parts.get("system") or DEFAULT_SYSTEM_PROMPT
+                prompt = parts.get("user") or f"[모드:{mode_token}]\n{user_q}"
+            except Exception:
+                system_prompt = DEFAULT_SYSTEM_PROMPT
+                prompt = f"[모드:{mode_token}]\n{user_q}"
+        else:
+            system_prompt = DEFAULT_SYSTEM_PROMPT
+            prompt = f"[모드:{mode_token}]\n{user_q}"
 
         try:
             with st.spinner("답변 생성 중..."):
-                res = _llm_call(prompt, system_prompt)
-            text = (res.get("text") or f"생성 실패: {res.get('error')}").strip() if res.get("ok") \
-                   else (res.get("error") or "생성 실패")
-            ss["chat"][thinking_idx] = {"id": aid, "role":"assistant", "text": text, "provider": res.get("provider")}
+                res = _llm_usable() and _llm["call_with_fallback"](
+                    user_prompt=prompt,
+                    system_prompt=system_prompt,
+                    mode_token=mode_token,
+                    extra={"question": user_q, "mode_key": cur},
+                    timeout_s=90,
+                )
+                if not res:
+                    raise RuntimeError("LLM 호출 실패 또는 비활성")
+
+                # 스트리밍이 아닌 단일 응답 가정
+                text = res.get("text") if isinstance(res, dict) else str(res)
+                ss["chat"][-1]["text"] = text or "(응답이 비어있어요)"
         except Exception as e:
-            err_txt = f"예외: {type(e).__name__}: {e}"
-            ss["chat"][thinking_idx] = {"id": aid, "role":"assistant", "text": err_txt}
+            err_txt = f"(오류) {type(e).__name__}: {e}"
+            ss["chat"][-1]["text"] = err_txt
             _errlog(f"LLM 예외: {e}", where="[qa_llm]", exc=e)
 
         # 최신 상태가 즉시 보이도록 한 프레임 갱신
@@ -466,6 +498,8 @@ def _render_chat_panel() -> None:
         klass = "user" if m["role"] == "user" else "ai"
         st.markdown(f'<div class="row {klass}"><div class="bubble {klass}">{m["text"]}</div></div>', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
+# [10] 학생 UI: 모드 버튼 + 파스텔 채팅(지연해결/생각중/말풍선 꼬리/간격) ==========  # [10] END
+
 
 # [11] 본문 렌더 ===============================================================
 def _render_body() -> None:
