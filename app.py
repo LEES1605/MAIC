@@ -450,18 +450,20 @@ def _render_admin_panels() -> None:
         st.text_area("최근 오류", value=txt, height=180)
         st.download_button("로그 다운로드", data=txt.encode("utf-8"), file_name="app_error_log.txt")
 
-# [10] 학생 UI (Stable v1.1): 상태버튼 + 모드 + 채팅 + 관리자 컨트롤 ==================  # [10] START
+# [10] 학생 UI (Stable v1.2): 상태버튼 + 모드 + 채팅(파스텔 하늘색 배경) + 관리자 컨트롤  # [10] START
 def _inject_chat_styles_once():
     if st.session_state.get("_chat_styles_injected"):
         return
     st.session_state["_chat_styles_injected"] = True
     st.markdown("""
     <style>
+      /* 상태 버튼 (미니멀) */
       .status-btn{display:inline-block; padding:6px 10px; border-radius:14px;
         font-size:12px; font-weight:700; color:#111; border:1px solid transparent;}
       .status-btn.green{ background:#daf5cb; border-color:#bfe5ac; }
       .status-btn.yellow{ background:#fff3bf; border-color:#ffe08a; }
 
+      /* 모드 버튼 */
       .seg-zone{ gap:8px; }
       .seg-zone .stButton{ width:100%; }
       .seg-zone .stButton>button{
@@ -470,35 +472,47 @@ def _inject_chat_styles_once():
       }
       .seg-zone .stButton>button:hover{ background:#f5fbff; }
 
-      .chat-box{margin-top:12px;}
+      /* ===== 채팅 영역(파스텔 하늘색 배경) ===== */
+      .chat-wrap{
+        background:#eaf6ff;              /* 파스텔 하늘색 */
+        border:1px solid #cfe7ff;
+        border-radius:18px;
+        padding:10px 10px 8px;
+        margin-top:10px;
+      }
+      .chat-box{
+        max-height:52vh;                  /* 필요시 조절 */
+        overflow-y:auto;
+        padding:6px 6px 2px;
+      }
       .chat-box .row{ display:flex; margin:6px 0; }
-      .chat-box .row.user{ justify-content: flex-end; }
-      .chat-box .row.ai{ justify-content: flex-start; }
+      .chat-box .row.user{ justify-content:flex-end; }   /* 학생 → 오른쪽 */
+      .chat-box .row.ai{ justify-content:flex-start; }   /* AI  → 왼쪽  */
       .chat-box .bubble{
-        max-width: 88%;
+        max-width:88%;
         padding:12px 14px; border-radius:16px; line-height:1.6; font-size:15px;
-        box-shadow: 0 1px 1px rgba(0,0,0,0.05);
+        box-shadow:0 1px 1px rgba(0,0,0,0.05);
       }
       .chat-box .bubble.user{
-        background:#eaf4ff; color:#0a2540; border:1px solid #cfe7ff;
+        background:#ffffff; color:#0a2540; border:1px solid #d9eaff;
         border-top-right-radius:8px; position:relative;
       }
       .chat-box .bubble.ai{
-        background:#f7f7ff; color:#14121f; border:1px solid #e6e6ff;
+        background:#f7faff; color:#14121f; border:1px solid #e0eaff;
         border-top-left-radius:8px; position:relative;
       }
       .chat-box .row.user .bubble:after{
         content:""; position:absolute; right:-8px; top:10px;
         border-width:8px 0 8px 8px; border-style:solid;
-        border-color:transparent transparent transparent #cfe7ff;
+        border-color:transparent transparent transparent #d9eaff;
       }
       .chat-box .row.ai .bubble:before{
         content:""; position:absolute; left:-8px; top:10px;
         border-width:8px 8px 8px 0; border-style:solid;
-        border-color:transparent #e6e6ff transparent transparent;
+        border-color:transparent #e0eaff transparent transparent;
       }
 
-      /* 관리자 컨트롤 패널 */
+      /* 관리자 컨트롤 패널 버튼 */
       .admin-panel .stButton>button{ padding:6px 10px; border-radius:10px; }
     </style>
     """, unsafe_allow_html=True)
@@ -546,16 +560,12 @@ def _render_admin_index_controls():
     """관리자 전용: 인덱싱하기/백업 쓰기/재빌드."""
     if not _is_admin_view():
         return
-    import json, inspect, pathlib
     ss = st.session_state
-
-    # 상단 상태 한 줄 (소스 표시)
     src = ss.get("index_source") or "unknown"
     st.caption(f"인덱스 소스: **{src}**  |  상태: {ss.get('brain_status_msg','')}")
     need = bool(ss.get("index_decision_needed"))
     stats = ss.get("index_change_stats") or {}
 
-    # 버튼 행
     c1, c2, c3 = st.columns(3, gap="small")
     with c1:
         if st.button("🚀 재빌드", key="btn_rebuild", use_container_width=True):
@@ -567,7 +577,6 @@ def _render_admin_index_controls():
         if need and st.button("📦 백업 쓰기(현상유지)", key="btn_use_release", use_container_width=True):
             _admin_use_release()
 
-    # 변경 통계(있을 때만 노출)
     if need and stats:
         st.info(f"변경 감지: +{stats.get('added',0)} / Δ{stats.get('changed',0)} / -{stats.get('removed',0)}")
 
@@ -585,7 +594,7 @@ def _admin_trigger_build():
     def _pct(p, m=None):
         try: prog.progress(int(p), text=("인덱싱 중… " + (m or "")).strip())
         except Exception: pass
-    def _msg(s): 
+    def _msg(s):
         try: msgbox.info(str(s))
         except Exception: pass
 
@@ -613,7 +622,6 @@ def _admin_trigger_build():
 
 def _admin_use_release():
     """관리자: Releases에서 복구하여 현 상태 유지로 전환."""
-    import pathlib
     mod = _try_import("src.backup.github_release", ["restore_latest"]) or {}
     rest = mod.get("restore_latest")
     if not callable(rest):
@@ -641,7 +649,8 @@ def _admin_use_release():
         st.error("복구 결과가 유효하지 않습니다(파일 없음).")
 
 def _render_chat_log(messages: list[dict]):
-    st.markdown('<div class="chat-box">', unsafe_allow_html=True)
+    # 파스텔 하늘색 배경 컨테이너로 감싸기
+    st.markdown('<div class="chat-wrap"><div class="chat-box">', unsafe_allow_html=True)
     for m in messages:
         role = m.get("role", "ai")
         text = m.get("text", "")
@@ -650,7 +659,7 @@ def _render_chat_log(messages: list[dict]):
             f'<div class="row {klass}"><div class="bubble {klass}">{text}</div></div>',
             unsafe_allow_html=True
         )
-    st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown('</div></div>', unsafe_allow_html=True)
 
 def _render_chat_panel():
     import time, inspect
@@ -740,10 +749,9 @@ def _render_chat_panel():
 
         st.rerun()
 
-    # 5) 채팅 로그 렌더
+    # 5) 채팅 로그 렌더 (파스텔 하늘색 배경 유지)
     _render_chat_log(ss["chat"])
-# [10] 학생 UI (Stable v1.1): 상태버튼 + 모드 + 채팅 + 관리자 컨트롤 ==================  # [10] END
-
+# [10] 학생 UI (Stable v1.2): 상태버튼 + 모드 + 채팅(파스텔 하늘색 배경) + 관리자 컨트롤  # [10] END
 
 # [11] 본문 렌더 ===============================================================
 def _render_body() -> None:
