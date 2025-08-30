@@ -450,7 +450,7 @@ def _render_admin_panels() -> None:
         st.text_area("최근 오류", value=txt, height=180)
         st.download_button("로그 다운로드", data=txt.encode("utf-8"), file_name="app_error_log.txt")
 
-# [10] 학생 UI (Stable v1.4): 상태버튼 + 모드(선택 강조) + 채팅(파스텔 하늘색, 엔터/화살표) + 관리자 컨트롤  # [10] START
+# [10] 학생 UI (Stable v1.5): 모드(세그먼트 강조) + 채팅(파스텔 하늘색) + 2단계 렌더(질문→준비중→답변)  # [10] START
 def _inject_chat_styles_once():
     if st.session_state.get("_chat_styles_injected"):
         return
@@ -463,34 +463,23 @@ def _inject_chat_styles_once():
       .status-btn.green{ background:#daf5cb; border-color:#bfe5ac; }
       .status-btn.yellow{ background:#fff3bf; border-color:#ffe08a; }
 
-      /* ===== 모드 버튼 (선택 강조) ===== */
-      .stButton > button:disabled{
-        background:#3da5ff !important; color:#fff !important; border-color:#3da5ff !important;
-        opacity:1 !important; cursor:default !important;
-      }
-      .stButton > button{
-        width:100%; border:2px solid #bcdcff; border-radius:16px;
-        background:#fff; color:#111; font-weight:700; padding:8px 10px;
-      }
-      .stButton > button:hover{ background:#f5fbff; }
-
       /* ===== 채팅 영역(파스텔 하늘색 배경) ===== */
       .chat-wrap{
-        background:#eaf6ff;             /* 파스텔 하늘색 */
+        background:#eaf6ff;
         border:1px solid #cfe7ff;
         border-radius:18px;
         padding:10px 10px 8px;
         margin-top:10px;
       }
       .chat-box{
-        min-height:240px;                /* 내용 없어도 영역이 보이도록 */
+        min-height:240px;
         max-height:52vh;
         overflow-y:auto;
         padding:6px 6px 2px;
 
-        display:flex;                    /* 아래쪽 고정 느낌(카톡처럼) */
+        display:flex;
         flex-direction:column;
-        justify-content:flex-end;
+        justify-content:flex-end; /* 아래쪽 기준으로 쌓임 → 카톡 느낌 */
       }
       .chat-box .row{ display:flex; margin:8px 0; gap:10px; }
       .chat-box .row.user{ justify-content:flex-end; }   /* 학생 → 오른쪽 */
@@ -499,7 +488,7 @@ def _inject_chat_styles_once():
         max-width:88%;
         padding:12px 14px; border-radius:16px; line-height:1.6; font-size:15px;
         box-shadow:0 1px 1px rgba(0,0,0,0.05);
-        white-space:pre-wrap;             /* 줄바꿈 유지: 질문/답변 붙는 현상 방지 */
+        white-space:pre-wrap;  /* 줄바꿈 유지 */
       }
       .chat-box .bubble.user{
         background:#ffffff; color:#0a2540; border:1px solid #d9eaff;
@@ -519,9 +508,6 @@ def _inject_chat_styles_once():
         border-width:8px 8px 8px 0; border-style:solid;
         border-color:transparent #e0eaff transparent transparent;
       }
-
-      /* 관리자 컨트롤 패널 버튼 */
-      .admin-panel .stButton>button{ padding:6px 10px; border-radius:10px; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -542,27 +528,38 @@ def _render_llm_status_minimal():
     st.markdown(html, unsafe_allow_html=True)
 
 def _render_mode_controls_minimal(*, admin: bool) -> str:
+    """
+    선택이 확실히 보이도록 기본은 세그먼티드 컨트롤(UI 탭) 사용.
+    미지원 환경이면 버튼 3개로 대체.
+    """
     _inject_chat_styles_once()
     ss = st.session_state
     cfg = _sanitize_modes_cfg(_load_modes_cfg())
 
-    st.markdown("#### 질문 모드 선택")
-    col1, col2, col3 = st.columns(3, gap="small")
-
-    def _mode_btn(label: str, key: str, mode: str):
-        cur = ss.get("qa_mode_radio")
-        if cur == mode:
-            st.button(f"{label} ✓", key=f"{key}_sel", use_container_width=True, disabled=True)
-        else:
+    try:
+        # Streamlit 1.32+ (세그먼트)
+        sel = st.segmented_control(
+            "질문 모드 선택",
+            options=_MODE_KEYS,
+            default=ss.get("qa_mode_radio") or (cfg.get("default") or "문법"),
+            format_func=lambda k: {"문법":"🧩 어법","문장":"🧱 문장","지문":"📖 지문"}.get(k,k),
+        )
+        if sel != ss.get("qa_mode_radio"):
+            ss["qa_mode_radio"] = sel
+            st.rerun()
+        cur = sel
+    except Exception:
+        # Fallback: 버튼 3개
+        st.markdown("#### 질문 모드 선택")
+        col1, col2, col3 = st.columns(3, gap="small")
+        def _btn(label: str, key: str, mode: str):
             if st.button(label, key=key, use_container_width=True):
-                ss["qa_mode_radio"] = mode
-                st.rerun()
+                ss["qa_mode_radio"] = mode; st.rerun()
+        with col1: _btn("🧩 어법", "mode_btn_gram", "문법")
+        with col2: _btn("🧱 문장", "mode_btn_sent", "문장")
+        with col3: _btn("📖 지문", "mode_btn_pass", "지문")
+        cur = ss.get("qa_mode_radio") or (cfg.get("default") or "문법")
 
-    with col1: _mode_btn("🧩 " + _LABELS["문법"], "mode_btn_gram", "문법")
-    with col2: _mode_btn("🧱 " + _LABELS["문장"], "mode_btn_sent", "문장")
-    with col3: _mode_btn("📖 " + _LABELS["지문"], "mode_btn_pass", "지문")
-
-    cur = ss.get("qa_mode_radio")
     if cur not in _MODE_KEYS:
         cur = cfg.get("default") or "문법"
     ss["qa_mode_radio"] = cur
@@ -661,7 +658,7 @@ def _admin_use_release():
         st.error("복구 결과가 유효하지 않습니다(파일 없음).")
 
 def _render_chat_log(messages: list[dict]):
-    # 파스텔 하늘색 배경 컨테이너로 감싸기 + 아래쪽 고정 스크롤
+    # 파스텔 하늘색 배경 컨테이너로 감싸기 + 아래쪽 정렬
     st.markdown('<div class="chat-wrap"><div class="chat-box">', unsafe_allow_html=True)
     for m in messages:
         role = m.get("role", "ai")
@@ -673,75 +670,53 @@ def _render_chat_log(messages: list[dict]):
         )
     st.markdown('</div></div>', unsafe_allow_html=True)
 
+def _replace_assistant_text(aid: str, new_text: str):
+    """aid로 지정된 assistant 말풍선의 텍스트만 교체."""
+    ss = st.session_state
+    for m in ss.get("chat", []):
+        if m.get("id") == aid and m.get("role") == "assistant":
+            m["text"] = new_text
+            return True
+    return False
+
 def _render_chat_panel():
     import time, inspect
     ss = st.session_state
     if "chat" not in ss:
         ss["chat"] = []
 
-    # 1) 상단 상태 버튼
-    _render_llm_status_minimal()
-
-    # 1-1) (관리자 전용) 인덱스 컨트롤 패널
-    _render_admin_index_controls()
-
-    # 2) 모드 선택
-    cur = _render_mode_controls_minimal(admin=_is_admin_view())
-
-    # 3) 입력창: 엔터 전송 + 입력창 내부 화살표(스트림릿 기본 chat_input 사용)
-    #    - 엔터 전송 자동 지원
-    #    - 입력값은 제출 시 자동 초기화 (별도 session_state 조작 불필요 → 에러 제거)
-    user_q = st.chat_input("예) 분사구문이 뭐예요?  예) 이 문장 구조 분석해줘")
-
-    # 4) 전송 처리 (Enter 또는 화살표)
-    if user_q and user_q.strip():
-        uid = f"u{int(time.time()*1000)}"
-        ss["chat"].append({"id": uid, "role":"user", "text": user_q.strip()})
-
-        # 즉시 피드백(생각중)
-        aid = f"a{int(time.time()*1000)}"
-        ss["chat"].append({"id": aid, "role":"assistant", "text": "생각중…"})
-
-        # prompts.yaml 연결 (실패 시 안전 폴백)
-        mode_token = _LLM_TOKEN.get(cur, "문법설명")
-        _prompt_mod = _try_import("src.prompt_modes", ["build_prompt"])
-        _build_prompt = (_prompt_mod or {}).get("build_prompt")
-        DEFAULT_SYSTEM_PROMPT = "너는 한국의 영어학원 원장처럼, 따뜻하고 명확하게 설명한다."
-
-        if callable(_build_prompt):
-            try:
-                parts = _build_prompt(mode_token, user_q)
-                system_prompt = parts.get("system") or DEFAULT_SYSTEM_PROMPT
-                prompt = parts.get("user") or f"[모드:{mode_token}]\n{user_q}"
-            except Exception:
-                system_prompt = DEFAULT_SYSTEM_PROMPT
-                prompt = f"[모드:{mode_token}]\n{user_q}"
-        else:
-            system_prompt = DEFAULT_SYSTEM_PROMPT
-            prompt = f"[모드:{mode_token}]\n{user_q}"
-
-        # LLM 호출 (시그니처 자동 매핑 → 어댑터 변경에도 안전)
+    # 0) pending 콜이 있으면(2단계): 이 런에서 LLM 호출 → 준비중 말풍선 업데이트
+    pending = ss.get("_pending_call")
+    if pending:
         try:
+            user_q = pending["q"]; mode_token = pending["mode_token"]; aid = pending["aid"]; cur = pending["mode_key"]
+            # prompts.yaml 연결
+            _prompt_mod = _try_import("src.prompt_modes", ["build_prompt"])
+            _build_prompt = (_prompt_mod or {}).get("build_prompt")
+            DEF_SYS = "너는 한국의 영어학원 원장처럼, 따뜻하고 명확하게 설명한다."
+            if callable(_build_prompt):
+                try:
+                    parts = _build_prompt(mode_token, user_q)
+                    system_prompt = parts.get("system") or DEF_SYS
+                    prompt = parts.get("user") or f"[모드:{mode_token}]\n{user_q}"
+                except Exception:
+                    system_prompt = DEF_SYS; prompt = f"[모드:{mode_token}]\n{user_q}"
+            else:
+                system_prompt = DEF_SYS; prompt = f"[모드:{mode_token}]\n{user_q}"
+
             call = (_llm or {}).get("call_with_fallback") if "_llm" in globals() else None
             if not callable(call):
                 raise RuntimeError("LLM 어댑터(call_with_fallback)를 사용할 수 없습니다.")
 
-            sig = inspect.signature(call)
-            params = sig.parameters.keys()
-            kwargs = {}
-
+            sig = inspect.signature(call); params = sig.parameters.keys(); kwargs = {}
             if "messages" in params:
-                msgs = []
-                if system_prompt:
-                    msgs.append({"role":"system","content":system_prompt})
-                msgs.append({"role":"user","content":prompt})
+                msgs = [{"role":"system","content":system_prompt},{"role":"user","content":prompt}]
                 kwargs["messages"] = msgs
             else:
                 if "prompt" in params: kwargs["prompt"] = prompt
                 elif "user_prompt" in params: kwargs["user_prompt"] = prompt
                 if "system_prompt" in params: kwargs["system_prompt"] = system_prompt
                 elif "system" in params: kwargs["system"] = system_prompt
-
             if "mode_token" in params: kwargs["mode_token"] = mode_token
             elif "mode" in params: kwargs["mode"] = mode_token
             if "timeout_s" in params: kwargs["timeout_s"] = 90
@@ -751,16 +726,40 @@ def _render_chat_panel():
             with st.spinner("답변 생성 중..."):
                 res = call(**kwargs)
                 text = res.get("text") if isinstance(res, dict) else str(res)
-                ss["chat"][-1]["text"] = text or "(응답이 비어있어요)"
+                if not text: text = "(응답이 비어있어요)"
+                _replace_assistant_text(aid, text)
         except Exception as e:
-            ss["chat"][-1]["text"] = f"(오류) {type(e).__name__}: {e}"
+            _replace_assistant_text(pending.get("aid",""), f"(오류) {type(e).__name__}: {e}")
             _errlog(f"LLM 예외: {e}", where="[qa_llm]", exc=e)
+        finally:
+            ss["_pending_call"] = None  # 소모
+            # 여기서는 rerun 없이도 아래 렌더에서 갱신된 말풍선을 바로 그림
 
-        st.rerun()
+    # 1) 상단 상태 버튼
+    _render_llm_status_minimal()
+
+    # 1-1) (관리자 전용) 인덱스 컨트롤 패널
+    _render_admin_index_controls()
+
+    # 2) 모드 선택(세그먼트)
+    cur = _render_mode_controls_minimal(admin=_is_admin_view())
+
+    # 3) 입력창: chat_input (엔터/화살표 자동, 제출 시 자동 초기화)
+    user_q = st.chat_input("예) 분사구문이 뭐예요?  예) 이 문장 구조 분석해줘")
+
+    # 4) 전송 1단계: 즉시 사용자 말풍선(오른쪽) + '답변 준비중…'(왼쪽) 추가 → rerun
+    if user_q and user_q.strip():
+        uid = f"u{int(time.time()*1000)}"
+        aid = f"a{uid}"  # 페어링을 위해 uid 기반
+        ss["chat"].append({"id": uid, "role":"user", "text": user_q.strip()})
+        ss["chat"].append({"id": aid, "role":"assistant", "text": "답변 준비중…"})
+        mode_token = _LLM_TOKEN.get(cur, "문법설명")
+        ss["_pending_call"] = {"q": user_q.strip(), "mode_key": cur, "mode_token": mode_token, "aid": aid}
+        st.rerun()  # 2단계 런에서 LLM 호출 후 같은 말풍선을 업데이트
 
     # 5) 채팅 로그 렌더 (파스텔 하늘색 배경 유지, 아래쪽 정렬)
     _render_chat_log(ss["chat"])
-# [10] 학생 UI (Stable v1.4): 상태버튼 + 모드(선택 강조) + 채팅(파스텔 하늘색, 엔터/화살표) + 관리자 컨트롤  # [10] END
+# [10] 학생 UI (Stable v1.5): 모드(세그먼트 강조) + 채팅(파스텔 하늘색) + 2단계 렌더(질문→준비중→답변)  # [10] END
 
 
 # [11] 본문 렌더 ===============================================================
