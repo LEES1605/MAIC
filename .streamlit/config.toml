@@ -6,3 +6,9 @@ runOnSave = false
 [logger]
 # 불필요한 debug/info 로그 억제 (필요시 "info"로 조정 가능)
 level = "warning"
+
+[browser]
+gatherUsageStats = false
+
+[theme]
+base = "light"  # 또는 "dark"
