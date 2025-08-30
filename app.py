@@ -26,12 +26,12 @@ def _from_secrets(name: str, default: Optional[str] = None) -> Optional[str]:
         return os.getenv(name, default)
 
 def _bootstrap_env() -> None:
-    # GH_* 추가(일관성) — index/prompts 양쪽에서 사용
     keys = [
         "OPENAI_API_KEY","OPENAI_MODEL","GEMINI_API_KEY","GEMINI_MODEL",
-        "GH_TOKEN","GH_REPO","GH_BRANCH","GH_PROMPTS_PATH",  # 깃허브 프롬프트용
+        "GH_TOKEN","GH_REPO","GH_BRANCH","GH_PROMPTS_PATH",
         "GDRIVE_PREPARED_FOLDER_ID","GDRIVE_BACKUP_FOLDER_ID",
         "APP_MODE","AUTO_START_MODE","LOCK_MODE_FOR_STUDENTS","APP_ADMIN_PASSWORD",
+        "DISABLE_BG",
     ]
     for k in keys:
         v = _from_secrets(k)
@@ -61,8 +61,7 @@ def _is_brain_ready() -> bool:
     p = PERSIST_DIR
     if not p.exists():
         return False
-    signals = ["chunks.jsonl","manifest.json",".ready","faiss.index","index.faiss","chroma.sqlite","docstore.json"]
-    for s in signals:
+    for s in ["chunks.jsonl","manifest.json",".ready","faiss.index","index.faiss","chroma.sqlite","docstore.json"]:
         fp = p / s
         try:
             if fp.exists() and fp.stat().st_size > 0:
@@ -100,15 +99,12 @@ def _errlog_text() -> str:
         out.write("-" * 60 + "\n")
     return out.getvalue()
 
-# [05] 동적 임포트 바인딩(필요 최소만) =========================================
-_import_warns: List[str] = []
-
+# [05] 지연 임포트 헬퍼 =========================================================
 def _try_import(mod: str, attrs: List[str]) -> Dict[str, Any]:
     out: Dict[str, Any] = {}
     try:
         m = importlib.import_module(mod)
-    except Exception as e:
-        _import_warns.append(f"{mod}: {type(e).__name__}: {e}")
+    except Exception:
         return out
     for a in attrs:
         try:
@@ -116,12 +112,6 @@ def _try_import(mod: str, attrs: List[str]) -> Dict[str, Any]:
         except Exception:
             pass
     return out
-
-_ui_admin = _try_import("src.ui_admin", [
-    "ensure_admin_session_keys", "render_admin_controls", "render_role_caption", "render_mode_radio_admin"
-])
-_ui_orch = _try_import("src.ui_orchestrator", ["render_index_orchestrator_panel"])
-_llm     = _try_import("src.llm.providers", ["call_with_fallback"])
 
 # [06] 페이지 설정 & 헤더(아이콘 로그인, Enter 제출 지원) =======================
 if st:
@@ -134,11 +124,10 @@ def _is_admin_view() -> bool:
 def _toggle_login_flag():
     st.session_state["_show_admin_login"] = not st.session_state.get("_show_admin_login", False)
 
-def _llm_health() -> tuple[str, str]:
-    has_cb = bool(_llm.get("call_with_fallback"))
+def _llm_health_badge() -> tuple[str, str]:
+    # 시작 속도를 위해 '키 존재'만으로 최소 상태 표시
     has_g  = bool(os.getenv("GEMINI_API_KEY") or _from_secrets("GEMINI_API_KEY"))
     has_o  = bool(os.getenv("OPENAI_API_KEY") or _from_secrets("OPENAI_API_KEY"))
-    if not has_cb: return ("미탑재", "⚠️")
     if not (has_g or has_o): return ("키없음", "⚠️")
     if has_g and has_o: return ("Gemini/OpenAI", "✅")
     return ("Gemini", "✅") if has_g else ("OpenAI", "✅")
@@ -155,21 +144,20 @@ def _header():
     with right:
         if _is_admin_view():
             st.markdown("**🟢 준비완료**" if _is_brain_ready() else "**🟡 준비중**")
-        label, icon = _llm_health()
+        label, icon = _llm_health_badge()
         st.caption(f"LLM: {icon} {label}")
 
-        # ↘ 학생 모드: 우상단 톱니 아이콘만 노출(미니멀)
+        # 학생 모드: 우상단 아이콘만(미니멀)
         if not _is_admin_view():
             if st.button("⚙️", key="admin_icon_header", help="관리자", use_container_width=True):
                 _toggle_login_flag()
         else:
-            # ↘ 관리자 모드: '관리자 해제'만 노출
             if st.button("관리자 해제", use_container_width=True):
                 ss["admin_mode"] = False
                 ss["_show_admin_login"] = False
                 st.rerun()
 
-        # 인라인 로그인 폼 (Enter 제출: st.form)
+        # 인라인 로그인 폼
         if ss.get("_show_admin_login", False) and not _is_admin_view():
             pwd_set = os.getenv("APP_ADMIN_PASSWORD") or _from_secrets("APP_ADMIN_PASSWORD", "0000") or "0000"
             with st.container(border=True):
@@ -192,73 +180,47 @@ def _header():
                     ss["_show_admin_login"] = False
                     st.rerun()
 
-    if _import_warns:
-        with st.expander("임포트 경고", expanded=False):
-            for w in _import_warns:
-                st.code(w, language="text")
     st.divider()
 
-# ✅ 본문 로그인 패널은 완전 제거(호환용 NOP). 호출도 더 이상 하지 않음.
 def _login_panel_if_needed():
-    return
+    return  # 더 이상 사용 안 함
 
-# [06B] 모던 3D 배경: 전역 CSS+JS 라이브러리(1회 주입)  # [06B] START
+# [06B] 배경 라이브러리(필요 시) ==============================================
 def _inject_modern_bg_lib():
-    import streamlit as st
-    # 이미 주입됐으면 스킵
     if st.session_state.get("__bg_lib_injected__"):
         return
     st.session_state["__bg_lib_injected__"] = True
-
     st.markdown("""
 <style id="maic-bg-style">
-/* 앱은 위, 배경은 뒤(고정) */
 html, body, .stApp { height: 100%; }
 .stApp { position: relative; z-index: 1; }
-
-/* 배경 루트 */
 #maic-bg-root{ position: fixed; inset:0; z-index:0; pointer-events:none; overflow:hidden; }
-
-/* 레이어 */
 #maic-bg-root .maic-bg-gradient{ position:absolute; inset:0; }
 #maic-bg-root .maic-bg-shapes{ position:absolute; inset:0; perspective:1000px; }
 #maic-bg-root .maic-bg-grid{ position:absolute; inset:0; pointer-events:none; }
 #maic-bg-root .maic-bg-grain{ position:absolute; inset:0; pointer-events:none; opacity:.7; mix-blend-mode:overlay; background-size:128px 128px; }
 #maic-bg-root .maic-bg-veil{ position:absolute; inset:0; pointer-events:none; }
-
-/* 애니메이션 */
 @keyframes bobY { from { --bob: -6px; } to { --bob: 6px; } }
-
-/* 접근성: reduce-motion 시 정지 */
-@media (prefers-reduced-motion: reduce){
-  #maic-bg-root .maic-shape{ animation:none !important; }
-}
-
-/* 얇은 격자 오버레이 */
+@media (prefers-reduced-motion: reduce){ #maic-bg-root .maic-shape{ animation:none !important; } }
 #maic-bg-root .maic-bg-grid[data-theme="light"]{
-  background-image:
-    linear-gradient(0deg, rgba(30,41,59,.06) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(30,41,59,.06) 1px, transparent 1px);
+  background-image:linear-gradient(0deg, rgba(30,41,59,.06) 1px, transparent 1px),
+                   linear-gradient(90deg, rgba(30,41,59,.06) 1px, transparent 1px);
   background-size:24px 24px;
   -webkit-mask-image: radial-gradient(80% 80% at 50% 50%, black 60%, transparent 100%);
           mask-image: radial-gradient(80% 80% at 50% 50%, black 60%, transparent 100%);
 }
 #maic-bg-root .maic-bg-grid[data-theme="dark"]{
-  background-image:
-    linear-gradient(0deg, rgba(255,255,255,.06) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255,255,255,.06) 1px, transparent 1px);
+  background-image:linear-gradient(0deg, rgba(255,255,255,.06) 1px, transparent 1px),
+                   linear-gradient(90deg, rgba(255,255,255,.06) 1px, transparent 1px);
   background-size:24px 24px;
   -webkit-mask-image: radial-gradient(80% 80% at 50% 50%, black 60%, transparent 100%);
           mask-image: radial-gradient(80% 80% at 50% 50%, black 60%, transparent 100%);
 }
 </style>
-
 <script id="maic-bg-lib">
 (() => {
-  // 중복 주입/예외로 인한 초기 렌더 지연 방지
   try {
     if (window.MAIC_BG) return;
-
     const clamp=(n,min,max)=>Math.min(max,Math.max(min,n));
     const hexToRgb=(hex)=>{const c=hex.replace("#","");const v=c.length===3?c.split("").map(x=>x+x).join(""):c;const num=parseInt(v,16);return{r:(num>>16)&255,g:(num>>8)&255,b:num&255}};
     const rgbToHex=(r,g,b)=>"#"+[r,g,b].map(v=>v.toString(16).padStart(2,"0")).join("");
@@ -266,228 +228,37 @@ html, body, .stApp { height: 100%; }
     const hslToRgb=(h,s,l)=>{h/=360;let r,g,b;if(s===0){r=g=b=l}else{const hue2rgb=(p,q,t)=>{if(t<0)t+=1;if(t>1)t-=1;if(t<1/6)return p+(q-p)*6*t;if(t<1/2)return q;if(t<2/3)return p+(q-p)*(2/3-t)*6;return p};const q=l<.5?l*(1+s):l+s-l*s;const p=2*l-q;r=hue2rgb(p,q,h+1/3);g=hue2rgb(p,q,h);b=hue2rgb(p,q,h-1/3)}return{r:Math.round(r*255),g:Math.round(g*255),b:Math.round(b*255)}};
     const shade=(hex,lD=0,sD=0,hD=0)=>{const {r,g,b}=hexToRgb(hex);const hsl=rgbToHsl(r,g,b);const h=(hsl.h+hD+360)%360;const s=clamp(hsl.s+sD,0,1);const l=clamp(hsl.l+lD,0,1);const {r:rr,g:rg,b:rb}=hslToRgb(h,s,l);return rgbToHex(rr,rg,rb)};
     const mulberry32=(a)=>()=>{let t=(a+=0x6d2b79f5);t=Math.imul(t^(t>>>15),t|1);t^=t+Math.imul(t^(t>>>7),t|61);return((t^(t>>>14))>>>0)/4294967296};
-
-    const makeGradient=(theme,style,accent)=>{
-      const aL=shade(accent, theme==="light"?-0.1:0.1);
-      const aD=shade(accent, theme==="light"?-0.2:-0.05);
-      const baseLight= theme==="light" ? "#F7FAFF" : "#0B1020";
-      const baseDark = theme==="light" ? "#EAF1FF" : "#0E1224";
-      if(style==="conic")  return `conic-gradient(from 220deg at 65% 35%, ${aL}, ${baseLight}, ${aD}, ${baseDark})`;
-      if(style==="linear") return `linear-gradient(135deg, ${baseLight}, ${aL} 35%, ${baseDark})`;
-      return `radial-gradient(1200px 800px at 75% 20%, ${aL}, transparent 55%), radial-gradient(900px 700px at 10% 80%, ${aD}, transparent 50%), linear-gradient(180deg, ${baseLight}, ${baseDark})`;
-    };
-
-    const generateShapes=({count,seed,accent,theme})=>{
-      const rnd=mulberry32(seed||1234);
-      return Array.from({length:count},(_,i)=>{
-        const t=rnd(); const type=t<.34?"sphere": t<.67?"cube":"pyramid";
-        const size=80+Math.floor(rnd()*220);
-        const x=-10+rnd()*120, y=-10+rnd()*120, rot=Math.floor(rnd()*360);
-        const depth=-40+rnd()*80, opacity=.18+rnd()*.22;
-        const hueShift=rnd()*40-20, tone=rnd()*.2-.1;
-        const color=shade(accent,tone,0,hueShift);
-        return {id:i,type,size,x,y,rot,depth,opacity,color};
-      });
-    };
-
-    const face=(bg,clip,extra={})=>{
-      const d=document.createElement("div");
-      Object.assign(d.style,{position:"absolute",inset:"0",background:bg,clipPath:clip,...extra});
-      return d;
-    };
-
-    function buildShapeEl(s, animate=true){
-      const el=document.createElement("div");
-      el.className="maic-shape";
-      el.style.position="absolute";
-      el.style.width=s.size+"px"; el.style.height=s.size+"px";
-      el.style.opacity=s.opacity;
-      el.style.transition="transform 120ms ease-out";
-      el.style.willChange="transform";
-      const t=`translate3d(calc(${s.x}% + var(--mx,0) * ${s.depth*16}px), calc(${s.y}% + var(--my,0) * ${s.depth*16}px + var(--bob, 0px)), ${s.depth}px) rotate(${s.rot}deg)`;
-      el.style.transform=t;
-
-      if(s.type==="sphere"){
-        const light=shade(s.color, .12), dark=shade(s.color,-.18);
-        el.style.borderRadius="9999px";
-        el.style.background=`radial-gradient(circle at 35% 30%, ${light}, ${s.color} 55%, ${dark} 100%)`;
-        el.style.boxShadow=`0 10px 30px ${shade(s.color,-.18)}40, inset -10px -16px 30px ${shade(s.color,-.18)}70`;
-      }else if(s.type==="cube"){
-        const light=shade(s.color,.12), dark=shade(s.color,-.18);
-        const wrap=document.createElement("div"); wrap.style.position="relative"; wrap.style.width="100%"; wrap.style.height="100%"; wrap.style.filter="drop-shadow(0 12px 24px rgba(0,0,0,.18))";
-        wrap.appendChild(face(`linear-gradient(135deg, ${light}, ${s.color})`,"polygon(0% 50%, 50% 25%, 50% 75%, 0% 100%)"));
-        wrap.appendChild(face(`linear-gradient(315deg, ${dark}, ${s.color})`,"polygon(100% 50%, 50% 25%, 50% 75%, 100% 100%)"));
-        wrap.appendChild(face(`linear-gradient(180deg, ${shade(s.color,.18)}, ${dark})`,"polygon(0% 50%, 50% 25%, 100% 50%, 50% 75%)"));
-        el.appendChild(wrap);
-      }else{
-        const light=shade(s.color,.12), dark=shade(s.color,-.18);
-        const wrap=document.createElement("div"); wrap.style.position="relative"; wrap.style.width="100%"; wrap.style.height="100%"; wrap.style.filter="drop-shadow(0 10px 22px rgba(0,0,0,.16))";
-        wrap.appendChild(face(`linear-gradient(145deg, ${light}, ${s.color})`,"polygon(50% 10%, 85% 85%, 15% 85%)"));
-        wrap.appendChild(face(`linear-gradient(180deg, ${shade(s.color,.22)}, ${dark})`,"polygon(50% 10%, 85% 85%, 50% 65%)"));
-        el.appendChild(wrap);
-      }
-
-      if(animate){
-        el.style.setProperty("--bob","0px");
-        el.style.animation = `bobY ${6 + (s.depth + 40) / 20}s ease-in-out ${s.id * .37}s infinite alternate`;
-      }
-      return el;
-    }
-
-    function ensureRoot(){
-      let root=document.getElementById("maic-bg-root");
-      if(!root){
-        root=document.createElement("div");
-        root.id="maic-bg-root";
-        document.body && document.body.appendChild(root);
-      }
-      let grad=root.querySelector(".maic-bg-gradient");
-      let shapes=root.querySelector(".maic-bg-shapes");
-      if(!grad){ grad=document.createElement("div"); grad.className="maic-bg-gradient"; root.appendChild(grad); }
-      if(!shapes){ shapes=document.createElement("div"); shapes.className="maic-bg-shapes"; root.appendChild(shapes); }
-      return root;
-    }
-
-    let grainUrl=null;
-    function getGrain(intensity=.07){
-      if(grainUrl) return grainUrl;
-      const c=document.createElement("canvas"); const size=128; c.width=size; c.height=size;
-      const ctx=c.getContext("2d"); const img=ctx.createImageData(size,size);
-      for(let i=0;i<img.data.length;i+=4){ const v=Math.random()*255; img.data[i]=v; img.data[i+1]=v; img.data[i+2]=v; img.data[i+3]=Math.floor(255*intensity); }
-      ctx.putImageData(img,0,0);
-      grainUrl=c.toDataURL();
-      return grainUrl;
-    }
-
-    function bindPointer(interactive){
-      const d=document;
-      if(!interactive){
-        d.removeEventListener("pointermove",window.__MAIC_BG_PM__);
-        d.removeEventListener("pointerleave",window.__MAIC_BG_PL__);
-        document.documentElement.style.setProperty("--mx","0");
-        document.documentElement.style.setProperty("--my","0");
-        return;
-      }
-      if(window.__MAIC_BG_PM__) return;
-      window.__MAIC_BG_PM__=(e)=>{
-        const w=window.innerWidth, h=window.innerHeight;
-        const nx=(e.clientX/w)-.5, ny=(e.clientY/h)-.5;
-        document.documentElement.style.setProperty("--mx", nx.toFixed(4));
-        document.documentElement.style.setProperty("--my", ny.toFixed(4));
-      };
-      window.__MAIC_BG_PL__=()=>{ document.documentElement.style.setProperty("--mx","0"); document.documentElement.style.setProperty("--my","0"); };
-      d.addEventListener("pointermove", window.__MAIC_BG_PM__);
-      d.addEventListener("pointerleave", window.__MAIC_BG_PL__);
-    }
-
-    function mount(opts={}){
-      // DOM 준비 뒤에만 실행되도록 _mount_background에서 보장합니다.
-      const theme = (opts.theme==="light"||opts.theme==="dark")?opts.theme:"dark";
-      const accent = opts.accent || "#5B8CFF";
-      const gradientStyle = opts.gradient || "radial";
-      const density = Math.max(1, Math.min(5, parseInt(opts.density||3,10)));
-      const count = Math.min(6*density, 30);
-      const animate = !!opts.animate;
-      const interactive = !!opts.interactive;
-      const grid = !!opts.grid;
-      const grain = !!opts.grain;
-      const blur = +opts.blur || 0;
-      const seed = Number.isFinite(+opts.seed) ? +opts.seed : 1234;
-      const veil = (opts.readabilityVeil!==false);
-
-      const root=ensureRoot(); if(!root) return;
-      root.dataset.theme = theme;
-
-      const grad = root.querySelector(".maic-bg-gradient");
-      grad.style.background = makeGradient(theme, gradientStyle, accent);
-      grad.style.filter = blur ? `saturate(1.05) blur(${blur}px)` : "";
-
-      const wrap = root.querySelector(".maic-bg-shapes");
-      wrap.innerHTML="";
-      const shapes = generateShapes({count, seed, accent, theme});
-      const prefersReduced = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-      shapes.forEach(s=>wrap.appendChild(buildShapeEl(s, animate && !prefersReduced)));
-
-      let gridEl = root.querySelector(".maic-bg-grid");
-      if(grid){
-        if(!gridEl){ gridEl=document.createElement("div"); gridEl.className="maic-bg-grid"; root.appendChild(gridEl); }
-        gridEl.dataset.theme=theme;
-      }else if(gridEl){ gridEl.remove(); }
-
-      let grainEl = root.querySelector(".maic-bg-grain");
-      if(grain){
-        if(!grainEl){ grainEl=document.createElement("div"); grainEl.className="maic-bg-grain"; root.appendChild(grainEl); }
-        grainEl.style.backgroundImage=`url(${getGrain(theme==="light"?0.06:0.08)})`;
-      }else if(grainEl){ grainEl.remove(); }
-
-      let veilEl = root.querySelector(".maic-bg-veil");
-      const veilColor = theme==="light" ? "rgba(255,255,255,.55)" : "rgba(6,10,22,.55)";
-      if(veil){
-        if(!veilEl){ veilEl=document.createElement("div"); veilEl.className="maic-bg-veil"; root.appendChild(veilEl); }
-        veilEl.style.background = `radial-gradient(1200px 800px at 55% 35%, transparent, ${veilColor})`;
-      }else if(veilEl){ veilEl.remove(); }
-
-      bindPointer(interactive);
-    }
-
-    window.MAIC_BG = { mount };
-  } catch (e) {
-    console.warn("MAIC_BG bootstrap skipped (non-fatal):", e);
-  }
+    const makeGradient=(theme,style,accent)=>{const aL=shade(accent, theme==="light"?-0.1:0.1);const aD=shade(accent, theme==="light"?-0.2:-0.05);const baseLight= theme==="light" ? "#F7FAFF" : "#0B1020";const baseDark = theme==="light" ? "#EAF1FF" : "#0E1224";if(style==="conic")  return `conic-gradient(from 220deg at 65% 35%, ${aL}, ${baseLight}, ${aD}, ${baseDark})`;if(style==="linear") return `linear-gradient(135deg, ${baseLight}, ${aL} 35%, ${baseDark})`;return `radial-gradient(1200px 800px at 75% 20%, ${aL}, transparent 55%), radial-gradient(900px 700px at 10% 80%, ${aD}, transparent 50%), linear-gradient(180deg, ${baseLight}, ${baseDark})`;};
+    const face=(bg,clip,extra={})=>{const d=document.createElement("div");Object.assign(d.style,{position:"absolute",inset:"0",background:bg,clipPath:clip,...extra});return d;};
+    function ensureRoot(){let root=document.getElementById("maic-bg-root");if(!root){root=document.createElement("div");root.id="maic-bg-root";document.body && document.body.appendChild(root);}let grad=root.querySelector(".maic-bg-gradient");let shapes=root.querySelector(".maic-bg-shapes");if(!grad){grad=document.createElement("div");grad.className="maic-bg-gradient";root.appendChild(grad);}if(!shapes){shapes=document.createElement("div");shapes.className="maic-bg-shapes";root.appendChild(shapes);}return root;}
+    function mount(opts={}){const theme=(opts.theme==="light"||opts.theme==="dark")?opts.theme:"dark";const accent=opts.accent||"#5B8CFF";const gradientStyle=opts.gradient||"radial";const root=ensureRoot();root.dataset.theme=theme;const grad=root.querySelector(".maic-bg-gradient");grad.style.background=makeGradient(theme, gradientStyle, accent);}
+    window.MAIC_BG={mount};
+  } catch (e) { console.warn("MAIC_BG bootstrap skipped:", e); }
 })();
 </script>
     """, unsafe_allow_html=True)
-# [06B] END
 
-# [06C] 배경 마운트 헬퍼  # [06C] START
 def _mount_background(
-    *,
-    theme: str = "light",
-    accent: str = "#5B8CFF",
-    density: int = 3,
-    interactive: bool = True,
-    animate: bool = True,
-    gradient: str = "radial",
-    grid: bool = True,
-    grain: bool = False,
-    blur: int = 0,
-    seed: int = 1234,
+    *, theme: str = "light", accent: str = "#5B8CFF", density: int = 3,
+    interactive: bool = True, animate: bool = True, gradient: str = "radial",
+    grid: bool = True, grain: bool = False, blur: int = 0, seed: int = 1234,
     readability_veil: bool = True,
 ):
-    """
-    - DISABLE_BG=true(또는 1/yes/on) 이면 배경을 스킵.
-    - DOMContentLoaded 이후 requestAnimationFrame 타이밍에 mount 실행.
-    - 예외 발생 시 콘솔 경고만 출력하고 앱 UI는 정상 표시.
-    """
-    import os, json
-    import streamlit as st
-
-    # 안전 스위치(secrets/env)
+    # DISABLE_BG는 secrets/env에서만 읽음 (config.toml 금지)
     def _truthy(x: str | None) -> bool:
         return str(x or "").strip().lower() in ("1","true","yes","on")
-
-    disable = _truthy(os.getenv("DISABLE_BG")) or _truthy(getattr(st, "secrets", {}).get("DISABLE_BG") if hasattr(st, "secrets") else None)
-    if disable:
+    if _truthy(os.getenv("DISABLE_BG")):
         return
-
     _inject_modern_bg_lib()
-
-    opts = dict(
-        theme=theme, accent=accent, density=density, interactive=interactive,
-        animate=animate, gradient=gradient, grid=grid, grain=grain,
-        blur=blur, seed=seed, readabilityVeil=readability_veil
-    )
     st.markdown(f"""
 <script>
 (function(){{
   const mount = () => {{
     try {{
       if (window.MAIC_BG && typeof window.MAIC_BG.mount === "function") {{
-        window.MAIC_BG.mount({json.dumps(opts)});
+        window.MAIC_BG.mount({{"theme":"{theme}","accent":"{accent}","gradient":"{gradient}"}});
       }}
-    }} catch(e) {{
-      console.warn("MAIC_BG mount failed (non-fatal):", e);
-    }}
+    }} catch(e) {{ console.warn("MAIC_BG mount failed:", e); }}
   }};
   if (document.readyState === "loading") {{
     document.addEventListener("DOMContentLoaded", () => requestAnimationFrame(mount), {{ once: true }});
@@ -497,14 +268,9 @@ def _mount_background(
 }})();
 </script>
     """, unsafe_allow_html=True)
-# [06C] END
 
-# [07] 부팅/인덱스 준비 로직 (빠른 부팅 + 수동 깊은 점검)  # [07] START
+# [07] 부팅/인덱스 준비(빠른 경로) =============================================
 def _quick_local_attach_only():
-    """
-    아주 빠른 경로: 로컬 인덱스 존재만 확인하여 '준비완료'로 붙이고 끝낸다.
-    네트워크(Drive/GitHub)는 전혀 호출하지 않는다 → 첫 화면 빠르게 렌더.
-    """
     ss = st.session_state
     ss.setdefault("brain_attached", False)
     ss.setdefault("brain_status_msg", "초기화 중…")
@@ -514,7 +280,6 @@ def _quick_local_attach_only():
     ss.setdefault("index_decision_needed", False)
     ss.setdefault("index_change_stats", {})
 
-    # 로컬 시그널만 아주 빠르게 확인
     man = (PERSIST_DIR / "manifest.json")
     chunks = (PERSIST_DIR / "chunks.jsonl")
     ready = (PERSIST_DIR / ".ready")
@@ -526,7 +291,6 @@ def _quick_local_attach_only():
         ss["restore_recommend"] = False
         return True
 
-    # 로컬 없음: 화면은 빨리 띄우고, 관리자가 '깊은 점검'을 눌러서 복구하도록 유도
     ss["brain_attached"] = False
     ss["brain_status_msg"] = "인덱스 없음(관리자에서 '깊은 점검'으로 복구)"
     ss["index_status_code"] = "MISSING"
@@ -534,23 +298,11 @@ def _quick_local_attach_only():
     ss["restore_recommend"] = True
     return False
 
-
 def _run_deep_check_and_attach():
-    """
-    네트워크 포함 '깊은 점검':
-      1) Drive 준비상태/폴더 유효성 확인(가능하면)
-      2) GitHub Releases 자동 복구 시도
-      3) diff 검사로 변경 유무 판단
-    완료 후 화면 갱신.
-    """
     ss = st.session_state
-
-    # 동적 임포트(여기서만 로드)
-    idx = _try_import("src.rag.index_build", ["quick_precheck", "diff_with_manifest"]) or {}
-    rel = _try_import("src.backup.github_release", ["restore_latest"]) or {}
-
-    quick = idx.get("quick_precheck")
-    diff  = idx.get("diff_with_manifest")
+    idx = _try_import("src.rag.index_build", ["quick_precheck", "diff_with_manifest"])
+    rel = _try_import("src.backup.github_release", ["restore_latest"])
+    quick = idx.get("quick_precheck"); diff  = idx.get("diff_with_manifest")
     restore_latest = rel.get("restore_latest")
 
     def _attach_success(source: str, msg: str):
@@ -566,7 +318,7 @@ def _run_deep_check_and_attach():
         ss["index_decision_needed"] = bool(wait)
         ss["index_change_stats"] = stats or {}
 
-    # 0) 로컬 있으면 우선 attach
+    # 0) 로컬 먼저
     if _is_brain_ready():
         ch, stts = (None, {})
         if callable(diff):
@@ -585,15 +337,14 @@ def _run_deep_check_and_attach():
             _set_decision(False, stts)
         return
 
-    # 1) Drive 빠른 점검(있으면)
+    # 1) Drive 상태 확인(있으면)
     if callable(quick):
         try:
-            info = quick() or {}
-            _ = bool(info.get("drive_ok")); _ = bool(info.get("prepared_id"))
+            _ = quick() or {}
         except Exception as e:
             _errlog(f"precheck 예외: {e}", where="[deep_check]")
 
-    # 2) GitHub Releases 복구(있으면)
+    # 2) GitHub Releases 복구
     restored = False
     if callable(restore_latest):
         try:
@@ -619,7 +370,7 @@ def _run_deep_check_and_attach():
             _set_decision(False, stts2)
         return
 
-    # 3) 실패: 상태만 남김
+    # 3) 실패
     ss["brain_attached"] = False
     ss["brain_status_msg"] = "깊은 점검 실패(인덱스 없음). 관리자: 재빌드/복구 필요"
     ss["index_status_code"] = "MISSING"
@@ -628,14 +379,9 @@ def _run_deep_check_and_attach():
     ss["index_decision_needed"] = False
     ss["index_change_stats"] = {}
     return
-# [07] END
 
-# [08] 자동 시작(선택) — 기본 비활성(초기 로딩 차단 방지) =======================
+# [08] 자동 시작(선택) — 기본 비활성 ==========================================
 def _auto_start_once():
-    """
-    권장: 기본은 비활성.
-    AUTO_START_MODE in {"restore","on"} 일 때만 GitHub Releases 복구를 시도.
-    """
     if st is None or st.session_state.get("_auto_started"):
         return
     st.session_state["_auto_started"] = True
@@ -643,133 +389,67 @@ def _auto_start_once():
         return
     mode = (os.getenv("AUTO_START_MODE") or _from_secrets("AUTO_START_MODE", "off") or "off").lower()
     if mode in ("restore", "on"):
-        rel = _try_import("src.backup.github_release", ["restore_latest"]) or {}
-        if not rel.get("restore_latest"):
+        rel = _try_import("src.backup.github_release", ["restore_latest"])
+        fn = rel.get("restore_latest")
+        if not callable(fn):
             return
         try:
-            if rel["restore_latest"](dest_dir=PERSIST_DIR):
+            if fn(dest_dir=PERSIST_DIR):
                 _mark_ready()
                 st.toast("자동 복원 완료", icon="✅")
                 st.rerun()
         except Exception as e:
             _errlog(f"auto restore failed: {e}", where="[auto_start]", exc=e)
 
-# [09] 설명 모드 허용/기본값 & 관리자 패널 정의 ================================
-def _modes_cfg_path() -> Path:
-    return PERSIST_DIR / "explain_modes.json"
-
-def _load_modes_cfg() -> Dict[str, Any]:
-    try:
-        p = _modes_cfg_path()
-        if not p.exists():
-            return {"allowed": ["문법", "문장", "지문"], "default": "문법"}
-        return json.loads(p.read_text(encoding="utf-8") or "{}")
-    except Exception:
-        return {"allowed": ["문법", "문장", "지문"], "default": "문법"}
-
-def _save_modes_cfg(cfg: Dict[str, Any]) -> None:
-    try:
-        _modes_cfg_path().write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
-    except Exception as e:
-        _errlog(f"save modes cfg failed: {e}", where="[modes_save]", exc=e)
-
-def _sanitize_modes_cfg(cfg: Dict[str, Any]) -> Dict[str, Any]:
-    modes = ["문법", "문장", "지문"]
-    allowed = [m for m in (cfg.get("allowed") or []) if m in modes]
-    default = cfg.get("default") or "문법"
-    if default not in modes:
-        default = "문법"
-    return {"allowed": allowed, "default": default}
-
-_LABELS    = {"문법": "어법", "문장": "문장", "지문": "지문"}
-_LLM_TOKEN = {"문법": "문법설명", "문장": "문장구조분석", "지문": "지문분석"}
-
-def _mode_to_token(m: str) -> str:
-    return {"문법":"문법설명","문장":"문장구조분석","지문":"지문분석"}.get(m, m)
-
-def _token_to_mode(t: str) -> str:
-    inv = {"문법설명":"문법","문장구조분석":"문장","지문분석":"지문"}
-    return inv.get(t, t)
-
+# [09] 관리자 패널 ==============================================================
 def _render_admin_panels() -> None:
     if st is None or not _is_admin_view():
         return
 
-    # 외부 모듈 패널
-    if _ui_admin.get("ensure_admin_session_keys"): _ui_admin["ensure_admin_session_keys"]()
-    if _ui_admin.get("render_admin_controls"):     _ui_admin["render_admin_controls"]()
-    if _ui_admin.get("render_role_caption"):       _ui_admin["render_role_caption"]()
+    ui_admin = _try_import("src.ui_admin", [
+        "ensure_admin_session_keys", "render_admin_controls", "render_role_caption", "render_mode_radio_admin"
+    ])
+    ui_orch = _try_import("src.ui_orchestrator", ["render_index_orchestrator_panel"])
+
+    if ui_admin.get("ensure_admin_session_keys"): ui_admin["ensure_admin_session_keys"]()
+    if ui_admin.get("render_admin_controls"):     ui_admin["render_admin_controls"]()
+    if ui_admin.get("render_role_caption"):       ui_admin["render_role_caption"]()
     st.divider()
 
     st.markdown("## 관리자: 자료/인덱스 관리")
-    if _ui_orch.get("render_index_orchestrator_panel"):
+    if ui_orch.get("render_index_orchestrator_panel"):
         try:
-            _ui_orch["render_index_orchestrator_panel"]()
+            ui_orch["render_index_orchestrator_panel"]()
         except Exception as e:
             st.error(f"오케스트레이터 패널 오류: {type(e).__name__}: {e}")
             _errlog(f"ui_orchestrator error: {e}", where="[admin_panel]", exc=e)
     else:
         st.info("오케스트레이터 모듈이 없습니다: src.ui_orchestrator")
 
-    st.markdown("### 설명 모드 허용 설정")
-    cfg = _sanitize_modes_cfg(_load_modes_cfg())
-    a = set(cfg["allowed"])
-    c1, c2, c3 = st.columns(3)
-    with c1: g = st.checkbox("문법", value=("문법" in a))
-    with c2: s = st.checkbox("문장", value=("문장" in a))
-    with c3: p = st.checkbox("지문", value=("지문" in a))
-    base_modes = ["문법", "문장", "지문"]
-    default_sel = st.selectbox("기본 모드(학생 초기값)", base_modes, index=base_modes.index(cfg["default"]))
-    if st.button("허용 설정 저장", type="primary"):
-        new_cfg = _sanitize_modes_cfg({
-            "allowed": [m for m, v in [("문법", g), ("문장", s), ("지문", p)] if v],
-            "default": default_sel
-        })
-        _save_modes_cfg(new_cfg)
-        st.success("저장 완료")
-        st.rerun()
-
-    if _ui_admin.get("render_mode_radio_admin"):
-        st.markdown("#### (관리자 전용) 미리보기용 모드 선택")
-        ss = st.session_state
-        cur_mode = ss.get("qa_mode_radio") or cfg["default"]
-        ss["_qa_mode_backup"] = cur_mode
-        ss["qa_mode_radio"] = _mode_to_token(cur_mode)
-        try:
-            _ui_admin["render_mode_radio_admin"]()
-        except Exception as e:
-            st.warning(f"관리자 미리보기 패널 경고: {type(e).__name__}: {e}")
-        finally:
-            sel_token = ss.get("qa_mode_radio", _mode_to_token(cur_mode))
-            ss["qa_mode_radio"] = _token_to_mode(sel_token)
-            ss.pop("_qa_mode_backup", None)
-
     with st.expander("오류 로그", expanded=False):
         txt = _errlog_text()
         st.text_area("최근 오류", value=txt, height=180)
         st.download_button("로그 다운로드", data=txt.encode("utf-8"), file_name="app_error_log.txt")
 
-# [10] 학생 UI (Stable Chatbot v2): 파스텔 하늘 배경 + 말풍선 + 모드(Pill) + 스트리밍 ===
-# [10A] 스타일/유틸 =================================================================
+# [10] 학생 UI (Stable Chatbot): 파스텔 배경 + 말풍선 + 스트리밍 =================
 def _inject_chat_styles_once():
     if st.session_state.get("_chat_styles_injected"): return
     st.session_state["_chat_styles_injected"] = True
     st.markdown("""
     <style>
-      /* 상태 배지 */
       .status-btn{display:inline-block;padding:6px 10px;border-radius:14px;
         font-size:12px;font-weight:700;color:#111;border:1px solid transparent}
       .status-btn.green{background:#daf5cb;border-color:#bfe5ac}
       .status-btn.yellow{background:#fff3bf;border-color:#ffe08a}
 
-      /* 모드: 수평 라디오(작게·균일, 아이콘 없음) */
+      /* 모드 라디오(작게·균일, 아이콘 없음) */
       div[data-testid="stRadio"] > div[role="radiogroup"]{display:flex;gap:10px;flex-wrap:wrap}
       div[data-testid="stRadio"] [role="radio"]{
         border:2px solid #bcdcff;border-radius:12px;padding:6px 12px;background:#fff;color:#0a2540;
         font-weight:700;font-size:14px;line-height:1;
       }
       div[data-testid="stRadio"] [role="radio"][aria-checked="true"]{
-        background:#eaf6ff;border-color:#9fd1ff;color:#0a2540;   /* 선택: 색만 변경 */
+        background:#eaf6ff;border-color:#9fd1ff;color:#0a2540;
       }
       div[data-testid="stRadio"] svg{display:none!important}
 
@@ -778,7 +458,7 @@ def _inject_chat_styles_once():
                  padding:10px 10px 8px;margin-top:10px}
       .chat-box{min-height:240px;max-height:54vh;overflow-y:auto;padding:6px 6px 2px}
 
-      /* 커스텀 말풍선 */
+      /* 말풍선 */
       .row{display:flex;margin:8px 0}
       .row.user{justify-content:flex-end}
       .row.ai{justify-content:flex-start}
@@ -791,29 +471,13 @@ def _inject_chat_styles_once():
     </style>
     """, unsafe_allow_html=True)
 
-def _llm_callable_ok():
-    try: return callable((_llm or {}).get("call_with_fallback"))
-    except Exception: return False
-
-def _render_llm_status_minimal():
-    ok = _llm_callable_ok()
-    st.markdown(
-        f'<span class="status-btn {"green" if ok else "yellow"}">'
-        f'{"🟢 준비완료" if ok else "🟡 준비중"}</span>', unsafe_allow_html=True)
-
-def _esc_html(s:str)->str:
-    import html, re
-    t = html.escape(s or "")
-    t = t.replace("\n","<br/>")
-    t = re.sub(r"  ","&nbsp;&nbsp;", t)
-    return t
-
 def _render_bubble(role:str, text:str):
+    import html, re
     klass = "user" if role=="user" else "ai"
-    st.markdown(f'<div class="row {klass}"><div class="bubble {klass}">{_esc_html(text)}</div></div>',
-                unsafe_allow_html=True)
+    t = html.escape(text or "").replace("\n","<br/>")
+    t = re.sub(r"  ","&nbsp;&nbsp;", t)
+    st.markdown(f'<div class="row {klass}"><div class="bubble {klass}">{t}</div></div>', unsafe_allow_html=True)
 
-# [10B] 학생 로직 (Streaming v1.4, GitHub prompts + 근거 우선순위 + 안내문) ==========
 def _render_mode_controls_pills()->str:
     _inject_chat_styles_once()
     ss=st.session_state
@@ -825,12 +489,20 @@ def _render_mode_controls_pills()->str:
     if new_key != cur: ss["qa_mode_radio"]=new_key; st.rerun()
     return ss.get("qa_mode_radio", new_key)
 
+def _render_llm_status_minimal():
+    has_g  = bool(os.getenv("GEMINI_API_KEY") or _from_secrets("GEMINI_API_KEY"))
+    has_o  = bool(os.getenv("OPENAI_API_KEY") or _from_secrets("OPENAI_API_KEY"))
+    ok = bool(has_g or has_o)
+    st.markdown(
+        f'<span class="status-btn {"green" if ok else "yellow"}">'
+        f'{"🟢 준비완료" if ok else "🟡 키없음"}</span>', unsafe_allow_html=True)
+
 def _render_chat_panel():
     import time, base64, json, urllib.request
     try:
         import yaml
     except Exception:
-        yaml = None  # PyYAML 없으면 GitHub YAML 파싱 스킵 → Fallback 사용
+        yaml = None
 
     ss = st.session_state
     if "chat" not in ss: ss["chat"] = []
@@ -840,11 +512,10 @@ def _render_chat_panel():
     cur_label = _render_mode_controls_pills()     # "문법" / "문장" / "지문"
     MODE_TOKEN = {"문법":"문법설명","문장":"문장구조분석","지문":"지문분석"}[cur_label]
 
-    # ── 근거(컨텍스트) — 당분간 세션에서 주입(없으면 빈 문자열) ───────────────────
-    ev_notes  = ss.get("__evidence_class_notes", "")      # 1차: 수업자료(이유문법/깨알문법)
-    ev_books  = ss.get("__evidence_grammar_books", "")    # 2차: 문법서 PDF 스니펫
+    ev_notes  = ss.get("__evidence_class_notes", "")
+    ev_books  = ss.get("__evidence_grammar_books", "")
 
-    # ── GitHub prompts 로더 ────────────────────────────────────────────────────
+    # GitHub prompts 로더(질문이 있을 때만 네트워크)
     def _github_fetch_prompts_text():
         token  = st.secrets.get("GH_TOKEN") or os.getenv("GH_TOKEN")
         repo   = st.secrets.get("GH_REPO")  or os.getenv("GH_REPO")
@@ -853,8 +524,7 @@ def _render_chat_panel():
         if not (token and repo and yaml):
             return None
         url = f"https://api.github.com/repos/{repo}/contents/{path}?ref={branch}"
-        req = urllib.request.Request(url, headers={"Authorization": f"token {token}",
-                                                  "User-Agent": "maic-app"})
+        req = urllib.request.Request(url, headers={"Authorization": f"token {token}","User-Agent": "maic-app"})
         try:
             with urllib.request.urlopen(req) as r:
                 meta = json.loads(r.read().decode("utf-8"))
@@ -883,7 +553,6 @@ def _render_chat_panel():
         except Exception:
             return None
 
-    # ── Drive 모듈(있으면) ────────────────────────────────────────────────────
     def _build_prompt_from_drive(mode_token: str, q: str, ev1: str, ev2: str):
         _prompt_mod = _try_import("src.prompt_modes", ["build_prompt"]) or {}
         fn = _prompt_mod.get("build_prompt")
@@ -901,7 +570,6 @@ def _render_chat_panel():
         except Exception:
             return None
 
-    # ── Fallback(부드러운 안내 포함) ───────────────────────────────────────────
     def _fallback_prompts(mode_token: str, q: str, ev1: str, ev2: str, cur_label: str):
         NOTICE = "안내: 현재 자료 연결이 원활하지 않아 간단 모드로 답변합니다. 핵심만 짧게 안내할게요."
         BASE = "너는 한국의 영어학원 원장처럼 따뜻하고 명확하게 설명한다. 모든 출력은 한국어로 간결하게."
@@ -944,7 +612,6 @@ def _render_chat_panel():
         st.session_state["__prompt_source"] = "Fallback"
         return sys_p, usr_p
 
-    # ── 최종 프롬프트 결합: GitHub → Drive → Fallback ────────────────────────
     def _resolve_prompts(mode_token: str, q: str, ev1: str, ev2: str, cur_label: str):
         gh = _build_prompt_from_github(mode_token, q, ev1, ev2)
         if gh and (gh.get("system") or gh.get("user")):
@@ -966,7 +633,7 @@ def _render_chat_panel():
 
         return _fallback_prompts(mode_token, q, ev1, ev2, cur_label)
 
-    # ── 입력 & 렌더(항상 chat-wrap 내부 유지) ─────────────────────────────────
+    # 입력 & 렌더
     user_q = st.chat_input("예) 분사구문이 뭐예요?  예) 이 문장 구조 분석해줘")
     qtxt = user_q.strip() if user_q and user_q.strip() else None
     do_stream = qtxt is not None
@@ -982,13 +649,16 @@ def _render_chat_panel():
         text_final = ""
         if do_stream:
             ph = st.empty()
-            ph.markdown(f'<div class="row ai"><div class="bubble ai">{_esc_html("답변 준비중…")}</div></div>', unsafe_allow_html=True)
+            ph.markdown(f'<div class="row ai"><div class="bubble ai">{"답변 준비중…"}</div></div>', unsafe_allow_html=True)
             system_prompt, user_prompt = _resolve_prompts(MODE_TOKEN, qtxt, ev_notes, ev_books, cur_label)
 
-            call = (_llm or {}).get("call_with_fallback") if "_llm" in globals() else None
+            # LLM 어댑터는 필요할 때만 지연 임포트
+            prov = _try_import("src.llm.providers", ["call_with_fallback"])
+            call = prov.get("call_with_fallback")
+
             if not callable(call):
                 text_final = "(오류) LLM 어댑터를 사용할 수 없습니다."
-                ph.markdown(f'<div class="row ai"><div class="bubble ai">{_esc_html(text_final)}</div></div>', unsafe_allow_html=True)
+                ph.markdown(f'<div class="row ai"><div class="bubble ai">{text_final}</div></div>', unsafe_allow_html=True)
             else:
                 import inspect
                 sig = inspect.signature(call); params = sig.parameters.keys(); kwargs = {}
@@ -1001,7 +671,7 @@ def _render_chat_panel():
                     if "prompt" in params: kwargs["prompt"] = user_prompt
                     elif "user_prompt" in params: kwargs["user_prompt"] = user_prompt
                     if "system_prompt" in params: kwargs["system_prompt"] = (system_prompt or "")
-                    elif "system" in params: kwargs["system"] = (system_prompt or "")
+                    elif "system" in params:      kwargs["system"] = (system_prompt or "")
 
                 if "mode_token" in params: kwargs["mode_token"] = MODE_TOKEN
                 elif "mode" in params:     kwargs["mode"] = MODE_TOKEN
@@ -1015,7 +685,7 @@ def _render_chat_panel():
                 def _emit(piece: str):
                     nonlocal acc
                     acc += str(piece)
-                    ph.markdown(f'<div class="row ai"><div class="bubble ai">{_esc_html(acc)}</div></div>', unsafe_allow_html=True)
+                    ph.markdown(f'<div class="row ai"><div class="bubble ai">{acc}</div></div>', unsafe_allow_html=True)
 
                 supports_stream = ("stream" in params) or ("on_token" in params) or ("on_delta" in params) or ("yield_text" in params)
                 try:
@@ -1030,10 +700,10 @@ def _render_chat_panel():
                         res  = call(**kwargs)
                         text_final = res.get("text") if isinstance(res, dict) else str(res)
                         if not text_final: text_final = "(응답이 비어있어요)"
-                        ph.markdown(f'<div class="row ai"><div class="bubble ai">{_esc_html(text_final)}</div></div>', unsafe_allow_html=True)
+                        ph.markdown(f'<div class="row ai"><div class="bubble ai">{text_final}</div></div>', unsafe_allow_html=True)
                 except Exception as e:
                     text_final = f"(오류) {type(e).__name__}: {e}"
-                    ph.markdown(f'<div class="row ai"><div class="bubble ai">{_esc_html(text_final)}</div></div>', unsafe_allow_html=True)
+                    ph.markdown(f'<div class="row ai"><div class="bubble ai">{text_final}</div></div>', unsafe_allow_html=True)
                     _errlog(f"LLM 예외: {e}", where="[qa_llm]", exc=e)
 
         st.markdown('</div></div>', unsafe_allow_html=True)
@@ -1042,93 +712,27 @@ def _render_chat_panel():
         ss["chat"].append({"id": f"a{int(time.time()*1000)}", "role": "assistant", "text": text_final})
         st.rerun()
 
-# [10C] 관리자: 모드별 prompts 편집 → GitHub 업로드(선택) =========================
-def _render_admin_prompts_panel():
-    if not st.session_state.get("admin_panel_open"): return
-    st.subheader("관리자 · prompts 편집")
-    tabs = st.tabs(["어법(문법)", "문장", "지문"])
-
-    cache = st.session_state.get("__admin_prompts_cache") or {"문법":"", "문장":"", "지문":""}
-
-    with tabs[0]:
-        cache["문법"] = st.text_area("어법 프롬프트", value=cache.get("문법",""), height=200)
-    with tabs[1]:
-        cache["문장"] = st.text_area("문장 프롬프트", value=cache.get("문장",""), height=200)
-    with tabs[2]:
-        cache["지문"] = st.text_area("지문 프롬프트", value=cache.get("지문",""), height=200)
-
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("💾 로컬 저장", use_container_width=True):
-            import yaml
-            y = {"modes":{"문법설명":cache["문법"],"문장구조분석":cache["문장"],"지문분석":cache["지문"]}}
-            p = (PERSIST_DIR / "prompts.yaml"); p.write_text(yaml.safe_dump(y, allow_unicode=True), encoding="utf-8")
-            st.session_state["__admin_prompts_cache"] = cache
-            st.success(f"로컬에 저장됨: {p}")
-
-    with col2:
-        if st.button("⬆️ GitHub에 업로드", use_container_width=True):
-            import base64, json, urllib.request
-            token = st.secrets.get("GH_TOKEN") or os.getenv("GH_TOKEN")
-            repo  = st.secrets.get("GH_REPO")  or os.getenv("GH_REPO")
-            branch = st.secrets.get("GH_BRANCH","main") or os.getenv("GH_BRANCH","main")
-            if not (token and repo):
-                st.error("GH_TOKEN / GH_REPO (owner/repo) 가 필요합니다.")
-            else:
-                try:
-                    path = "prompts.yaml"
-                    url_get = f"https://api.github.com/repos/{repo}/contents/{path}?ref={branch}"
-                    req = urllib.request.Request(url_get, headers={"Authorization": f"token {token}", "User-Agent": "maic-app"})
-                    try:
-                        with urllib.request.urlopen(req) as r:
-                            meta = json.loads(r.read().decode("utf-8"))
-                            sha = meta.get("sha")
-                    except Exception:
-                        sha = None  # 첫 업로드 가능
-                    y = {"modes":{"문법설명":cache["문법"],"문장구조분석":cache["문장"],"지문분석":cache["지문"]}}
-                    content_b64 = base64.b64encode(json.dumps(y, ensure_ascii=False).encode("utf-8")).decode("utf-8")
-                    url_put = f"https://api.github.com/repos/{repo}/contents/{path}"
-                    body = json.dumps({
-                        "message": "chore: update prompts.yaml from admin panel",
-                        "content": content_b64,
-                        "branch": branch,
-                        **({"sha": sha} if sha else {})
-                    }).encode("utf-8")
-                    req2 = urllib.request.Request(url_put, data=body, method="PUT",
-                            headers={"Authorization": f"token {token}","User-Agent":"maic-app","Content-Type":"application/json"})
-                    with urllib.request.urlopen(req2) as r2:
-                        _ = r2.read()
-                    st.success("GitHub 업로드 완료 (contents API)")
-                    st.session_state["__prompt_source"] = "GitHub"
-                except Exception as e:
-                    st.error(f"업로드 실패: {type(e).__name__}: {e}")
-
 # [11] 본문 렌더 ===============================================================
 def _render_body() -> None:
     if st is None:
         return
 
-    # 🔹 배경은 항상 먼저 마운트(리런에도 유지)
-    _mount_background(
-        theme="light", accent="#5B8CFF", density=3,
-        interactive=True, animate=True, gradient="radial",
-        grid=True, grain=False, blur=0, seed=1234, readability_veil=True,
-    )
+    # 배경(필요 시)
+    _mount_background(theme="light", accent="#5B8CFF", density=3,
+                      interactive=True, animate=True, gradient="radial",
+                      grid=True, grain=False, blur=0, seed=1234, readability_veil=True)
 
-    # 헤더
     _header()
 
-    # ⛳ 빠른 부팅: 네트워크 없이 로컬 인덱스만 확인(헬스체크 통과 보장)
+    # 빠른 부팅: 네트워크 없이 로컬만 확인
     try:
         _quick_local_attach_only()
     except Exception as e:
         _errlog(f"quick attach failed: {e}", where="[render_body]", exc=e)
 
-    # 관리자 전용 패널 + '깊은 점검' 버튼 (Drive/GitHub 네트워크 호출)
+    # 관리자 패널 + 깊은 점검 버튼(네트워크 호출)
     if _is_admin_view():
         _render_admin_panels()
-
-        # ✅ 질문하신 버튼의 정확한 위치: 관리자 패널 바로 아래
         with st.container():
             if st.button(
                 "🔎 자료 자동 점검(깊은 검사)",
@@ -1140,10 +744,8 @@ def _render_body() -> None:
                     st.success(st.session_state.get("brain_status_msg", "완료"))
                     st.rerun()
 
-    # (선택) 자동 시작 — 기본 off, 운영자 의도시 secrets/env로 켬
     _auto_start_once()
 
-    # 학생 영역
     st.markdown("## 질문은 천재들의 공부 방법이다.")
     _render_chat_panel()
 
