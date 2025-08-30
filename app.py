@@ -451,44 +451,34 @@ def _render_admin_panels() -> None:
         st.download_button("로그 다운로드", data=txt.encode("utf-8"), file_name="app_error_log.txt")
 
 # [10] 학생 UI (Stable v1.5): 모드(세그먼트 강조) + 채팅(파스텔 하늘색) + 2단계 렌더(질문→준비중→답변)  # [10] START
+# [10A] 학생 UI (Stable): 스타일/세그먼트/버블 렌더러 ===============================  # [10A] START
 def _inject_chat_styles_once():
     if st.session_state.get("_chat_styles_injected"):
         return
     st.session_state["_chat_styles_injected"] = True
     st.markdown("""
     <style>
-      /* 상태 버튼 (미니멀) */
+      /* 상태 버튼 */
       .status-btn{display:inline-block; padding:6px 10px; border-radius:14px;
         font-size:12px; font-weight:700; color:#111; border:1px solid transparent;}
       .status-btn.green{ background:#daf5cb; border-color:#bfe5ac; }
       .status-btn.yellow{ background:#fff3bf; border-color:#ffe08a; }
 
-      /* ===== 채팅 영역(파스텔 하늘색 배경) ===== */
+      /* 채팅 영역(파스텔 하늘색) */
       .chat-wrap{
-        background:#eaf6ff;
-        border:1px solid #cfe7ff;
-        border-radius:18px;
-        padding:10px 10px 8px;
-        margin-top:10px;
+        background:#eaf6ff; border:1px solid #cfe7ff; border-radius:18px;
+        padding:10px 10px 8px; margin-top:10px;
       }
       .chat-box{
-        min-height:240px;
-        max-height:52vh;
-        overflow-y:auto;
-        padding:6px 6px 2px;
-
-        display:flex;
-        flex-direction:column;
-        justify-content:flex-end; /* 아래쪽 기준으로 쌓임 → 카톡 느낌 */
+        min-height:240px; max-height:54vh; overflow-y:auto; padding:6px 6px 2px;
+        display:flex; flex-direction:column; justify-content:flex-end;  /* 아래쪽 정렬 */
       }
       .chat-box .row{ display:flex; margin:8px 0; gap:10px; }
-      .chat-box .row.user{ justify-content:flex-end; }   /* 학생 → 오른쪽 */
-      .chat-box .row.ai{ justify-content:flex-start; }   /* AI  → 왼쪽  */
+      .chat-box .row.user{ justify-content:flex-end; }   /* 오른쪽(학생) */
+      .chat-box .row.ai{ justify-content:flex-start; }   /* 왼쪽(AI) */
       .chat-box .bubble{
-        max-width:88%;
-        padding:12px 14px; border-radius:16px; line-height:1.6; font-size:15px;
-        box-shadow:0 1px 1px rgba(0,0,0,0.05);
-        white-space:pre-wrap;  /* 줄바꿈 유지 */
+        max-width:88%; padding:12px 14px; border-radius:16px; line-height:1.6; font-size:15px;
+        box-shadow:0 1px 1px rgba(0,0,0,0.05); white-space:pre-wrap;
       }
       .chat-box .bubble.user{
         background:#ffffff; color:#0a2540; border:1px solid #d9eaff;
@@ -500,13 +490,11 @@ def _inject_chat_styles_once():
       }
       .chat-box .row.user .bubble:after{
         content:""; position:absolute; right:-8px; top:10px;
-        border-width:8px 0 8px 8px; border-style:solid;
-        border-color:transparent transparent transparent #d9eaff;
+        border-width:8px 0 8px 8px; border-style:solid; border-color:transparent transparent transparent #d9eaff;
       }
       .chat-box .row.ai .bubble:before{
         content:""; position:absolute; left:-8px; top:10px;
-        border-width:8px 8px 8px 0; border-style:solid;
-        border-color:transparent #e0eaff transparent transparent;
+        border-width:8px 8px 8px 0; border-style:solid; border-color:transparent #e0eaff transparent transparent;
       }
     </style>
     """, unsafe_allow_html=True)
@@ -527,17 +515,13 @@ def _render_llm_status_minimal():
            '<span class="status-btn yellow">🟡 준비중</span>'
     st.markdown(html, unsafe_allow_html=True)
 
-def _render_mode_controls_minimal(*, admin: bool) -> str:
-    """
-    선택이 확실히 보이도록 기본은 세그먼티드 컨트롤(UI 탭) 사용.
-    미지원 환경이면 버튼 3개로 대체.
-    """
+def _render_mode_controls_segmented(*, admin: bool) -> str:
+    """세그먼티드 컨트롤로 직관적 강조, 미지원이면 버튼 폴백."""
     _inject_chat_styles_once()
     ss = st.session_state
     cfg = _sanitize_modes_cfg(_load_modes_cfg())
 
     try:
-        # Streamlit 1.32+ (세그먼트)
         sel = st.segmented_control(
             "질문 모드 선택",
             options=_MODE_KEYS,
@@ -549,7 +533,6 @@ def _render_mode_controls_minimal(*, admin: bool) -> str:
             st.rerun()
         cur = sel
     except Exception:
-        # Fallback: 버튼 3개
         st.markdown("#### 질문 모드 선택")
         col1, col2, col3 = st.columns(3, gap="small")
         def _btn(label: str, key: str, mode: str):
@@ -565,6 +548,37 @@ def _render_mode_controls_minimal(*, admin: bool) -> str:
     ss["qa_mode_radio"] = cur
     return cur
 
+def _htmlize_text(s: str) -> str:
+    """간단 마크다운을 HTML로 안전 변환(헤딩/리스트는 줄바꿈으로 유지)."""
+    import html, re
+    t = html.escape(s)
+    # 헤딩/리스트 마커는 그냥 텍스트로 두고 줄바꿈만 보존
+    t = t.replace("\n", "<br/>")
+    # 연속 공백 약간 보존
+    t = re.sub(r"  ", "&nbsp;&nbsp;", t)
+    return t
+
+def _render_chat_log(messages: list[dict]):
+    """파스텔 하늘색 영역 + 버블 렌더."""
+    st.markdown('<div class="chat-wrap"><div class="chat-box">', unsafe_allow_html=True)
+    for m in messages:
+        role = m.get("role", "ai")
+        text = _htmlize_text(m.get("text", ""))
+        klass = "user" if role == "user" else "ai"
+        st.markdown(f'<div class="row {klass}"><div class="bubble {klass}">{text}</div></div>',
+                    unsafe_allow_html=True)
+    st.markdown('</div></div>', unsafe_allow_html=True)
+
+def _replace_assistant_text(aid: str, new_text: str):
+    """aid에 해당하는 assistant 버블 텍스트만 교체."""
+    ss = st.session_state
+    for m in ss.get("chat", []):
+        if m.get("id") == aid and m.get("role") == "assistant":
+            m["text"] = new_text
+            return True
+    return False
+# [10A] 학생 UI (Stable): 스타일/세그먼트/버블 렌더러 ===============================  # [10A] END
+# [10B] 학생 로직: 입력 → 준비중 버블 → 답변 치환 + 관리자 컨트롤 ====================  # [10B] START
 def _render_admin_index_controls():
     """관리자 전용: 인덱싱하기/백업 쓰기/재빌드."""
     if not _is_admin_view():
@@ -589,108 +603,18 @@ def _render_admin_index_controls():
     if need and stats:
         st.info(f"변경 감지: +{stats.get('added',0)} / Δ{stats.get('changed',0)} / -{stats.get('removed',0)}")
 
-def _admin_trigger_build():
-    """관리자: 즉시 전체 인덱싱 실행 → attach."""
-    import json
-    mod = _try_import("src.rag.index_build", ["build_index_with_checkpoint"]) or {}
-    build = mod.get("build_index_with_checkpoint")
-    if not callable(build):
-        st.error("빌드 엔트리를 찾을 수 없습니다.")
-        return
-
-    prog = st.progress(0, text="인덱싱 중…")
-    msgbox = st.empty()
-    def _pct(p, m=None):
-        try: prog.progress(int(p), text=("인덱싱 중… " + (m or "")).strip())
-        except Exception: pass
-    def _msg(s):
-        try: msgbox.info(str(s))
-        except Exception: pass
-
-    try:
-        gdrive_folder_id = st.secrets.get("GDRIVE_PREPARED_FOLDER_ID") or ""
-        gcp_creds = st.secrets.get("gcp_service_account") or {}
-        if isinstance(gcp_creds, str):
-            try: gcp_creds = json.loads(gcp_creds)
-            except Exception: gcp_creds = {}
-        res = build(_pct, _msg, gdrive_folder_id, gcp_creds, "", {}, None) or {}
-        st.success("인덱싱 완료. 최신 인덱스로 전환했습니다.")
-        ss = st.session_state
-        ss["brain_attached"] = True
-        ss["brain_status_msg"] = "로컬 인덱스 빌드·연결 완료"
-        ss["index_status_code"] = "READY"
-        ss["index_source"] = "build"
-        ss["index_decision_needed"] = False
-        ss["index_change_stats"] = {}
-        st.rerun()
-    except Exception as e:
-        st.error(f"인덱싱 실패: {type(e).__name__}: {e}")
-    finally:
-        try: prog.empty(); msgbox.empty()
-        except Exception: pass
-
-def _admin_use_release():
-    """관리자: Releases에서 복구하여 현 상태 유지로 전환."""
-    mod = _try_import("src.backup.github_release", ["restore_latest"]) or {}
-    rest = mod.get("restore_latest")
-    if not callable(rest):
-        st.error("Releases 복구 엔트리를 찾을 수 없습니다.")
-        return
-
-    ok = False
-    try:
-        ok = bool(rest(PERSIST_DIR))
-    except Exception as e:
-        st.error(f"복구 실패: {type(e).__name__}: {e}")
-        return
-
-    if ok and (PERSIST_DIR / "chunks.jsonl").exists():
-        ss = st.session_state
-        ss["brain_attached"] = True
-        ss["brain_status_msg"] = "Releases에서 복구·연결 완료"
-        ss["index_status_code"] = "READY"
-        ss["index_source"] = "release"
-        ss["index_decision_needed"] = False
-        ss["index_change_stats"] = {}
-        st.success("백업(릴리스) 기준으로 연결했습니다.")
-        st.rerun()
-    else:
-        st.error("복구 결과가 유효하지 않습니다(파일 없음).")
-
-def _render_chat_log(messages: list[dict]):
-    # 파스텔 하늘색 배경 컨테이너로 감싸기 + 아래쪽 정렬
-    st.markdown('<div class="chat-wrap"><div class="chat-box">', unsafe_allow_html=True)
-    for m in messages:
-        role = m.get("role", "ai")
-        text = m.get("text", "")
-        klass = "user" if role == "user" else "ai"
-        st.markdown(
-            f'<div class="row {klass}"><div class="bubble {klass}">{text}</div></div>',
-            unsafe_allow_html=True
-        )
-    st.markdown('</div></div>', unsafe_allow_html=True)
-
-def _replace_assistant_text(aid: str, new_text: str):
-    """aid로 지정된 assistant 말풍선의 텍스트만 교체."""
-    ss = st.session_state
-    for m in ss.get("chat", []):
-        if m.get("id") == aid and m.get("role") == "assistant":
-            m["text"] = new_text
-            return True
-    return False
-
 def _render_chat_panel():
     import time, inspect
     ss = st.session_state
     if "chat" not in ss:
         ss["chat"] = []
 
-    # 0) pending 콜이 있으면(2단계): 이 런에서 LLM 호출 → 준비중 말풍선 업데이트
+    # 0) pending 콜 처리(2단계): 이번 런에서 LLM 호출 → '준비중' 버블 교체
     pending = ss.get("_pending_call")
     if pending:
         try:
             user_q = pending["q"]; mode_token = pending["mode_token"]; aid = pending["aid"]; cur = pending["mode_key"]
-            # prompts.yaml 연결
+            # 프롬프트 빌드(Drive prompts.yaml 연결, 실패 시 폴백)
             _prompt_mod = _try_import("src.prompt_modes", ["build_prompt"])
             _build_prompt = (_prompt_mod or {}).get("build_prompt")
             DEF_SYS = "너는 한국의 영어학원 원장처럼, 따뜻하고 명확하게 설명한다."
@@ -710,8 +634,7 @@ def _render_chat_panel():
 
             sig = inspect.signature(call); params = sig.parameters.keys(); kwargs = {}
             if "messages" in params:
-                msgs = [{"role":"system","content":system_prompt},{"role":"user","content":prompt}]
-                kwargs["messages"] = msgs
+                kwargs["messages"] = [{"role":"system","content":system_prompt},{"role":"user","content":prompt}]
             else:
                 if "prompt" in params: kwargs["prompt"] = prompt
                 elif "user_prompt" in params: kwargs["user_prompt"] = prompt
@@ -733,7 +656,6 @@ def _render_chat_panel():
             _errlog(f"LLM 예외: {e}", where="[qa_llm]", exc=e)
         finally:
             ss["_pending_call"] = None  # 소모
-            # 여기서는 rerun 없이도 아래 렌더에서 갱신된 말풍선을 바로 그림
 
     # 1) 상단 상태 버튼
     _render_llm_status_minimal()
@@ -741,24 +663,28 @@ def _render_chat_panel():
     # 1-1) (관리자 전용) 인덱스 컨트롤 패널
     _render_admin_index_controls()
 
-    # 2) 모드 선택(세그먼트)
-    cur = _render_mode_controls_minimal(admin=_is_admin_view())
+    # 2) 모드 선택(세그먼트 → 강조)
+    cur = _render_mode_controls_segmented(admin=_is_admin_view())
 
-    # 3) 입력창: chat_input (엔터/화살표 자동, 제출 시 자동 초기화)
+    # 3) 채팅 로그(파스텔 하늘색 배경) 먼저 보여주고,
+    _render_chat_log(ss["chat"])
+
+    # 4) 입력: chat_input (엔터/화살표 자동, 제출 시 자동 초기화)
     user_q = st.chat_input("예) 분사구문이 뭐예요?  예) 이 문장 구조 분석해줘")
 
-    # 4) 전송 1단계: 즉시 사용자 말풍선(오른쪽) + '답변 준비중…'(왼쪽) 추가 → rerun
+    # 5) 전송 1단계: 즉시 오른쪽(학생) 버블 + 왼쪽 '준비중' 버블 추가 → rerun
     if user_q and user_q.strip():
         uid = f"u{int(time.time()*1000)}"
-        aid = f"a{uid}"  # 페어링을 위해 uid 기반
+        aid = f"a{uid}"  # 페어링
         ss["chat"].append({"id": uid, "role":"user", "text": user_q.strip()})
         ss["chat"].append({"id": aid, "role":"assistant", "text": "답변 준비중…"})
         mode_token = _LLM_TOKEN.get(cur, "문법설명")
         ss["_pending_call"] = {"q": user_q.strip(), "mode_key": cur, "mode_token": mode_token, "aid": aid}
-        st.rerun()  # 2단계 런에서 LLM 호출 후 같은 말풍선을 업데이트
+        st.rerun()
+# [10B] 학생 로직: 입력 → 준비중 버블 → 답변 치환 + 관리자 컨트롤 ====================  # [10B] END
 
-    # 5) 채팅 로그 렌더 (파스텔 하늘색 배경 유지, 아래쪽 정렬)
-    _render_chat_log(ss["chat"])
+
+
 # [10] 학생 UI (Stable v1.5): 모드(세그먼트 강조) + 채팅(파스텔 하늘색) + 2단계 렌더(질문→준비중→답변)  # [10] END
 
 
