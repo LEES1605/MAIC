@@ -503,26 +503,13 @@ def _mount_background(
     """, unsafe_allow_html=True)
 # [06C] END
 
-
-# [07] MAIN: 자동 attach/복구/판단 대기 =========================================
-def _auto_attach_or_build_index():
+# [07] 부팅/인덱스 준비 로직 (빠른 부팅 + 수동 깊은 점검)  # [07] START
+def _quick_local_attach_only():
     """
-    우선순위:
-    1) 로컬 인덱스 존재 → Drive diff 검사
-       - 변경 없음(False)/판단 불가(None): attach(READY)
-       - 변경 있음(True): attach(READY) + 관리자 선택 대기
-    2) 로컬 없으면 → GitHub Releases 자동 복구 → diff 검사
-       - 변경 없음(False)/판단 불가(None): attach(READY)
-       - 변경 있음(True): attach + 관리자 선택 대기
-    3) 빌드는 관리자가 명시적으로 요청할 때만 수행
+    아주 빠른 경로: 로컬 인덱스 존재만 확인하여 '준비완료'로 붙이고 끝낸다.
+    네트워크(Drive/GitHub)는 전혀 호출하지 않는다 → 첫 화면 빠르게 렌더.
     """
-    import json, pathlib
     ss = st.session_state
-    if ss.get("_index_boot_ran_v5"):
-        return
-    ss["_index_boot_ran_v5"] = True
-
-    # 상태 기본값
     ss.setdefault("brain_attached", False)
     ss.setdefault("brain_status_msg", "초기화 중…")
     ss.setdefault("index_status_code", "INIT")
@@ -531,7 +518,38 @@ def _auto_attach_or_build_index():
     ss.setdefault("index_decision_needed", False)
     ss.setdefault("index_change_stats", {})
 
-    # 필요한 모듈(동적 임포트)
+    # 로컬 시그널만 아주 빠르게 확인
+    man = (PERSIST_DIR / "manifest.json")
+    chunks = (PERSIST_DIR / "chunks.jsonl")
+    ready = (PERSIST_DIR / ".ready")
+    if (chunks.exists() and chunks.stat().st_size > 0) or (man.exists() and man.stat().st_size > 0) or (ready.exists()):
+        ss["brain_attached"] = True
+        ss["brain_status_msg"] = "로컬 인덱스 연결됨(빠른 부팅)"
+        ss["index_status_code"] = "READY"
+        ss["index_source"] = "local"
+        ss["restore_recommend"] = False
+        return True
+
+    # 로컬 없음: 화면은 빨리 띄우고, 관리자가 '깊은 점검'을 눌러서 복구하도록 유도
+    ss["brain_attached"] = False
+    ss["brain_status_msg"] = "인덱스 없음(관리자에서 '깊은 점검'으로 복구)"
+    ss["index_status_code"] = "MISSING"
+    ss["index_source"] = ""
+    ss["restore_recommend"] = True
+    return False
+
+
+def _run_deep_check_and_attach():
+    """
+    네트워크 포함 '깊은 점검':
+      1) Drive 준비상태/폴더 유효성 확인(가능하면)
+      2) GitHub Releases 자동 복구 시도
+      3) diff 검사로 변경 유무 판단
+    완료 후 화면 갱신.
+    """
+    ss = st.session_state
+
+    # 동적 임포트
     idx = _try_import("src.rag.index_build", ["quick_precheck", "diff_with_manifest"]) or {}
     rel = _try_import("src.backup.github_release", ["restore_latest"]) or {}
 
@@ -539,20 +557,9 @@ def _auto_attach_or_build_index():
     diff  = idx.get("diff_with_manifest")
     restore_latest = rel.get("restore_latest")
 
-    # 표준 경로
-    persist_path = PERSIST_DIR
-    chunks_path  = persist_path / "chunks.jsonl"
-    ready_flag   = persist_path / ".ready"
-
-    def _touch_ready():
-        try:
-            persist_path.mkdir(parents=True, exist_ok=True)
-            ready_flag.write_text("ok", encoding="utf-8")
-        except Exception:
-            pass
-
     def _attach_success(source: str, msg: str):
-        _touch_ready()
+        try: (PERSIST_DIR / ".ready").write_text("ok", encoding="utf-8")
+        except Exception: pass
         ss["brain_attached"] = True
         ss["brain_status_msg"] = msg
         ss["index_status_code"] = "READY"
@@ -563,73 +570,72 @@ def _auto_attach_or_build_index():
         ss["index_decision_needed"] = bool(wait)
         ss["index_change_stats"] = stats or {}
 
-    def _try_diff() -> tuple[bool|None, dict]:
-        """(changed_flag, stats_dict) 반환. 실패 시 (None, {})."""
-        if not callable(diff):
-            return None, {}
-        try:
-            d = diff() or {}
-            if not d.get("ok"):
-                return None, {}
-            stts = d.get("stats") or {}
-            changed_total = int(stts.get("added", 0)) + int(stts.get("changed", 0)) + int(stts.get("removed", 0))
-            return (changed_total > 0), stts
-        except Exception as e:
-            _errlog(f"diff 실패: {e}", where="[index_boot]")
-            return None, {}
-
-    # 0) 로컬 인덱스 빠른 점검
-    if not callable(quick):
-        ss["index_status_code"] = "MISSING"
-        return
-
-    try:
-        pre = quick() or {}
-    except Exception as e:
-        _errlog(f"precheck 예외: {e}", where="[index_boot]")
-        pre = {}
-
-    # 1) 로컬 인덱스가 이미 있으면: attach 후 diff 판단
-    if pre.get("ok") and (pre.get("local_index_ok") or pre.get("ready")):
-        ch, stts = _try_diff()
+    # 0) 로컬 있으면 우선 attach
+    if _is_brain_ready():
+        ch, stts = (None, {})
+        if callable(diff):
+            try:
+                d = diff() or {}
+                stts = d.get("stats") or {}
+                total = int(stts.get("added", 0)) + int(stts.get("changed", 0)) + int(stts.get("removed", 0))
+                ch = (total > 0)
+            except Exception as e:
+                _errlog(f"diff 실패: {e}", where="[deep_check]")
         if ch is True:
             _attach_success("local", "로컬 인덱스 연결됨(신규/변경 감지)")
             _set_decision(True, stts)
-            return
         else:
             _attach_success("local", "로컬 인덱스 연결됨(변경 없음/판단 불가)")
             _set_decision(False, stts)
-            return
+        return
 
-    # 2) 로컬이 없으면: Releases에서 복구(자동)
+    # 1) Drive 빠른 점검(있으면)
+    drive_ok, prepared_ok = (False, False)
+    if callable(quick):
+        try:
+            info = quick() or {}
+            drive_ok = bool(info.get("drive_ok"))
+            prepared_ok = bool(info.get("prepared_id"))
+        except Exception as e:
+            _errlog(f"precheck 예외: {e}", where="[deep_check]")
+
+    # 2) GitHub Releases 복구(있으면)
     restored = False
     if callable(restore_latest):
         try:
-            restored = bool(restore_latest(persist_path))
+            restored = bool(restore_latest(PERSIST_DIR))
         except Exception as e:
-            _errlog(f"restore 실패: {e}", where="[index_boot]")
+            _errlog(f"restore 실패: {e}", where="[deep_check]")
 
-    if restored and chunks_path.exists():
-        ch2, stts2 = _try_diff()
+    if restored and _is_brain_ready():
+        ch2, stts2 = (None, {})
+        if callable(diff):
+            try:
+                d = diff() or {}
+                stts2 = d.get("stats") or {}
+                total = int(stts2.get("added", 0)) + int(stts2.get("changed", 0)) + int(stts2.get("removed", 0))
+                ch2 = (total > 0)
+            except Exception as e:
+                _errlog(f"diff 실패(복구후): {e}", where="[deep_check]")
         if ch2 is True:
             _attach_success("release", "Releases에서 복구·연결(신규/변경 감지)")
             _set_decision(True, stts2)
-            return
         else:
             _attach_success("release", "Releases에서 복구·연결(변경 없음/판단 불가)")
             _set_decision(False, stts2)
-            return
+        return
 
-    # 3) 여기까지 왔으면 로컬/릴리스 모두 실패 — 상태만 남김(관리자 재빌드 버튼으로 해결)
+    # 3) 실패: 상태만 남김
     ss["brain_attached"] = False
-    ss["brain_status_msg"] = "인덱스 없음(관리자에서 재빌드 필요)"
+    ss["brain_status_msg"] = "깊은 점검 실패(인덱스 없음). 관리자: 재빌드/복구 필요"
     ss["index_status_code"] = "MISSING"
-    _set_decision(False, {})
+    ss["index_source"] = ""
+    ss["restore_recommend"] = True
+    ss["index_decision_needed"] = False
+    ss["index_change_stats"] = {}
     return
+# [07] END
 
-# 모듈 초기화 시 1회 자동 실행
-if st:
-    _auto_attach_or_build_index()
 
 # [08] 자동 시작(선택) =========================================================
 def _auto_start_once():
@@ -1114,7 +1120,7 @@ def _render_body() -> None:
         _render_admin_panels()
 
     st.markdown("## 질문은 천재들의 공부 방법이다.")
-    _render_chat_panel()
+     _quick_local_attach_only()
 
 # [12] main ===================================================================
 def main():
