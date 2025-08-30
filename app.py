@@ -450,7 +450,7 @@ def _render_admin_panels() -> None:
         st.text_area("최근 오류", value=txt, height=180)
         st.download_button("로그 다운로드", data=txt.encode("utf-8"), file_name="app_error_log.txt")
 
-# [10] 학생 UI (Stable v1.3): 상태버튼 + 모드(선택 강조) + 채팅(파스텔 하늘색, Enter 전송/화살표) + 관리자 컨트롤  # [10] START
+# [10] 학생 UI (Stable v1.4): 상태버튼 + 모드(선택 강조) + 채팅(파스텔 하늘색, 엔터/화살표) + 관리자 컨트롤  # [10] START
 def _inject_chat_styles_once():
     if st.session_state.get("_chat_styles_injected"):
         return
@@ -476,16 +476,21 @@ def _inject_chat_styles_once():
 
       /* ===== 채팅 영역(파스텔 하늘색 배경) ===== */
       .chat-wrap{
-        background:#eaf6ff;              /* 파스텔 하늘색 */
+        background:#eaf6ff;             /* 파스텔 하늘색 */
         border:1px solid #cfe7ff;
         border-radius:18px;
         padding:10px 10px 8px;
         margin-top:10px;
       }
       .chat-box{
-        max-height:52vh;                  /* 필요시 조절 */
+        min-height:240px;                /* 내용 없어도 영역이 보이도록 */
+        max-height:52vh;
         overflow-y:auto;
         padding:6px 6px 2px;
+
+        display:flex;                    /* 아래쪽 고정 느낌(카톡처럼) */
+        flex-direction:column;
+        justify-content:flex-end;
       }
       .chat-box .row{ display:flex; margin:8px 0; gap:10px; }
       .chat-box .row.user{ justify-content:flex-end; }   /* 학생 → 오른쪽 */
@@ -494,7 +499,7 @@ def _inject_chat_styles_once():
         max-width:88%;
         padding:12px 14px; border-radius:16px; line-height:1.6; font-size:15px;
         box-shadow:0 1px 1px rgba(0,0,0,0.05);
-        white-space:pre-wrap;             /* 줄바꿈/개행 유지 → 질문/답변이 붙어 보이는 현상 방지 */
+        white-space:pre-wrap;             /* 줄바꿈 유지: 질문/답변 붙는 현상 방지 */
       }
       .chat-box .bubble.user{
         background:#ffffff; color:#0a2540; border:1px solid #d9eaff;
@@ -515,18 +520,8 @@ def _inject_chat_styles_once():
         border-color:transparent #e0eaff transparent transparent;
       }
 
-      /* ===== 입력창 + '카톡풍' 화살표 전송 버튼 ===== */
-      .input-wrap{ position:relative; }
-      .input-wrap [data-testid="stTextInput"] input{
-        padding-right:52px;               /* 화살표 버튼 자리 확보 */
-      }
-      .input-wrap .send-btn > button{
-        width:38px; height:38px; border-radius:19px;
-        position:absolute; right:6px; top:50%; transform:translateY(-50%);
-        border:1px solid #bcdcff; background:#ffffff;
-        font-size:18px; line-height:1; padding:0; box-shadow:0 1px 1px rgba(0,0,0,0.05);
-      }
-      .input-wrap .send-btn > button:hover{ background:#f0f7ff; }
+      /* 관리자 컨트롤 패널 버튼 */
+      .admin-panel .stButton>button{ padding:6px 10px; border-radius:10px; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -666,7 +661,7 @@ def _admin_use_release():
         st.error("복구 결과가 유효하지 않습니다(파일 없음).")
 
 def _render_chat_log(messages: list[dict]):
-    # 파스텔 하늘색 배경 컨테이너로 감싸기
+    # 파스텔 하늘색 배경 컨테이너로 감싸기 + 아래쪽 고정 스크롤
     st.markdown('<div class="chat-wrap"><div class="chat-box">', unsafe_allow_html=True)
     for m in messages:
         role = m.get("role", "ai")
@@ -693,19 +688,13 @@ def _render_chat_panel():
     # 2) 모드 선택
     cur = _render_mode_controls_minimal(admin=_is_admin_view())
 
-    # 3) 입력창 + 전송 (Enter 제출 가능: st.form)
-    with st.form("chat_form", clear_on_submit=False):
-        st.markdown('<div class="input-wrap">', unsafe_allow_html=True)
-        user_q = st.text_input(
-            "무엇이 궁금한가요?", key="user_q", label_visibility="collapsed",
-            placeholder="예) 분사구문이 뭐예요?  예) 이 문장 구조 분석해줘"
-        )
-        # 화살표 전송 버튼(카톡풍) — 시각적으로 입력창 안에 겹치도록 위치
-        submitted = st.form_submit_button("➤", use_container_width=False)
-        st.markdown('</div>', unsafe_allow_html=True)
+    # 3) 입력창: 엔터 전송 + 입력창 내부 화살표(스트림릿 기본 chat_input 사용)
+    #    - 엔터 전송 자동 지원
+    #    - 입력값은 제출 시 자동 초기화 (별도 session_state 조작 불필요 → 에러 제거)
+    user_q = st.chat_input("예) 분사구문이 뭐예요?  예) 이 문장 구조 분석해줘")
 
     # 4) 전송 처리 (Enter 또는 화살표)
-    if submitted and (user_q and user_q.strip()):
+    if user_q and user_q.strip():
         uid = f"u{int(time.time()*1000)}"
         ss["chat"].append({"id": uid, "role":"user", "text": user_q.strip()})
 
@@ -767,13 +756,11 @@ def _render_chat_panel():
             ss["chat"][-1]["text"] = f"(오류) {type(e).__name__}: {e}"
             _errlog(f"LLM 예외: {e}", where="[qa_llm]", exc=e)
 
-        # 입력창 비우기 + 즉시 갱신
-        st.session_state["user_q"] = ""
         st.rerun()
 
-    # 5) 채팅 로그 렌더 (파스텔 하늘색 배경 유지)
+    # 5) 채팅 로그 렌더 (파스텔 하늘색 배경 유지, 아래쪽 정렬)
     _render_chat_log(ss["chat"])
-# [10] 학생 UI (Stable v1.3): 상태버튼 + 모드(선택 강조) + 채팅(파스텔 하늘색, Enter 전송/화살표) + 관리자 컨트롤  # [10] END
+# [10] 학생 UI (Stable v1.4): 상태버튼 + 모드(선택 강조) + 채팅(파스텔 하늘색, 엔터/화살표) + 관리자 컨트롤  # [10] END
 
 
 # [11] 본문 렌더 ===============================================================
