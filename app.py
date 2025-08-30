@@ -578,27 +578,32 @@ def _replace_assistant_text(aid: str, new_text: str):
     return False
 
 # ──────────────────────────────────────────────────────────────────────────────
-# [10B] 로직(가변): 입력 → 즉시 말풍선 → 자동 재실행 → LLM 호출/치환
+# [10B] 학생 로직: 챗봇 버블 2스텝(질문→준비중→치환), 스타일 강제주입, 스피너 제거  # [10B] START
 def _render_chat_panel():
     import time, inspect
     ss = st.session_state
+
+    # 0) 세션 초기화
     if "chat" not in ss:
         ss["chat"] = []
 
-    # 상단 상태/모드
-    _render_llm_status_minimal()
-    cur = _render_mode_controls_pills()
+    # 1) 스타일은 항상 선주입 (준비중 런에서도 깨지지 않도록)
+    _inject_chat_styles_once()
 
-    # 현재까지 대화 로그 먼저 그림(언제나 보이도록)
+    # 2) 상단 상태/모드
+    _render_llm_status_minimal()
+    cur = _render_mode_controls_pills()  # 색만 바뀌는 파스텔 하늘 Pill
+
+    # 3) 현재까지 대화 로그(말풍선) 먼저 그리기 — 항상 화면에 보이게
     _render_chat_log(ss["chat"])
 
-    # 새 입력(엔터/화살표 자동)
+    # 4) 입력창(엔터/화살표 자동)
     user_q = st.chat_input("예) 분사구문이 뭐예요?  예) 이 문장 구조 분석해줘")
 
-    # 1단계: 내 말풍선 → '답변 준비중…' 말풍선 추가 후 'show' 단계로 전환
+    # 5) 전송 1단계: 내 말풍선 + '답변 준비중…' 말풍선 추가 → 'show' 단계로 전환
     if user_q and user_q.strip():
         uid = f"u{int(time.time()*1000)}"
-        aid = f"a{uid}"  # 페어링 ID
+        aid = f"a{uid}"  # 페어링용
         ss["chat"].append({"id": uid, "role":"user", "text": user_q.strip()})
         ss["chat"].append({"id": aid, "role":"assistant", "text": "답변 준비중…"})
         ss["_pending_call"] = {
@@ -610,26 +615,34 @@ def _render_chat_panel():
         ss["_llm_phase"] = "show"
         st.rerun()
 
-    # 1차 런: 화면을 먼저 그린 뒤 짧은 지연 후 자동 재실행 → 2차 런에서 LLM 호출
+    # 6) 1차 런(show): 화면만 먼저 보여주고 아주 짧게 자동 재실행 → 2차 런에서 LLM 호출
     if ss.get("_pending_call") and ss.get("_llm_phase") == "show":
+        # 회색 오버레이 방지: 스피너 사용하지 않고, JS로만 부드럽게 리프레시
         st.markdown("<script>setTimeout(()=>window.location.reload(),120);</script>",
                     unsafe_allow_html=True)
         ss["_llm_phase"] = "call"
         return
 
-    # 2차 런: LLM 호출 → 같은 말풍선 텍스트 교체
+    # 7) 2차 런(call): LLM 호출 → 같은 '준비중…' 말풍선을 답변으로 교체(오버레이 없음)
     pending = ss.get("_pending_call")
     if pending and ss.get("_llm_phase") == "call":
         try:
-            q   = pending["q"]; mode_token = pending["mode_token"]; aid = pending["aid"]; mkey = pending["mode_key"]
-            # prompts.yaml(Drive) → 실패 시 폴백 시스템 프롬프트
-            build_prompt = (_prompt or {}).get("build_prompt")
-            DEF_SYS = ("너는 한국의 영어학원 원장처럼 따뜻하고 명확하게 설명한다. "
-                       "질문과 선택된 모드에 직접 관련된 내용만 한국어로 간결하게 답한다. "
-                       "예문과 단계별 설명을 포함하되 탈선 금지.")
-            if callable(build_prompt):
+            q   = pending["q"]
+            aid = pending["aid"]
+            mode_token = pending["mode_token"]
+            cur_mode   = pending["mode_key"]
+
+            # prompts.yaml (실패 시 폴백)
+            _prompt_mod = _try_import("src.prompt_modes", ["build_prompt"])
+            _build_prompt = (_prompt_mod or {}).get("build_prompt")
+            DEF_SYS = (
+                "너는 한국의 영어학원 원장처럼 따뜻하고 명확하게 설명한다. "
+                "질문과 선택된 모드에 직접 관련된 내용만 한국어로 간결하게 답한다. "
+                "예문과 단계별 설명을 포함하되 탈선은 금지한다."
+            )
+            if callable(_build_prompt):
                 try:
-                    parts = build_prompt(mode_token, q) or {}
+                    parts = _build_prompt(mode_token, q) or {}
                     system_prompt = parts.get("system") or DEF_SYS
                     prompt        = parts.get("user")   or f"[모드:{mode_token}]\n{q}"
                 except Exception:
@@ -637,10 +650,10 @@ def _render_chat_panel():
             else:
                 system_prompt, prompt = DEF_SYS, f"[모드:{mode_token}]\n{q}"
 
+            # 어댑터 시그니처 자동 매핑 (스피너 없음 = 전면 회색 오버레이 없음)
             call = (_llm or {}).get("call_with_fallback") if "_llm" in globals() else None
             if not callable(call):
                 raise RuntimeError("LLM 어댑터(call_with_fallback)를 사용할 수 없습니다.")
-
             sig = inspect.signature(call); params = sig.parameters.keys(); kwargs = {}
             if "messages" in params:
                 kwargs["messages"] = [
@@ -656,13 +669,14 @@ def _render_chat_panel():
             elif "mode" in params: kwargs["mode"] = mode_token
             if "timeout_s" in params: kwargs["timeout_s"] = 90
             elif "timeout" in params: kwargs["timeout"] = 90
-            if "extra" in params: kwargs["extra"] = {"question": q, "mode_key": mkey}
+            if "extra" in params: kwargs["extra"] = {"question": q, "mode_key": cur_mode}
 
-            with st.spinner("답변 생성 중..."):
-                res = call(**kwargs)
-                text = res.get("text") if isinstance(res, dict) else str(res)
-                if not text: text = "(응답이 비어있어요)"
-                _replace_assistant_text(aid, text)
+            # 호출
+            res  = call(**kwargs)
+            text = res.get("text") if isinstance(res, dict) else str(res)
+            if not text: text = "(응답이 비어있어요)"
+            _replace_assistant_text(aid, text)
+
         except Exception as e:
             _replace_assistant_text(pending.get("aid",""), f"(오류) {type(e).__name__}: {e}")
             _errlog(f"LLM 예외: {e}", where="[qa_llm]", exc=e)
@@ -670,6 +684,8 @@ def _render_chat_panel():
             ss["_pending_call"] = None
             ss["_llm_phase"] = None
             st.rerun()
+# [10B] 학생 로직: 챗봇 버블 2스텝(질문→준비중→치환), 스타일 강제주입, 스피너 제거  # [10B] END
+
 # [10] 학생 UI (Stable Chatbot v2) ────────────────────────────────────────────  # [10] END
 
 
