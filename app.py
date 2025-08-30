@@ -208,42 +208,60 @@ def _login_panel_if_needed():
 def _auto_attach_or_build_index():
     """
     우선순위:
-    1) 로컬 인덱스(chunks.jsonl) 존재 → Drive diff 검사 → 변경 없으면 즉시 attach
+    1) 로컬 인덱스(chunks.jsonl/.ready) 존재 → Drive diff 검사 → 변경 없으면 즉시 attach
     2) 로컬 없으면 → GitHub Releases에서 복구(restore) → diff 검사 → 변경 없으면 attach
     3) 변경이 있거나 복구 실패 시에만 Drive에서 빌드 실행
-    결과 상태는 st.session_state['brain_attached'] / ['brain_status_msg']에 기록
+    모든 성공 경로에서 UI 상태 플래그와 `.ready` 파일을 보장한다.
     """
     import json, pathlib, inspect
     ss = st.session_state
-    if ss.get("_index_boot_ran_v2"):
+    if ss.get("_index_boot_ran_v3"):
         return
-    ss["_index_boot_ran_v2"] = True
+    ss["_index_boot_ran_v3"] = True
 
     # 기본 상태
     ss.setdefault("brain_attached", False)
     ss.setdefault("brain_status_msg", "초기화 중…")
+    ss.setdefault("index_status_code", "INIT")
+    ss.setdefault("index_source", "")
+    ss.setdefault("restore_recommend", True)
 
     # 필요한 모듈(동적 임포트)
     idx = _try_import("src.rag.index_build", [
         "quick_precheck", "build_index_with_checkpoint", "diff_with_manifest"
     ]) or {}
-    rel = _try_import("src.backup.github_release", [
-        "restore_latest"
-    ]) or {}
+    rel = _try_import("src.backup.github_release", ["restore_latest"]) or {}
 
     quick = idx.get("quick_precheck")
     build = idx.get("build_index_with_checkpoint")
     diff  = idx.get("diff_with_manifest")
     restore_latest = rel.get("restore_latest")
 
-    # 안전 헬퍼
-    def _attach(msg: str):
+    # 공통 경로/헬퍼
+    persist_path = pathlib.Path.home() / ".maic" / "persist"
+    chunks_path  = persist_path / "chunks.jsonl"
+    ready_flag   = persist_path / ".ready"
+
+    def _touch_ready():
+        try:
+            persist_path.mkdir(parents=True, exist_ok=True)
+            ready_flag.write_text("ok", encoding="utf-8")
+        except Exception:
+            pass
+
+    def _attach_success(source: str, msg: str):
+        _touch_ready()
         ss["brain_attached"] = True
         ss["brain_status_msg"] = msg
+        ss["index_status_code"] = "READY"
+        ss["index_source"] = source
+        ss["restore_recommend"] = False
 
-    def _detach(msg: str):
+    def _attach_fail(msg: str):
         ss["brain_attached"] = False
         ss["brain_status_msg"] = msg
+        ss["index_status_code"] = "MISSING"
+        ss["restore_recommend"] = True
 
     def _has_changes() -> Optional[bool]:
         """Drive prepared와 로컬 manifest 비교 → 변경 유무(bool) 또는 None(판단 불가)."""
@@ -260,26 +278,23 @@ def _auto_attach_or_build_index():
             _errlog(f"diff 실패: {e}", where="[index_boot]")
             return None
 
-    # 0) 로컬 인덱스 빠른 점검
+    # 0) quick_precheck
     if not callable(quick):
-        return _detach("인덱스 모듈(quick_precheck) 미탑재")
+        return _attach_fail("인덱스 모듈(quick_precheck) 미탑재")
     try:
         pre = quick() or {}
     except Exception as e:
         _errlog(f"precheck 예외: {e}", where="[index_boot]")
         pre = {}
 
-    persist_dir = pre.get("persist_dir") or str(pathlib.Path.home() / ".maic" / "persist")
-    persist_path = pathlib.Path(persist_dir)
-
-    # 1) 로컬 인덱스가 이미 있으면: 변경 없는지 확인 후 바로 attach
+    # 1) 로컬 인덱스가 이미 있으면: 변경 없으면 즉시 attach
     if pre.get("ok") and pre.get("ready"):
         ch = _has_changes()
         if ch is False:
-            return _attach("로컬 인덱스 연결됨(변경 없음)")
-        # 변경 존재(True) 또는 판단 불가(None)면 빌드 경로로 진행
+            return _attach_success("local", "로컬 인덱스 연결됨(변경 없음)")
+        # 변경 존재(True) 또는 판단 불가(None)면 다음 단계 진행
 
-    # 2) 로컬이 없으면: Releases에서 복구 시도
+    # 2) 로컬이 없으면: Releases에서 복구 시도(자동)
     restored = False
     if callable(restore_latest):
         try:
@@ -288,20 +303,16 @@ def _auto_attach_or_build_index():
             _errlog(f"restore 실패: {e}", where="[index_boot]")
             restored = False
 
-    if restored:
-        # 복구 후 다시 로컬 확인 + diff
-        try:
-            pre2 = quick() or {}
-        except Exception:
-            pre2 = {}
+    if restored and chunks_path.exists():
+        # 복구 후 diff 검사: 변경 없으면 수동 안내 없이 바로 attach
         ch2 = _has_changes()
-        if pre2.get("ok") and pre2.get("ready") and ch2 is False:
-            return _attach("Releases에서 복구·연결(변경 없음)")
-        # 변경 존재(True) 또는 판단 불가(None)면 빌드로 진행
+        if ch2 is False or ch2 is None:  # 판단 불가여도 보수적으로 attach 후 사용 가능
+            return _attach_success("release", "Releases에서 복구·연결(변경 없음)")
+        # 변경 있음(True)이면 빌드로 진행
 
     # 3) 여기까지 왔으면 빌드 필요(변경 존재/판단 불가/복구 실패/모듈 미흡 등)
     if not callable(build):
-        return _detach("빌드 엔트리(build_index_with_checkpoint) 없음")
+        return _attach_fail("빌드 엔트리(build_index_with_checkpoint) 없음")
 
     prog = st.progress(0, text="두뇌 준비중…")
     msgbox = st.empty()
@@ -334,15 +345,13 @@ def _auto_attach_or_build_index():
             should_stop=None,
         ) or {}
 
-        # 빌드 후 파일 존재 확인
-        chunks_path = persist_path / "chunks.jsonl"
         if chunks_path.exists():
-            _attach("로컬 인덱스 빌드·연결 완료")
+            return _attach_success("build", "로컬 인덱스 빌드·연결 완료")
         else:
-            _detach("로컬 인덱스 생성 실패")
+            return _attach_fail("로컬 인덱스 생성 실패")
 
     except Exception as e:
-        _detach(f"인덱스 빌드 오류: {type(e).__name__}: {e}")
+        _attach_fail(f"인덱스 빌드 오류: {type(e).__name__}: {e}")
         _errlog(f"build 실패: {e}", where="[index_boot]", exc=e)
     finally:
         try:
