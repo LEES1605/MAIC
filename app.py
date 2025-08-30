@@ -342,7 +342,7 @@ def _render_admin_panels() -> None:
         st.text_area("최근 오류", value=txt, height=180)
         st.download_button("로그 다운로드", data=txt.encode("utf-8"), file_name="app_error_log.txt")
 
-# [10] 학생 UI: 모드 버튼 + 상태표시 + 파스텔 채팅 ===========================  # [10] START
+# [10] 학생 UI: 모드 버튼 + 미니멀 상태버튼 + 파스텔 채팅 =====================  # [10] START
 def _inject_minimal_styles_once():
     if st.session_state.get("_minimal_styles_injected"):
         return
@@ -384,9 +384,14 @@ def _inject_minimal_styles_once():
         border-width:8px 8px 8px 0; border-style:solid;
         border-color:transparent #e6e6ff transparent transparent;
       }
-      .seg-zone{ gap:8px; }
-      .seg-zone .stButton{ width:100%; }
-      .seg-zone .stButton>button{ border-radius:16px !important; padding:8px 10px !important; }
+
+      /* 상태 버튼 (미니멀) */
+      .status-btn{
+        display:inline-block; padding:6px 10px; border-radius:14px;
+        font-size:12px; font-weight:700; color:#111; border:1px solid transparent;
+      }
+      .status-btn.green{ background:#daf5cb; border-color:#bfe5ac; }
+      .status-btn.yellow{ background:#fff3bf; border-color:#ffe08a; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -400,23 +405,11 @@ def _llm_callable_ok() -> bool:
     except Exception:
         return False
 
-def _render_llm_status_and_diag():
+def _render_llm_status_minimal():
     ok = _llm_callable_ok()
-    c1, c2 = st.columns([8, 2], gap="small")
-    with c2:
-        st.caption("LLM: 🟢 사용 가능 (Gemini/OpenAI)" if ok else "LLM: 🟡 확인 필요(키/쿼터/네트워크)")
-        if st.button("진단", key="btn_llm_diag"):
-            tips = []
-            try:
-                oa = st.secrets.get("openai_api_key") if hasattr(st, "secrets") else None  # type: ignore
-                ge = st.secrets.get("GEMINI_API_KEY") if hasattr(st, "secrets") else None  # type: ignore
-                if not oa and not ge:
-                    tips.append("API 키가 설정되어 있지 않습니다.")
-                if not ok:
-                    tips.append("LLM 어댑터(call_with_fallback)를 확인하세요.")
-            except Exception:
-                tips.append("Secrets 조회 중 예외 발생")
-            st.info(" / ".join(tips) if tips else "정상 동작 중입니다.")
+    html = '<span class="status-btn green">🟢 준비완료</span>' if ok else \
+           '<span class="status-btn yellow">🟡 준비중</span>'
+    st.markdown(html, unsafe_allow_html=True)
 
 def _render_mode_controls_minimal(*, admin: bool) -> str:
     _inject_minimal_styles_once()
@@ -435,20 +428,21 @@ def _render_mode_controls_minimal(*, admin: bool) -> str:
         if st.button(f"📖 {_LABELS['지문']}", key="mode_btn_pass", use_container_width=True):
             ss["qa_mode_radio"] = "지문"; st.rerun()
 
+    # 사용자가 누른 값이 있으면 그대로 사용. 없으면 기본값.
     cur = ss.get("qa_mode_radio")
-    if cur not in cfg["allowed"]:
-        cur = cfg["default"]
+    if cur not in _MODE_KEYS:
+        cur = cfg.get("default") or "문법"
     ss["qa_mode_radio"] = cur
     return cur
 
 def _render_chat_panel():
-    import time
+    import time, inspect
     ss = st.session_state
     if "chat" not in ss:
         ss["chat"] = []
 
-    # 상단 상태표시 + 간단 진단 버튼
-    _render_llm_status_and_diag()
+    # 상단 미니멀 상태 표시 (녹/노)
+    _render_llm_status_minimal()
 
     # 모드 버튼
     cur = _render_mode_controls_minimal(admin=_is_admin_view())
@@ -470,11 +464,8 @@ def _render_chat_panel():
         aid = f"a{int(time.time()*1000)}"
         ss["chat"].append({"id": aid, "role":"assistant", "text": "생각중…"})
 
-        cfg = _sanitize_modes_cfg(_load_modes_cfg())
-        cur = ss.get("qa_mode_radio") or cfg["default"]
+        # 모드 토큰 + prompts.yaml 연결 (실패 시 안전 폴백)
         mode_token = _LLM_TOKEN.get(cur, "문법설명")
-
-        # prompts.yaml 연결 (실패 시 안전 폴백)
         _prompt_mod = _try_import("src.prompt_modes", ["build_prompt"])
         _build_prompt = (_prompt_mod or {}).get("build_prompt")
         DEFAULT_SYSTEM_PROMPT = "너는 한국의 영어학원 원장처럼, 따뜻하고 명확하게 설명한다."
@@ -491,19 +482,38 @@ def _render_chat_panel():
             system_prompt = DEFAULT_SYSTEM_PROMPT
             prompt = f"[모드:{mode_token}]\n{user_q}"
 
-        # LLM 호출 (NameError 원인 `_llm_usable` 제거 → 바로 어댑터 호출)
+        # LLM 호출 (시그니처 자동 매핑)
         try:
             call = (_llm or {}).get("call_with_fallback") if "_llm" in globals() else None
             if not callable(call):
                 raise RuntimeError("LLM 어댑터(call_with_fallback)를 사용할 수 없습니다.")
+
+            sig = inspect.signature(call)
+            params = sig.parameters.keys()
+            kwargs = {}
+
+            # messages 방식 우선 지원
+            if "messages" in params:
+                msgs = []
+                if system_prompt:
+                    msgs.append({"role":"system","content":system_prompt})
+                msgs.append({"role":"user","content":prompt})
+                kwargs["messages"] = msgs
+            else:
+                if "prompt" in params: kwargs["prompt"] = prompt
+                elif "user_prompt" in params: kwargs["user_prompt"] = prompt
+                if "system_prompt" in params: kwargs["system_prompt"] = system_prompt
+                elif "system" in params: kwargs["system"] = system_prompt
+
+            # 부가 인자 자동 매핑
+            if "mode_token" in params: kwargs["mode_token"] = mode_token
+            elif "mode" in params: kwargs["mode"] = mode_token
+            if "timeout_s" in params: kwargs["timeout_s"] = 90
+            elif "timeout" in params: kwargs["timeout"] = 90
+            if "extra" in params: kwargs["extra"] = {"question": user_q, "mode_key": cur}
+
             with st.spinner("답변 생성 중..."):
-                res = call(
-                    user_prompt=prompt,
-                    system_prompt=system_prompt,
-                    mode_token=mode_token,
-                    extra={"question": user_q, "mode_key": cur},
-                    timeout_s=90,
-                )
+                res = call(**kwargs)
                 text = res.get("text") if isinstance(res, dict) else str(res)
                 ss["chat"][-1]["text"] = text or "(응답이 비어있어요)"
         except Exception as e:
@@ -521,7 +531,7 @@ def _render_chat_panel():
             unsafe_allow_html=True
         )
     st.markdown('</div>', unsafe_allow_html=True)
-# [10] 학생 UI: 모드 버튼 + 상태표시 + 파스텔 채팅 ===========================  # [10] END
+# [10] 학생 UI: 모드 버튼 + 미니멀 상태버튼 + 파스텔 채팅 =====================  # [10] END
 
 
 # [11] 본문 렌더 ===============================================================
