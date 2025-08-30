@@ -1,189 +1,113 @@
-좋아—지금까지의 진행 상황, 규칙, 남은 과제를 **지식파일에 바로 넣어도 되는 형태**로 깔끔하게 정리했어. (섹션마다 제목이 있으니 그대로 저장하면 돼!)
+# Re-create PROJECT_STATUS.md and confirm it exists
+from datetime import datetime
+from textwrap import dedent
+import os, json, pathlib
+
+now = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+content = dedent(f"""
+# PROJECT_STATUS.md — LEES AI Teacher
+_Updated: {now} (Asia/Seoul)_
+
+## 0) 실행 요약 (Executive Summary)
+- **목표:** 학원 학생들이 24/7로 질문할 수 있는 **Streamlit 기반 Q&A 앱** 구축. (OpenAI/Gemini 듀얼, GitHub·Google Drive 연동)
+- **현상태:** 무한 로딩 이슈 해결을 위해 **빠른 부팅(로컬 붙이기)** + **관리자 수동 '깊은 점검'** 구조로 안정화.  
+  채팅 UI는 **말풍선 + 파스텔 하늘색 컨테이너** + **스트리밍**을 적용했고, **모드 버튼(어법/문장/지문)**은 미니멀 스타일로 동작.
+- **프롬프트 단일 출처:** `prompts.yaml`을 **GitHub**에 두고, **GitHub → Fallback** 순으로 사용.
+- **인덱스(지식베이스):** 신규/변경 감지는 Deep Check에서 수행. 변경 없음이면 **GitHub Release에서 자동 복구(로컬 attach)** 로 빠르게 준비.
 
 ---
 
-# AI Teacher 프로젝트 요약 · 운영 매뉴얼 (v2025-08-26, KST)
-
-## 1) 현재 상태(요약)
-
-* ✅ **앱 실행**: 정상 구동.
-* ⚠️ **응답 지연**: 답변 속도가 체감상 느림.
-* ⚠️ **LLM 제공자**: OpenAI만 응답, Gemini 폴백이 동작하지 않음.
-* ⚠️ **RAG(두뇌) 세션**: 최적화 파일 감지·백업 복구는 되나, **세션 부착(attach) 미완료** 사례 존재.
-
----
-
-## 2) 시스템 개요
-
-* **앱 프레임워크**: Streamlit + 관리자/학생 **단일 코드베이스**(역할 가드로 분기).
-* **LLM 계층**: 프롬프트-모드(YAML) → `build_prompt()` → OpenAI 1순위 / Gemini 폴백.
-* **RAG 계층**:
-
-  * Drive `prepared/` ↔ 로컬 `~/.maic/persist`
-  * 지표/백업: manifest·chunks.jsonl·backup ZIP
-  * 패널: “자료 최적화/백업 패널” + “🧠 두뇌 연결(강제)”
-* **프롬프트 관리**: `prompts.yaml` (Drive 지정 폴더 ↔ 로컬 동기화), 모드별(system/user 템플릿) 오버라이드.
+## 1) 마스터 플랜 (Master Plan)
+1. **기능 아키텍처**
+   - UI: Streamlit (채팅형 인터페이스, 말풍선, Enter 제출)
+   - LLM: **OpenAI + Gemini** (자동 fallback), 필요 시 이중 설명 지원
+   - 프롬프트: `prompts.yaml` **단일 소스** (레포에 보관)
+   - RAG: Google Drive `prepared` 폴더(읽기 전용) + 로컬 캐시(`~/.maic/persist`)
+   - 백업: **GitHub Release**를 인덱스 백업/복구에 사용 (OAuth 장기 권한 이슈 회피)
+   - 버전관리: GitHub (코드/프롬프트 분리 관리, PR 리뷰)
+   - 학생들 회원가입을 통한 로그인 기능 지원
+   - 회원관리(정보수정, 가입허용, 강제탈퇴) 기능 지원
+2. **UX 원칙**
+   - 학생 UI: **미니멀**·**즉시 반응**·**시각적 구분(질문=하늘색, 답변=흰색)**
+   - 관리자 UI: 우상단 아이콘(⚙️) 최소화, 필요 시 패널 확장
+   - 실패/지연 시: **부드러운 안내문** 및 **Fallback 응답** 제공
+3. **운영/배포**
+   - Streamlit Cloud/서버 배포
+   - Health-check 통과 보장: 초기 프레임은 **네트워크 I/O 없이** 렌더
+   - 비밀정보: `.streamlit/secrets.toml` 사용 (키/토큰/모드)
 
 ---
 
-## 3) 코드 구획(파일: `app.py`)
+## 2) 협의 규약 (Working Agreements)
+- **한 번에 한 단계(One step at a time).**
+- **Plan → Agreement → Code.** 변경 의도/근거를 먼저 설명하고 합의 후 코드 요청
+- **업로드 된 코드를 전수점검 후 
+- **“코드 보여줄까요?”** 합의 확인 후 코드 제시.
 
-* `# ===== [00A-FIX]` secrets→환경변수 부트스트랩(Drive/LLM 키·모델 반영)
-* `# ===== [01]` 앱 부트 & 환경 변수 세팅
-* `# ===== [02]` 임포트 & RAG 바인딩(예외 내성)
-* `# ===== [03]` 세션/헬퍼(attach/restore/status 통합, 모드 가드 등)
-* `# ===== [04A]` 외부 관리자 UI 훅(`ui_admin.py`)
-* `# ===== [04B]` 관리자 설정(문법설명/문장구조분석/지문분석 가로 체크박스)
-* `# ===== [04C]` 프롬프트·Drive 진단 패널(강제 당겨오기 포함)
-* `# ===== [05A]` 자료 최적화/백업 패널(진행률·ETA·강제연결 버튼)
-* `# ===== [05B]` 간단 진단(자동복구 로그/경로)
-* `# ===== [06]` 질문/답변 패널(프롬프트 연동, OpenAI→Gemini, LLM-only 배지)
-* `# ===== [07]` 메인 오케스트레이터(헤더/자동복구/패널 호출)
+- **전체 블록 교체 규칙.** 파일은 번호 블록 `# [01]START =============… # [01]END============`로 나누고, 변경 시 **해당 블록 전체** 교체.  
+  3개 블록 이상 바뀌면 **파일 전체 재생성**.
 
-> 모든 구획은 **START/END 주석**으로 시작과 끝이 명확합니다.
-
----
-
-## 4) 환경/설정(운영 체크리스트)
-
-### 4.1 `requirements.txt` (레포 루트)
-
-```
-openai>=1.0.0
-google-generativeai>=0.7.2
-PyYAML>=6.0.1
-```
-
-### 4.2 Streamlit Secrets
-
-```
-OPENAI_API_KEY = "sk-..."
-OPENAI_MODEL   = "gpt-4o-mini"        # (선택)
-GEMINI_API_KEY = "...your-gemini-key"
-GEMINI_MODEL   = "gemini-1.5-flash"   # (선택)
-MAIC_PROMPTS_DRIVE_FOLDER_ID = "<Drive 폴더 ID>"
-MAIC_PROMPTS_PATH = "/home/appuser/.maic/prompts.yaml"  # (선택)
-```
-
-* \[00A-FIX]에서 secrets→환경변수로 자동 승격되므로 SDK가 인식합니다.
-
-### 4.3 Drive/로컬 경로
-
-* **Drive**: `MAIC_PROMPTS_DRIVE_FOLDER_ID` 내 `prompts.yaml` (정확한 파일명)
-* **로컬**: `~/.maic/prompts.yaml` / `~/.maic/persist` / `~/.maic/backup`
+- **Cause → Goal → Code → Test.** 수정 이유→목표→코드→테스트 순서 준수.
+- **학생 톤:** 원장님이 직접 설명하는 **따뜻하고 친절한 한국어**.
+- **프롬프트 단일 소스:** `prompts.yaml`(GitHub) 최우선. Fallback 문구는 **부드러운 안내** 포함.
+- **Drive 쓰기 금지.** (OAuth 영속 이슈) — 인덱스 백업/복구는 **GitHub Release**만 사용.
+- **UI 합의 사항:** 말풍선(오른쪽=학생/하늘색, 왼쪽=AI/흰색), 파스텔 하늘색 채팅 컨테이너, 모드 버튼은 **색상만 변화**(크기 불변·아이콘 제거).
 
 ---
 
-## 5) 용어 정리
+## 3) 현재 구현 상태 (As-Is)
+### 3.1 앱 구동/헬스체크
+- **빠른 부팅:** `_quick_local_attach_only()` — 로컬 시그널(`.ready`, `chunks.jsonl`, `manifest.json`)만 확인 → 첫 화면 즉시 렌더.
+- **깊은 점검:** `_run_deep_check_and_attach()` — 관리자 버튼으로 수동 실행.  
+  - Drive 준비상태 점검(가능 시)  
+  - **GitHub Releases 복구** 시도 → 로컬 붙이기  
+  - `diff_with_manifest()`로 변경 통계 확인(added/changed/removed)
+- **자동 시작 옵션:** `_auto_start_once()` — `AUTO_START_MODE in {"restore","on"}`일 때만 Release 복구 시도 (기본 off).
 
-* **prepared**: 새/변경 소스가 모이는 드라이브 폴더(인덱싱 대상).
-* **manifest**: 인덱스 스냅샷 메타(소스 다이제스트·타임스탬프 등). 없으면 초기화 필요 신호.
-* **RAG 연결 상태**:
+### 3.2 채팅 UI
+- **말풍선/색상:** 질문=우측·하늘색, 답변=좌측·흰색. 채팅 컨테이너는 **파스텔 하늘색** 유지.
+- **스트리밍:** “답변 준비중…” 말풍선을 좌측에 먼저 띄운 뒤 토큰 단위로 갱신.
+- **모드 선택:** “어법/문장/지문” pill 라디오 — **선택 시 색만 바뀜**(크기 동일·아이콘 없음).
 
-  * `ready`: 세션에 인덱스 부착 완료
-  * `pending`: 로컬 파일은 있으나 세션 미부착
-  * `missing`: 로컬 신호 없음
+### 3.3 프롬프트 로딩
+- 우선순위: **GitHub → Drive → Fallback**
+  - GitHub: 레포/브랜치/경로는 `GH_REPO`, `GH_BRANCH`, `GH_PROMPTS_PATH`로 설정.
+  - Drive: 보조 모듈(`src.prompt_modes.build_prompt`) 있으면 사용.
+  - Fallback: 자료 연결이 없을 때 **안내 문구**가 선행된 간결 답변.
 
----
-
-## 6) 현재 이슈 & 가설 · 바로잡기 플랜
-
-### 6.1 응답이 느린 문제
-
-**가설**
-
-* OpenAI 기본 모델/매개변수 과대(토큰 상한, `max_tokens` 큼).
-* 스트리밍 미사용.
-* 세션 최초 호출마다 클라이언트 인스턴스 재생성.
-  **조치(우선순위)**
-
-1. 스트리밍 적용(가능 모델로) + `max_tokens` 하향(예: 600–900).
-2. `OpenAI()`/`genai.GenerativeModel()` **세션 캐시**.
-3. 불필요한 프롬프트 부속 출력(미리보기 OFF 기본).
-4. Gemini 1.5 Flash를 정상화해 폴백 성공률→속도 상향.
-
-### 6.2 Gemini 미응답
-
-**가설**
-
-* 패키지/키는 있으나 `to_gemini()` payload 또는 모델명/권한 문제.
-* 네트워크 제한·쿼터·안전필터로 빈 응답.
-  **조치**
-
-1. 진단: `[06]`에서 `have_gemini_lib/has_gemini_key` 둘 다 True인지 확인.
-2. `to_gemini()` 출력 로그 옵션 추가(관리자만). 내용 구조: `{"contents":[...]}`
-3. 모델명 교체 옵션 추가: `gemini-1.5-pro`/`-flash` 라디오(관리자).
-4. 오류/빈응답 시 원문 candidates dump(관리자 expander에만).
-
-### 6.3 RAG 세션 미부착
-
-**가설**
-
-* `rag_engine.get_or_build_index()` 미반환 또는 `PERSIST_DIR` 불일치.
-* 복구 후 `.ready/chunks.jsonl` 경로 불일치.
-  **조치**
-
-1. 이미 추가됨: **\[🧠 두뇌 연결(강제)]** 버튼 → `_attach_from_local()` 즉시 시도 & 원인 안내.
-2. `[03] _force_persist_dir()`로 **모듈 PERSIST\_DIR 강제 통일**(주입) 유지.
-3. 복구 후 자동 `attach` 재시도(`_auto_attach_or_restore_silently`) 경로/예외 로그 확장.
-4. 필요 시 `rag_engine` 내부의 `persist_dir` 사용처 점검(속성명·구현 차이 흡수).
+### 3.4 증거(근거) 사용 규칙
+- **1차:** 학원 수업자료(텍스트/Markdown) — 파일명이 **‘이유문법’/‘깨알문법’**으로 시작하면 **최우선**.
+- **2차:** 기존 문법서 **PDF 발췌** — 파일명이 **영어**로 시작하면 **보조 근거**.
+- **3차:** 위 자료가 없을 때 **AI 자체지식**으로 간략 안내.
 
 ---
 
-## 7) 다음 실행 계획(체크리스트)
-
-### P0 — 즉시(안정화)
-
-* [ ] **Gemini 가동**: `[06]`에 **모델 선택 라디오** + payload 디버그 토글(관리자 전용) 추가.
-* [ ] **스트리밍 도입**: OpenAI/Gemini 모두 스트리밍 분기·UI 업데이트.
-* [ ] **자동 attach 로그 확장**: `_auto_attach_or_restore_silently()`에 단계별 이유 기록(경로/파일수/예외).
-* [ ] **RAG attach 보강**: 복구 성공 직후 `attach` 2회 재시도(소폭 지연 포함).
-
-### P1 — 성능/UX
-
-* [ ] **세션 캐싱**: LLM 클라이언트/모델 인스턴스 global singletons.
-* [ ] **프롬프트 최소화**: 불필요 부가 텍스트/토큰 절감.
-* [ ] **인덱싱 ETA 고도화**: 평균 처리속도 가중 이동평균으로 ETA 안정화.
-
-### P2 — 기능
-
-* [ ] **관리자 프롬프트 에디터**: YAML live 편집→Drive 저장→로컬 반영(버전 표시).
-* [ ] **질문 로그/인기 질문**: 학생 질문 추적, FAQ 자동 랭킹(이미 자리 있음).
+## 4) 최근 수정 요약 (What Changed)
+- **무한 로딩 방지:** 초기 네트워크 I/O를 제거하고, **관리자 수동 ‘깊은 점검’** 버튼으로 분리.
+- **LLM 시그니처 호환:** 인자 자동 탐지(`messages`/`prompt`/`user_prompt`/스트리밍 콜백).
+- **UI 고정화:** 말풍선/배경/모드 버튼 스타일을 한 번만 주입하여 리런에도 유지.
+- **DISABLE_BG:** 배경은 `secrets.toml`의 `DISABLE_BG="true"`로 제어(※ `config.toml`이 아님).
 
 ---
 
-## 8) 협의·작업 규약(재확인)
-
-1. **한 번에 하나**의 실행요소만 적용·확정.
-2. 변경 전 **수정 목표**와 **붙일 위치**를 내가 먼저 제시.
-3. 너는 **최신 전체 코드**를 전달 → 나는 **단일 구획**으로 교체 코드 제공.
-4. 구획은 **시작/끝 주석**을 반드시 포함.
-5. 3개 이상 구획 변경 또는 네 요청 시, **전체 코드**를 제공.
-6. 우리 둘 다 합의 후에만 코드 반영.
-7. 문법/에러 발생 시, **부분 패치 지양**·**구획 전체 교체** 우선.
-8. 한국어 설명 + 필요한 곳 영문 주석 병기(학생/관리자 모두 고려).
+## 5) 파일/경로 규약
+- **앱 엔트리:** `app.py` (번호 블록 구조 유지: `[01]..[END]`)
+- **인덱스/RAG:** `src/rag/index_build.py`
+- **오케스트레이터:** `src/ui_orchestrator.py`
+- **관리자 패널:** `src/ui_admin.py`
+- **LLM 프로바이더:** `src/llm/providers.py`
+- **지속 디렉터리:** `~/.maic/persist` (인덱스·매니페스트·체크포인트)
+- **프롬프트:** `prompts.yaml` (레포 루트 권장, `GH_PROMPTS_PATH`로 경로 재지정 가능)
 
 ---
 
-## 9) 운영 팁(문제 발생 시)
+## 6) 설정 가이드 (Config & Secrets)
+### 6.1 `.streamlit/config.toml`
+```toml
+[server]
+fileWatcherType = "none"
+runOnSave = false
 
-* **LLM 실패**:
-
-  * 패널 힌트 확인 → `requirements.txt`/secrets 점검 → 관리자 진단에서 프롬프트·모델 확인.
-* **RAG 미부착**:
-
-  * 진단: 인덱스 상태=Pending? ⇒ **🧠 두뇌 연결(강제)** 클릭 → 실패 시 경로/파일 수 확인.
-* **프롬프트 갱신**:
-
-  * Drive의 `prompts.yaml` 변경 → 관리자 진단에서 **🔄 강제 당겨오기** → 성공 로그 확인.
-
----
-
-## 10) 지금 바로 해결할 우선 과제(합의 제안)
-
-* **P0-1. Gemini 작동화 + 모델 선택 라디오** (관리자만 표시)
-* **P0-2. OpenAI/Gemini 스트리밍 도입** (응답속도 체감 개선)
-* **P0-3. 자동/강제 attach 로깅 강화** (세션 미부착 원인 가시화)
-
-필요하면 이 문서를 그대로 **knowledge 파일**에 저장하고, 깃헙 레포 루트에도 `PROJECT_STATUS.md`로 커밋해줘.
-새 챗에서 “P0-1부터 시작”이라고만 말해주면, 바로 **위치 지정 → 전체 코드 요청 → 패치 구획 제공** 순서로 진행할게.
+[logger]
+level = "warning"
