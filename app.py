@@ -159,16 +159,17 @@ def _header():
         st.caption(f"LLM: {icon} {label}")
 
         if _is_admin_view():
-            # 로그인 상태에서는 로그인 버튼 숨김, 해제만 노출
+            # ✅ 관리자 모드: '관리자 해제'만 노출
             if st.button("관리자 해제", use_container_width=True):
                 ss["admin_mode"] = False
                 ss["_show_admin_login"] = False
                 st.rerun()
         else:
+            # ✅ 학생 모드: '관리자' 버튼 → 인라인 로그인 폼 토글
             if st.button("관리자", use_container_width=True):
                 _toggle_login_flag()
 
-            # 인라인 로그인 폼 (Enter 제출 지원: st.form)
+            # 인라인 로그인 폼 (Enter 제출: st.form)
             if ss.get("_show_admin_login", False):
                 pwd_set = os.getenv("APP_ADMIN_PASSWORD") or _from_secrets("APP_ADMIN_PASSWORD", "0000") or "0000"
                 with st.container(border=True):
@@ -178,7 +179,7 @@ def _header():
                         with c1:
                             submit = st.form_submit_button("로그인", use_container_width=True)
                         with c2:
-                            close = st.form_submit_button("닫기", use_container_width=True)
+                            close  = st.form_submit_button("닫기",   use_container_width=True)
                     if submit:
                         if pw and pw == str(pwd_set):
                             ss["admin_mode"] = True
@@ -197,7 +198,7 @@ def _header():
                 st.code(w, language="text")
     st.divider()
 
-# 본문 로그인 패널은 완전 제거(호환용 NOP)
+# ✅ 본문 로그인 패널은 완전 제거(호환용 NOP). 호출도 더 이상 하지 않음.
 def _login_panel_if_needed():
     return
 
@@ -317,27 +318,22 @@ def _render_admin_panels() -> None:
         st.success("저장 완료")
         st.rerun()
 
-    # ---- 여기: ui_admin 호환 래핑 -------------------------------------------
+    # ---- ui_admin 라디오와의 키 호환 래핑 ------------------------------------
     if _ui_admin.get("render_mode_radio_admin"):
         st.markdown("#### (관리자 전용) 미리보기용 모드 선택")
-
-        # 1) 우리 세션 키(문법/문장/지문) → ui_admin 기대값(문법설명/…)으로 일시 변환
         ss = st.session_state
         cur_mode = ss.get("qa_mode_radio") or cfg["default"]
         ss["_qa_mode_backup"] = cur_mode
         ss["qa_mode_radio"] = _mode_to_token(cur_mode)
-
-        # 2) 외부 패널 호출 (내부는 토큰 문자열을 사용)
         try:
             _ui_admin["render_mode_radio_admin"]()
         except Exception as e:
             st.warning(f"관리자 미리보기 패널 경고: {type(e).__name__}: {e}")
         finally:
-            # 3) 사용자가 바꿨을 수 있으니, 토큰→우리 키로 복원/반영
             sel_token = ss.get("qa_mode_radio", _mode_to_token(cur_mode))
             ss["qa_mode_radio"] = _token_to_mode(sel_token)
             ss.pop("_qa_mode_backup", None)
-    # ------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
 
     with st.expander("오류 로그", expanded=False):
         txt = _errlog_text()
@@ -345,7 +341,7 @@ def _render_admin_panels() -> None:
         st.download_button("로그 다운로드", data=txt.encode("utf-8"), file_name="app_error_log.txt")
 
 
-# [10] 학생 UI: 모드 버튼 + 파스텔 채팅(생각중·꼬리·간격·지연해결) ==============
+# [10] 학생 UI: 모드 버튼 + 파스텔 채팅(지연해결/생각중/말풍선 꼬리/간격) ==========
 def _inject_minimal_styles_once():
     if st.session_state.get("_minimal_styles_injected"):
         return
@@ -360,7 +356,6 @@ def _inject_minimal_styles_once():
       .seg-zone .stButton>button:disabled{
         background:#eeeeee !important; color:#888 !important; border-color:#ddd !important;
       }
-      /* 대화 박스 */
       .chat-box{ border:2px solid #bcdcff; background:#e6f7ff; padding:16px; border-radius:16px; min-height:360px; }
       .bubble{ position:relative; max-width:92%; padding:10px 12px; border-radius:14px; margin:10px 0; line-height:1.55; font-size:1rem; }
       .user{ background:#fff7cc; margin-left:auto; }    /* 학생: 연노랑 */
@@ -377,7 +372,7 @@ def _inject_minimal_styles_once():
         content:""; position:absolute; left:-8px; top:14px; border-width:8px 8px 8px 0; border-style:solid;
         border-color:transparent #d9f7d9 transparent transparent;
       }
-      /* chat_input에 테두리/배경 */
+      /* chat_input 테두리/배경 */
       div[data-testid="stChatInput"]{
         border:2px solid #bcdcff !important;
         background:#e6f7ff !important;
@@ -388,6 +383,8 @@ def _inject_minimal_styles_once():
     """, unsafe_allow_html=True)
 
 _MODE_KEYS = ["문법", "문장", "지문"]
+_LABELS    = {"문법":"어법","문장":"문장","지문":"지문"}
+_LLM_TOKEN = {"문법":"문법설명","문장":"문장구조분석","지문":"지문분석"}
 
 def _render_mode_controls_minimal(*, admin: bool) -> str:
     _inject_minimal_styles_once()
@@ -405,8 +402,7 @@ def _render_mode_controls_minimal(*, admin: bool) -> str:
         for col, key in zip([c1, c2, c3], _MODE_KEYS):
             disabled = False if admin else (key not in allowed)
             with col:
-                label = {"문법":"어법","문장":"문장","지문":"지문"}[key]
-                btn = st.button(label, key=f"mode_btn_{key}", disabled=disabled,
+                btn = st.button(_LABELS[key], key=f"mode_btn_{key}", disabled=disabled,
                                 type=("primary" if cur == key else "secondary"))
                 if btn and (admin or (key in allowed)):
                     ss["qa_mode_radio"] = key; cur = key; st.rerun()
@@ -434,51 +430,48 @@ def _render_chat_panel() -> None:
     if not ready:
         _manual_restore_cta()
 
-    # 대화 로그 렌더
+    # ✅ 1) 입력 먼저 처리(같은 프레임에서 '생각중'→응답까지 반영)
+    user_q = st.chat_input("질문을 입력하세요")
+    if user_q:
+        uid = ss["_chat_next_id"]; ss["_chat_next_id"] += 1
+        ss["chat"].append({"id": uid, "role":"user", "text": user_q})
+
+        # '생각중…' 플레이스홀더
+        aid = ss["_chat_next_id"]; ss["_chat_next_id"] += 1
+        thinking_idx = len(ss["chat"])
+        ss["chat"].append({"id": aid, "role":"assistant", "text": "생각중…"})
+
+        cfg = _sanitize_modes_cfg(_load_modes_cfg())
+        cur = ss.get("qa_mode_radio") or cfg["default"]
+        system_prompt = "너는 한국의 영어학원 원장처럼, 따뜻하고 명확하게 설명한다."
+        prompt = f"[모드:{_LLM_TOKEN.get(cur,'문법설명')}]\n{user_q}"
+
+        try:
+            with st.spinner("답변 생성 중..."):
+                res = _llm_call(prompt, system_prompt)
+            text = (res.get("text") or f"생성 실패: {res.get('error')}").strip() if res.get("ok") \
+                   else (res.get("error") or "생성 실패")
+            ss["chat"][thinking_idx] = {"id": aid, "role":"assistant", "text": text, "provider": res.get("provider")}
+        except Exception as e:
+            err_txt = f"예외: {type(e).__name__}: {e}"
+            ss["chat"][thinking_idx] = {"id": aid, "role":"assistant", "text": err_txt}
+            _errlog(f"LLM 예외: {e}", where="[qa_llm]", exc=e)
+
+        # 최신 상태가 즉시 보이도록 한 프레임 갱신
+        st.rerun()
+
+    # ✅ 2) (입력 처리 후) 대화 로그 렌더 → 같은 런에서 최신 상태가 보임
     st.markdown('<div class="chat-box">', unsafe_allow_html=True)
     for m in ss["chat"]:
         klass = "user" if m["role"] == "user" else "ai"
         st.markdown(f'<div class="row {klass}"><div class="bubble {klass}">{m["text"]}</div></div>', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # 입력: chat_input (엔터 전송 + 화살표 아이콘)
-    user_q = st.chat_input("질문을 입력하세요")
-    if not user_q:
-        return
-
-    # 1) 사용자 메시지 추가
-    msg_id = ss["_chat_next_id"]; ss["_chat_next_id"] += 1
-    ss["chat"].append({"id": msg_id, "role":"user", "text": user_q})
-
-    # 2) "생각중…" 플레이스홀더(즉시 표시) — 다음 id 예약
-    aid = ss["_chat_next_id"]; ss["_chat_next_id"] += 1
-    thinking_index = len(ss["chat"])
-    ss["chat"].append({"id": aid, "role":"assistant", "text": "생각중…"})
-
-    # 3) LLM 호출(현재 렌더 주기 내 완료) → 플레이스홀더 업데이트
-    cfg = _sanitize_modes_cfg(_load_modes_cfg())
-    cur = ss.get("qa_mode_radio") or cfg["default"]
-    system_prompt = "너는 한국의 영어학원 원장처럼, 따뜻하고 명확하게 설명한다."
-    token = {"문법":"문법설명","문장":"문장구조분석","지문":"지문분석"}[cur]
-    prompt = f"[모드:{token}]\n{user_q}"
-
-    try:
-        with st.spinner("답변 생성 중..."):
-            res = _llm_call(prompt, system_prompt)
-        text = (res.get("text") or f"생성 실패: {res.get('error')}").strip() if res.get("ok") \
-               else (res.get("error") or "생성 실패")
-        ss["chat"][thinking_index] = {"id": aid, "role":"assistant", "text": text, "provider": res.get("provider")}
-    except Exception as e:
-        err_txt = f"예외: {type(e).__name__}: {e}"
-        ss["chat"][thinking_index] = {"id": aid, "role":"assistant", "text": err_txt}
-        _errlog(f"LLM 예외: {e}", where="[qa_llm]", exc=e)
-    # 추가 st.rerun() 불필요 — chat_input이 이미 rerun 트리거
-
 # [11] 본문 렌더 ===============================================================
 def _render_body() -> None:
     if st is None:
         return
-    _header()            # 인라인 로그인만 사용
+    _header()            # ✅ 인라인 로그인만 사용
     _auto_start_once()
     if _is_admin_view():
         _render_admin_panels()
