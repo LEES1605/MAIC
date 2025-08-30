@@ -452,7 +452,7 @@ def _render_admin_panels() -> None:
 
 # [10] 학생 UI (Stable Chatbot v2): 파스텔 하늘 배경 + 말풍선 + 모드(Pill) + 2스텝 렌더  # [10] START
 # ──────────────────────────────────────────────────────────────────────────────
-# [10A] 학생 UI (Stable): 작고 균일한 모드 라디오 + 챗봇 스타일 보강  # [10A] START
+# [10A] 학생 UI (Stable): 작고 균일한 모드 라디오 + 챗봇 말풍선(질문=파스텔 하늘)  # [10A] START
 def _inject_chat_styles_once():
     if st.session_state.get("_chat_styles_injected"): return
     st.session_state["_chat_styles_injected"] = True
@@ -463,54 +463,74 @@ def _inject_chat_styles_once():
       .status-btn.green{background:#daf5cb;border-color:#bfe5ac}
       .status-btn.yellow{background:#fff3bf;border-color:#ffe08a}
 
-      /* 모드: 수평 라디오를 '작은 pill 버튼'처럼, 크기 고정 */
+      /* 모드: 수평 라디오를 작은 pill처럼, 크기 고정(아이콘 없음) */
       div[data-testid="stRadio"] > div[role="radiogroup"]{display:flex;gap:10px;flex-wrap:wrap}
       div[data-testid="stRadio"] [role="radio"]{
         border:2px solid #bcdcff;border-radius:12px;padding:6px 12px;background:#fff;color:#0a2540;
         font-weight:700;font-size:14px;line-height:1;
       }
       div[data-testid="stRadio"] [role="radio"][aria-checked="true"]{
-        background:#eaf6ff;border-color:#9fd1ff;color:#0a2540;   /* 선택: 색만 변경 */
+        background:#eaf6ff;border-color:#9fd1ff;color:#0a2540; /* 선택: 색만 변경 */
       }
-      div[data-testid="stRadio"] svg{display:none!important}      /* 점 아이콘 제거 */
+      div[data-testid="stRadio"] svg{display:none!important}
 
       /* 채팅 컨테이너(파스텔 하늘) */
       .chat-wrap{background:#eaf6ff;border:1px solid #cfe7ff;border-radius:18px;
                  padding:10px 10px 8px;margin-top:10px}
       .chat-box{min-height:240px;max-height:54vh;overflow-y:auto;padding:6px 6px 2px}
 
-      /* 네이티브 chat_message 내용 가독성 보강 */
+      /* 네이티브 chat_message 말풍선 보강 */
+      .row{display:flex;margin:8px 0}
       .stChatMessage .stMarkdown p{line-height:1.6}
-      .stChatMessage-user{justify-content:flex-end}
+
+      /* 우리 말풍선(렌더 로그용) */
+      .row.user{justify-content:flex-end}
+      .row.ai{justify-content:flex-start}
+      .bubble{
+        max-width:88%;padding:12px 14px;border-radius:16px;line-height:1.6;font-size:15px;
+        box-shadow:0 1px 1px rgba(0,0,0,.05);white-space:pre-wrap;position:relative;border:1px solid #e0eaff;
+      }
+      .bubble.user{                 /* ← 요청: 질문 말풍선은 파스텔 하늘 */
+        background:#dff0ff; color:#0a2540; border-color:#bfe2ff; border-top-right-radius:8px;
+      }
+      .bubble.ai{
+        background:#ffffff; color:#14121f; border-color:#e0eaff; border-top-left-radius:8px;
+      }
     </style>
     """, unsafe_allow_html=True)
 
 _MODE_KEYS = ["문법","문장","지문"]
+
+def _llm_callable_ok():
+    try: return callable((_llm or {}).get("call_with_fallback"))
+    except Exception: return False
+
 def _render_llm_status_minimal():
-    ok = callable((_llm or {}).get("call_with_fallback")) if "_llm" in globals() else False
+    ok = _llm_callable_ok()
     st.markdown(
-        '<span class="status-btn %s">%s</span>' %
-        ("green","🟢 준비완료" if ok else "🟡 준비중"),
-        unsafe_allow_html=True)
+        f'<span class="status-btn {"green" if ok else "yellow"}">'
+        f'{"🟢 준비완료" if ok else "🟡 준비중"}</span>', unsafe_allow_html=True)
 
 def _render_mode_controls_pills()->str:
     _inject_chat_styles_once()
     ss=st.session_state
     cur=ss.get("qa_mode_radio") or "문법"
-    labels=["어법","문장","지문"]; to_key={"어법":"문법","문장":"문장","지문":"지문"}
-    idx=labels.index({"문법":"어법","문장":"문장","지문":"지문"}[cur])
-    sel=st.radio("질문 모드 선택",options=labels,index=idx,horizontal=True)
-    new_key=to_key[sel]
-    if new_key!=cur: ss["qa_mode_radio"]=new_key; st.rerun()
-    return ss.get("qa_mode_radio",new_key)
+    labels=["어법","문장","지문"]; map_to={"어법":"문법","문장":"문장","지문":"지문"}
+    idx = labels.index({"문법":"어법","문장":"문장","지문":"지문"}[cur])
+    sel = st.radio("질문 모드 선택", options=labels, index=idx, horizontal=True)
+    new_key = map_to[sel]
+    if new_key != cur: ss["qa_mode_radio"]=new_key; st.rerun()
+    return ss.get("qa_mode_radio", new_key)
 
 def _render_chat_log(messages:list[dict]):
-    st.markdown('<div class="chat-wrap"><div class="chat-box">',unsafe_allow_html=True)
+    # 기존 히스토리를 '우리 말풍선'으로 그릴 때 사용(필요 시).
+    st.markdown('<div class="chat-wrap"><div class="chat-box">', unsafe_allow_html=True)
     for m in messages or []:
-        role=m.get("role","assistant")
-        with st.chat_message("user" if role=="user" else "assistant"):
-            st.markdown(m.get("text",""))
-    st.markdown('</div></div>',unsafe_allow_html=True)
+        role=m.get("role","assistant"); text=m.get("text","")
+        klass="user" if role=="user" else "ai"
+        st.markdown(f'<div class="row {klass}"><div class="bubble {klass}">{text}</div></div>',
+                    unsafe_allow_html=True)
+    st.markdown('</div></div>', unsafe_allow_html=True)
 
 def _replace_assistant_text(aid:str,new_text:str):
     ss=st.session_state
@@ -518,110 +538,125 @@ def _replace_assistant_text(aid:str,new_text:str):
         if m.get("id")==aid and m.get("role")=="assistant":
             m["text"]=new_text; return True
     return False
-# [10A] END====================================================
-# [10B] 학생 로직 (Safe v1.0.2): ID 생성 버그 수정 + 폴백 강화 + temperature=0.2  # [10B] START
+# [10A] END ==================================================================
+
+# [10B] 학생 로직 (Streaming v1): 질문 즉시 표시 + 스트리밍/폴백 + 정확도 가드  # [10B] START
 def _render_chat_panel():
     import time, inspect
     ss = st.session_state
-    if "chat" not in ss:
-        ss["chat"] = []
+    if "chat" not in ss: ss["chat"] = []
 
     # 스타일/상태/모드
     _inject_chat_styles_once()
     _render_llm_status_minimal()
     cur = _render_mode_controls_pills()
 
-    # 이전 대화 표시
-    _render_chat_log(ss["chat"])
+    # 1) 과거 대화는 네이티브 chat_message로 재그리기(일관성)
+    for m in ss["chat"]:
+        with st.chat_message("user" if m["role"]=="user" else "assistant"):
+            st.markdown(m["text"])
 
-    # 입력
+    # 2) 입력
     user_q = st.chat_input("예) 분사구문이 뭐예요?  예) 이 문장 구조 분석해줘")
-    if not (user_q and user_q.strip()):
-        return
+    if not (user_q and user_q.strip()): return
 
     qtxt = user_q.strip()
-    ts   = int(time.time()*1000)  # ← FIX: 1000() 아님!
-    uid  = f"u{ts}"
-    aid  = f"a{ts}"
+    ts   = int(time.time()*1000)
+    uid, aid = f"u{ts}", f"a{ts}"
 
-    # 말풍선 상태 먼저 기록 (준비중)
-    ss["chat"].append({"id": uid, "role": "user", "text": qtxt})
-    ss["chat"].append({"id": aid, "role": "assistant", "text": "답변 준비중…"})
+    # 3) 화면에 즉시 렌더(질문 → 준비중)
+    with st.chat_message("user"):      st.markdown(qtxt)
+    with st.chat_message("assistant"): placeholder = st.empty(); placeholder.markdown("답변 준비중…")
 
-    # prompts.yaml → 실패 시 모드별 폴백 + '질문-집중' 가드
-    MODE_TOKEN = {"문법": "문법설명", "문장": "문장구조분석", "지문": "지문분석"}[cur]
+    # 4) prompts.yaml → 실패 시 모드별 폴백
+    MODE_TOKEN = {"문법":"문법설명","문장":"문장구조분석","지문":"지문분석"}[cur]
     _prompt_mod = _try_import("src.prompt_modes", ["build_prompt"]) or {}
     _build_prompt = _prompt_mod.get("build_prompt")
-
     BASE = "너는 한국의 영어학원 원장처럼 따뜻하고 명확하게 설명한다. "
-    FALLBACK_BY_MODE = {
-        "문법설명": BASE + "오직 질문된 문법 주제에만 답하고, 정의→핵심 규칙 bullet 3~5개→예문 3개(해석 포함)→자주 틀리는 포인트→두 문장 요약 순으로 간결히 설명해라. 다른 주제는 금지.",
-        "문장구조분석": BASE + "주어·동사·목적어·보어·수식어를 식별해 표/리스트로 구조를 단계별로 설명하라. 불필요한 서론 금지.",
-        "지문분석": BASE + "지문 요지/구조/핵심어·핵심문장만 간결히 정리하고, 문제풀이식 단계 제시. 장황한 배경설명 금지.",
+    FALLBACK = {
+        "문법설명": BASE+"오직 해당 문법만: 정의→핵심 규칙 3~5개→예문3개(해석)→흔한 오류2개→두 문장 요약.",
+        "문장구조분석": BASE+"주어·동사·목적어·보어·수식어를 단계별로 식별/설명. 군더더기 금지.",
+        "지문분석": BASE+"요지/구조/핵심어만 간결히. 문제풀이식 단계 제시. 장황한 배경 금지.",
     }
-    GUARD_USER_APPEND = (
-        f"\n\n[질문]\n{qtxt}\n\n"
-        "[지시]\n"
-        f"- 현재 모드: {cur} ({MODE_TOKEN})\n"
-        "- 반드시 질문 주제에만 답할 것. 주제와 무관하면 '질문과 다른 주제입니다'라고 알리고 재질문을 요청.\n"
-        "- 형식: (1) 한 줄 정의 (2) 핵심 규칙/핵심 요지 bullet (3) 예문 3개 (4) 흔한 오류 2개 (5) 두 문장 요약.\n"
+    GUARD = (
+        f"\n\n[질문]\n{qtxt}\n\n[지시]\n- 현재 모드: {cur} ({MODE_TOKEN})\n"
+        "- 반드시 질문 주제에만 답할 것. 벗어나면 '질문과 다른 주제입니다'라고 알림.\n"
+        "- 형식: (1) 한 줄 정의 (2) 핵심 bullet (3) 예문 3개 (4) 흔한 오류 2개 (5) 두 문장 요약.\n"
     )
-
     if callable(_build_prompt):
         try:
             parts = _build_prompt(MODE_TOKEN, qtxt) or {}
-            system_prompt = parts.get("system") or FALLBACK_BY_MODE[MODE_TOKEN]
-            user_prompt   = (parts.get("user") or f"[모드:{MODE_TOKEN}]\n{qtxt}") + GUARD_USER_APPEND
+            system_prompt = parts.get("system") or FALLBACK[MODE_TOKEN]
+            user_prompt   = (parts.get("user") or f"[모드:{MODE_TOKEN}]\n{qtxt}") + GUARD
         except Exception:
-            system_prompt, user_prompt = FALLBACK_BY_MODE[MODE_TOKEN], f"[모드:{MODE_TOKEN}]\n{qtxt}" + GUARD_USER_APPEND
+            system_prompt, user_prompt = FALLBACK[MODE_TOKEN], f"[모드:{MODE_TOKEN}]\n{qtxt}"+GUARD
     else:
-        system_prompt, user_prompt = FALLBACK_BY_MODE[MODE_TOKEN], f"[모드:{MODE_TOKEN}]\n{qtxt}" + GUARD_USER_APPEND
+        system_prompt, user_prompt = FALLBACK[MODE_TOKEN], f"[모드:{MODE_TOKEN}]\n{qtxt}"+GUARD
 
-    # 어댑터 시그니처 자동 매핑 (+temperature=0.2로 엉뚱 답변 완화)
+    # 5) 스트리밍 지원 탐지 및 호출
+    call = (_llm or {}).get("call_with_fallback") if "_llm" in globals() else None
+    if not callable(call):
+        placeholder.markdown("(오류) LLM 어댑터를 사용할 수 없습니다.")
+        return
+
+    sig = inspect.signature(call)
+    params = sig.parameters.keys()
+    kwargs = {}
+
+    # 메시지/프롬프트 구성
+    if "messages" in params:
+        kwargs["messages"] = [
+            {"role":"system","content":system_prompt},
+            {"role":"user","content":user_prompt},
+        ]
+    else:
+        if "prompt" in params: kwargs["prompt"] = user_prompt
+        elif "user_prompt" in params: kwargs["user_prompt"] = user_prompt
+        if "system_prompt" in params: kwargs["system_prompt"] = system_prompt
+        elif "system" in params: kwargs["system"] = system_prompt
+
+    # 제약: 정확도 안정화
+    if "mode_token" in params: kwargs["mode_token"] = MODE_TOKEN
+    elif "mode" in params:     kwargs["mode"] = MODE_TOKEN
+    if "temperature" in params: kwargs["temperature"] = 0.2
+    elif "temp" in params:      kwargs["temp"] = 0.2
+    if "timeout_s" in params:   kwargs["timeout_s"] = 90
+    elif "timeout" in params:   kwargs["timeout"] = 90
+    if "extra" in params:       kwargs["extra"] = {"question": qtxt, "mode_key": cur}
+
+    # 스트리밍 핸들러
+    acc = ""
+    def _emit(piece: str):
+        nonlocal acc
+        acc += str(piece)
+        placeholder.markdown(acc)
+
+    # 파라미터 탐지: stream / on_token / on_delta / yield_text
+    supports_stream = "stream" in params or "on_token" in params or "on_delta" in params or "yield_text" in params
     try:
-        call = (_llm or {}).get("call_with_fallback") if "_llm" in globals() else None
-        if not callable(call):
-            raise RuntimeError("LLM 어댑터(call_with_fallback)를 사용할 수 없습니다.")
-
-        sig = inspect.signature(call)
-        params = sig.parameters.keys()
-        kwargs = {}
-
-        if "messages" in params:
-            kwargs["messages"] = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user",   "content": user_prompt},
-            ]
+        if supports_stream:
+            if "stream" in params:   kwargs["stream"] = True
+            if "on_token" in params: kwargs["on_token"] = _emit
+            if "on_delta" in params: kwargs["on_delta"] = _emit
+            if "yield_text" in params: kwargs["yield_text"] = _emit  # 일부 어댑터 명칭
+            res = call(**kwargs)     # 일부 구현은 최종 dict를, 일부는 None을 반환
+            text = (res.get("text") if isinstance(res, dict) else acc) or acc
         else:
-            if "prompt" in params: kwargs["prompt"] = user_prompt
-            elif "user_prompt" in params: kwargs["user_prompt"] = user_prompt
-            if "system_prompt" in params: kwargs["system_prompt"] = system_prompt
-            elif "system" in params: kwargs["system"] = system_prompt
-
-        if "mode_token" in params: kwargs["mode_token"] = MODE_TOKEN
-        elif "mode" in params: kwargs["mode"] = MODE_TOKEN
-
-        if "temperature" in params: kwargs["temperature"] = 0.2
-        elif "temp" in params:      kwargs["temp"] = 0.2
-
-        if "timeout_s" in params: kwargs["timeout_s"] = 90
-        elif "timeout" in params: kwargs["timeout"] = 90
-
-        if "extra" in params: kwargs["extra"] = {"question": qtxt, "mode_key": cur}
-
-        res  = call(**kwargs)
-        text = res.get("text") if isinstance(res, dict) else str(res)
-        if not text: text = "(응답이 비어있어요)"
-        _replace_assistant_text(aid, text)
-
+            res  = call(**kwargs)
+            text = res.get("text") if isinstance(res, dict) else str(res)
+            if not text: text = "(응답이 비어있어요)"
+            placeholder.markdown(text)
     except Exception as e:
-        _replace_assistant_text(aid, f"(오류) {type(e).__name__}: {e}")
+        text = f"(오류) {type(e).__name__}: {e}"
+        placeholder.markdown(text)
         _errlog(f"LLM 예외: {e}", where="[qa_llm]", exc=e)
 
-    # 최종 히스토리 저장 (준비중 문구가 아닌 최종 답변 기준)
-    # 이미 위에서 ai 버블 텍스트를 교체했으므로, 히스토리는 그대로 둡니다.
+    # 6) 히스토리에 저장(다음 렌더에서 일관 출력)
+    ss["chat"].append({"id": uid, "role": "user", "text": qtxt})
+    ss["chat"].append({"id": aid, "role": "assistant", "text": text})
     st.rerun()
-# [10B] 학생 로직 (Safe v1.0.2): ID 생성 버그 수정 + 폴백 강화 + temperature=0.2  # [10B] END
+# [10B] END =======================================================
+
 
 # [10] 학생 UI (Stable Chatbot v2) ────────────────────────────────────────────  # [10] END
 
