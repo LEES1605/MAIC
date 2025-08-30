@@ -29,8 +29,7 @@ def _bootstrap_env() -> None:
     # GH_* 추가(일관성) — index/prompts 양쪽에서 사용
     keys = [
         "OPENAI_API_KEY","OPENAI_MODEL","GEMINI_API_KEY","GEMINI_MODEL",
-        "GITHUB_TOKEN","GITHUB_REPO",           # (레거시 호환)
-        "GH_TOKEN","GH_REPO","GH_BRANCH","GH_PROMPTS_PATH",
+        "GH_TOKEN","GH_REPO","GH_BRANCH","GH_PROMPTS_PATH",  # 깃허브 프롬프트용
         "GDRIVE_PREPARED_FOLDER_ID","GDRIVE_BACKUP_FOLDER_ID",
         "APP_MODE","AUTO_START_MODE","LOCK_MODE_FOR_STUDENTS","APP_ADMIN_PASSWORD",
     ]
@@ -38,6 +37,7 @@ def _bootstrap_env() -> None:
         v = _from_secrets(k)
         if v and not os.getenv(k):
             os.environ[k] = str(v)
+
     # Streamlit 안정화
     os.environ.setdefault("STREAMLIT_SERVER_FILE_WATCHER_TYPE", "none")
     os.environ.setdefault("STREAMLIT_RUN_ON_SAVE", "false")
@@ -100,7 +100,7 @@ def _errlog_text() -> str:
         out.write("-" * 60 + "\n")
     return out.getvalue()
 
-# [05] 동적 임포트 바인딩 =======================================================
+# [05] 동적 임포트 바인딩(필요 최소만) =========================================
 _import_warns: List[str] = []
 
 def _try_import(mod: str, attrs: List[str]) -> Dict[str, Any]:
@@ -121,10 +121,7 @@ _ui_admin = _try_import("src.ui_admin", [
     "ensure_admin_session_keys", "render_admin_controls", "render_role_caption", "render_mode_radio_admin"
 ])
 _ui_orch = _try_import("src.ui_orchestrator", ["render_index_orchestrator_panel"])
-_gh      = _try_import("src.backup.github_release", ["restore_latest"])
-_rag     = _try_import("src.rag.index_build", ["build_index_with_checkpoint"])
 _llm     = _try_import("src.llm.providers", ["call_with_fallback"])
-_prompt  = _try_import("src.prompt_modes", ["build_prompt"])
 
 # [06] 페이지 설정 & 헤더(아이콘 로그인, Enter 제출 지원) =======================
 if st:
@@ -442,7 +439,6 @@ html, body, .stApp { height: 100%; }
     """, unsafe_allow_html=True)
 # [06B] END
 
-
 # [06C] 배경 마운트 헬퍼  # [06C] START
 def _mount_background(
     *,
@@ -549,7 +545,7 @@ def _run_deep_check_and_attach():
     """
     ss = st.session_state
 
-    # 동적 임포트
+    # 동적 임포트(여기서만 로드)
     idx = _try_import("src.rag.index_build", ["quick_precheck", "diff_with_manifest"]) or {}
     rel = _try_import("src.backup.github_release", ["restore_latest"]) or {}
 
@@ -590,12 +586,10 @@ def _run_deep_check_and_attach():
         return
 
     # 1) Drive 빠른 점검(있으면)
-    drive_ok, prepared_ok = (False, False)
     if callable(quick):
         try:
             info = quick() or {}
-            drive_ok = bool(info.get("drive_ok"))
-            prepared_ok = bool(info.get("prepared_id"))
+            _ = bool(info.get("drive_ok")); _ = bool(info.get("prepared_id"))
         except Exception as e:
             _errlog(f"precheck 예외: {e}", where="[deep_check]")
 
@@ -636,18 +630,24 @@ def _run_deep_check_and_attach():
     return
 # [07] END
 
-
-# [08] 자동 시작(선택) =========================================================
+# [08] 자동 시작(선택) — 기본 비활성(초기 로딩 차단 방지) =======================
 def _auto_start_once():
+    """
+    권장: 기본은 비활성.
+    AUTO_START_MODE in {"restore","on"} 일 때만 GitHub Releases 복구를 시도.
+    """
     if st is None or st.session_state.get("_auto_started"):
         return
     st.session_state["_auto_started"] = True
     if _is_brain_ready():
         return
     mode = (os.getenv("AUTO_START_MODE") or _from_secrets("AUTO_START_MODE", "off") or "off").lower()
-    if mode in ("restore", "on") and _gh.get("restore_latest"):
+    if mode in ("restore", "on"):
+        rel = _try_import("src.backup.github_release", ["restore_latest"]) or {}
+        if not rel.get("restore_latest"):
+            return
         try:
-            if _gh["restore_latest"](dest_dir=PERSIST_DIR):
+            if rel["restore_latest"](dest_dir=PERSIST_DIR):
                 _mark_ready()
                 st.toast("자동 복원 완료", icon="✅")
                 st.rerun()
@@ -826,7 +826,7 @@ def _render_mode_controls_pills()->str:
     return ss.get("qa_mode_radio", new_key)
 
 def _render_chat_panel():
-    import time, inspect, base64, json, urllib.request
+    import time, base64, json, urllib.request
     try:
         import yaml
     except Exception:
@@ -1107,6 +1107,7 @@ def _render_admin_prompts_panel():
 def _render_body() -> None:
     if st is None:
         return
+
     # 🔹 배경은 항상 먼저 마운트(리런에도 유지)
     _mount_background(
         theme="light", accent="#5B8CFF", density=3,
@@ -1114,13 +1115,37 @@ def _render_body() -> None:
         grid=True, grain=False, blur=0, seed=1234, readability_veil=True,
     )
 
-    _header()            # 우상단 아이콘 로그인
-    _auto_start_once()
+    # 헤더
+    _header()
+
+    # ⛳ 빠른 부팅: 네트워크 없이 로컬 인덱스만 확인(헬스체크 통과 보장)
+    try:
+        _quick_local_attach_only()
+    except Exception as e:
+        _errlog(f"quick attach failed: {e}", where="[render_body]", exc=e)
+
+    # 관리자 전용 패널 + '깊은 점검' 버튼 (Drive/GitHub 네트워크 호출)
     if _is_admin_view():
         _render_admin_panels()
 
+        # ✅ 질문하신 버튼의 정확한 위치: 관리자 패널 바로 아래
+        with st.container():
+            if st.button(
+                "🔎 자료 자동 점검(깊은 검사)",
+                help="Drive/Release 점검 및 복구, 변경 감지 수행",
+                use_container_width=True
+            ):
+                with st.spinner("깊은 점검 중…"):
+                    _run_deep_check_and_attach()
+                    st.success(st.session_state.get("brain_status_msg", "완료"))
+                    st.rerun()
+
+    # (선택) 자동 시작 — 기본 off, 운영자 의도시 secrets/env로 켬
+    _auto_start_once()
+
+    # 학생 영역
     st.markdown("## 질문은 천재들의 공부 방법이다.")
-     _quick_local_attach_only()
+    _render_chat_panel()
 
 # [12] main ===================================================================
 def main():
