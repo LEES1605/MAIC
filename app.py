@@ -450,150 +450,22 @@ def _render_admin_panels() -> None:
         st.text_area("최근 오류", value=txt, height=180)
         st.download_button("로그 다운로드", data=txt.encode("utf-8"), file_name="app_error_log.txt")
 
-# [10] 학생 UI (Stable v1.5): 모드(세그먼트 강조) + 채팅(파스텔 하늘색) + 2단계 렌더(질문→준비중→답변)  # [10] START
-
-# [10A] 학생 UI (Stable): 스타일/세그먼트/버블 렌더러 ===============================  # [10A] START
+# [10] 학생 UI (Stable Chatbot v2): 파스텔 하늘 배경 + 말풍선 + 모드(Pill) + 2스텝 렌더  # [10] START
+# ──────────────────────────────────────────────────────────────────────────────
+# [10A] UI(고정): 스타일 / 모드(Pill) / 말풍선 렌더러 / 헬퍼
 def _inject_chat_styles_once():
     if st.session_state.get("_chat_styles_injected"):
         return
     st.session_state["_chat_styles_injected"] = True
     st.markdown("""
     <style>
-      /* 상태 버튼 */
+      /* 상태 배지 */
       .status-btn{display:inline-block; padding:6px 10px; border-radius:14px;
         font-size:12px; font-weight:700; color:#111; border:1px solid transparent;}
       .status-btn.green{ background:#daf5cb; border-color:#bfe5ac; }
       .status-btn.yellow{ background:#fff3bf; border-color:#ffe08a; }
 
-      /* 채팅 영역(파스텔 하늘색) */
-      .chat-wrap{
-        background:#eaf6ff; border:1px solid #cfe7ff; border-radius:18px;
-        padding:10px 10px 8px; margin-top:10px;
-      }
-      .chat-box{
-        min-height:240px; max-height:54vh; overflow-y:auto; padding:6px 6px 2px;
-        display:flex; flex-direction:column; justify-content:flex-end;  /* 아래쪽 정렬 */
-      }
-      .chat-box .row{ display:flex; margin:8px 0; gap:10px; }
-      .chat-box .row.user{ justify-content:flex-end; }   /* 오른쪽(학생) */
-      .chat-box .row.ai{ justify-content:flex-start; }   /* 왼쪽(AI) */
-      .chat-box .bubble{
-        max-width:88%; padding:12px 14px; border-radius:16px; line-height:1.6; font-size:15px;
-        box-shadow:0 1px 1px rgba(0,0,0,0.05); white-space:pre-wrap;
-      }
-      .chat-box .bubble.user{
-        background:#ffffff; color:#0a2540; border:1px solid #d9eaff;
-        border-top-right-radius:8px; position:relative;
-      }
-      .chat-box .bubble.ai{
-        background:#f7faff; color:#14121f; border:1px solid #e0eaff;
-        border-top-left-radius:8px; position:relative;
-      }
-      .chat-box .row.user .bubble:after{
-        content:""; position:absolute; right:-8px; top:10px;
-        border-width:8px 0 8px 8px; border-style:solid; border-color:transparent transparent transparent #d9eaff;
-      }
-      .chat-box .row.ai .bubble:before{
-        content:""; position:absolute; left:-8px; top:10px;
-        border-width:8px 8px 8px 0; border-style:solid; border-color:transparent #e0eaff transparent transparent;
-      }
-    </style>
-    """, unsafe_allow_html=True)
-
-_MODE_KEYS = ["문법", "문장", "지문"]
-_LABELS    = {"문법":"어법","문장":"문장","지문":"지문"}
-_LLM_TOKEN = {"문법":"문법설명","문장":"문장구조분석","지문":"지문분석"}
-
-def _llm_callable_ok() -> bool:
-    try:
-        return callable((_llm or {}).get("call_with_fallback"))
-    except Exception:
-        return False
-
-def _render_llm_status_minimal():
-    ok = _llm_callable_ok()
-    html = '<span class="status-btn green">🟢 준비완료</span>' if ok else \
-           '<span class="status-btn yellow">🟡 준비중</span>'
-    st.markdown(html, unsafe_allow_html=True)
-
-def _render_mode_controls_segmented(*, admin: bool) -> str:
-    """세그먼티드 컨트롤로 직관적 강조, 미지원이면 버튼 폴백."""
-    _inject_chat_styles_once()
-    ss = st.session_state
-    cfg = _sanitize_modes_cfg(_load_modes_cfg())
-
-    try:
-        sel = st.segmented_control(
-            "질문 모드 선택",
-            options=_MODE_KEYS,
-            default=ss.get("qa_mode_radio") or (cfg.get("default") or "문법"),
-            format_func=lambda k: {"문법":"🧩 어법","문장":"🧱 문장","지문":"📖 지문"}.get(k,k),
-        )
-        if sel != ss.get("qa_mode_radio"):
-            ss["qa_mode_radio"] = sel
-            st.rerun()
-        cur = sel
-    except Exception:
-        st.markdown("#### 질문 모드 선택")
-        col1, col2, col3 = st.columns(3, gap="small")
-        def _btn(label: str, key: str, mode: str):
-            if st.button(label, key=key, use_container_width=True):
-                ss["qa_mode_radio"] = mode; st.rerun()
-        with col1: _btn("🧩 어법", "mode_btn_gram", "문법")
-        with col2: _btn("🧱 문장", "mode_btn_sent", "문장")
-        with col3: _btn("📖 지문", "mode_btn_pass", "지문")
-        cur = ss.get("qa_mode_radio") or (cfg.get("default") or "문법")
-
-    if cur not in _MODE_KEYS:
-        cur = cfg.get("default") or "문법"
-    ss["qa_mode_radio"] = cur
-    return cur
-
-def _htmlize_text(s: str) -> str:
-    """간단 마크다운을 HTML로 안전 변환(헤딩/리스트는 줄바꿈으로 유지)."""
-    import html, re
-    t = html.escape(s)
-    # 헤딩/리스트 마커는 그냥 텍스트로 두고 줄바꿈만 보존
-    t = t.replace("\n", "<br/>")
-    # 연속 공백 약간 보존
-    t = re.sub(r"  ", "&nbsp;&nbsp;", t)
-    return t
-
-def _render_chat_log(messages: list[dict]):
-    """파스텔 하늘색 영역 + 버블 렌더."""
-    st.markdown('<div class="chat-wrap"><div class="chat-box">', unsafe_allow_html=True)
-    for m in messages:
-        role = m.get("role", "ai")
-        text = _htmlize_text(m.get("text", ""))
-        klass = "user" if role == "user" else "ai"
-        st.markdown(f'<div class="row {klass}"><div class="bubble {klass}">{text}</div></div>',
-                    unsafe_allow_html=True)
-    st.markdown('</div></div>', unsafe_allow_html=True)
-
-def _replace_assistant_text(aid: str, new_text: str):
-    """aid에 해당하는 assistant 버블 텍스트만 교체."""
-    ss = st.session_state
-    for m in ss.get("chat", []):
-        if m.get("id") == aid and m.get("role") == "assistant":
-            m["text"] = new_text
-            return True
-    return False
-# [10A] 학생 UI (Stable): 스타일/세그먼트/버블 렌더러 ===============================  # [10A] END
-
-# [10A] 학생 UI (Stable): 스타일/모드(파스텔 하늘색)/Q&A 카드 렌더러 ==================  # [10A] START
-def _inject_chat_styles_once():
-    if st.session_state.get("_chat_styles_injected"):
-        return
-    st.session_state["_chat_styles_injected"] = True
-    st.markdown("""
-    <style>
-      /* 상태 버튼 */
-      .status-btn{display:inline-block; padding:6px 10px; border-radius:14px;
-        font-size:12px; font-weight:700; color:#111; border:1px solid transparent;}
-      .status-btn.green{ background:#daf5cb; border-color:#bfe5ac; }
-      .status-btn.yellow{ background:#fff3bf; border-color:#ffe08a; }
-
-      /* ===== 모드 선택: 파스텔 하늘색 Pill ===== */
+      /* 모드 선택: 파스텔 하늘색 Pill */
       .mode-zone{ margin:6px 0 2px 0; }
       .mode-pill{
         display:block; width:100%; text-align:center; padding:10px 12px;
@@ -601,48 +473,48 @@ def _inject_chat_styles_once():
         color:#0a2540; font-weight:700;
       }
       .mode-pill.active{
-        background:#eaf6ff;             /* 파스텔 하늘색 */
+        background:#eaf6ff;  /* 파스텔 하늘 */
         border-color:#9fd1ff;
       }
       .mode-pill:hover{ background:#f5fbff; }
 
-      /* ===== 채팅 영역(파스텔 하늘색 배경) ===== */
+      /* 채팅 컨테이너 (파스텔 하늘 배경) */
       .chat-wrap{
         background:#eaf6ff; border:1px solid #cfe7ff; border-radius:18px;
         padding:10px 10px 8px; margin-top:10px;
       }
       .chat-box{
         min-height:240px; max-height:54vh; overflow-y:auto; padding:6px 6px 2px;
-        display:flex; flex-direction:column; justify-content:flex-end;  /* 아래쪽 정렬 */
+        display:flex; flex-direction:column; justify-content:flex-end; /* 아래 정렬 */
       }
 
-      /* Q/A 페어 카드 */
-      .qa-pair{ display:flex; flex-direction:column; gap:8px; margin:10px 4px; }
-      .qa-card{
-        border-radius:14px; padding:12px 14px; line-height:1.6; font-size:15px;
-        border:1px solid transparent; box-shadow:0 1px 1px rgba(0,0,0,0.05);
-        white-space:pre-wrap;
+      /* 챗봇 말풍선 */
+      .row{ display:flex; margin:8px 0; gap:10px; }
+      .row.user{ justify-content:flex-end; }   /* 학생 → 오른쪽 */
+      .row.ai{   justify-content:flex-start; } /* AI   → 왼쪽  */
+      .bubble{
+        max-width:88%; padding:12px 14px; border-radius:16px; line-height:1.6; font-size:15px;
+        box-shadow:0 1px 1px rgba(0,0,0,0.05); white-space:pre-wrap;
+        border:1px solid #e0eaff; position:relative;
       }
-      .qa-card.question{
-        background:#fff7cc;              /* 파스텔 노랑 */
-        border-color:#ffe593;
+      .bubble.user{
+        background:#ffffff; color:#0a2540; border-color:#d9eaff; border-top-right-radius:8px;
       }
-      .qa-card.answer{
-        background:#f7fbff;              /* 연한 하늘 */
-        border-color:#d8ecff;
+      .bubble.ai{
+        background:#f7faff; color:#14121f; border-color:#e0eaff; border-top-left-radius:8px;
       }
-      .qa-label{
-        display:inline-block; font-size:11px; font-weight:800; margin-bottom:6px;
-        padding:2px 8px; border-radius:10px; border:1px solid #00000010;
+      .row.user .bubble:after{
+        content:""; position:absolute; right:-8px; top:10px;
+        border-width:8px 0 8px 8px; border-style:solid;
+        border-color:transparent transparent transparent #d9eaff;
       }
-      .qa-label.q{ background:#fff1a6; }
-      .qa-label.a{ background:#dff0ff; }
+      .row.ai .bubble:before{
+        content:""; position:absolute; left:-8px; top:10px;
+        border-width:8px 8px 8px 0; border-style:solid;
+        border-color:transparent #e0eaff transparent transparent;
+      }
     </style>
     """, unsafe_allow_html=True)
-
-_MODE_KEYS = ["문법", "문장", "지문"]
-_LABELS    = {"문법":"어법","문장":"문장","지문":"지문"}
-_LLM_TOKEN = {"문법":"문법설명","문장":"문장구조분석","지문":"지문분석"}
 
 def _llm_callable_ok() -> bool:
     try:
@@ -656,16 +528,12 @@ def _render_llm_status_minimal():
            '<span class="status-btn yellow">🟡 준비중</span>'
     st.markdown(html, unsafe_allow_html=True)
 
-def _render_mode_controls_segmented(*, admin: bool) -> str:
-    """
-    세그먼트 대신 우리 Pill UI를 사용해 색을 정확히 제어(파스텔 하늘).
-    선택된 모드는 .active 스타일로 강조, 나머지는 클릭 가능.
-    """
+def _render_mode_controls_pills() -> str:
+    """파스텔 하늘색 Pill UI로 모드 강조(세그먼트 대신)."""
     _inject_chat_styles_once()
     ss = st.session_state
     cfg = _sanitize_modes_cfg(_load_modes_cfg())
     cur = ss.get("qa_mode_radio") or (cfg.get("default") or "문법")
-
     st.markdown("#### 질문 모드 선택")
     c1, c2, c3 = st.columns(3, gap="small")
     def pill(col, mode, icon_label):
@@ -675,24 +543,16 @@ def _render_mode_controls_segmented(*, admin: bool) -> str:
                             unsafe_allow_html=True)
             else:
                 if st.button(icon_label, key=f"mode_btn_{mode}", use_container_width=True):
-                    ss["qa_mode_radio"] = mode
-                    st.rerun()
-                # 버튼을 pill처럼 보이게
-                st.markdown("""
-                <script>
-                  const btn = window.parent.document.querySelector('button[kind="secondary"]') || null;
-                </script>
-                """, unsafe_allow_html=True)
+                    ss["qa_mode_radio"] = mode; st.rerun()
     pill(c1, "문법", "🧩 어법")
     pill(c2, "문장", "🧱 문장")
     pill(c3, "지문", "📖 지문")
-
-    if cur not in _MODE_KEYS: cur = "문법"
+    if cur not in ["문법","문장","지문"]:
+        cur = cfg.get("default") or "문법"
     ss["qa_mode_radio"] = cur
     return cur
 
 def _htmlize_text(s: str) -> str:
-    """간단 마크다운을 HTML로 안전 변환."""
     import html, re
     t = html.escape(s or "")
     t = t.replace("\n", "<br/>")
@@ -700,61 +560,118 @@ def _htmlize_text(s: str) -> str:
     return t
 
 def _render_chat_log(messages: list[dict]):
-    """
-    채팅을 'Q/A 페어' 카드로 렌더:
-    - [user, assistant]가 연속이면 하나의 페어로 묶어서 노랑/하늘 카드로 표시
-    - 마지막이 user로 끝나면 질문 카드만 표시(답변 대기중)
-    """
+    """파스텔 하늘색 영역에 챗봇 말풍선 렌더."""
     st.markdown('<div class="chat-wrap"><div class="chat-box">', unsafe_allow_html=True)
-    i, n = 0, len(messages or [])
-    while i < n:
-        m = messages[i]
-        if m.get("role") == "user" and i+1 < n and messages[i+1].get("role") == "assistant":
-            u = _htmlize_text(m.get("text",""))
-            a = _htmlize_text(messages[i+1].get("text",""))
-            st.markdown(
-                f'''
-                <div class="qa-pair">
-                  <div class="qa-card question">
-                    <div class="qa-label q">Q</div><div>{u}</div>
-                  </div>
-                  <div class="qa-card answer">
-                    <div class="qa-label a">A</div><div>{a}</div>
-                  </div>
-                </div>
-                ''', unsafe_allow_html=True
-            )
-            i += 2
-        else:
-            # 단독(주로 첫 질문 직후)
-            role = m.get("role","user")
-            klass = "question" if role=="user" else "answer"
-            lab   = "Q" if role=="user" else "A"
-            txt   = _htmlize_text(m.get("text",""))
-            st.markdown(
-                f'''
-                <div class="qa-pair">
-                  <div class="qa-card {klass}">
-                    <div class="qa-label {'q' if role=='user' else 'a'}">{lab}</div><div>{txt}</div>
-                  </div>
-                </div>
-                ''', unsafe_allow_html=True
-            )
-            i += 1
+    for m in messages or []:
+        role = m.get("role","ai"); text = _htmlize_text(m.get("text",""))
+        klass = "user" if role == "user" else "ai"
+        st.markdown(f'<div class="row {klass}"><div class="bubble {klass}">{text}</div></div>',
+                    unsafe_allow_html=True)
     st.markdown('</div></div>', unsafe_allow_html=True)
 
 def _replace_assistant_text(aid: str, new_text: str):
-    """aid에 해당하는 assistant 카드 텍스트만 교체."""
     ss = st.session_state
     for m in ss.get("chat", []):
         if m.get("id") == aid and m.get("role") == "assistant":
             m["text"] = new_text
             return True
     return False
-# [10A] 학생 UI (Stable): 스타일/모드(파스텔 하늘색)/Q&A 카드 렌더러 ==================  # [10A] END
 
+# ──────────────────────────────────────────────────────────────────────────────
+# [10B] 로직(가변): 입력 → 즉시 말풍선 → 자동 재실행 → LLM 호출/치환
+def _render_chat_panel():
+    import time, inspect
+    ss = st.session_state
+    if "chat" not in ss:
+        ss["chat"] = []
 
-# [10] 학생 UI (Stable v1.5): 모드(세그먼트 강조) + 채팅(파스텔 하늘색) + 2단계 렌더(질문→준비중→답변)  # [10] END
+    # 상단 상태/모드
+    _render_llm_status_minimal()
+    cur = _render_mode_controls_pills()
+
+    # 현재까지 대화 로그 먼저 그림(언제나 보이도록)
+    _render_chat_log(ss["chat"])
+
+    # 새 입력(엔터/화살표 자동)
+    user_q = st.chat_input("예) 분사구문이 뭐예요?  예) 이 문장 구조 분석해줘")
+
+    # 1단계: 내 말풍선 → '답변 준비중…' 말풍선 추가 후 'show' 단계로 전환
+    if user_q and user_q.strip():
+        uid = f"u{int(time.time()*1000)}"
+        aid = f"a{uid}"  # 페어링 ID
+        ss["chat"].append({"id": uid, "role":"user", "text": user_q.strip()})
+        ss["chat"].append({"id": aid, "role":"assistant", "text": "답변 준비중…"})
+        ss["_pending_call"] = {
+            "q": user_q.strip(),
+            "mode_key": cur,
+            "mode_token": _LLM_TOKEN.get(cur, "문법설명"),
+            "aid": aid,
+        }
+        ss["_llm_phase"] = "show"
+        st.rerun()
+
+    # 1차 런: 화면을 먼저 그린 뒤 짧은 지연 후 자동 재실행 → 2차 런에서 LLM 호출
+    if ss.get("_pending_call") and ss.get("_llm_phase") == "show":
+        st.markdown("<script>setTimeout(()=>window.location.reload(),120);</script>",
+                    unsafe_allow_html=True)
+        ss["_llm_phase"] = "call"
+        return
+
+    # 2차 런: LLM 호출 → 같은 말풍선 텍스트 교체
+    pending = ss.get("_pending_call")
+    if pending and ss.get("_llm_phase") == "call":
+        try:
+            q   = pending["q"]; mode_token = pending["mode_token"]; aid = pending["aid"]; mkey = pending["mode_key"]
+            # prompts.yaml(Drive) → 실패 시 폴백 시스템 프롬프트
+            build_prompt = (_prompt or {}).get("build_prompt")
+            DEF_SYS = ("너는 한국의 영어학원 원장처럼 따뜻하고 명확하게 설명한다. "
+                       "질문과 선택된 모드에 직접 관련된 내용만 한국어로 간결하게 답한다. "
+                       "예문과 단계별 설명을 포함하되 탈선 금지.")
+            if callable(build_prompt):
+                try:
+                    parts = build_prompt(mode_token, q) or {}
+                    system_prompt = parts.get("system") or DEF_SYS
+                    prompt        = parts.get("user")   or f"[모드:{mode_token}]\n{q}"
+                except Exception:
+                    system_prompt, prompt = DEF_SYS, f"[모드:{mode_token}]\n{q}"
+            else:
+                system_prompt, prompt = DEF_SYS, f"[모드:{mode_token}]\n{q}"
+
+            call = (_llm or {}).get("call_with_fallback") if "_llm" in globals() else None
+            if not callable(call):
+                raise RuntimeError("LLM 어댑터(call_with_fallback)를 사용할 수 없습니다.")
+
+            sig = inspect.signature(call); params = sig.parameters.keys(); kwargs = {}
+            if "messages" in params:
+                kwargs["messages"] = [
+                    {"role":"system","content":system_prompt},
+                    {"role":"user","content":prompt}
+                ]
+            else:
+                if "prompt" in params: kwargs["prompt"] = prompt
+                elif "user_prompt" in params: kwargs["user_prompt"] = prompt
+                if "system_prompt" in params: kwargs["system_prompt"] = system_prompt
+                elif "system" in params: kwargs["system"] = system_prompt
+            if "mode_token" in params: kwargs["mode_token"] = mode_token
+            elif "mode" in params: kwargs["mode"] = mode_token
+            if "timeout_s" in params: kwargs["timeout_s"] = 90
+            elif "timeout" in params: kwargs["timeout"] = 90
+            if "extra" in params: kwargs["extra"] = {"question": q, "mode_key": mkey}
+
+            with st.spinner("답변 생성 중..."):
+                res = call(**kwargs)
+                text = res.get("text") if isinstance(res, dict) else str(res)
+                if not text: text = "(응답이 비어있어요)"
+                _replace_assistant_text(aid, text)
+        except Exception as e:
+            _replace_assistant_text(pending.get("aid",""), f"(오류) {type(e).__name__}: {e}")
+            _errlog(f"LLM 예외: {e}", where="[qa_llm]", exc=e)
+        finally:
+            ss["_pending_call"] = None
+            ss["_llm_phase"] = None
+            st.rerun()
+# [10] 학생 UI (Stable Chatbot v2) ────────────────────────────────────────────  # [10] END
+
 
 
 # [11] 본문 렌더 ===============================================================
