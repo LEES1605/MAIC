@@ -560,114 +560,165 @@ def _replace_assistant_text(aid:str,new_text:str):
     return False
 # [10A] END
 
-# [10B] 학생 로직 (Streaming v1.3, GitHub prompts): chat-wrap 내부 렌더 + GitHub 우선 + 소스뱃지  # [10B] START
+# [10B] 학생 로직 (Streaming v1.4, GitHub prompts + 근거 우선순위 + 안내문)  # [10B] START
 def _render_chat_panel():
-    import time, inspect, base64, json, urllib.request, yaml
+    import time, inspect, base64, json, urllib.request
+    try:
+        import yaml
+    except Exception:
+        yaml = None  # PyYAML 없을 경우 GitHub YAML 파싱은 스킵됨 → Fallback 사용
+
     ss = st.session_state
     if "chat" not in ss: ss["chat"] = []
 
-    # ── 상단(아이콘/상태/모드) ─────────────────────────────────────────────
+    # ── 상단 UI(아이콘/상태/모드) ───────────────────────────────────────────────
     _render_top_right_admin_icon()
-    # 관리자 패널을 실제로 띄우려면(10C 사용 시): 아래 한 줄이 있어야 합니다.
-    if " _render_admin_prompts_panel" in globals():  # 안전 가드
+    # (선택) 관리자 패널: 10C를 쓰는 경우에만 안전 호출
+    if "_render_admin_prompts_panel" in globals():
         try: _render_admin_prompts_panel()
         except Exception: pass
 
     _inject_chat_styles_once()
     _render_llm_status_minimal()
-    cur = _render_mode_controls_pills()
+    cur_label = _render_mode_controls_pills()     # "문법" / "문장" / "지문"
+    MODE_TOKEN = {"문법":"문법설명","문장":"문장구조분석","지문":"지문분석"}[cur_label]
 
-    # ── GitHub prompts 로더(이 블록이 핵심) ─────────────────────────────────
+    # ── 증거(컨텍스트) 수집: 당분간 세션에서 주입(없으면 빈 문자열) ───────────────
+    ev_notes  = ss.get("__evidence_class_notes", "")      # 1차: 수업자료(이유문법/깨알문법)
+    ev_books  = ss.get("__evidence_grammar_books", "")    # 2차: 문법서 PDF 스니펫
+
+    # ── GitHub prompts 로더 ────────────────────────────────────────────────────
     def _github_fetch_prompts_text():
-        """GitHub Contents API로 prompts.yaml 텍스트 반환. 캐시 사용."""
-        cache = ss.get("__gh_prompts_cache") or {}
+        """GitHub Contents API로 prompts.yaml 텍스트 반환. 성공 시 캐시."""
         token  = st.secrets.get("GH_TOKEN")
         repo   = st.secrets.get("GH_REPO")
         branch = st.secrets.get("GH_BRANCH", "main")
         path   = st.secrets.get("GH_PROMPTS_PATH", "prompts.yaml")
-        if not (token and repo):
+        if not (token and repo and yaml):
             return None
-
         url = f"https://api.github.com/repos/{repo}/contents/{path}?ref={branch}"
-        req = urllib.request.Request(
-            url,
-            headers={"Authorization": f"token {token}", "User-Agent": "maic-app"}
-        )
+        req = urllib.request.Request(url, headers={"Authorization": f"token {token}",
+                                                  "User-Agent": "maic-app"})
         try:
             with urllib.request.urlopen(req) as r:
                 meta = json.loads(r.read().decode("utf-8"))
                 content_b64 = meta.get("content") or ""
                 text = base64.b64decode(content_b64.encode("utf-8")).decode("utf-8")
-                sha  = meta.get("sha")
+                ss["__gh_prompts_cache"] = {"sha": meta.get("sha"), "text": text}
+                return text
         except Exception:
             return None
 
-        ss["__gh_prompts_cache"] = {"sha": sha, "text": text}
-        return text
-
-    def _build_prompt_from_github(mode_token: str, user_q: str):
-        """
-        GitHub의 prompts.yaml을 다음 포맷으로 해석:
-        - dict 버전: modes.<mode_token>.system / .user
-        - 문자열 버전: modes.<mode_token> == user 프롬프트(plain)
-        둘 다 없으면 None.
-        """
+    def _build_prompt_from_github(mode_token: str, q: str, ev1: str, ev2: str):
         txt = _github_fetch_prompts_text()
-        if not txt:
-            return None
+        if not (txt and yaml): return None
         try:
             data = yaml.safe_load(txt) or {}
             node = (data.get("modes") or {}).get(mode_token)
-            if not node:
-                return None
-            if isinstance(node, str):
-                return {"system": None, "user": node}
-            if isinstance(node, dict):
-                return {"system": node.get("system"), "user": node.get("user")}
-            return None
+            if not node: return None
+            sys_p = node.get("system") if isinstance(node, dict) else None
+            usr_p = node.get("user")   if isinstance(node, dict) else (node if isinstance(node, str) else None)
+            if usr_p is None: return None
+            # 플레이스홀더 치환
+            usr_p = (usr_p
+                     .replace("{QUESTION}", q)
+                     .replace("{EVIDENCE_CLASS_NOTES}", ev1 or "")
+                     .replace("{EVIDENCE_GRAMMAR_BOOKS}", ev2 or ""))
+            return {"system": sys_p, "user": usr_p}
         except Exception:
             return None
 
-    # ── prompts 선택 로직: GitHub → (있다면) Drive build_prompt → Fallback ─────────
-    def _resolve_prompts(mode_token: str, user_q: str):
-        BASE = "너는 한국의 영어학원 원장처럼 따뜻하고 명확하게 설명한다. "
-        FALLBACK = {
-            "문법설명": BASE+"오직 해당 문법만: 정의→핵심 규칙 3~5개→예문3개(해석)→흔한 오류2개→두 문장 요약.",
-            "문장구조분석": BASE+"주어·동사·목적어·보어·수식어를 단계적으로 식별/설명. 군더더기 금지.",
-            "지문분석": BASE+"요지/구조/핵심어만 간결히. 문제풀이식 단계 제시. 장황한 배경 금지.",
-        }
-        GUARD = (
-            f"\n\n[질문]\n{user_q}\n\n[지시]\n- 현재 모드: {cur} ({mode_token})\n"
-            "- 반드시 질문 주제에만 답할 것. 벗어나면 '질문과 다른 주제입니다'라고 알림.\n"
-            "- 형식: (1) 한 줄 정의 (2) 핵심 bullet (3) 예문 3개 (4) 흔한 오류 2개 (5) 두 문장 요약.\n"
-        )
+    # ── Drive 모듈(있으면) ────────────────────────────────────────────────────
+    def _build_prompt_from_drive(mode_token: str, q: str, ev1: str, ev2: str):
+        _prompt_mod = _try_import("src.prompt_modes", ["build_prompt"]) or {}
+        fn = _prompt_mod.get("build_prompt")
+        if not callable(fn): return None
+        try:
+            parts = fn(mode_token, q) or {}
+            sys_p = parts.get("system")
+            usr_p = parts.get("user")
+            if usr_p:
+                usr_p = (usr_p
+                         .replace("{QUESTION}", q)
+                         .replace("{EVIDENCE_CLASS_NOTES}", ev1 or "")
+                         .replace("{EVIDENCE_GRAMMAR_BOOKS}", ev2 or ""))
+            return {"system": sys_p, "user": usr_p}
+        except Exception:
+            return None
+
+    # ── Fallback(부드러운 안내 포함, 모드별 포맷 반영) ───────────────────────────
+    def _fallback_prompts(mode_token: str, q: str, ev1: str, ev2: str, cur_label: str):
+        NOTICE = "안내: 현재 자료 연결이 원활하지 않아 간단 모드로 답변합니다. 핵심만 짧게 안내할게요."
+        BASE = "너는 한국의 영어학원 원장처럼 따뜻하고 명확하게 설명한다. 모든 출력은 한국어로 간결하게."
+        if mode_token == "문법설명":
+            # 요청 반영: 예문 1개, 흔한 오류 삭제, 출처 3종
+            sys_p = BASE + " 주제에서 벗어난 장황한 배경설명은 금지한다."
+            lines = []
+            # 1·2차 근거가 모두 없으면 안내문으로 시작
+            if not ev1 and not ev2:
+                lines.append(NOTICE)
+            lines += [
+                "1) 한 줄 핵심",
+                "2) 이미지/비유 (짧게)",
+                "3) 핵심 규칙 3–5개 (• bullet)",
+                "4) 예문 1개(+한국어 해석)",
+                "5) 한 문장 리마인드",
+                "6) 출처 1개: [출처: 이유문법] / [출처: 책제목(…)] / [출처: AI자체지식]",
+            ]
+            usr_p = f"[질문]\n{q}\n\n[작성 지침]\n- 형식을 지켜라.\n" + "\n".join(f"- {x}" for x in lines)
+        elif mode_token == "문장구조분석":
+            sys_p = BASE + " 불확실한 판단은 '약 ~% 불확실'로 명시한다."
+            usr_p = (
+                "[출력 형식]\n"
+                "0) 모호성 점검\n"
+                "1) 괄호 규칙 요약\n"
+                "2) 핵심 골격 S–V–O–C–M 한 줄 개요\n"
+                "3) 성분 식별: 표/리스트\n"
+                "4) 구조/구문: 수식 관계·It-cleft·가주어/진주어·생략 복원 등 단계적 설명\n"
+                "5) 핵심 포인트 2–3개\n"
+                "6) 출처(보수): [규칙/자료/수업노트 등 ‘출처 유형’만]\n\n"
+                f"[문장]\n{q}"
+            )
+        else:  # 지문분석
+            sys_p = BASE + " 불확실한 판단은 '약 ~% 불확실'로 명시한다."
+            usr_p = (
+                "[출력 형식]\n"
+                "1) 한 줄 요지(명사구)\n"
+                "2) 구조 요약: (서론–본론–결론) 또는 단락별 핵심 문장\n"
+                "3) 핵심어/표현 3–6개 + 이유\n"
+                "4) 문제풀이 힌트(있다면)\n\n"
+                f"[지문/질문]\n{q}"
+            )
+        ss["__prompt_source"] = "Fallback"
+        return sys_p, usr_p
+
+    # ── 최종 프롬프트 결합 로직: GitHub → Drive → Fallback + 안내문 지시 ──────────
+    def _resolve_prompts(mode_token: str, q: str, ev1: str, ev2: str, cur_label: str):
         # 1) GitHub
-        gh = _build_prompt_from_github(mode_token, user_q)
-        if gh:
+        gh = _build_prompt_from_github(mode_token, q, ev1, ev2)
+        if gh and (gh.get("system") or gh.get("user")):
             ss["__prompt_source"] = "GitHub"
-            sys_p = gh.get("system") or BASE
-            usr_p = (gh.get("user") or f"[모드:{mode_token}]\n{user_q}") + GUARD
+            sys_p = gh.get("system") or ""
+            usr_p = gh.get("user") or f"[모드:{mode_token}]\n{q}"
+            # 1·2차 근거가 비어 있으면 '안내문으로 시작' 지시를 추가(문법설명일 때 우선)
+            if mode_token == "문법설명" and not ev1 and not ev2:
+                usr_p += "\n\n[지시]\n- 답변 첫 줄을 다음 문장으로 시작: '안내: 현재 자료 연결이 원활하지 않아 간단 모드로 답변합니다. 핵심만 짧게 안내할게요.'"
             return sys_p, usr_p
 
-        # 2) (선택) Drive 모듈
-        _prompt_mod = _try_import("src.prompt_modes", ["build_prompt"]) or {}
-        _build_prompt = _prompt_mod.get("build_prompt")
-        if callable(_build_prompt):
-            try:
-                parts = _build_prompt(mode_token, user_q) or {}
-                ss["__prompt_source"] = "Drive"
-                sys_p = parts.get("system") or BASE
-                usr_p = (parts.get("user") or f"[모드:{mode_token}]\n{user_q}") + GUARD
-                return sys_p, usr_p
-            except Exception:
-                pass
+        # 2) Drive
+        dv = _build_prompt_from_drive(mode_token, q, ev1, ev2)
+        if dv and (dv.get("system") or dv.get("user")):
+            ss["__prompt_source"] = "Drive"
+            sys_p = dv.get("system") or ""
+            usr_p = dv.get("user") or f"[모드:{mode_token}]\n{q}"
+            if mode_token == "문법설명" and not ev1 and not ev2:
+                usr_p += "\n\n[지시]\n- 답변 첫 줄을 다음 문장으로 시작: '안내: 현재 자료 연결이 원활하지 않아 간단 모드로 답변합니다. 핵심만 짧게 안내할게요.'"
+            return sys_p, usr_p
 
         # 3) Fallback
-        ss["__prompt_source"] = "Fallback"
-        return FALLBACK[mode_token], f"[모드:{mode_token}]\n{user_q}"+GUARD
+        return _fallback_prompts(mode_token, q, ev1, ev2, cur_label)
 
-    # ── chat-wrap 내부에서만 렌더(배경 유지) ────────────────────────────────────────
-    # 과거 로그 + 이번 질문/답변 모두 chat-wrap 안에서 처리
+    # ── 입력 & 렌더(항상 chat-wrap 내부에서 유지) ────────────────────────────────
     user_q = st.chat_input("예) 분사구문이 뭐예요?  예) 이 문장 구조 분석해줘")
     qtxt = user_q.strip() if user_q and user_q.strip() else None
     do_stream = qtxt is not None
@@ -689,34 +740,27 @@ def _render_chat_panel():
                 f'<div class="row ai"><div class="bubble ai">{_esc_html("답변 준비중…")}</div></div>',
                 unsafe_allow_html=True
             )
-            # prompts 준비(GitHub → Drive → Fallback)
-            MODE_TOKEN = {"문법":"문법설명","문장":"문장구조분석","지문":"지문분석"}[cur]
-            system_prompt, user_prompt = _resolve_prompts(MODE_TOKEN, qtxt)
-
-            # 상단 상태줄에 소스 뱃지 보여주기(10A 보강과 연동)
-            # (_render_llm_status_minimal 안에서도 뱃지를 쓰지만, 여기서도 한번)
-            # st.caption(f"프롬프트 소스: {ss.get('__prompt_source')}")
+            # 프롬프트 해석
+            system_prompt, user_prompt = _resolve_prompts(MODE_TOKEN, qtxt, ev_notes, ev_books, cur_label)
 
             # LLM 호출(스트리밍 지원 자동 탐지)
             call = (_llm or {}).get("call_with_fallback") if "_llm" in globals() else None
             if not callable(call):
                 text_final = "(오류) LLM 어댑터를 사용할 수 없습니다."
-                ph.markdown(
-                    f'<div class="row ai"><div class="bubble ai">{_esc_html(text_final)}</div></div>',
-                    unsafe_allow_html=True
-                )
+                ph.markdown(f'<div class="row ai"><div class="bubble ai">{_esc_html(text_final)}</div></div>',
+                            unsafe_allow_html=True)
             else:
                 sig = inspect.signature(call); params = sig.parameters.keys(); kwargs = {}
                 if "messages" in params:
                     kwargs["messages"] = [
-                        {"role":"system","content":system_prompt},
+                        {"role":"system","content":system_prompt or ""},
                         {"role":"user","content":user_prompt},
                     ]
                 else:
                     if "prompt" in params: kwargs["prompt"] = user_prompt
                     elif "user_prompt" in params: kwargs["user_prompt"] = user_prompt
-                    if "system_prompt" in params: kwargs["system_prompt"] = system_prompt
-                    elif "system" in params: kwargs["system"] = system_prompt
+                    if "system_prompt" in params: kwargs["system_prompt"] = (system_prompt or "")
+                    elif "system" in params: kwargs["system"] = (system_prompt or "")
 
                 if "mode_token" in params: kwargs["mode_token"] = MODE_TOKEN
                 elif "mode" in params:     kwargs["mode"] = MODE_TOKEN
@@ -724,7 +768,7 @@ def _render_chat_panel():
                 elif "temp" in params:      kwargs["temp"] = 0.2
                 if "timeout_s" in params:   kwargs["timeout_s"] = 90
                 elif "timeout" in params:   kwargs["timeout"] = 90
-                if "extra" in params:       kwargs["extra"] = {"question": qtxt, "mode_key": cur}
+                if "extra" in params:       kwargs["extra"] = {"question": qtxt, "mode_key": cur_label}
 
                 acc = ""
                 def _emit(piece: str):
@@ -763,11 +807,10 @@ def _render_chat_panel():
 
         st.markdown('</div></div>', unsafe_allow_html=True)
 
-    # 스트리밍 완료 → 히스토리 저장 + 새로고침
     if do_stream:
         ss["chat"].append({"id": f"a{int(time.time()*1000)}", "role": "assistant", "text": text_final})
         st.rerun()
-# [10B] 학생 로직 (Streaming v1.3, GitHub prompts)  # [10B] END
+# [10B] 학생 로직 (Streaming v1.4, GitHub prompts + 근거 우선순위 + 안내문)  # [10B] END
 
 # [10C] 관리자: 모드별 prompts 편집 → GitHub 업로드(Contents API, 선택)  # [10C] START
 def _render_admin_prompts_panel():
