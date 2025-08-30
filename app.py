@@ -482,7 +482,7 @@ def _inject_chat_styles_once():
       div[data-testid="stRadio"] svg{display:none!important}
 
       /* 채팅 컨테이너(파스텔 하늘) */
-      .chat-wrap{background:#eaf6ff;border:1px solid #cfe7ff;border-radius:18px;
+      .chat-wrap{background:#eaf6ff !important;border:1px solid #cfe7ff !important;border-radius:18px;
                  padding:10px 10px 8px;margin-top:10px}
       .chat-box{min-height:240px;max-height:54vh;overflow-y:auto;padding:6px 6px 2px}
 
@@ -495,7 +495,7 @@ def _inject_chat_styles_once():
         box-shadow:0 1px 1px rgba(0,0,0,.05);white-space:pre-wrap;position:relative;border:1px solid #e0eaff;
       }
       .bubble.user{                      /* ← 질문 = 파스텔 하늘색 */
-        background:#dff0ff; color:#0a2540; border-color:#bfe2ff; border-top-right-radius:8px;
+        background:#dff0ff !important; color:#0a2540!important; border-color:#bfe2ff !important; border-top-right-radius:8px;
       }
       .bubble.ai{                         /* ← 답변 = 흰색 */
         background:#ffffff; color:#14121f; border-top-left-radius:8px;
