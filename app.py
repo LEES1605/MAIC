@@ -450,7 +450,7 @@ def _render_admin_panels() -> None:
         st.text_area("최근 오류", value=txt, height=180)
         st.download_button("로그 다운로드", data=txt.encode("utf-8"), file_name="app_error_log.txt")
 
-# [10] 학생 UI (Stable v1.2): 상태버튼 + 모드 + 채팅(파스텔 하늘색 배경) + 관리자 컨트롤  # [10] START
+# [10] 학생 UI (Stable v1.3): 상태버튼 + 모드(선택 강조) + 채팅(파스텔 하늘색, Enter 전송/화살표) + 관리자 컨트롤  # [10] START
 def _inject_chat_styles_once():
     if st.session_state.get("_chat_styles_injected"):
         return
@@ -463,14 +463,16 @@ def _inject_chat_styles_once():
       .status-btn.green{ background:#daf5cb; border-color:#bfe5ac; }
       .status-btn.yellow{ background:#fff3bf; border-color:#ffe08a; }
 
-      /* 모드 버튼 */
-      .seg-zone{ gap:8px; }
-      .seg-zone .stButton{ width:100%; }
-      .seg-zone .stButton>button{
+      /* ===== 모드 버튼 (선택 강조) ===== */
+      .stButton > button:disabled{
+        background:#3da5ff !important; color:#fff !important; border-color:#3da5ff !important;
+        opacity:1 !important; cursor:default !important;
+      }
+      .stButton > button{
         width:100%; border:2px solid #bcdcff; border-radius:16px;
         background:#fff; color:#111; font-weight:700; padding:8px 10px;
       }
-      .seg-zone .stButton>button:hover{ background:#f5fbff; }
+      .stButton > button:hover{ background:#f5fbff; }
 
       /* ===== 채팅 영역(파스텔 하늘색 배경) ===== */
       .chat-wrap{
@@ -485,13 +487,14 @@ def _inject_chat_styles_once():
         overflow-y:auto;
         padding:6px 6px 2px;
       }
-      .chat-box .row{ display:flex; margin:6px 0; }
+      .chat-box .row{ display:flex; margin:8px 0; gap:10px; }
       .chat-box .row.user{ justify-content:flex-end; }   /* 학생 → 오른쪽 */
       .chat-box .row.ai{ justify-content:flex-start; }   /* AI  → 왼쪽  */
       .chat-box .bubble{
         max-width:88%;
         padding:12px 14px; border-radius:16px; line-height:1.6; font-size:15px;
         box-shadow:0 1px 1px rgba(0,0,0,0.05);
+        white-space:pre-wrap;             /* 줄바꿈/개행 유지 → 질문/답변이 붙어 보이는 현상 방지 */
       }
       .chat-box .bubble.user{
         background:#ffffff; color:#0a2540; border:1px solid #d9eaff;
@@ -512,8 +515,18 @@ def _inject_chat_styles_once():
         border-color:transparent #e0eaff transparent transparent;
       }
 
-      /* 관리자 컨트롤 패널 버튼 */
-      .admin-panel .stButton>button{ padding:6px 10px; border-radius:10px; }
+      /* ===== 입력창 + '카톡풍' 화살표 전송 버튼 ===== */
+      .input-wrap{ position:relative; }
+      .input-wrap [data-testid="stTextInput"] input{
+        padding-right:52px;               /* 화살표 버튼 자리 확보 */
+      }
+      .input-wrap .send-btn > button{
+        width:38px; height:38px; border-radius:19px;
+        position:absolute; right:6px; top:50%; transform:translateY(-50%);
+        border:1px solid #bcdcff; background:#ffffff;
+        font-size:18px; line-height:1; padding:0; box-shadow:0 1px 1px rgba(0,0,0,0.05);
+      }
+      .input-wrap .send-btn > button:hover{ background:#f0f7ff; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -540,20 +553,24 @@ def _render_mode_controls_minimal(*, admin: bool) -> str:
 
     st.markdown("#### 질문 모드 선택")
     col1, col2, col3 = st.columns(3, gap="small")
-    with col1:
-        if st.button(f"🧩 {_LABELS['문법']}", key="mode_btn_gram", use_container_width=True):
-            ss["qa_mode_radio"] = "문법"; st.rerun()
-    with col2:
-        if st.button(f"🧱 {_LABELS['문장']}", key="mode_btn_sent", use_container_width=True):
-            ss["qa_mode_radio"] = "문장"; st.rerun()
-    with col3:
-        if st.button(f"📖 {_LABELS['지문']}", key="mode_btn_pass", use_container_width=True):
-            ss["qa_mode_radio"] = "지문"; st.rerun()
 
-    cur = st.session_state.get("qa_mode_radio")
+    def _mode_btn(label: str, key: str, mode: str):
+        cur = ss.get("qa_mode_radio")
+        if cur == mode:
+            st.button(f"{label} ✓", key=f"{key}_sel", use_container_width=True, disabled=True)
+        else:
+            if st.button(label, key=key, use_container_width=True):
+                ss["qa_mode_radio"] = mode
+                st.rerun()
+
+    with col1: _mode_btn("🧩 " + _LABELS["문법"], "mode_btn_gram", "문법")
+    with col2: _mode_btn("🧱 " + _LABELS["문장"], "mode_btn_sent", "문장")
+    with col3: _mode_btn("📖 " + _LABELS["지문"], "mode_btn_pass", "지문")
+
+    cur = ss.get("qa_mode_radio")
     if cur not in _MODE_KEYS:
         cur = cfg.get("default") or "문법"
-    st.session_state["qa_mode_radio"] = cur
+    ss["qa_mode_radio"] = cur
     return cur
 
 def _render_admin_index_controls():
@@ -676,16 +693,19 @@ def _render_chat_panel():
     # 2) 모드 선택
     cur = _render_mode_controls_minimal(admin=_is_admin_view())
 
-    # 3) 입력창 + 전송
-    qcol1, qcol2 = st.columns([8, 2], gap="small")
-    with qcol1:
-        user_q = st.text_input("무엇이 궁금한가요?", key="user_q", label_visibility="collapsed",
-                               placeholder="예) 분사구문이 뭐예요?  예) 이 문장 구조 분석해줘")
-    with qcol2:
-        send = st.button("보내기", use_container_width=True)
+    # 3) 입력창 + 전송 (Enter 제출 가능: st.form)
+    with st.form("chat_form", clear_on_submit=False):
+        st.markdown('<div class="input-wrap">', unsafe_allow_html=True)
+        user_q = st.text_input(
+            "무엇이 궁금한가요?", key="user_q", label_visibility="collapsed",
+            placeholder="예) 분사구문이 뭐예요?  예) 이 문장 구조 분석해줘"
+        )
+        # 화살표 전송 버튼(카톡풍) — 시각적으로 입력창 안에 겹치도록 위치
+        submitted = st.form_submit_button("➤", use_container_width=False)
+        st.markdown('</div>', unsafe_allow_html=True)
 
-    # 4) 전송 처리
-    if (user_q and user_q.strip()) and send:
+    # 4) 전송 처리 (Enter 또는 화살표)
+    if submitted and (user_q and user_q.strip()):
         uid = f"u{int(time.time()*1000)}"
         ss["chat"].append({"id": uid, "role":"user", "text": user_q.strip()})
 
@@ -711,7 +731,7 @@ def _render_chat_panel():
             system_prompt = DEFAULT_SYSTEM_PROMPT
             prompt = f"[모드:{mode_token}]\n{user_q}"
 
-        # LLM 호출 (시그니처 자동 매핑)
+        # LLM 호출 (시그니처 자동 매핑 → 어댑터 변경에도 안전)
         try:
             call = (_llm or {}).get("call_with_fallback") if "_llm" in globals() else None
             if not callable(call):
@@ -747,11 +767,14 @@ def _render_chat_panel():
             ss["chat"][-1]["text"] = f"(오류) {type(e).__name__}: {e}"
             _errlog(f"LLM 예외: {e}", where="[qa_llm]", exc=e)
 
+        # 입력창 비우기 + 즉시 갱신
+        st.session_state["user_q"] = ""
         st.rerun()
 
     # 5) 채팅 로그 렌더 (파스텔 하늘색 배경 유지)
     _render_chat_log(ss["chat"])
-# [10] 학생 UI (Stable v1.2): 상태버튼 + 모드 + 채팅(파스텔 하늘색 배경) + 관리자 컨트롤  # [10] END
+# [10] 학생 UI (Stable v1.3): 상태버튼 + 모드(선택 강조) + 채팅(파스텔 하늘색, Enter 전송/화살표) + 관리자 컨트롤  # [10] END
+
 
 # [11] 본문 렌더 ===============================================================
 def _render_body() -> None:
