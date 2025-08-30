@@ -204,27 +204,112 @@ def _header():
 def _login_panel_if_needed():
     return
 
-# [07] 두뇌 수동 복원 CTA(관리자 전용) =========================================
-def _manual_restore_cta():
-    if st is None or not _is_admin_view() or _is_brain_ready():
+# [07] MAIN: 부팅 시 자동 연결(attach) / 필요 시 자동 빌드(build) ===================  # [07] START
+def _auto_attach_or_build_index():
+    """
+    1) 로컬 인덱스(chunks.jsonl)가 있으면 즉시 attach(사용)하고 종료
+    2) 없으면 Drive prepared 폴더에서 자동으로 build → 로컬 저장 → attach
+    결과 상태는 st.session_state['brain_attached'] / ['brain_status_msg']에 기록
+    """
+    import json, pathlib
+    ss = st.session_state
+    if ss.get("_index_boot_ran"):
         return
-    with st.container(border=True):
-        c1, c2 = st.columns([0.65, 0.35])
-        with c1:
-            st.info("두뇌가 아직 준비되지 않았어요. 최신 GitHub Releases에서 복원할 수 있어요.")
-        with c2:
-            if st.button("최신 릴리스에서 복원", type="primary", use_container_width=True):
-                try:
-                    ok = bool(_gh.get("restore_latest") and _gh["restore_latest"](dest_dir=PERSIST_DIR))
-                    if ok:
-                        _mark_ready()
-                        st.success("복원 완료! 잠시 후 새로고침됩니다.")
-                        st.rerun()
-                    else:
-                        st.error("복원 실패: Releases의 manifest/chunks를 확인하세요.")
-                except Exception as e:
-                    _errlog(f"manual restore failed: {e}", where="[manual_restore]", exc=e)
-                    st.error(f"예외: {type(e).__name__}: {e}")
+    ss["_index_boot_ran"] = True
+
+    # 기본 상태 초기화
+    ss.setdefault("brain_attached", False)
+    ss.setdefault("brain_status_msg", "초기화 중…")
+
+    # 모듈 로드 (안전 지연 임포트)
+    mod = _try_import("src.rag.index_build", [
+        "quick_precheck", "build_index_with_checkpoint"
+    ]) or {}
+
+    quick = mod.get("quick_precheck")
+    build = mod.get("build_index_with_checkpoint")
+
+    # quick_precheck 없으면 더 진행 불가
+    if not callable(quick):
+        ss["brain_attached"] = False
+        ss["brain_status_msg"] = "인덱스 모듈(quick_precheck) 미탑재"
+        return
+
+    # 0) 로컬 인덱스 존재 점검 → 있으면 곧바로 attach
+    try:
+        pre = quick() or {}
+        if pre.get("ok") and pre.get("ready"):
+            ss["brain_attached"] = True
+            ss["brain_status_msg"] = "로컬 인덱스 연결됨"
+            return
+    except Exception as e:
+        _errlog(f"precheck 실패: {e}", where="[index_boot]")
+
+    # 1) 로컬이 없으면 빌드 시도
+    if not callable(build):
+        ss["brain_attached"] = False
+        ss["brain_status_msg"] = "빌드 엔트리(build_index_with_checkpoint) 없음"
+        return
+
+    prog = st.progress(0, text="두뇌 준비중…")
+    msgbox = st.empty()
+
+    def _pct(p, m=None):
+        try:
+            prog.progress(int(p), text=("두뇌 준비중… " + (m or "")).strip())
+        except Exception:
+            pass
+
+    def _msg(s):
+        try:
+            msgbox.info(str(s))
+        except Exception:
+            pass
+
+    try:
+        # secrets에서 필요한 값 확보
+        gdrive_folder_id = st.secrets.get("GDRIVE_PREPARED_FOLDER_ID") or ""
+        gcp_creds = st.secrets.get("gcp_service_account") or {}
+        if isinstance(gcp_creds, str):
+            try:
+                gcp_creds = json.loads(gcp_creds)
+            except Exception:
+                gcp_creds = {}
+
+        # 원격 manifest 등은 없어도 스키마 충족(빈 dict)
+        res = build(
+            _pct, _msg,
+            gdrive_folder_id=gdrive_folder_id,
+            gcp_creds=gcp_creds,
+            persist_dir="",              # index_build 모듈 내부 기본 경로 사용
+            remote_manifest={},          # 원격 비교 비활성(간단 경로)
+            should_stop=None,
+        ) or {}
+
+        # 빌드 후 실제 파일 존재 확인 → attach 플래그 반영
+        chunks_path = pathlib.Path.home() / ".maic" / "persist" / "chunks.jsonl"
+        if chunks_path.exists():
+            ss["brain_attached"] = True
+            ss["brain_status_msg"] = "로컬 인덱스 빌드·연결 완료"
+        else:
+            ss["brain_attached"] = False
+            ss["brain_status_msg"] = "로컬 인덱스 생성 실패"
+
+    except Exception as e:
+        ss["brain_attached"] = False
+        ss["brain_status_msg"] = f"인덱스 빌드 오류: {type(e).__name__}: {e}"
+        _errlog(f"build 실패: {e}", where="[index_boot]", exc=e)
+    finally:
+        try:
+            prog.empty()
+            msgbox.empty()
+        except Exception:
+            pass
+
+# 모듈 초기화 시 1회 자동 실행
+_auto_attach_or_build_index()
+# [07] MAIN: 부팅 시 자동 연결(attach) / 필요 시 자동 빌드(build) ===================  # [07] END
+
 
 # [08] 자동 시작(선택) =========================================================
 def _auto_start_once():
