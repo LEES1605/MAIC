@@ -205,25 +205,39 @@ def _header():
 def _login_panel_if_needed():
     return
 
-# [06B] 모던 3D 배경: 전역 CSS+JS 라이브러리(1회 주입) =========================
+# [06B] 모던 3D 배경: 전역 CSS+JS 라이브러리(1회 주입)  # [06B] START
 def _inject_modern_bg_lib():
-    if st is None or st.session_state.get("__bg_lib_injected__"):
+    import streamlit as st
+    # 이미 주입됐으면 스킵
+    if st.session_state.get("__bg_lib_injected__"):
         return
     st.session_state["__bg_lib_injected__"] = True
+
     st.markdown("""
 <style id="maic-bg-style">
+/* 앱은 위, 배경은 뒤(고정) */
 html, body, .stApp { height: 100%; }
 .stApp { position: relative; z-index: 1; }
+
+/* 배경 루트 */
 #maic-bg-root{ position: fixed; inset:0; z-index:0; pointer-events:none; overflow:hidden; }
+
+/* 레이어 */
 #maic-bg-root .maic-bg-gradient{ position:absolute; inset:0; }
 #maic-bg-root .maic-bg-shapes{ position:absolute; inset:0; perspective:1000px; }
 #maic-bg-root .maic-bg-grid{ position:absolute; inset:0; pointer-events:none; }
 #maic-bg-root .maic-bg-grain{ position:absolute; inset:0; pointer-events:none; opacity:.7; mix-blend-mode:overlay; background-size:128px 128px; }
 #maic-bg-root .maic-bg-veil{ position:absolute; inset:0; pointer-events:none; }
+
+/* 애니메이션 */
 @keyframes bobY { from { --bob: -6px; } to { --bob: 6px; } }
+
+/* 접근성: reduce-motion 시 정지 */
 @media (prefers-reduced-motion: reduce){
   #maic-bg-root .maic-shape{ animation:none !important; }
 }
+
+/* 얇은 격자 오버레이 */
 #maic-bg-root .maic-bg-grid[data-theme="light"]{
   background-image:
     linear-gradient(0deg, rgba(30,41,59,.06) 1px, transparent 1px),
@@ -244,161 +258,192 @@ html, body, .stApp { height: 100%; }
 
 <script id="maic-bg-lib">
 (() => {
-  if (window.MAIC_BG) return;
-  const clamp=(n,min,max)=>Math.min(max,Math.max(min,n));
-  const hexToRgb=(hex)=>{const c=hex.replace("#","");const v=c.length===3?c.split("").map(x=>x+x).join(""):c;const num=parseInt(v,16);return{r:(num>>16)&255,g:(num>>8)&255,b:num&255}};
-  const rgbToHex=(r,g,b)=>"#"+[r,g,b].map(v=>v.toString(16).padStart(2,"0")).join("");
-  const rgbToHsl=(r,g,b)=>{r/=255;g/=255;b/=255;const max=Math.max(r,g,b),min=Math.min(r,g,b);let h=0,s=0,l=(max+min)/2;if(max!==min){const d=max-min;s=l>0.5?d/(2-max-min):d/(max+min);switch(max){case r:h=(g-b)/d+(g<b?6:0);break;case g:h=(b-r)/d+2;break;case b:h=(r-g)/d+4;break}h/=6}return{h:h*360,s,l}};
-  const hslToRgb=(h,s,l)=>{h/=360;let r,g,b;if(s===0){r=g=b=l}else{const hue2rgb=(p,q,t)=>{if(t<0)t+=1;if(t>1)t-=1;if(t<1/6)return p+(q-p)*6*t;if(t<1/2)return q;if(t<2/3)return p+(q-p)*(2/3-t)*6;return p};const q=l<.5?l*(1+s):l+s-l*s;const p=2*l-q;r=hue2rgb(p,q,h+1/3);g=hue2rgb(p,q,h);b=hue2rgb(p,q,h-1/3)}return{r:Math.round(r*255),g:Math.round(g*255),b:Math.round(b*255)}};
-  const shade=(hex,lD=0,sD=0,hD=0)=>{const {r,g,b}=hexToRgb(hex);const hsl=rgbToHsl(r,g,b);const h=(hsl.h+hD+360)%360;const s=clamp(hsl.s+sD,0,1);const l=clamp(hsl.l+lD,0,1);const {r:rr,g:rg,b:rb}=hslToRgb(h,s,l);return rgbToHex(rr,rg,rb)};
-  const mulberry32=(a)=>()=>{let t=(a+=0x6d2b79f5);t=Math.imul(t^(t>>>15),t|1);t^=t+Math.imul(t^(t>>>7),t|61);return((t^(t>>>14))>>>0)/4294967296};
-  const makeGradient=(theme,style,accent)=>{
-    const aL=shade(accent, theme==="light"?-0.1:0.1);
-    const aD=shade(accent, theme==="light"?-0.2:-0.05);
-    const baseLight= theme==="light" ? "#F7FAFF" : "#0B1020";
-    const baseDark = theme==="light" ? "#EAF1FF" : "#0E1224";
-    if(style==="conic")  return `conic-gradient(from 220deg at 65% 35%, ${aL}, ${baseLight}, ${aD}, ${baseDark})`;
-    if(style==="linear") return `linear-gradient(135deg, ${baseLight}, ${aL} 35%, ${baseDark})`;
-    return `radial-gradient(1200px 800px at 75% 20%, ${aL}, transparent 55%), radial-gradient(900px 700px at 10% 80%, ${aD}, transparent 50%), linear-gradient(180deg, ${baseLight}, ${baseDark})`;
-  };
-  const generateShapes=({count,seed,accent,theme})=>{
-    const rnd=mulberry32(seed||1234);
-    return Array.from({length:count},(_,i)=>{
-      const t=rnd(); const type=t<.34?"sphere": t<.67?"cube":"pyramid";
-      const size=80+Math.floor(rnd()*220);
-      const x=-10+rnd()*120, y=-10+rnd()*120, rot=Math.floor(rnd()*360);
-      const depth=-40+rnd()*80, opacity=.18+rnd()*.22;
-      const hueShift=rnd()*40-20, tone=rnd()*.2-.1;
-      const color=shade(accent,tone,0,hueShift);
-      return {id:i,type,size,x,y,rot,depth,opacity,color};
-    });
-  };
-  const face=(bg,clip,extra={})=>{const d=document.createElement("div");Object.assign(d.style,{position:"absolute",inset:"0",background:bg,clipPath:clip,...extra});return d;};
-  function buildShapeEl(s, animate=true){
-    const el=document.createElement("div");
-    el.className="maic-shape";
-    el.style.position="absolute";
-    el.style.width=s.size+"px"; el.style.height=s.size+"px";
-    el.style.opacity=s.opacity;
-    el.style.transition="transform 120ms ease-out";
-    el.style.willChange="transform";
-    const t=`translate3d(calc(${s.x}% + var(--mx,0) * ${s.depth*16}px), calc(${s.y}% + var(--my,0) * ${s.depth*16}px + var(--bob, 0px)), ${s.depth}px) rotate(${s.rot}deg)`;
-    el.style.transform=t;
-    if(s.type==="sphere"){
-      const light=shade(s.color, .12), dark=shade(s.color,-.18);
-      el.style.borderRadius="9999px";
-      el.style.background=`radial-gradient(circle at 35% 30%, ${light}, ${s.color} 55%, ${dark} 100%)`;
-      el.style.boxShadow=`0 10px 30px ${shade(s.color,-.18)}40, inset -10px -16px 30px ${shade(s.color,-.18)}70`;
-    }else if(s.type==="cube"){
-      const light=shade(s.color,.12), dark=shade(s.color,-.18);
-      const wrap=document.createElement("div"); wrap.style.position="relative"; wrap.style.width="100%"; wrap.style.height="100%"; wrap.style.filter="drop-shadow(0 12px 24px rgba(0,0,0,.18))";
-      wrap.appendChild(face(`linear-gradient(135deg, ${light}, ${s.color})`,"polygon(0% 50%, 50% 25%, 50% 75%, 0% 100%)"));
-      wrap.appendChild(face(`linear-gradient(315deg, ${dark}, ${s.color})`,"polygon(100% 50%, 50% 25%, 50% 75%, 100% 100%)"));
-      wrap.appendChild(face(`linear-gradient(180deg, ${shade(s.color,.18)}, ${dark})`,"polygon(0% 50%, 50% 25%, 100% 50%, 50% 75%)"));
-      el.appendChild(wrap);
-    }else{
-      const light=shade(s.color,.12), dark=shade(s.color,-.18);
-      const wrap=document.createElement("div"); wrap.style.position="relative"; wrap.style.width="100%"; wrap.style.height="100%"; wrap.style.filter="drop-shadow(0 10px 22px rgba(0,0,0,.16))";
-      wrap.appendChild(face(`linear-gradient(145deg, ${light}, ${s.color})`,"polygon(50% 10%, 85% 85%, 15% 85%)"));
-      wrap.appendChild(face(`linear-gradient(180deg, ${shade(s.color,.22)}, ${dark})`,"polygon(50% 10%, 85% 85%, 50% 65%)"));
-      el.appendChild(wrap);
-    }
-    if(animate){
-      el.style.setProperty("--bob","0px");
-      el.style.animation = `bobY ${6 + (s.depth + 40) / 20}s ease-in-out ${s.id * .37}s infinite alternate`;
-    }
-    return el;
-  }
-  function ensureRoot(){
-    let root=document.getElementById("maic-bg-root");
-    if(!root){
-      root=document.createElement("div");
-      root.id="maic-bg-root";
-      document.body.appendChild(root);
-    }
-    let grad=root.querySelector(".maic-bg-gradient");
-    let shapes=root.querySelector(".maic-bg-shapes");
-    if(!grad){ grad=document.createElement("div"); grad.className="maic-bg-gradient"; root.appendChild(grad); }
-    if(!shapes){ shapes=document.createElement("div"); shapes.className="maic-bg-shapes"; root.appendChild(shapes); }
-    return root;
-  }
-  let grainUrl=null;
-  function getGrain(intensity=.07){
-    if(grainUrl) return grainUrl;
-    const c=document.createElement("canvas"); const size=128; c.width=size; c.height=size;
-    const ctx=c.getContext("2d"); const img=ctx.createImageData(size,size);
-    for(let i=0;i<img.data.length;i+=4){ const v=Math.random()*255; img.data[i]=v; img.data[i+1]=v; img.data[i+2]=v; img.data[i+3]=Math.floor(255*intensity); }
-    ctx.putImageData(img,0,0);
-    grainUrl=c.toDataURL();
-    return grainUrl;
-  }
-  function bindPointer(interactive){
-    const d=document;
-    if(!interactive){
-      d.removeEventListener("pointermove",window.__MAIC_BG_PM__);
-      d.removeEventListener("pointerleave",window.__MAIC_BG_PL__);
-      document.documentElement.style.setProperty("--mx","0");
-      document.documentElement.style.setProperty("--my","0");
-      return;
-    }
-    if(window.__MAIC_BG_PM__) return;
-    window.__MAIC_BG_PM__=(e)=>{
-      const w=window.innerWidth, h=window.innerHeight;
-      const nx=(e.clientX/w)-.5, ny=(e.clientY/h)-.5;
-      document.documentElement.style.setProperty("--mx", nx.toFixed(4));
-      document.documentElement.style.setProperty("--my", ny.toFixed(4));
-    };
-    window.__MAIC_BG_PL__=()=>{ document.documentElement.style.setProperty("--mx","0"); document.documentElement.style.setProperty("--my","0"); };
-    d.addEventListener("pointermove", window.__MAIC_BG_PM__);
-    d.addEventListener("pointerleave", window.__MAIC_BG_PL__);
-  }
-  function mount(opts={}){
-    const theme = (opts.theme==="light"||opts.theme==="dark")?opts.theme:"dark";
-    const accent = opts.accent || "#5B8CFF";
-    const gradientStyle = opts.gradient || "radial";
-    const density = Math.max(1, Math.min(5, parseInt(opts.density||3,10)));
-    const count = Math.min(6*density, 30);
-    const animate = !!opts.animate;
-    const interactive = !!opts.interactive;
-    const grid = !!opts.grid;
-    const grain = !!opts.grain;
-    const blur = +opts.blur || 0;
-    const seed = Number.isFinite(+opts.seed) ? +opts.seed : 1234;
-    const veil = (opts.readabilityVeil!==false);
+  // 중복 주입/예외로 인한 초기 렌더 지연 방지
+  try {
+    if (window.MAIC_BG) return;
 
-    const root=ensureRoot(); root.dataset.theme = theme;
-    const grad = root.querySelector(".maic-bg-gradient");
-    grad.style.background = makeGradient(theme, gradientStyle, accent);
-    grad.style.filter = blur ? `saturate(1.05) blur(${blur}px)` : "";
-    const wrap = root.querySelector(".maic-bg-shapes");
-    wrap.innerHTML="";
-    const shapes = generateShapes({count, seed, accent, theme});
-    const prefersReduced = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    shapes.forEach(s=>wrap.appendChild(buildShapeEl(s, animate && !prefersReduced)));
-    let gridEl = root.querySelector(".maic-bg-grid");
-    if(grid){
-      if(!gridEl){ gridEl=document.createElement("div"); gridEl.className="maic-bg-grid"; root.appendChild(gridEl); }
-      gridEl.dataset.theme=theme;
-    }else if(gridEl){ gridEl.remove(); }
-    let grainEl = root.querySelector(".maic-bg-grain");
-    if(grain){
-      if(!grainEl){ grainEl=document.createElement("div"); grainEl.className="maic-bg-grain"; root.appendChild(grainEl); }
-      grainEl.style.backgroundImage=`url(${getGrain(theme==="light"?0.06:0.08)})`;
-    }else if(grainEl){ grainEl.remove(); }
-    let veilEl = root.querySelector(".maic-bg-veil");
-    const veilColor = theme==="light" ? "rgba(255,255,255,.55)" : "rgba(6,10,22,.55)";
-    if(veil){
-      if(!veilEl){ veilEl=document.createElement("div"); veilEl.className="maic-bg-veil"; root.appendChild(veilEl); }
-      veilEl.style.background = `radial-gradient(1200px 800px at 55% 35%, transparent, ${veilColor})`;
-    }else if(veilEl){ veilEl.remove(); }
-    bindPointer(interactive);
+    const clamp=(n,min,max)=>Math.min(max,Math.max(min,n));
+    const hexToRgb=(hex)=>{const c=hex.replace("#","");const v=c.length===3?c.split("").map(x=>x+x).join(""):c;const num=parseInt(v,16);return{r:(num>>16)&255,g:(num>>8)&255,b:num&255}};
+    const rgbToHex=(r,g,b)=>"#"+[r,g,b].map(v=>v.toString(16).padStart(2,"0")).join("");
+    const rgbToHsl=(r,g,b)=>{r/=255;g/=255;b/=255;const max=Math.max(r,g,b),min=Math.min(r,g,b);let h=0,s=0,l=(max+min)/2;if(max!==min){const d=max-min;s=l>0.5?d/(2-max-min):d/(max+min);switch(max){case r:h=(g-b)/d+(g<b?6:0);break;case g:h=(b-r)/d+2;break;case b:h=(r-g)/d+4;break}h/=6}return{h:h*360,s,l}};
+    const hslToRgb=(h,s,l)=>{h/=360;let r,g,b;if(s===0){r=g=b=l}else{const hue2rgb=(p,q,t)=>{if(t<0)t+=1;if(t>1)t-=1;if(t<1/6)return p+(q-p)*6*t;if(t<1/2)return q;if(t<2/3)return p+(q-p)*(2/3-t)*6;return p};const q=l<.5?l*(1+s):l+s-l*s;const p=2*l-q;r=hue2rgb(p,q,h+1/3);g=hue2rgb(p,q,h);b=hue2rgb(p,q,h-1/3)}return{r:Math.round(r*255),g:Math.round(g*255),b:Math.round(b*255)}};
+    const shade=(hex,lD=0,sD=0,hD=0)=>{const {r,g,b}=hexToRgb(hex);const hsl=rgbToHsl(r,g,b);const h=(hsl.h+hD+360)%360;const s=clamp(hsl.s+sD,0,1);const l=clamp(hsl.l+lD,0,1);const {r:rr,g:rg,b:rb}=hslToRgb(h,s,l);return rgbToHex(rr,rg,rb)};
+    const mulberry32=(a)=>()=>{let t=(a+=0x6d2b79f5);t=Math.imul(t^(t>>>15),t|1);t^=t+Math.imul(t^(t>>>7),t|61);return((t^(t>>>14))>>>0)/4294967296};
+
+    const makeGradient=(theme,style,accent)=>{
+      const aL=shade(accent, theme==="light"?-0.1:0.1);
+      const aD=shade(accent, theme==="light"?-0.2:-0.05);
+      const baseLight= theme==="light" ? "#F7FAFF" : "#0B1020";
+      const baseDark = theme==="light" ? "#EAF1FF" : "#0E1224";
+      if(style==="conic")  return `conic-gradient(from 220deg at 65% 35%, ${aL}, ${baseLight}, ${aD}, ${baseDark})`;
+      if(style==="linear") return `linear-gradient(135deg, ${baseLight}, ${aL} 35%, ${baseDark})`;
+      return `radial-gradient(1200px 800px at 75% 20%, ${aL}, transparent 55%), radial-gradient(900px 700px at 10% 80%, ${aD}, transparent 50%), linear-gradient(180deg, ${baseLight}, ${baseDark})`;
+    };
+
+    const generateShapes=({count,seed,accent,theme})=>{
+      const rnd=mulberry32(seed||1234);
+      return Array.from({length:count},(_,i)=>{
+        const t=rnd(); const type=t<.34?"sphere": t<.67?"cube":"pyramid";
+        const size=80+Math.floor(rnd()*220);
+        const x=-10+rnd()*120, y=-10+rnd()*120, rot=Math.floor(rnd()*360);
+        const depth=-40+rnd()*80, opacity=.18+rnd()*.22;
+        const hueShift=rnd()*40-20, tone=rnd()*.2-.1;
+        const color=shade(accent,tone,0,hueShift);
+        return {id:i,type,size,x,y,rot,depth,opacity,color};
+      });
+    };
+
+    const face=(bg,clip,extra={})=>{
+      const d=document.createElement("div");
+      Object.assign(d.style,{position:"absolute",inset:"0",background:bg,clipPath:clip,...extra});
+      return d;
+    };
+
+    function buildShapeEl(s, animate=true){
+      const el=document.createElement("div");
+      el.className="maic-shape";
+      el.style.position="absolute";
+      el.style.width=s.size+"px"; el.style.height=s.size+"px";
+      el.style.opacity=s.opacity;
+      el.style.transition="transform 120ms ease-out";
+      el.style.willChange="transform";
+      const t=`translate3d(calc(${s.x}% + var(--mx,0) * ${s.depth*16}px), calc(${s.y}% + var(--my,0) * ${s.depth*16}px + var(--bob, 0px)), ${s.depth}px) rotate(${s.rot}deg)`;
+      el.style.transform=t;
+
+      if(s.type==="sphere"){
+        const light=shade(s.color, .12), dark=shade(s.color,-.18);
+        el.style.borderRadius="9999px";
+        el.style.background=`radial-gradient(circle at 35% 30%, ${light}, ${s.color} 55%, ${dark} 100%)`;
+        el.style.boxShadow=`0 10px 30px ${shade(s.color,-.18)}40, inset -10px -16px 30px ${shade(s.color,-.18)}70`;
+      }else if(s.type==="cube"){
+        const light=shade(s.color,.12), dark=shade(s.color,-.18);
+        const wrap=document.createElement("div"); wrap.style.position="relative"; wrap.style.width="100%"; wrap.style.height="100%"; wrap.style.filter="drop-shadow(0 12px 24px rgba(0,0,0,.18))";
+        wrap.appendChild(face(`linear-gradient(135deg, ${light}, ${s.color})`,"polygon(0% 50%, 50% 25%, 50% 75%, 0% 100%)"));
+        wrap.appendChild(face(`linear-gradient(315deg, ${dark}, ${s.color})`,"polygon(100% 50%, 50% 25%, 50% 75%, 100% 100%)"));
+        wrap.appendChild(face(`linear-gradient(180deg, ${shade(s.color,.18)}, ${dark})`,"polygon(0% 50%, 50% 25%, 100% 50%, 50% 75%)"));
+        el.appendChild(wrap);
+      }else{
+        const light=shade(s.color,.12), dark=shade(s.color,-.18);
+        const wrap=document.createElement("div"); wrap.style.position="relative"; wrap.style.width="100%"; wrap.style.height="100%"; wrap.style.filter="drop-shadow(0 10px 22px rgba(0,0,0,.16))";
+        wrap.appendChild(face(`linear-gradient(145deg, ${light}, ${s.color})`,"polygon(50% 10%, 85% 85%, 15% 85%)"));
+        wrap.appendChild(face(`linear-gradient(180deg, ${shade(s.color,.22)}, ${dark})`,"polygon(50% 10%, 85% 85%, 50% 65%)"));
+        el.appendChild(wrap);
+      }
+
+      if(animate){
+        el.style.setProperty("--bob","0px");
+        el.style.animation = `bobY ${6 + (s.depth + 40) / 20}s ease-in-out ${s.id * .37}s infinite alternate`;
+      }
+      return el;
+    }
+
+    function ensureRoot(){
+      let root=document.getElementById("maic-bg-root");
+      if(!root){
+        root=document.createElement("div");
+        root.id="maic-bg-root";
+        document.body && document.body.appendChild(root);
+      }
+      let grad=root.querySelector(".maic-bg-gradient");
+      let shapes=root.querySelector(".maic-bg-shapes");
+      if(!grad){ grad=document.createElement("div"); grad.className="maic-bg-gradient"; root.appendChild(grad); }
+      if(!shapes){ shapes=document.createElement("div"); shapes.className="maic-bg-shapes"; root.appendChild(shapes); }
+      return root;
+    }
+
+    let grainUrl=null;
+    function getGrain(intensity=.07){
+      if(grainUrl) return grainUrl;
+      const c=document.createElement("canvas"); const size=128; c.width=size; c.height=size;
+      const ctx=c.getContext("2d"); const img=ctx.createImageData(size,size);
+      for(let i=0;i<img.data.length;i+=4){ const v=Math.random()*255; img.data[i]=v; img.data[i+1]=v; img.data[i+2]=v; img.data[i+3]=Math.floor(255*intensity); }
+      ctx.putImageData(img,0,0);
+      grainUrl=c.toDataURL();
+      return grainUrl;
+    }
+
+    function bindPointer(interactive){
+      const d=document;
+      if(!interactive){
+        d.removeEventListener("pointermove",window.__MAIC_BG_PM__);
+        d.removeEventListener("pointerleave",window.__MAIC_BG_PL__);
+        document.documentElement.style.setProperty("--mx","0");
+        document.documentElement.style.setProperty("--my","0");
+        return;
+      }
+      if(window.__MAIC_BG_PM__) return;
+      window.__MAIC_BG_PM__=(e)=>{
+        const w=window.innerWidth, h=window.innerHeight;
+        const nx=(e.clientX/w)-.5, ny=(e.clientY/h)-.5;
+        document.documentElement.style.setProperty("--mx", nx.toFixed(4));
+        document.documentElement.style.setProperty("--my", ny.toFixed(4));
+      };
+      window.__MAIC_BG_PL__=()=>{ document.documentElement.style.setProperty("--mx","0"); document.documentElement.style.setProperty("--my","0"); };
+      d.addEventListener("pointermove", window.__MAIC_BG_PM__);
+      d.addEventListener("pointerleave", window.__MAIC_BG_PL__);
+    }
+
+    function mount(opts={}){
+      // DOM 준비 뒤에만 실행되도록 _mount_background에서 보장합니다.
+      const theme = (opts.theme==="light"||opts.theme==="dark")?opts.theme:"dark";
+      const accent = opts.accent || "#5B8CFF";
+      const gradientStyle = opts.gradient || "radial";
+      const density = Math.max(1, Math.min(5, parseInt(opts.density||3,10)));
+      const count = Math.min(6*density, 30);
+      const animate = !!opts.animate;
+      const interactive = !!opts.interactive;
+      const grid = !!opts.grid;
+      const grain = !!opts.grain;
+      const blur = +opts.blur || 0;
+      const seed = Number.isFinite(+opts.seed) ? +opts.seed : 1234;
+      const veil = (opts.readabilityVeil!==false);
+
+      const root=ensureRoot(); if(!root) return;
+      root.dataset.theme = theme;
+
+      const grad = root.querySelector(".maic-bg-gradient");
+      grad.style.background = makeGradient(theme, gradientStyle, accent);
+      grad.style.filter = blur ? `saturate(1.05) blur(${blur}px)` : "";
+
+      const wrap = root.querySelector(".maic-bg-shapes");
+      wrap.innerHTML="";
+      const shapes = generateShapes({count, seed, accent, theme});
+      const prefersReduced = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      shapes.forEach(s=>wrap.appendChild(buildShapeEl(s, animate && !prefersReduced)));
+
+      let gridEl = root.querySelector(".maic-bg-grid");
+      if(grid){
+        if(!gridEl){ gridEl=document.createElement("div"); gridEl.className="maic-bg-grid"; root.appendChild(gridEl); }
+        gridEl.dataset.theme=theme;
+      }else if(gridEl){ gridEl.remove(); }
+
+      let grainEl = root.querySelector(".maic-bg-grain");
+      if(grain){
+        if(!grainEl){ grainEl=document.createElement("div"); grainEl.className="maic-bg-grain"; root.appendChild(grainEl); }
+        grainEl.style.backgroundImage=`url(${getGrain(theme==="light"?0.06:0.08)})`;
+      }else if(grainEl){ grainEl.remove(); }
+
+      let veilEl = root.querySelector(".maic-bg-veil");
+      const veilColor = theme==="light" ? "rgba(255,255,255,.55)" : "rgba(6,10,22,.55)";
+      if(veil){
+        if(!veilEl){ veilEl=document.createElement("div"); veilEl.className="maic-bg-veil"; root.appendChild(veilEl); }
+        veilEl.style.background = `radial-gradient(1200px 800px at 55% 35%, transparent, ${veilColor})`;
+      }else if(veilEl){ veilEl.remove(); }
+
+      bindPointer(interactive);
+    }
+
+    window.MAIC_BG = { mount };
+  } catch (e) {
+    console.warn("MAIC_BG bootstrap skipped (non-fatal):", e);
   }
-  window.MAIC_BG = { mount };
 })();
 </script>
     """, unsafe_allow_html=True)
+# [06B] END
 
-# [06C] 배경 마운트 헬퍼 =======================================================
+
+# [06C] 배경 마운트 헬퍼  # [06C] START
 def _mount_background(
     *,
     theme: str = "light",
@@ -413,18 +458,51 @@ def _mount_background(
     seed: int = 1234,
     readability_veil: bool = True,
 ):
-    if st is None:
+    """
+    - DISABLE_BG=true(또는 1/yes/on) 이면 배경을 스킵.
+    - DOMContentLoaded 이후 requestAnimationFrame 타이밍에 mount 실행.
+    - 예외 발생 시 콘솔 경고만 출력하고 앱 UI는 정상 표시.
+    """
+    import os, json
+    import streamlit as st
+
+    # 안전 스위치(secrets/env)
+    def _truthy(x: str | None) -> bool:
+        return str(x or "").strip().lower() in ("1","true","yes","on")
+
+    disable = _truthy(os.getenv("DISABLE_BG")) or _truthy(getattr(st, "secrets", {}).get("DISABLE_BG") if hasattr(st, "secrets") else None)
+    if disable:
         return
-    import json as _json
+
     _inject_modern_bg_lib()
-    opts = dict(theme=theme, accent=accent, density=density, interactive=interactive,
-                animate=animate, gradient=gradient, grid=grid, grain=grain,
-                blur=blur, seed=seed, readabilityVeil=readability_veil)
+
+    opts = dict(
+        theme=theme, accent=accent, density=density, interactive=interactive,
+        animate=animate, gradient=gradient, grid=grid, grain=grain,
+        blur=blur, seed=seed, readabilityVeil=readability_veil
+    )
     st.markdown(f"""
 <script>
-window.MAIC_BG && window.MAIC_BG.mount({_json.dumps(opts)});
+(function(){{
+  const mount = () => {{
+    try {{
+      if (window.MAIC_BG && typeof window.MAIC_BG.mount === "function") {{
+        window.MAIC_BG.mount({json.dumps(opts)});
+      }}
+    }} catch(e) {{
+      console.warn("MAIC_BG mount failed (non-fatal):", e);
+    }}
+  }};
+  if (document.readyState === "loading") {{
+    document.addEventListener("DOMContentLoaded", () => requestAnimationFrame(mount), {{ once: true }});
+  }} else {{
+    requestAnimationFrame(mount);
+  }}
+}})();
 </script>
     """, unsafe_allow_html=True)
+# [06C] END
+
 
 # [07] MAIN: 자동 attach/복구/판단 대기 =========================================
 def _auto_attach_or_build_index():
