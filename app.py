@@ -311,23 +311,32 @@ def _header():
         "MISSING":   ("🔴 미준비",   "red"),
     }.get(code, ("🔴 미준비", "red"))
 
-    # 헤더 전용 CSS + HTML (제목 3D, 부제목 앵커·오버레이)
+    # 헤더 전용 CSS + HTML (간격 ↑, 3D 타이틀 강화)
     st.markdown(f"""
     <style>
       .lees-header {{ margin: 0 0 .25rem 0; }}
+
+      /* 3D 타이틀: 보랏빛 그라디언트 + 엠보싱 섀도 */
       .lees-header .title-3d {{
         font-size: clamp(24px, 3.6vw, 42px);
         font-weight: 800; letter-spacing: .3px; line-height: 1.05;
-        color: #222;
+        background: linear-gradient(180deg, #f8f7ff 0%, #e3ddff 28%, #b49df8 62%, #6942d1 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
         text-shadow:
-          0 1px 0 #fff,
-          0 2px 0 #e9e9e9,
-          0 3px 0 #dadada,
-          0 4px 0 #cfcfcf,
+          0 1px 0 #ffffff,
+          0 2px 0 #ece8ff,
+          0 3px 0 #d9d2ff,
           0 6px 12px rgba(0,0,0,.18);
         margin: 0;
       }}
-      .lees-header .subhead-wrap {{ position: relative; margin-top: .25rem; }}
+
+      .lees-header .subhead-wrap {{
+        position: relative;
+        /* 제목과 부제목/오버레이 사이 간격 ↑ */
+        margin-top: .6rem;
+      }}
+
       .lees-header .subhead {{
         position: relative;
         font-weight: 700;
@@ -341,14 +350,19 @@ def _header():
       /* 오버레이: 부제목 글자 크기의 70% */
       .lees-header .badge, .lees-header .gear {{
         position: absolute; top: 0; left: 0;
-        transform: translateY(-90%);
+        /* 제목과의 간격 확보를 위해 살짝 더 낮게 배치(-90% → -80%) */
+        transform: translateY(-80%);
         font-size: .7em; line-height: 1;
         padding: .15em .5em; border-radius: 999px;
         user-select: none; -webkit-tap-highlight-color: transparent;
         z-index: 2; white-space: nowrap;
       }}
+
       .lees-header .gear {{
-        left: 100%; margin-left: -1.2em; padding: .15em .35em; border-radius: 10px;
+        left: 100%;
+        /* 단어에 덜 붙도록 살짝 여유: -1.2em → -1.0em */
+        margin-left: -1.0em;
+        padding: .15em .35em; border-radius: 10px;
         background: #f3f4f6; color: #111827; border: 1px solid #e5e7eb; text-decoration: none;
       }}
       .lees-header .gear:hover {{ filter: brightness(.96); }}
@@ -360,7 +374,7 @@ def _header():
 
       /* 매우 좁은 화면에서는 조금 더 위로 */
       @media (max-width: 380px) {{
-        .lees-header .badge, .lees-header .gear {{ transform: translateY(-110%); }}
+        .lees-header .badge, .lees-header .gear {{ transform: translateY(-100%); }}
       }}
     </style>
 
@@ -403,9 +417,8 @@ def _header():
             with c2:
                 st.write(" ")
 
-    # 준비선(READY면 내부 로직에서 자동 숨김)
     _render_boot_progress_line()
-    # st.divider()  # ← 제거(요청사항: 제목-부제목 사이 라인 없음)
+    # st.divider()  # ← 유지 금지(요청사항: 제목-부제목 사이 라인 없음)
 
 
 # [08] 배경(완전 비활성) =======================================================
