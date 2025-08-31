@@ -131,56 +131,130 @@ def _llm_health_badge() -> tuple[str, str]:
     if not (has_g or has_o): return ("키없음", "⚠️")
     if has_g and has_o: return ("Gemini/OpenAI", "✅")
     return ("Gemini", "✅") if has_g else ("OpenAI", "✅")
+# START [06A] 상태 SSOT 헬퍼 =========================================
+def _get_brain_status() -> dict[str, Any]:
+    """헤더/관리자 패널이 공유하는 단일 진실 소스(SSOT) 상태 객체를 반환합니다.
 
+    Fields:
+      - code: 'READY' | 'SCANNING' | 'RESTORING' | 'WARN' | 'ERROR' | 'MISSING'
+      - attached: bool  (Q&A 가능한 상태인지)
+      - msg: 사용자용 짧은 메시지
+      - source: 'local' | 'drive' | None
+    """
+    if st is None:
+        # headless/test 모드: 파일시스템만으로 판단
+        return {
+            "code": "READY" if _is_brain_ready() else "MISSING",
+            "attached": bool(_is_brain_ready()),
+            "msg": "테스트 모드: 로컬 인덱스 확인",
+            "source": "local" if _is_brain_ready() else None,
+        }
+
+    ss = st.session_state
+
+    # attach/restore 흐름에서 미리 기록해 둔 상태가 있으면 우선 사용
+    code = (ss.get("brain_status_code") or "").upper().strip()
+    msg  = ss.get("brain_status_msg")
+    src  = ss.get("brain_source")  # 'local' | 'drive' | None
+
+    # 하위호환: 세부 코드가 없다면 기존 세션키들로 유추
+    if not code:
+        if ss.get("restore_in_progress"):
+            code = "RESTORING"
+        elif ss.get("scan_in_progress"):
+            code = "SCANNING"
+        elif ss.get("brain_warning"):
+            code = "WARN"
+        elif ss.get("brain_error"):
+            code = "ERROR"
+        else:
+            code = "READY" if _is_brain_ready() else "MISSING"
+
+    if not msg:
+        default_msgs = {
+            "READY": "두뇌 준비완료",
+            "SCANNING": "자료 스캔 중…",
+            "RESTORING": "백업 복원 중…",
+            "WARN": "주의: 부분 불일치/검토 필요",
+            "ERROR": "오류: 복구/연결 실패",
+            "MISSING": "두뇌 없음: 빌드/복원 필요",
+        }
+        msg = default_msgs.get(code, code)
+
+    attached = code in ("READY", "WARN") and _is_brain_ready()
+
+    return {
+        "code": code,
+        "attached": bool(attached),
+        "msg": str(msg),
+        "source": src,
+    }
+# END [06A] 상태 SSOT 헬퍼 =========================================
+
+# START [06] _header 교체 (L135–L184) =================================
 def _header():
     if st is None:
         return
     ss = st.session_state
     ss.setdefault("_show_admin_login", False)
 
+    status = _get_brain_status()
+    code = status["code"]
+    attached = status["attached"]
+    msg = status["msg"]
+
+    # 상태 → 배지 매핑
+    badge = {
+        "READY": ("🟢", "준비완료"),
+        "SCANNING": ("🟡", "스캔중"),
+        "RESTORING": ("🟡", "복원중"),
+        "WARN": ("🟠", "주의"),
+        "ERROR": ("🔴", "오류"),
+        "MISSING": ("🔴", "없음"),
+    }.get(code, ("⚪", code))
+
     left, right = st.columns([0.78, 0.22])
     with left:
         st.markdown("### LEES AI Teacher")
     with right:
         if _is_admin_view():
-            st.markdown("**🟢 준비완료**" if _is_brain_ready() else "**🟡 준비중**")
+            st.markdown(f"**{badge[0]} {badge[1]}**")
+            st.caption(f"상태: {code} · {msg}")
         label, icon = _llm_health_badge()
         st.caption(f"LLM: {icon} {label}")
 
         # 학생 모드: 우상단 아이콘만(미니멀)
         if not _is_admin_view():
-            if st.button("⚙️", key="admin_icon_header", help="관리자", use_container_width=True):
-                _toggle_login_flag()
+            with st.popover("👤", use_container_width=True):
+                with st.form(key="admin_login"):
+                    pwd_set = _from_secrets("ADMIN_PASSWORD", "")
+                    pw = st.text_input("관리자 비밀번호", type="password")
+                    submit = st.form_submit_button("로그인", use_container_width=True)
+                    if submit:
+                        if pw and pw == str(pwd_set):
+                            ss["admin_mode"] = True
+                            st.success("로그인 성공")
+                            st.rerun()
+                        else:
+                            st.error("비밀번호가 올바르지 않습니다.")
         else:
-            if st.button("관리자 해제", use_container_width=True):
-                ss["admin_mode"] = False
-                ss["_show_admin_login"] = False
-                st.rerun()
-
-        # 인라인 로그인 폼
-        if ss.get("_show_admin_login", False) and not _is_admin_view():
-            pwd_set = os.getenv("APP_ADMIN_PASSWORD") or _from_secrets("APP_ADMIN_PASSWORD", "0000") or "0000"
-            with st.container(border=True):
-                with st.form("admin_login_form", clear_on_submit=True):
-                    pw = st.text_input("관리자 비밀번호", type="password", label_visibility="collapsed")
-                    c1, c2 = st.columns([0.5, 0.5])
-                    with c1:
-                        submit = st.form_submit_button("로그인", use_container_width=True)
-                    with c2:
+            # 관리자 모드: 로그아웃/닫기
+            with st.popover("👤", use_container_width=True):
+                with st.form(key="admin_logout"):
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        submit = st.form_submit_button("로그아웃", use_container_width=True)
+                    with col2:
                         close  = st.form_submit_button("닫기",   use_container_width=True)
                 if submit:
-                    if pw and pw == str(pwd_set):
-                        ss["admin_mode"] = True
-                        ss["_show_admin_login"] = False
-                        st.success("로그인 성공")
-                        st.rerun()
-                    else:
-                        st.error("비밀번호가 올바르지 않습니다.")
+                    ss["admin_mode"] = False
+                    st.success("로그아웃")
+                    st.rerun()
                 elif close:
-                    ss["_show_admin_login"] = False
                     st.rerun()
 
     st.divider()
+# END [06] _header 교체 (L135–L184) ===================================
 
 def _login_panel_if_needed():
     return  # 더 이상 사용 안 함
