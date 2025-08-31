@@ -190,14 +190,67 @@ def _get_brain_status() -> dict[str, Any]:
         "source": src,
     }
 # END [06A] 상태 SSOT 헬퍼 =========================================
+# ====================== [06A2] Boot Progress SSOT & UI — START ======================
+def _set_phase(code: str, msg: str = "") -> None:
+    """오토플로우 진행 단계를 SSOT로 기록"""
+    if st is None: 
+        return
+    ss = st.session_state
+    ss["_boot_phase"] = code  # e.g., LOCAL_CHECK, RESTORE_FROM_RELEASE, DIFF_CHECK, REINDEXING, READY_MARK, READY, ERROR
+    if msg:
+        ss["_boot_msg"] = msg
 
-# START [06] _header 교체 (L135–L184) =================================
+def _render_boot_progress_line():
+    """지하철 노선 스타일 진행 표시(점선=진행/예정, 실선=완료, 붉은 실선=오류)"""
+    if st is None:
+        return
+    ss = st.session_state
+    steps = [
+        ("LOCAL_CHECK", "로컬검사"),
+        ("RESTORE_FROM_RELEASE", "백업복원"),
+        ("DIFF_CHECK", "변경감지"),
+        ("REINDEXING", "재인덱싱"),
+        ("READY_MARK", "마킹"),
+        ("READY", "준비완료"),
+    ]
+    phase = (ss.get("_boot_phase") or ("READY" if _is_brain_ready() else "LOCAL_CHECK")).upper()
+    has_error = (phase == "ERROR")
+    idx = next((i for i,(k,_) in enumerate(steps) if k == phase), (len(steps)-1 if phase=="READY" else 0))
+
+    st.markdown("""
+    <style>
+      .metro-wrap{display:flex;align-items:center;gap:10px;margin:6px 2px 2px 2px}
+      .metro-step{flex:1}
+      .metro-seg{height:2px;border-top:2px dashed #cdd6e1;margin:6px 0 2px 0}
+      .metro-seg.done{border-top-style:solid;border-color:#10a37f}
+      .metro-seg.doing{border-top-style:dashed;border-color:#f0ad00}
+      .metro-seg.todo{border-top-style:dashed;border-color:#cdd6e1}
+      .metro-seg.error{border-top-style:solid;border-color:#c5362c}
+      .metro-lbl{font-size:.78rem;color:#536273;text-align:center}
+    </style>
+    """, unsafe_allow_html=True)
+
+    cols = st.columns(len(steps))
+    for i,(code,label) in enumerate(steps):
+        klass = "todo"
+        if has_error:
+            klass = "error" if i == idx else "todo"
+        else:
+            if i < idx:  klass = "done"
+            elif i == idx: klass = "doing"
+            else: klass = "todo"
+        with cols[i]:
+            st.markdown(f'<div class="metro-step"><div class="metro-seg {klass}"></div>'
+                        f'<div class="metro-lbl">{label}</div></div>', unsafe_allow_html=True)
+# ======================= [06A2] Boot Progress SSOT & UI — END =======================
+
+# ============================== [06] _header — START ===============================
 def _header():
     """
     헤더 미니멀:
-    - 상태 텍스트(예: '준비완료') 제거, 아이콘만 사용
-    - 아이콘을 제목 앞에 배치, 제목 크기 1.5배
-    - 로그인 팝오버는 안전 폴백(지원 안 되면 expander)
+    - 상태 아이콘만 사용(텍스트 제거) → SSOT(_get_brain_status)
+    - 타이틀 바로 아래에 '지하철 노선' 진행선 출력
+    - 관리자 진입 아이콘을 사람(👤) → 톱니(⚙️)로 변경
     """
     import streamlit as st
     if st is None:
@@ -208,13 +261,13 @@ def _header():
     status = _get_brain_status()
     code = status["code"]
 
-    # 상태 → 아이콘만 사용 (텍스트 제거)
+    # SSOT 상태 → 아이콘 매핑
     badge_icon = {
         "READY": "🟢", "SCANNING": "🟡", "RESTORING": "🟡",
         "WARN": "🟠", "ERROR": "🔴", "MISSING": "🔴",
     }.get(code, "⚪")
 
-    # 가벼운 안전 팝오버(미지원/실패 시 expander 폴백)
+    # 안전 팝오버(미지원 시 expander)
     def _safe_popover(label: str, **kw):
         if hasattr(st, "popover"):
             try:
@@ -223,7 +276,7 @@ def _header():
                 pass
         return st.expander(label, expanded=True)
 
-    # 제목/뱃지 스타일(최소 CSS)
+    # 타이틀
     st.markdown("""
     <style>
       .brand-row { display:flex; align-items:center; gap:.5rem; }
@@ -239,16 +292,18 @@ def _header():
             f'<span class="brand-title">LEES AI Teacher</span></div>',
             unsafe_allow_html=True
         )
+        # 👇 진행선(지하철 노선)
+        _render_boot_progress_line()
+
     with right:
-        # LLM 상태(간단 캡션만 유지)
+        # LLM 상태 캡션(간단)
         label, icon = _llm_health_badge()
         st.caption(f"LLM: {icon} {label}")
 
-        # 로그인/로그아웃 팝오버(안전 버전)
+        # 관리자(⚙️) 아이콘으로 팝오버
         if not _is_admin_view():
-            with _safe_popover("👤", use_container_width=True):
+            with _safe_popover("⚙️", use_container_width=True):
                 with st.form(key="admin_login"):
-                    # 비밀번호 키 폴백: ADMIN_PASSWORD → APP_ADMIN_PASSWORD
                     pwd_set = (_from_secrets("ADMIN_PASSWORD", "")
                                or _from_secrets("APP_ADMIN_PASSWORD", "")
                                or "")
@@ -257,12 +312,11 @@ def _header():
                     if submit:
                         if pw and pwd_set and pw == str(pwd_set):
                             ss["admin_mode"] = True
-                            st.success("로그인 성공")
-                            st.rerun()
+                            st.success("로그인 성공"); st.rerun()
                         else:
                             st.error("비밀번호가 올바르지 않습니다.")
         else:
-            with _safe_popover("👤", use_container_width=True):
+            with _safe_popover("⚙️", use_container_width=True):
                 with st.form(key="admin_logout"):
                     col1, col2 = st.columns(2)
                     with col1:
@@ -271,16 +325,14 @@ def _header():
                         close  = st.form_submit_button("닫기",   use_container_width=True)
                 if submit:
                     ss["admin_mode"] = False
-                    st.success("로그아웃")
-                    st.rerun()
+                    st.success("로그아웃"); st.rerun()
                 elif close:
                     st.rerun()
 
     st.divider()
-def _login_panel_if_needed():
-    return  # 더 이상 사용 안 함
+# =============================== [06] _header — END ================================
 
-# [06B] 배경 라이브러리(필요 시) ==============================================
+
 # START [06B] 배경 완전 비활성 교체 (L262–L345)
 def _inject_modern_bg_lib():
     """
