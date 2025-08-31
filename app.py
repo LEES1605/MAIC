@@ -410,8 +410,10 @@ def _boot_autoflow_hook():
         if mod and hasattr(mod, "autoflow_boot_check"):
             mod.autoflow_boot_check(interactive=_is_admin_view())
     except Exception as e:
-        _error_log(f"boot_autoflow_hook: {e}")
+        # 오타 수정: _error_log -> _errlog
+        _errlog(f"boot_autoflow_hook: {e}", where="[boot_hook]", exc=e)
 # ============================= [07C] boot hook — END ==============================
+
 
 def main():
     if st is None:
@@ -908,6 +910,13 @@ def _render_chat_panel():
 def _render_body() -> None:
     if st is None:
         return
+
+    # [11A] 부팅 오토플로우 1회 실행 주입
+    if not st.session_state.get("_boot_checked"):
+        try:
+            _boot_autoflow_hook()
+        except Exception as e:
+            _errlog(f"boot check failed: {e}", where="[render_body.boot]", exc=e)
 
     # 배경(필요 시)
     _mount_background(theme="light", accent="#5B8CFF", density=3,
