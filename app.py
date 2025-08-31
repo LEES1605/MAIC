@@ -193,6 +193,13 @@ def _get_brain_status() -> dict[str, Any]:
 
 # START [06] _header 교체 (L135–L184) =================================
 def _header():
+    """
+    헤더 미니멀:
+    - 상태 텍스트(예: '준비완료') 제거, 아이콘만 사용
+    - 아이콘을 제목 앞에 배치, 제목 크기 1.5배
+    - 로그인 팝오버는 안전 폴백(지원 안 되면 expander)
+    """
+    import streamlit as st
     if st is None:
         return
     ss = st.session_state
@@ -200,40 +207,44 @@ def _header():
 
     status = _get_brain_status()
     code = status["code"]
-    attached = status["attached"]
-    msg = status["msg"]
 
-    # 상태 → 배지 매핑
-    badge = {
-        "READY": ("🟢", "준비완료"),
-        "SCANNING": ("🟡", "스캔중"),
-        "RESTORING": ("🟡", "복원중"),
-        "WARN": ("🟠", "주의"),
-        "ERROR": ("🔴", "오류"),
-        "MISSING": ("🔴", "없음"),
-    }.get(code, ("⚪", code))
+    # 상태 → 아이콘만 사용 (텍스트 제거)
+    badge_icon = {
+        "READY": "🟢", "SCANNING": "🟡", "RESTORING": "🟡",
+        "WARN": "🟠", "ERROR": "🔴", "MISSING": "🔴",
+    }.get(code, "⚪")
 
-    # 안전한 팝오버 래퍼: 구버전/환경 문제 시 expander로 폴백
+    # 가벼운 안전 팝오버(미지원/실패 시 expander 폴백)
     def _safe_popover(label: str, **kw):
         if hasattr(st, "popover"):
             try:
                 return st.popover(label, **kw)
             except Exception:
                 pass
-        # 폴백: expander (use_container_width 유사 효과)
         return st.expander(label, expanded=True)
+
+    # 제목/뱃지 스타일(최소 CSS)
+    st.markdown("""
+    <style>
+      .brand-row { display:flex; align-items:center; gap:.5rem; }
+      .brand-badge { font-size:1.25em; }
+      .brand-title { font-size:1.5em; font-weight:800; letter-spacing:.2px; }
+    </style>
+    """, unsafe_allow_html=True)
 
     left, right = st.columns([0.78, 0.22])
     with left:
-        st.markdown("### LEES AI Teacher")
+        st.markdown(
+            f'<div class="brand-row"><span class="brand-badge">{badge_icon}</span>'
+            f'<span class="brand-title">LEES AI Teacher</span></div>',
+            unsafe_allow_html=True
+        )
     with right:
-        if _is_admin_view():
-            st.markdown(f"**{badge[0]} {badge[1]}**")
-            st.caption(f"상태: {code} · {msg}")
+        # LLM 상태(간단 캡션만 유지)
         label, icon = _llm_health_badge()
         st.caption(f"LLM: {icon} {label}")
 
-        # 학생 모드: 우상단 로그인 아이콘(가벼운 팝오버/폴백)
+        # 로그인/로그아웃 팝오버(안전 버전)
         if not _is_admin_view():
             with _safe_popover("👤", use_container_width=True):
                 with st.form(key="admin_login"):
@@ -251,7 +262,6 @@ def _header():
                         else:
                             st.error("비밀번호가 올바르지 않습니다.")
         else:
-            # 관리자 모드: 로그아웃/닫기
             with _safe_popover("👤", use_container_width=True):
                 with st.form(key="admin_logout"):
                     col1, col2 = st.columns(2)
@@ -267,9 +277,6 @@ def _header():
                     st.rerun()
 
     st.divider()
-# END [06] _header 교체 (L135–L184) ===================================
-
-
 def _login_panel_if_needed():
     return  # 더 이상 사용 안 함
 
@@ -527,16 +534,68 @@ def _render_admin_panels() -> None:
 
 # [10] 학생 UI (Stable Chatbot): 파스텔 배경 + 말풍선 + 스트리밍 =================
 def _inject_chat_styles_once():
-    if st.session_state.get("_chat_styles_injected"): return
+    """
+    채팅용 전역 CSS 1회 주입:
+    - 커스텀 레이아웃(.row/.bubble)과 Streamlit chat 모두를 타겟팅
+    - 사용자: 보라 톤 / AI: 화이트, 확실한 대비
+    """
+    import streamlit as st  # 안전상 재임포트 허용
+    if st.session_state.get("_chat_styles_injected"):
+        return
     st.session_state["_chat_styles_injected"] = True
+
     st.markdown("""
     <style>
-      .status-btn{display:inline-block;padding:6px 10px;border-radius:14px;
-        font-size:12px;font-weight:700;color:#111;border:1px solid transparent}
-      .status-btn.green{background:#daf5cb;border-color:#bfe5ac}
-      .status-btn.yellow{background:#fff3bf;border-color:#ffe08a}
+      /* ===== 공통 컨테이너(있으면 적용, 없으면 무해) ===== */
+      .chat-wrap{
+        background:#f5f7fb !important;border:1px solid #e6ecf5 !important;border-radius:18px;
+        padding:10px 10px 8px;margin-top:10px
+      }
+      .chat-box{min-height:240px;max-height:54vh;overflow-y:auto;padding:6px 6px 2px}
 
-      /* 모드 라디오(작게·균일, 아이콘 없음) */
+      /* ===== 커스텀 말풍선(앱 내 .row/.bubble 구조용) ===== */
+      .row{display:flex;margin:8px 0}
+      .row.user{justify-content:flex-end}
+      .row.ai{justify-content:flex-start}
+      .bubble{
+        max-width:88%;padding:12px 14px;border-radius:16px;line-height:1.6;font-size:15px;
+        box-shadow:0 1px 1px rgba(0,0,0,.05);white-space:pre-wrap;position:relative;border:1px solid #e0e4ea;
+      }
+      /* 사용자(보라 톤) */
+      .bubble.user{
+        background:#EFE6FF !important;
+        color:#201547;
+        border-color:#D6CCFF !important;
+        border-top-right-radius:8px;
+      }
+      /* AI(화이트) */
+      .bubble.ai{
+        background:#FFFFFF;
+        color:#14121f;
+        border-top-left-radius:8px;
+      }
+
+      /* ===== Streamlit chat 기본 위젯에 대한 보정(있을 때만 적용) ===== */
+      /* 사용자 메시지(오른쪽) */
+      [data-testid="stChatMessageUser"] > div{
+        display:flex; justify-content:flex-end;
+      }
+      [data-testid="stChatMessageUser"] [data-testid="stMarkdownContainer"]{
+        max-width:88%; background:#EFE6FF; color:#201547;
+        border:1px solid #D6CCFF; border-radius:16px; border-top-right-radius:8px;
+        padding:12px 14px; box-shadow:0 1px 1px rgba(0,0,0,.05);
+      }
+      /* 어시스턴트 메시지(왼쪽) */
+      [data-testid="stChatMessage"] > div{
+        display:flex; justify-content:flex-start;
+      }
+      [data-testid="stChatMessage"] [data-testid="stMarkdownContainer"]{
+        max-width:88%; background:#FFFFFF; color:#14121f;
+        border:1px solid #e0e4ea; border-radius:16px; border-top-left-radius:8px;
+        padding:12px 14px; box-shadow:0 1px 1px rgba(0,0,0,.05);
+      }
+
+      /* ===== 라디오(모드 선택) pill 형태 보정 ===== */
       div[data-testid="stRadio"] > div[role="radiogroup"]{display:flex;gap:10px;flex-wrap:wrap}
       div[data-testid="stRadio"] [role="radio"]{
         border:2px solid #bcdcff;border-radius:12px;padding:6px 12px;background:#fff;color:#0a2540;
@@ -546,25 +605,8 @@ def _inject_chat_styles_once():
         background:#eaf6ff;border-color:#9fd1ff;color:#0a2540;
       }
       div[data-testid="stRadio"] svg{display:none!important}
-
-      /* 채팅 컨테이너(파스텔 하늘) */
-      .chat-wrap{background:#eaf6ff !important;border:1px solid #cfe7ff !important;border-radius:18px;
-                 padding:10px 10px 8px;margin-top:10px}
-      .chat-box{min-height:240px;max-height:54vh;overflow-y:auto;padding:6px 6px 2px}
-
-      /* 말풍선 */
-      .row{display:flex;margin:8px 0}
-      .row.user{justify-content:flex-end}
-      .row.ai{justify-content:flex-start}
-      .bubble{
-        max-width:88%;padding:12px 14px;border-radius:16px;line-height:1.6;font-size:15px;
-        box-shadow:0 1px 1px rgba(0,0,0,.05);white-space:pre-wrap;position:relative;border:1px solid #e0eaff;
-      }
-      .bubble.user{ background:#dff0ff !important; color:#0a2540!important; border-color:#bfe2ff !important; border-top-right-radius:8px; }
-      .bubble.ai{   background:#ffffff; color:#14121f; border-top-left-radius:8px; }
     </style>
     """, unsafe_allow_html=True)
-
 def _render_bubble(role:str, text:str):
     import html, re
     klass = "user" if role=="user" else "ai"
@@ -572,17 +614,33 @@ def _render_bubble(role:str, text:str):
     t = re.sub(r"  ","&nbsp;&nbsp;", t)
     st.markdown(f'<div class="row {klass}"><div class="bubble {klass}">{t}</div></div>', unsafe_allow_html=True)
 
-def _render_mode_controls_pills()->str:
+def _render_mode_controls_pills():
+    """
+    질문 모드 라디오: 라벨 문구를 미니멀하게 숨김(label_visibility='collapsed')
+    기존 상태 키(ss['qa_mode_radio'])와 '어법/문장/지문' 맵핑 유지
+    """
+    import streamlit as st
     _inject_chat_styles_once()
-    ss=st.session_state
-    cur=ss.get("qa_mode_radio") or "문법"
-    labels=["어법","문장","지문"]; map_to={"어법":"문법","문장":"문장","지문":"지문"}
-    idx = labels.index({"문법":"어법","문장":"문장","지문":"지문"}[cur])
-    sel = st.radio("질문 모드 선택", options=labels, index=idx, horizontal=True)
-    new_key = map_to[sel]
-    if new_key != cur: ss["qa_mode_radio"]=new_key; st.rerun()
-    return ss.get("qa_mode_radio", new_key)
+    ss = st.session_state
 
+    cur = ss.get("qa_mode_radio") or "문법"
+    labels = ["어법", "문장", "지문"]
+    map_to = {"어법": "문법", "문장": "문장", "지문": "지문"}
+    idx = labels.index({"문법": "어법", "문장": "문장", "지문": "지문"}[cur])
+
+    # ⚠️ 라벨 숨김(미니멀): label_visibility="collapsed"
+    sel = st.radio(
+        "질문 모드 선택",
+        options=labels,
+        index=idx,
+        horizontal=True,
+        label_visibility="collapsed",
+    )
+    new_key = map_to[sel]
+    if new_key != cur:
+        ss["qa_mode_radio"] = new_key
+        st.rerun()
+    return ss.get("qa_mode_radio", new_key)
 def _render_llm_status_minimal():
     has_g  = bool(os.getenv("GEMINI_API_KEY") or _from_secrets("GEMINI_API_KEY"))
     has_o  = bool(os.getenv("OPENAI_API_KEY") or _from_secrets("OPENAI_API_KEY"))
