@@ -1,8 +1,3 @@
-git mv PROJECT_STATUS.md PROJECT_STATUS.md
-git grep -n "PROJECT_STATUS" || true          # 혹시 남은 오탈자 참조 검색
-git commit -m "chore(docs): fix typo PROJECT_STATUS -> PROJECT_STATUS"
-
-
 # Re-create PROJECT_STATUS.md and confirm it exists
 from datetime import datetime
 from textwrap import dedent
