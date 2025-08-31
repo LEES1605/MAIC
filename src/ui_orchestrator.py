@@ -1,8 +1,7 @@
-# ===== 교체 대상: src/ui_orchestrator.py L66–L267 =====
-# ===================== render_index_orchestrator_panel — START =====================
+# =========== render_index_orchestrator_panel — START ===========
 def render_index_orchestrator_panel() -> None:
     """
-    관리자 오케스트레이터 패널(네트워크 호출 지연 + 버튼 클릭 시 실행)
+    관리자 진단 도구 패널(네트워크 호출 지연 + 버튼 클릭 시 실행)
     - 패널을 열어도 즉시 네트워크에 접근하지 않습니다.
     - "진단 실행" 버튼 클릭 시에만 Drive/GitHub 상태를 점검합니다.
     - 버튼 실행 중에는 spinner를 표시합니다.
@@ -11,7 +10,7 @@ def render_index_orchestrator_panel() -> None:
     import streamlit as st
     from pathlib import Path
 
-    st.markdown("## 🧠 인덱스 오케스트레이터")
+    st.markdown("## 🧠 인덱스 진단 도구")  # ← 헤더만 교체 (기존: 인덱스 오케스트레이터)
 
     # 1) 의존성 지연 임포트
     deps = _lazy_imports()
@@ -35,8 +34,8 @@ def render_index_orchestrator_panel() -> None:
 
     # 결과 캐시
     ss = st.session_state
-    ss.setdefault("_orch_diag", {})   # {"drive_ok":bool,"drive_email":str,"gh_ok":bool,"gh_tag":str, ...}
-    ss.setdefault("_orchestrator_errors", [])   # 기존 에러 누적 키와 동일하게 사용
+    ss.setdefault("_orch_diag", {})
+    ss.setdefault("_orchestrator_errors", [])
 
     # 1) 상태 점검(지연 실행)
     with st.container(border=True):
@@ -81,20 +80,22 @@ def render_index_orchestrator_panel() -> None:
                 }
             st.success(f"진단 완료 ({(time.perf_counter()-t0)*1000:.0f} ms)")
 
-        # 결과 표시(있으면)
+        # 결과 표시
         d = ss.get("_orch_diag") or {}
         def _badge(ok: bool|None, label: str) -> str:
             if ok is True:  return f"✅ {label}"
             if ok is False: return f"❌ {label}"
             return f"— {label}"
-        st.write("- Drive:", _badge(d.get('drive_ok'), f"연결" + (f"(`{d.get('drive_email')}`)" if d.get('drive_email') else "")))
-        st.write("- GitHub:", _badge(d.get('gh_ok'), f"최신 릴리스: {d.get('gh_tag') or '없음'}"))
         if PERSIST_DIR:
+            from pathlib import Path
             chunks = Path(PERSIST_DIR) / "chunks.jsonl"
             ready  = Path(PERSIST_DIR) / ".ready"
             local_ok = chunks.exists() and ready.exists()
-            st.write("- 로컬:", _badge(local_ok, f"인덱스 파일: {'있음' if chunks.exists() else '없음'} / .ready: {'있음' if ready.exists() else '없음'}"))
-            st.caption(f"persist: `{Path(PERSIST_DIR).as_posix()}`")
+        else:
+            local_ok = None
+        st.write("- Drive:", _badge(d.get('drive_ok'), f"연결" + (f"(`{d.get('drive_email')}`)" if d.get('drive_email') else "")))
+        st.write("- GitHub:", _badge(d.get('gh_ok'), f"최신 릴리스: {d.get('gh_tag') or '없음'}"))
+        st.write("- 로컬:", _badge(local_ok, "인덱스/ready 파일 상태"))
 
     # 2) 신규 자료 감지(Drive/Release 비교)
     with st.container(border=True):
@@ -198,4 +199,4 @@ def render_index_orchestrator_panel() -> None:
         txt = _errors_text()
         st.text_area("최근 오류", value=txt, height=160)
         st.download_button("오류 로그 다운로드", data=txt.encode("utf-8"), file_name="orchestrator_errors.txt")
-# ====================== render_index_orchestrator_panel — END ======================
+# ============ render_index_orchestrator_panel — END ============
