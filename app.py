@@ -265,12 +265,13 @@ def _render_boot_progress_line():
             )
 
 
-# [07] 헤더(미니멀, 톱니 아이콘, 진행선 포함) ====================================
+# [07] 헤더(타이틀 우측 끝에 ⚙️, 진행선 포함) ====================================
 def _header():
     """
     - 타이틀/상태 아이콘(SSOT)
-    - 바로 아래에 '지하철 노선' 진행선(READY면 숨김)
-    - 관리자 진입 아이콘: 톱니(⚙️) — 트리거 버튼을 32px로 축소
+    - 타이틀 **같은 줄의 우측 끝**에 ⚙️(관리자) 버튼 배치
+    - LLM 상태 캡션은 타이틀 아래 오른쪽 정렬(모바일에서는 자동 숨김)
+    - 진행선은 READY면 숨김
     """
     if st is None:
         return
@@ -293,34 +294,37 @@ def _header():
                 pass
         return st.expander(label, expanded=True)
 
+    # ── 헤더 전용 스타일
     st.markdown("""
     <style>
       .brand-row { display:flex; align-items:center; gap:.5rem; }
       .brand-badge { font-size:1.25em; }
       .brand-title { font-size:2.4em; font-weight:800; letter-spacing:.2px; } /* 60% 확대 */
-      /* ⚙️ popover 트리거를 32px로 축소 */
+      /* 두 컬럼을 한 줄로: 오른쪽 끝 정렬 */
+      .gear-wrap { display:flex; justify-content:flex-end; align-items:center; }
+      /* ⚙️ 트리거 버튼 32px로 축소 */
       div[data-testid="stPopover"] > button{
         width:32px;height:32px;min-width:32px;padding:0;border-radius:16px;
       }
       div[data-testid="stPopover"] > button p{ margin:0; font-size:18px; line-height:1; }
-      /* 질문 타이틀 30% 축소 */
+      /* LLM 캡션: 모바일에서는 숨김 */
+      .llm-cap { text-align:right; color:#6b7280; font-size:.82rem; margin-top:.25rem; }
+      @media (max-width:640px){ .llm-cap{ display:none; } }
+      /* 질문 타이틀 30% 축소(.hero-ask는 본문에서 사용) */
       .hero-ask{ font-size:1.54rem; font-weight:800; letter-spacing:.2px; margin: 4px 0 8px; }
     </style>
     """, unsafe_allow_html=True)
 
-    left, right = st.columns([0.78, 0.22])
-    with left:
+    # ── 타이틀 줄: 왼쪽(배지+타이틀) · 오른쪽(⚙️)
+    c_left, c_right = st.columns([0.92, 0.08], gap="small")
+    with c_left:
         st.markdown(
             f'<div class="brand-row"><span class="brand-badge">{badge_icon}</span>'
             f'<span class="brand-title">LEES AI Teacher</span></div>',
             unsafe_allow_html=True
         )
-        _render_boot_progress_line()
-
-    with right:
-        label, icon = _llm_health_badge()
-        st.caption(f"LLM: {icon} {label}")
-
+    with c_right:
+        st.markdown('<div class="gear-wrap">', unsafe_allow_html=True)
         if not _is_admin_view():
             with _safe_popover("⚙️"):
                 with st.form(key="admin_login"):
@@ -348,7 +352,17 @@ def _header():
                     st.success("로그아웃"); st.rerun()
                 elif close:
                     st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
 
+    # ── LLM 상태 캡션(타이틀 아래, 우측 정렬)
+    try:
+        label, icon = _llm_health_badge()
+        st.markdown(f'<div class="llm-cap">LLM: {icon} {label}</div>', unsafe_allow_html=True)
+    except Exception:
+        pass
+
+    # 진행선(READY면 자동 숨김)
+    _render_boot_progress_line()
     st.divider()
 
 
