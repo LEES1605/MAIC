@@ -269,7 +269,7 @@ def _header():
     """
     - 제목과 부제목을 하나의 헤더 블록에서 렌더링.
     - 부제목의 '질문은' 위에 상태 배지(70%), '이다.' 위에 ⚙(70%)를 오버레이.
-    - 모바일에서도 줄바꿈/겹침 최소화. 제목-부제목 사이에 라인 없음.
+    - 제목: 진한 남색 + 3D 섀도, 폰트 50% 확대.
     - ⚙ 클릭 시 ?settings=1 쿼리로 '관리자 로그인 패널' 열기.
     """
     if st is None:
@@ -290,7 +290,6 @@ def _header():
     if "settings" in qp_dict:
         flag = str(qp_dict.get("settings", "1"))
         ss["_show_admin_login"] = flag in ("1", "true", "True")
-        # 소모하여 URL 깔끔히
         try:
             if has_new_qp:
                 st.query_params.clear()
@@ -311,30 +310,29 @@ def _header():
         "MISSING":   ("🔴 미준비",   "red"),
     }.get(code, ("🔴 미준비", "red"))
 
-    # 헤더 전용 CSS + HTML (간격 ↑, 3D 타이틀 강화)
+    # 헤더 전용 CSS + HTML (진남색 3D + 폰트 1.5×, 간격 ↑)
     st.markdown(f"""
     <style>
-      .lees-header {{ margin: 0 0 .25rem 0; }}
+      .lees-header {{ margin: 0 0 .35rem 0; }}
 
-      /* 3D 타이틀: 보랏빛 그라디언트 + 엠보싱 섀도 */
+      /* 3D 타이틀: 진한 남색 + 엠보싱 섀도, 폰트 50% 확대
+         (기존 clamp(24, 3.6vw, 42) -> 1.5× = clamp(36, 5.4vw, 63)) */
       .lees-header .title-3d {{
-        font-size: clamp(24px, 3.6vw, 42px);
-        font-weight: 800; letter-spacing: .3px; line-height: 1.05;
-        background: linear-gradient(180deg, #f8f7ff 0%, #e3ddff 28%, #b49df8 62%, #6942d1 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
+        font-size: clamp(36px, 5.4vw, 63px);
+        font-weight: 800; letter-spacing: .3px; line-height: 1.04;
+        color: #0B1B45; /* 진한 남색 */
         text-shadow:
           0 1px 0 #ffffff,
-          0 2px 0 #ece8ff,
-          0 3px 0 #d9d2ff,
-          0 6px 12px rgba(0,0,0,.18);
+          0 2px 0 #e9eef9,
+          0 3px 0 #d2dbf2,
+          0 6px 12px rgba(0,0,0,.22);
         margin: 0;
       }}
 
       .lees-header .subhead-wrap {{
         position: relative;
-        /* 제목과 부제목/오버레이 사이 간격 ↑ */
-        margin-top: .6rem;
+        /* 제목↔부제목/오버레이 사이 간격 확대(.6rem -> .9rem) */
+        margin-top: .9rem;
       }}
 
       .lees-header .subhead {{
@@ -345,24 +343,28 @@ def _header():
         color: #1f2937;  /* neutral-800 */
         word-break: keep-all;
       }}
-      .lees-header .anchor {{ position: relative; display: inline-block; }}
+      .lees-header .anchor {{
+        position: relative; display: inline-block;
+        /* 오버레이와 본문 텍스트가 닿지 않도록 앵커 자체 위에 여백 부여 */
+        padding-top: .25em;
+      }}
 
       /* 오버레이: 부제목 글자 크기의 70% */
       .lees-header .badge, .lees-header .gear {{
-        position: absolute; top: 0; left: 0;
-        /* 제목과의 간격 확보를 위해 살짝 더 낮게 배치(-90% → -80%) */
-        transform: translateY(-80%);
+        position: absolute; left: 0;
+        /* 더 멀어지도록: -80% -> -65% + 위쪽으로 0.15em */
+        top: -0.15em; transform: translateY(-65%);
         font-size: .7em; line-height: 1;
-        padding: .15em .5em; border-radius: 999px;
+        padding: .18em .55em; border-radius: 999px;
         user-select: none; -webkit-tap-highlight-color: transparent;
         z-index: 2; white-space: nowrap;
       }}
 
       .lees-header .gear {{
         left: 100%;
-        /* 단어에 덜 붙도록 살짝 여유: -1.2em → -1.0em */
-        margin-left: -1.0em;
-        padding: .15em .35em; border-radius: 10px;
+        /* 단어와 수평 간격도 조금 띄움: -1.0em -> -0.6em */
+        margin-left: -0.6em;
+        padding: .18em .4em; border-radius: 10px;
         background: #f3f4f6; color: #111827; border: 1px solid #e5e7eb; text-decoration: none;
       }}
       .lees-header .gear:hover {{ filter: brightness(.96); }}
@@ -372,9 +374,9 @@ def _header():
       .lees-header .badge.yellow {{ background:#fff7e6; color:#9a6a00; border:1px solid #ffe2a8; }}
       .lees-header .badge.red    {{ background:#fde8e8; color:#a61b29; border:1px solid #f5b5bb; }}
 
-      /* 매우 좁은 화면에서는 조금 더 위로 */
+      /* 아주 좁은 화면: 겹침 방지 위해 더 위로 */
       @media (max-width: 380px) {{
-        .lees-header .badge, .lees-header .gear {{ transform: translateY(-100%); }}
+        .lees-header .badge, .lees-header .gear {{ transform: translateY(-85%); }}
       }}
     </style>
 
@@ -394,7 +396,7 @@ def _header():
     </div>
     """, unsafe_allow_html=True)
 
-    # (선택) 설정 패널: 쿼리파라미터로 열기
+    # (선택) 설정 패널
     if ss.get("_show_admin_login") and not _is_admin_view():
         with st.expander("관리자 로그인", expanded=True):
             pwd_set = (_from_secrets("ADMIN_PASSWORD", "")
@@ -418,7 +420,7 @@ def _header():
                 st.write(" ")
 
     _render_boot_progress_line()
-    # st.divider()  # ← 유지 금지(요청사항: 제목-부제목 사이 라인 없음)
+    # st.divider()  # ← 유지 금지(제목-부제목 사이 라인 없음)
 
 
 # [08] 배경(완전 비활성) =======================================================
