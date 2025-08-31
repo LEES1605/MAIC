@@ -274,88 +274,34 @@ def _login_panel_if_needed():
     return  # 더 이상 사용 안 함
 
 # [06B] 배경 라이브러리(필요 시) ==============================================
+# START [06B] 배경 완전 비활성 교체 (L262–L345)
 def _inject_modern_bg_lib():
-    if st.session_state.get("__bg_lib_injected__"):
-        return
-    st.session_state["__bg_lib_injected__"] = True
-    st.markdown("""
-<style id="maic-bg-style">
-html, body, .stApp { height: 100%; }
-.stApp { position: relative; z-index: 1; }
-#maic-bg-root{ position: fixed; inset:0; z-index:0; pointer-events:none; overflow:hidden; }
-#maic-bg-root .maic-bg-gradient{ position:absolute; inset:0; }
-#maic-bg-root .maic-bg-shapes{ position:absolute; inset:0; perspective:1000px; }
-#maic-bg-root .maic-bg-grid{ position:absolute; inset:0; pointer-events:none; }
-#maic-bg-root .maic-bg-grain{ position:absolute; inset:0; pointer-events:none; opacity:.7; mix-blend-mode:overlay; background-size:128px 128px; }
-#maic-bg-root .maic-bg-veil{ position:absolute; inset:0; pointer-events:none; }
-@keyframes bobY { from { --bob: -6px; } to { --bob: 6px; } }
-@media (prefers-reduced-motion: reduce){ #maic-bg-root .maic-shape{ animation:none !important; } }
-#maic-bg-root .maic-bg-grid[data-theme="light"]{
-  background-image:linear-gradient(0deg, rgba(30,41,59,.06) 1px, transparent 1px),
-                   linear-gradient(90deg, rgba(30,41,59,.06) 1px, transparent 1px);
-  background-size:24px 24px;
-  -webkit-mask-image: radial-gradient(80% 80% at 50% 50%, black 60%, transparent 100%);
-          mask-image: radial-gradient(80% 80% at 50% 50%, black 60%, transparent 100%);
-}
-#maic-bg-root .maic-bg-grid[data-theme="dark"]{
-  background-image:linear-gradient(0deg, rgba(255,255,255,.06) 1px, transparent 1px),
-                   linear-gradient(90deg, rgba(255,255,255,.06) 1px, transparent 1px);
-  background-size:24px 24px;
-  -webkit-mask-image: radial-gradient(80% 80% at 50% 50%, black 60%, transparent 100%);
-          mask-image: radial-gradient(80% 80% at 50% 50%, black 60%, transparent 100%);
-}
-</style>
-<script id="maic-bg-lib">
-(() => {
-  try {
-    if (window.MAIC_BG) return;
-    const clamp=(n,min,max)=>Math.min(max,Math.max(min,n));
-    const hexToRgb=(hex)=>{const c=hex.replace("#","");const v=c.length===3?c.split("").map(x=>x+x).join(""):c;const num=parseInt(v,16);return{r:(num>>16)&255,g:(num>>8)&255,b:num&255}};
-    const rgbToHex=(r,g,b)=>"#"+[r,g,b].map(v=>v.toString(16).padStart(2,"0")).join("");
-    const rgbToHsl=(r,g,b)=>{r/=255;g/=255;b/=255;const max=Math.max(r,g,b),min=Math.min(r,g,b);let h=0,s=0,l=(max+min)/2;if(max!==min){const d=max-min;s=l>0.5?d/(2-max-min):d/(max+min);switch(max){case r:h=(g-b)/d+(g<b?6:0);break;case g:h=(b-r)/d+2;break;case b:h=(r-g)/d+4;break}h/=6}return{h:h*360,s,l}};
-    const hslToRgb=(h,s,l)=>{h/=360;let r,g,b;if(s===0){r=g=b=l}else{const hue2rgb=(p,q,t)=>{if(t<0)t+=1;if(t>1)t-=1;if(t<1/6)return p+(q-p)*6*t;if(t<1/2)return q;if(t<2/3)return p+(q-p)*(2/3-t)*6;return p};const q=l<.5?l*(1+s):l+s-l*s;const p=2*l-q;r=hue2rgb(p,q,h+1/3);g=hue2rgb(p,q,h);b=hue2rgb(p,q,h-1/3)}return{r:Math.round(r*255),g:Math.round(g*255),b:Math.round(b*255)}};
-    const shade=(hex,lD=0,sD=0,hD=0)=>{const {r,g,b}=hexToRgb(hex);const hsl=rgbToHsl(r,g,b);const h=(hsl.h+hD+360)%360;const s=clamp(hsl.s+sD,0,1);const l=clamp(hsl.l+lD,0,1);const {r:rr,g:rg,b:rb}=hslToRgb(h,s,l);return rgbToHex(rr,rg,rb)};
-    const mulberry32=(a)=>()=>{let t=(a+=0x6d2b79f5);t=Math.imul(t^(t>>>15),t|1);t^=t+Math.imul(t^(t>>>7),t|61);return((t^(t>>>14))>>>0)/4294967296};
-    const makeGradient=(theme,style,accent)=>{const aL=shade(accent, theme==="light"?-0.1:0.1);const aD=shade(accent, theme==="light"?-0.2:-0.05);const baseLight= theme==="light" ? "#F7FAFF" : "#0B1020";const baseDark = theme==="light" ? "#EAF1FF" : "#0E1224";if(style==="conic")  return `conic-gradient(from 220deg at 65% 35%, ${aL}, ${baseLight}, ${aD}, ${baseDark})`;if(style==="linear") return `linear-gradient(135deg, ${baseLight}, ${aL} 35%, ${baseDark})`;return `radial-gradient(1200px 800px at 75% 20%, ${aL}, transparent 55%), radial-gradient(900px 700px at 10% 80%, ${aD}, transparent 50%), linear-gradient(180deg, ${baseLight}, ${baseDark})`;};
-    const face=(bg,clip,extra={})=>{const d=document.createElement("div");Object.assign(d.style,{position:"absolute",inset:"0",background:bg,clipPath:clip,...extra});return d;};
-    function ensureRoot(){let root=document.getElementById("maic-bg-root");if(!root){root=document.createElement("div");root.id="maic-bg-root";document.body && document.body.appendChild(root);}let grad=root.querySelector(".maic-bg-gradient");let shapes=root.querySelector(".maic-bg-shapes");if(!grad){grad=document.createElement("div");grad.className="maic-bg-gradient";root.appendChild(grad);}if(!shapes){shapes=document.createElement("div");shapes.className="maic-bg-shapes";root.appendChild(shapes);}return root;}
-    function mount(opts={}){const theme=(opts.theme==="light"||opts.theme==="dark")?opts.theme:"dark";const accent=opts.accent||"#5B8CFF";const gradientStyle=opts.gradient||"radial";const root=ensureRoot();root.dataset.theme=theme;const grad=root.querySelector(".maic-bg-gradient");grad.style.background=makeGradient(theme, gradientStyle, accent);}
-    window.MAIC_BG={mount};
-  } catch (e) { console.warn("MAIC_BG bootstrap skipped:", e); }
-})();
-</script>
-    """, unsafe_allow_html=True)
+    """
+    배경 라이브러리 주입을 완전 비활성화합니다.
+    - 과거: 대량 CSS/JS를 st.markdown(unsafe_allow_html=True)로 삽입
+    - 현재: No-Op 처리(아무 것도 하지 않음)
+    """
+    try:
+        # 혹시 이전 세션키를 사용하던 코드가 있어도 부작용이 없도록 False로 통일
+        st = globals().get("st", None)
+        if st is not None and hasattr(st, "session_state"):
+            st.session_state["__bg_lib_injected__"] = False
+    except Exception:
+        pass
 
 def _mount_background(
     *, theme: str = "light", accent: str = "#5B8CFF", density: int = 3,
     interactive: bool = True, animate: bool = True, gradient: str = "radial",
     grid: bool = True, grain: bool = False, blur: int = 0, seed: int = 1234,
     readability_veil: bool = True,
-):
-    # DISABLE_BG는 secrets/env에서만 읽음 (config.toml 금지)
-    def _truthy(x: str | None) -> bool:
-        return str(x or "").strip().lower() in ("1","true","yes","on")
-    if _truthy(os.getenv("DISABLE_BG")):
-        return
-    _inject_modern_bg_lib()
-    st.markdown(f"""
-<script>
-(function(){{
-  const mount = () => {{
-    try {{
-      if (window.MAIC_BG && typeof window.MAIC_BG.mount === "function") {{
-        window.MAIC_BG.mount({{"theme":"{theme}","accent":"{accent}","gradient":"{gradient}"}});
-      }}
-    }} catch(e) {{ console.warn("MAIC_BG mount failed:", e); }}
-  }};
-  if (document.readyState === "loading") {{
-    document.addEventListener("DOMContentLoaded", () => requestAnimationFrame(mount), {{ once: true }});
-  }} else {{
-    requestAnimationFrame(mount);
-  }}
-}})();
-</script>
-    """, unsafe_allow_html=True)
+) -> None:
+    """
+    배경을 렌더하지 않습니다(하드 OFF).
+    - 호출부(_render_body) 구조를 유지하기 위해 동일 시그니처로 즉시 return.
+    """
+    return
+# END [06B] 배경 완전 비활성 교체 (L262–L345)
+
 
 # [07] 부팅/인덱스 준비(빠른 경로) =============================================
 def _set_brain_status(code: str, msg: str, source: str = "", attached: bool = False):
