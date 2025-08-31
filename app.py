@@ -461,36 +461,43 @@ def _auto_start_once():
 def _render_admin_panels() -> None:
     """
     관리자 패널(지연 임포트 버전)
-    - 오케스트레이터 모듈은 '토글 ON' 이후에만 import 및 렌더합니다.
-    - 토글 OFF 상태에서는 어떤 무거운 의존성도 로드하지 않습니다.
-    - 실패 시 사용자 메시지(가벼움) + 상세 오류(Expander)로 안내합니다.
+    - 토글(또는 체크박스)을 켠 '이후'에만 오케스트레이터 모듈을 import 및 렌더합니다.
+    - 토글이 꺼져 있으면 어떤 무거운 의존성도 로드하지 않습니다.
+    - 실패 시 사용자 메시지(간단) + 상세 스택(Expander)로 안내합니다.
     """
-    # 가벼운 표준 라이브러리만 먼저 임포트(지연 로드에 영향 없음)
+    # 표준 라이브러리(가벼움)
     import time
     import importlib
     import traceback
 
-    # Streamlit 임포트는 앱 전역에 이미 있을 수 있으나, 중복 임포트는 무해합니다.
+    # 스트림릿
     import streamlit as st
 
     st.subheader("관리자 패널")
 
-    # --- (A) 토글 UI: 토글/체크박스 둘 중 가용한 위젯 사용 ---
-    # 일부 환경에서 st.toggle 미지원일 수 있으므로 안전한 폴백을 둡니다.
+    # --- (A) 토글 UI: st.toggle 미지원 환경 대비 체크박스 폴백 ---
+    #   - 세션 상태 키를 고정해 재실행(rerun) 시에도 상태 유지
+    toggle_key = "admin_orchestrator_open"
+    if toggle_key not in st.session_state:
+        st.session_state[toggle_key] = False
+
     try:
         open_panel = st.toggle(
             "🔧 오케스트레이터 도구 열기 (지연 로드)",
-            value=False,
+            value=st.session_state[toggle_key],
             help="클릭 시 필요한 모듈을 즉시 로드합니다."
         )
     except Exception:
         open_panel = st.checkbox(
             "🔧 오케스트레이터 도구 열기 (지연 로드)",
-            value=False,
+            value=st.session_state[toggle_key],
             help="클릭 시 필요한 모듈을 즉시 로드합니다."
         )
 
-    # 토글이 꺼져 있으면, 어떤 무거운 것도 실행하지 않고 가볍게 종료
+    # 세션 상태 동기화
+    st.session_state[toggle_key] = bool(open_panel)
+
+    # 토글이 꺼져 있으면, 어떤 무거운 것도 실행하지 않고 종료
     if not open_panel:
         st.caption("▶ 필요할 때만 로드되도록 최적화되었습니다. 위 토글을 켜면 모듈을 불러옵니다.")
         return
@@ -501,7 +508,7 @@ def _render_admin_panels() -> None:
         last_err = None
 
         # --- (B) 지연 임포트 ---
-        # 프로젝트 구조에 따라 'src.ui_orchestrator' 또는 'ui_orchestrator' 중 하나를 시도합니다.
+        # 프로젝트 구조 변화에 대비해 두 가지 경로를 시도합니다.
         for module_name in ("src.ui_orchestrator", "ui_orchestrator"):
             try:
                 mod = importlib.import_module(module_name)
@@ -510,15 +517,22 @@ def _render_admin_panels() -> None:
                 last_err = e
                 mod = None
 
+    # 임포트 실패 처리
     if mod is None:
+        import textwrap
         st.error("오케스트레이터 모듈을 불러오지 못했습니다.")
         if last_err is not None:
             with st.expander("오류 자세히 보기"):
                 st.code("".join(traceback.format_exception(type(last_err), last_err, last_err.__traceback__)))
+        st.info(textwrap.dedent("""
+            점검 팁:
+            1) 모듈 경로가 맞는지 확인: src/ui_orchestrator.py 또는 ui_orchestrator.py
+            2) 모듈 내 의존 패키지가 누락되지 않았는지 확인
+            3) 모듈 import 시 네트워크 초기화가 과도하지 않은지 확인
+        """).strip())
         return
 
     # --- (C) 렌더 함수 탐색 ---
-    # 다양한 프로젝트 변형을 고려한 후보 이름들
     candidate_names = (
         "render_index_orchestrator_panel",
         "render_orchestrator_panel",
@@ -535,9 +549,9 @@ def _render_admin_panels() -> None:
         st.warning(f"오케스트레이터 렌더 함수를 찾을 수 없습니다: {', '.join(candidate_names)}")
         return
 
-    # --- (D) 렌더 실행 (안전 호출) ---
+    # --- (D) 렌더 실행(안전 호출) ---
     try:
-        render_fn()  # 모듈 측 렌더 함수가 내부에서 Streamlit 컴포넌트를 그립니다.
+        render_fn()  # 모듈 측에서 Streamlit 컴포넌트를 그립니다.
     except Exception as e:
         st.error("오케스트레이터 렌더링 중 오류가 발생했습니다.")
         with st.expander("오류 자세히 보기"):
