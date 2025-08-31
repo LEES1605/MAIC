@@ -213,6 +213,16 @@ def _header():
         "MISSING": ("🔴", "없음"),
     }.get(code, ("⚪", code))
 
+    # 안전한 팝오버 래퍼: 구버전/환경 문제 시 expander로 폴백
+    def _safe_popover(label: str, **kw):
+        if hasattr(st, "popover"):
+            try:
+                return st.popover(label, **kw)
+            except Exception:
+                pass
+        # 폴백: expander (use_container_width 유사 효과)
+        return st.expander(label, expanded=True)
+
     left, right = st.columns([0.78, 0.22])
     with left:
         st.markdown("### LEES AI Teacher")
@@ -223,15 +233,18 @@ def _header():
         label, icon = _llm_health_badge()
         st.caption(f"LLM: {icon} {label}")
 
-        # 학생 모드: 우상단 아이콘만(미니멀)
+        # 학생 모드: 우상단 로그인 아이콘(가벼운 팝오버/폴백)
         if not _is_admin_view():
-            with st.popover("👤", use_container_width=True):
+            with _safe_popover("👤", use_container_width=True):
                 with st.form(key="admin_login"):
-                    pwd_set = _from_secrets("ADMIN_PASSWORD", "")
+                    # 비밀번호 키 폴백: ADMIN_PASSWORD → APP_ADMIN_PASSWORD
+                    pwd_set = (_from_secrets("ADMIN_PASSWORD", "")
+                               or _from_secrets("APP_ADMIN_PASSWORD", "")
+                               or "")
                     pw = st.text_input("관리자 비밀번호", type="password")
                     submit = st.form_submit_button("로그인", use_container_width=True)
                     if submit:
-                        if pw and pw == str(pwd_set):
+                        if pw and pwd_set and pw == str(pwd_set):
                             ss["admin_mode"] = True
                             st.success("로그인 성공")
                             st.rerun()
@@ -239,7 +252,7 @@ def _header():
                             st.error("비밀번호가 올바르지 않습니다.")
         else:
             # 관리자 모드: 로그아웃/닫기
-            with st.popover("👤", use_container_width=True):
+            with _safe_popover("👤", use_container_width=True):
                 with st.form(key="admin_logout"):
                     col1, col2 = st.columns(2)
                     with col1:
@@ -255,6 +268,7 @@ def _header():
 
     st.divider()
 # END [06] _header 교체 (L135–L184) ===================================
+
 
 def _login_panel_if_needed():
     return  # 더 이상 사용 안 함
