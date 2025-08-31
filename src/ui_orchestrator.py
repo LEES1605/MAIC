@@ -1,3 +1,106 @@
+# ======================== [00] orchestrator helpers — START ========================
+import importlib, traceback
+from pathlib import Path
+
+def _add_error(e) -> None:
+    """에러를 세션에 누적(최대 50개)"""
+    try:
+        import streamlit as st
+        lst = st.session_state.setdefault("_orchestrator_errors", [])
+        lst.append("".join(traceback.format_exception(type(e), e, e.__traceback__)))
+        if len(lst) > 50:
+            del lst[:-50]
+    except Exception:
+        pass
+
+def _errors_text() -> str:
+    """누적 에러를 텍스트로 반환"""
+    try:
+        import streamlit as st
+        lst = st.session_state.get("_orchestrator_errors") or []
+        return "\n\n".join(lst) if lst else "—"
+    except Exception:
+        return "—"
+
+def _ready_mark(persist_dir: Path) -> None:
+    """인덱싱/복원 완료 표시 파일(.ready) 생성"""
+    try:
+        persist_dir.mkdir(parents=True, exist_ok=True)
+        (persist_dir / ".ready").write_text("ready", encoding="utf-8")
+    except Exception as e:
+        _add_error(e)
+
+def _lazy_imports() -> dict:
+    """
+    의존 모듈을 '가능한 이름들'로 느슨하게 임포트해 dict로 반환.
+    - 프로젝트마다 모듈명/함수명이 조금씩 달라도 최대한 맞춰봅니다.
+    """
+    def _imp(name):
+        try:
+            return importlib.import_module(name)
+        except Exception:
+            return None
+
+    deps = {}
+
+    # config → PERSIST_DIR
+    for m in ("src.config", "config"):
+        mod = _imp(m)
+        if mod and hasattr(mod, "PERSIST_DIR"):
+            deps["PERSIST_DIR"] = getattr(mod, "PERSIST_DIR")
+            break
+
+    # GitHub release / manifest
+    for m in ("src.release", "release", "src.tools.release", "src.utils.release"):
+        mod = _imp(m)
+        if not mod: 
+            continue
+        deps.setdefault("get_latest_release", getattr(mod, "get_latest_release", None))
+        deps.setdefault("fetch_manifest_from_release", getattr(mod, "fetch_manifest_from_release", None))
+        deps.setdefault("restore_latest", getattr(mod, "restore_latest", None))
+        if all(k in deps and deps[k] for k in ("get_latest_release","fetch_manifest_from_release","restore_latest")):
+            break
+
+    # Google Drive 도우미
+    for m in ("src.drive", "drive", "src.gdrive", "gdrive", "src.google_drive", "google_drive"):
+        mod = _imp(m)
+        if not mod:
+            continue
+        deps.setdefault("_drive_client",
+            getattr(mod, "_drive_client", None) or getattr(mod, "drive_client", None) or getattr(mod, "client", None))
+        deps.setdefault("_find_folder_id",
+            getattr(mod, "_find_folder_id", None) or getattr(mod, "find_folder_id", None))
+        deps.setdefault("scan_drive_listing",
+            getattr(mod, "scan_drive_listing", None) or getattr(mod, "scan_listing", None))
+        if all(deps.get(k) for k in ("_drive_client","_find_folder_id","scan_drive_listing")):
+            break
+
+    # 인덱서
+    for m in ("src.index_build", "index_build", "src.rag.index_build", "src.rag.indexer", "src.rag.build"):
+        mod = _imp(m)
+        if not mod:
+            continue
+        deps.setdefault("build_index_with_checkpoint",
+            getattr(mod, "build_index_with_checkpoint", None) or getattr(mod, "build_index", None))
+        if deps.get("build_index_with_checkpoint"):
+            break
+
+    # diff 유틸
+    for m in ("src.manifest", "manifest", "src.release", "release", "src.utils.manifest", "src.utils"):
+        mod = _imp(m)
+        if not mod:
+            continue
+        for cand in ("diff_with_manifest", "diff_listing_with_manifest", "diff_manifest"):
+            fn = getattr(mod, cand, None)
+            if callable(fn):
+                deps["diff_with_manifest"] = fn
+                break
+        if deps.get("diff_with_manifest"):
+            break
+
+    return deps
+# ========================= [00] orchestrator helpers — END =========================
+
 # =========== render_index_orchestrator_panel — START ===========
 def render_index_orchestrator_panel() -> None:
     """
