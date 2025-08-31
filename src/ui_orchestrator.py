@@ -37,8 +37,11 @@ def _ready_mark(persist_dir: Path) -> None:
 def _lazy_imports() -> dict:
     """
     의존 모듈을 '가능한 이름들'로 느슨하게 임포트해 dict로 반환.
-    - PERSIST_DIR: (우선) src.rag.index_build.PERSIST_DIR → (또는) src.config.PERSIST_DIR → (폴백) ~/.maic/persist
-    - Drive/Index/GitHub 릴리스 유틸은 실제 파일에 맞춰 탐색
+    PERSIST_DIR 우선순위:
+      (0) Streamlit 세션 _PERSIST_DIR
+      (1) src.rag.index_build.PERSIST_DIR
+      (2) src.config.PERSIST_DIR
+      (3) ~/.maic/persist
     """
     import importlib
     from pathlib import Path as _P
@@ -51,29 +54,41 @@ def _lazy_imports() -> dict:
 
     deps = {}
 
-    # --- PERSIST_DIR ---
-    # 1) index_build 내부 상수
-    mod_idx = _imp("src.rag.index_build")
-    if mod_idx and hasattr(mod_idx, "PERSIST_DIR"):
-        deps["PERSIST_DIR"] = getattr(mod_idx, "PERSIST_DIR")
-    # 2) config 상수(있을 경우)
+    # 0) 세션에 공유된 경로 우선
+    try:
+        import streamlit as st
+        _ss_p = st.session_state.get("_PERSIST_DIR")
+        if _ss_p:
+            deps["PERSIST_DIR"] = _P(str(_ss_p))
+    except Exception:
+        pass
+
+    # 1) index_build
+    if "PERSIST_DIR" not in deps:
+        mod_idx = _imp("src.rag.index_build")
+        if mod_idx and hasattr(mod_idx, "PERSIST_DIR"):
+            deps["PERSIST_DIR"] = getattr(mod_idx, "PERSIST_DIR")
+    else:
+        mod_idx = _imp("src.rag.index_build")
+
+    # 2) config
     if "PERSIST_DIR" not in deps:
         mod_cfg = _imp("src.config")
         if mod_cfg and hasattr(mod_cfg, "PERSIST_DIR"):
             deps["PERSIST_DIR"] = _P(getattr(mod_cfg, "PERSIST_DIR"))
+
     # 3) 최종 폴백
     if "PERSIST_DIR" not in deps or not deps["PERSIST_DIR"]:
         deps["PERSIST_DIR"] = _P.home() / ".maic" / "persist"
 
     # --- GitHub release / manifest ---
-    # 실제 파일: src.backup.github_release
     mod_rel = _imp("src.backup.github_release")
     if mod_rel:
         deps["get_latest_release"] = getattr(mod_rel, "get_latest_release", None)
         deps["fetch_manifest_from_release"] = getattr(mod_rel, "fetch_manifest_from_release", None)
         deps["restore_latest"] = getattr(mod_rel, "restore_latest", None)
 
-    # --- Google Drive / Index 유틸 (index_build 안에 구현되어 있음) ---
+    # --- Google Drive / Index 유틸 ---
     if mod_idx:
         deps.setdefault("_drive_client", getattr(mod_idx, "_drive_client", None))
         deps.setdefault("_find_folder_id", getattr(mod_idx, "_find_folder_id", None))
