@@ -264,12 +264,11 @@ def _render_boot_progress_line():
                 unsafe_allow_html=True
             )
 
-
-# [07] 헤더(타이틀 우측 끝에 ⚙️, 진행선 포함) ====================================
+# [07] 헤더(타이틀 옆에 ⚙️ 고정, 진행선 포함) ====================================
 def _header():
     """
     - 타이틀/상태 아이콘(SSOT)
-    - 타이틀 **같은 줄의 우측 끝**에 ⚙️(관리자) 버튼 배치
+    - 타이틀 **같은 줄**에 ⚙️(관리자) 버튼을 바로 옆에 고정(마지막 열을 36px로 강제)
     - LLM 상태 캡션은 타이틀 아래 오른쪽 정렬(모바일에서는 자동 숨김)
     - 진행선은 READY면 숨김
     """
@@ -294,37 +293,44 @@ def _header():
                 pass
         return st.expander(label, expanded=True)
 
-    # ── 헤더 전용 스타일
+    # ── 헤더 전용 스타일 + '바로 다음 컬럼 묶음'의 마지막 열을 36px로 고정
     st.markdown("""
     <style>
       .brand-row { display:flex; align-items:center; gap:.5rem; }
       .brand-badge { font-size:1.25em; }
       .brand-title { font-size:2.4em; font-weight:800; letter-spacing:.2px; } /* 60% 확대 */
-      /* 두 컬럼을 한 줄로: 오른쪽 끝 정렬 */
-      .gear-wrap { display:flex; justify-content:flex-end; align-items:center; }
-      /* ⚙️ 트리거 버튼 32px로 축소 */
-      div[data-testid="stPopover"] > button{
-        width:32px;height:32px;min-width:32px;padding:0;border-radius:16px;
-      }
-      div[data-testid="stPopover"] > button p{ margin:0; font-size:18px; line-height:1; }
       /* LLM 캡션: 모바일에서는 숨김 */
       .llm-cap { text-align:right; color:#6b7280; font-size:.82rem; margin-top:.25rem; }
       @media (max-width:640px){ .llm-cap{ display:none; } }
+
+      /* 'brand-anchor' 바로 다음에 나오는 컬럼 컨테이너의 마지막 열을 고정 폭으로 */
+      #brand-anchor + div [data-testid="column"]:last-child{
+        flex: 0 0 36px !important;
+        max-width: 36px !important;
+        min-width: 36px !important;
+      }
+      /* ⚙️ 트리거 버튼 28~32px로 축소(가로세로 동일) */
+      #brand-anchor + div [data-testid="stPopover"] > button{
+        width:32px;height:32px;min-width:32px;padding:0;border-radius:16px;
+      }
+      #brand-anchor + div [data-testid="stPopover"] > button p{ margin:0; font-size:18px; line-height:1; }
       /* 질문 타이틀 30% 축소(.hero-ask는 본문에서 사용) */
       .hero-ask{ font-size:1.54rem; font-weight:800; letter-spacing:.2px; margin: 4px 0 8px; }
     </style>
     """, unsafe_allow_html=True)
 
-    # ── 타이틀 줄: 왼쪽(배지+타이틀) · 오른쪽(⚙️)
-    c_left, c_right = st.columns([0.92, 0.08], gap="small")
+    # ── 이 앵커 바로 "다음"에 만드는 columns 묶음을 CSS로 제어한다
+    st.markdown('<div id="brand-anchor"></div>', unsafe_allow_html=True)
+
+    # 타이틀(왼쪽) · ⚙️(오른쪽, 36px 고정) — 어떤 화면 폭에서도 같은 줄 유지
+    c_left, c_gear = st.columns([1, 0.001], gap="small")
     with c_left:
         st.markdown(
             f'<div class="brand-row"><span class="brand-badge">{badge_icon}</span>'
             f'<span class="brand-title">LEES AI Teacher</span></div>',
             unsafe_allow_html=True
         )
-    with c_right:
-        st.markdown('<div class="gear-wrap">', unsafe_allow_html=True)
+    with c_gear:
         if not _is_admin_view():
             with _safe_popover("⚙️"):
                 with st.form(key="admin_login"):
@@ -352,7 +358,6 @@ def _header():
                     st.success("로그아웃"); st.rerun()
                 elif close:
                     st.rerun()
-        st.markdown('</div>', unsafe_allow_html=True)
 
     # ── LLM 상태 캡션(타이틀 아래, 우측 정렬)
     try:
