@@ -30,7 +30,10 @@ def _ready_mark(persist_dir: Path) -> None:
         (persist_dir / ".ready").write_text("ready", encoding="utf-8")
     except Exception as e:
         _add_error(e)
-# ========================== [00B] lazy imports — START ============================
+# ========================= [00] orchestrator helpers — END =========================
+
+
+# ========================== [01] lazy imports — START =============================
 def _lazy_imports() -> dict:
     """
     의존 모듈을 '가능한 이름들'로 느슨하게 임포트해 dict로 반환.
@@ -79,10 +82,10 @@ def _lazy_imports() -> dict:
         deps.setdefault("build_index_with_checkpoint", getattr(mod_idx, "build_index_with_checkpoint", None))
 
     return deps
-# =========================== [00B] lazy imports — END =============================
+# =========================== [01] lazy imports — END ==============================
 
 
-# ======================== [01] autoflow_boot_check — START =========================
+# ======================== [02] autoflow_boot_check — START =========================
 def _has_local_index(persist_dir: Path) -> bool:
     return (persist_dir / "chunks.jsonl").exists() and (persist_dir / ".ready").exists()
 
@@ -100,10 +103,9 @@ def autoflow_boot_check(*, interactive: bool) -> None:
     if ss.get("_boot_checked") is True:
         return
 
-    # 진행 단계 기록 헬퍼
+    # 진행 단계 기록 헬퍼(SSOT에 반영)
     def PH(code: str, msg: str = ""):
         try:
-            # app.py의 _set_phase가 없더라도 세션키는 그대로 사용 가능
             ss["_boot_phase"] = code
             if msg:
                 ss["_boot_msg"] = msg
@@ -135,7 +137,6 @@ def autoflow_boot_check(*, interactive: bool) -> None:
                 _ready_mark(p)
                 ss["_boot_checked"] = True
                 PH("READY", "준비완료")
-                # 토스트 폴백
                 if hasattr(st, "toast"):
                     st.toast("✅ 백업에서 로컬 인덱스를 복원했습니다.", icon="✅")
                 else:
@@ -160,7 +161,7 @@ def autoflow_boot_check(*, interactive: bool) -> None:
 
     if has_new:
         if interactive:
-            with st.expander("📢 새 자료 감지 — 처리 방식을 선택하세요", expanded=True):
+            with st.expander("📢 변경사항 감지 — 처리 방식을 선택하세요", expanded=True):
                 choice = st.radio("처리", ("재인덱싱 후 백업/복사", "현재 백업 사용"), horizontal=True)
                 go = st.button("실행", type="primary")
                 if go:
@@ -235,10 +236,10 @@ def autoflow_boot_check(*, interactive: bool) -> None:
         ss["_boot_checked"] = True
         PH("READY", "준비완료")
         return
-# ========================= [01] autoflow_boot_check — END ==========================
+# ========================= [02] autoflow_boot_check — END ==========================
 
 
-# =========== render_index_orchestrator_panel — START ===========
+# ================== [03] render_index_orchestrator_panel — START ==================
 def render_index_orchestrator_panel() -> None:
     """
     관리자 진단 도구 패널(네트워크 호출 지연 + 버튼 클릭 시 실행)
@@ -248,7 +249,8 @@ def render_index_orchestrator_panel() -> None:
     import time
     import streamlit as st
 
-    st.markdown("## 🧠 인덱스 진단 도구")
+    # 패널 타이틀(직관형)
+    st.markdown("## 🛠 진단 도구")
 
     # 1) 의존성
     deps = _lazy_imports()
@@ -266,14 +268,14 @@ def render_index_orchestrator_panel() -> None:
     ss.setdefault("_orch_diag", {})
     ss.setdefault("_orchestrator_errors", [])
 
-    # 2) 상태 점검 섹션
+    # 2) 상태 요약
     with st.container(border=True):
-        st.markdown("### 상태 점검")
+        st.markdown("### 📋 상태 요약")
         c1, c2, c3 = st.columns([0.38,0.34,0.28])
         with c1:
-            run_diag = st.button("진단 실행", type="primary", use_container_width=True)
+            run_diag = st.button("🔎 빠른 점검", type="primary", use_container_width=True)
         with c2:
-            clear_diag = st.button("진단 초기화", use_container_width=True)
+            clear_diag = st.button("♻️ 결과 초기화", use_container_width=True)
         with c3:
             st.caption("버튼 클릭 시에만 네트워크 점검")
 
@@ -284,7 +286,7 @@ def render_index_orchestrator_panel() -> None:
 
         if run_diag:
             t0 = time.perf_counter()
-            with st.spinner("진단 실행 중…"):
+            with st.spinner("빠른 점검 실행 중…"):
                 # Drive
                 drive_ok = False; drive_email = None
                 if callable(_drive_client):
@@ -306,7 +308,7 @@ def render_index_orchestrator_panel() -> None:
                         _add_error(e)
                 ss["_orch_diag"] = {"drive_ok": drive_ok, "drive_email": drive_email,
                                     "gh_ok": gh_ok, "gh_tag": gh_tag}
-            st.success(f"진단 완료 ({(time.perf_counter()-t0)*1000:.0f} ms)")
+            st.success(f"빠른 점검 완료 ({(time.perf_counter()-t0)*1000:.0f} ms)")
 
         # 결과 표시
         d = ss.get("_orch_diag") or {}
@@ -319,9 +321,9 @@ def render_index_orchestrator_panel() -> None:
         st.write("- GitHub:", _badge(d.get('gh_ok'), f"최신 릴리스: {d.get('gh_tag') or '없음'}"))
         st.write("- 로컬:", _badge(local_ok, "인덱스/ready 파일 상태"))
 
-    # 3) 신규 자료 감지(Drive/Manifest diff)
+    # 3) 변경사항
     with st.container(border=True):
-        st.markdown("### 신규 자료 감지")
+        st.markdown("### 🔔 변경사항")
         added = changed = removed = 0
         details = {"added": [], "changed": [], "removed": []}
         if callable(diff_with_manifest):
@@ -342,14 +344,17 @@ def render_index_orchestrator_panel() -> None:
 
         has_new = (added + changed + removed) > 0
         if has_new:
-            st.info("📢 신규/변경 자료가 감지되었습니다. 어떻게 할까요?")
+            st.info("📢 변경사항이 감지되었습니다. 선택하여 진행하세요.")
             c1, c2 = st.columns(2)
             with c1:
-                if st.button("Yes — 업데이트 진행 (재인덱싱)", use_container_width=True, type="primary"):
+                if st.button("🔄 재인덱싱 실행", use_container_width=True, type="primary"):
                     if callable(build_index_with_checkpoint):
                         try:
-                            with st.spinner("업데이트 중…(재인덱싱)"):
-                                res = build_index_with_checkpoint(force=False, prefer_release_restore=False, folder_id=_find_folder_id(None) if callable(_find_folder_id) else None)
+                            with st.spinner("재인덱싱 중…"):
+                                res = build_index_with_checkpoint(
+                                    force=False, prefer_release_restore=False,
+                                    folder_id=_find_folder_id(None) if callable(_find_folder_id) else None
+                                )
                             if isinstance(res, dict) and res.get("ok"):
                                 _ready_mark(p)
                                 st.success("✅ 업데이트 완료(재인덱싱)")
@@ -360,14 +365,14 @@ def render_index_orchestrator_panel() -> None:
                     else:
                         st.error("build_index_with_checkpoint 사용 불가(임포트 실패)")
             with c2:
-                if st.button("No — 최신 릴리스에서 복원", use_container_width=True):
+                if st.button("📦 백업에서 복원", use_container_width=True):
                     if callable(restore_latest):
                         try:
-                            with st.spinner("최신 릴리스에서 복원 중…"):
+                            with st.spinner("백업에서 복원 중…"):
                                 ok = bool(restore_latest(dest_dir=p))
                             if ok:
                                 _ready_mark(p)
-                                st.success("✅ 최신 릴리스에서 복원 완료")
+                                st.success("✅ 백업 복원 완료")
                             else:
                                 st.error("복원에 실패했습니다.")
                         except Exception as e:
@@ -377,14 +382,17 @@ def render_index_orchestrator_panel() -> None:
         else:
             st.success("변경 사항이 없습니다. (최신 상태)")
 
-    # 4) 수동 인덱싱
+    # 4) 강제 재인덱싱
     with st.container(border=True):
-        st.markdown("### 수동 인덱싱")
-        if st.button("로컬에서 강제 인덱싱", use_container_width=True):
+        st.markdown("### ⛏ 강제 재인덱싱")
+        if st.button("⛏ 강제 재인덱싱", use_container_width=True):
             if callable(build_index_with_checkpoint):
                 try:
                     with st.spinner("로컬 인덱싱 중…"):
-                        res = build_index_with_checkpoint(force=True, prefer_release_restore=False, folder_id=_find_folder_id(None) if callable(_find_folder_id) else None)
+                        res = build_index_with_checkpoint(
+                            force=True, prefer_release_restore=False,
+                            folder_id=_find_folder_id(None) if callable(_find_folder_id) else None
+                        )
                     if isinstance(res, dict) and res.get("ok"):
                         _ready_mark(p)
                         st.success("✅ 인덱싱 완료")
@@ -395,10 +403,10 @@ def render_index_orchestrator_panel() -> None:
             else:
                 st.error("build_index_with_checkpoint 사용 불가(임포트 실패)")
 
-    # 5) 에러/로그 카드
+    # 5) 오류 로그
     with st.container(border=True):
-        st.markdown("### 에러/로그")
+        st.markdown("### 🧯 오류 로그")
         txt = _errors_text()
         st.text_area("최근 오류", value=txt, height=160)
         st.download_button("오류 로그 다운로드", data=txt.encode("utf-8"), file_name="orchestrator_errors.txt")
-# ============ render_index_orchestrator_panel — END ============
+# =================== [03] render_index_orchestrator_panel — END ===================
