@@ -1,8 +1,8 @@
 # [01] future import ==========================================================
 from __future__ import annotations
 
-# [02] bootstrap & imports ====================================================
-import os, io, json, time, traceback, importlib
+# [02] imports & bootstrap ====================================================
+import os, io, json, time, traceback, importlib, importlib.util, sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -10,6 +10,7 @@ try:
     import streamlit as st
 except Exception:
     st = None  # 로컬/테스트 환경 방어
+
 
 # [03] secrets → env 승격 & 서버 안정 옵션 ====================================
 def _from_secrets(name: str, default: Optional[str] = None) -> Optional[str]:
@@ -46,6 +47,10 @@ def _bootstrap_env() -> None:
 
 _bootstrap_env()
 
+if st:
+    st.set_page_config(page_title="LEES AI Teacher", layout="wide")
+
+
 # [04] 경로/상태 & 에러로그 =====================================================
 def _persist_dir() -> Path:
     try:
@@ -61,6 +66,7 @@ def _is_brain_ready() -> bool:
     p = PERSIST_DIR
     if not p.exists():
         return False
+    # 존재/용량 신호 중 하나라도 있으면 준비로 간주(빠른 판정)
     for s in ["chunks.jsonl","manifest.json",".ready","faiss.index","index.faiss","chroma.sqlite","docstore.json"]:
         fp = p / s
         try:
@@ -99,7 +105,20 @@ def _errlog_text() -> str:
         out.write("-" * 60 + "\n")
     return out.getvalue()
 
-# [05] 지연 임포트 헬퍼 =========================================================
+
+# [05] 모드/LLM/임포트 헬퍼 =====================================================
+def _is_admin_view() -> bool:
+    env = (os.getenv("APP_MODE") or _from_secrets("APP_MODE", "student") or "student").lower()
+    return bool(env == "admin" or (st and (st.session_state.get("is_admin") or st.session_state.get("admin_mode"))))
+
+def _llm_health_badge() -> tuple[str, str]:
+    # 시작 속도를 위해 '키 존재'만으로 최소 상태 표시
+    has_g  = bool(os.getenv("GEMINI_API_KEY") or _from_secrets("GEMINI_API_KEY"))
+    has_o  = bool(os.getenv("OPENAI_API_KEY") or _from_secrets("OPENAI_API_KEY"))
+    if not (has_g or has_o): return ("키없음", "⚠️")
+    if has_g and has_o: return ("Gemini/OpenAI", "✅")
+    return ("Gemini", "✅") if has_g else ("OpenAI", "✅")
+
 def _try_import(mod: str, attrs: List[str]) -> Dict[str, Any]:
     out: Dict[str, Any] = {}
     try:
@@ -113,28 +132,11 @@ def _try_import(mod: str, attrs: List[str]) -> Dict[str, Any]:
             pass
     return out
 
-# [06] 페이지 설정 & 헤더(아이콘 로그인, Enter 제출 지원) =======================
-if st:
-    st.set_page_config(page_title="LEES AI Teacher", layout="wide")
 
-def _is_admin_view() -> bool:
-    env = (os.getenv("APP_MODE") or _from_secrets("APP_MODE", "student") or "student").lower()
-    return bool(env == "admin" or (st and (st.session_state.get("is_admin") or st.session_state.get("admin_mode"))))
-
-def _toggle_login_flag():
-    st.session_state["_show_admin_login"] = not st.session_state.get("_show_admin_login", False)
-
-def _llm_health_badge() -> tuple[str, str]:
-    # 시작 속도를 위해 '키 존재'만으로 최소 상태 표시
-    has_g  = bool(os.getenv("GEMINI_API_KEY") or _from_secrets("GEMINI_API_KEY"))
-    has_o  = bool(os.getenv("OPENAI_API_KEY") or _from_secrets("OPENAI_API_KEY"))
-    if not (has_g or has_o): return ("키없음", "⚠️")
-    if has_g and has_o: return ("Gemini/OpenAI", "✅")
-    return ("Gemini", "✅") if has_g else ("OpenAI", "✅")
-# START [06A] 상태 SSOT 헬퍼 =========================================
+# [06] 상태 SSOT + 지하철 노선 진행선 ==========================================
 def _get_brain_status() -> dict[str, Any]:
-    """헤더/관리자 패널이 공유하는 단일 진실 소스(SSOT) 상태 객체를 반환합니다.
-
+    """
+    헤더/UI가 공유하는 단일 진실 소스(SSOT) 상태 객체를 반환.
     Fields:
       - code: 'READY' | 'SCANNING' | 'RESTORING' | 'WARN' | 'ERROR' | 'MISSING'
       - attached: bool  (Q&A 가능한 상태인지)
@@ -142,7 +144,6 @@ def _get_brain_status() -> dict[str, Any]:
       - source: 'local' | 'drive' | None
     """
     if st is None:
-        # headless/test 모드: 파일시스템만으로 판단
         return {
             "code": "READY" if _is_brain_ready() else "MISSING",
             "attached": bool(_is_brain_ready()),
@@ -152,28 +153,30 @@ def _get_brain_status() -> dict[str, Any]:
 
     ss = st.session_state
 
-    # attach/restore 흐름에서 미리 기록해 둔 상태가 있으면 우선 사용
+    # 0) 부팅 단계 우선 반영(진행 시 시각화와 일치)
+    phase = (ss.get("_boot_phase") or "").upper()
+    phase_map = {
+        "LOCAL_CHECK": "SCANNING",
+        "RESTORE_FROM_RELEASE": "RESTORING",
+        "DIFF_CHECK": "SCANNING",
+        "REINDEXING": "SCANNING",
+        "READY_MARK": "SCANNING",
+        "READY": "READY",
+        "ERROR": "ERROR",
+    }
+    phase_code = phase_map.get(phase, "")
+
+    # 1) 명시 코드(이전 로직 호환)
     code = (ss.get("brain_status_code") or "").upper().strip()
-    msg  = ss.get("brain_status_msg")
-    src  = ss.get("brain_source")  # 'local' | 'drive' | None
-
-    # 하위호환: 세부 코드가 없다면 기존 세션키들로 유추
     if not code:
-        if ss.get("restore_in_progress"):
-            code = "RESTORING"
-        elif ss.get("scan_in_progress"):
-            code = "SCANNING"
-        elif ss.get("brain_warning"):
-            code = "WARN"
-        elif ss.get("brain_error"):
-            code = "ERROR"
-        else:
-            code = "READY" if _is_brain_ready() else "MISSING"
+        code = phase_code or ("READY" if _is_brain_ready() else "MISSING")
 
+    # 2) 메시지
+    msg  = ss.get("brain_status_msg")
     if not msg:
         default_msgs = {
             "READY": "두뇌 준비완료",
-            "SCANNING": "자료 스캔 중…",
+            "SCANNING": "자료 검사 중…",
             "RESTORING": "백업 복원 중…",
             "WARN": "주의: 부분 불일치/검토 필요",
             "ERROR": "오류: 복구/연결 실패",
@@ -182,15 +185,8 @@ def _get_brain_status() -> dict[str, Any]:
         msg = default_msgs.get(code, code)
 
     attached = code in ("READY", "WARN") and _is_brain_ready()
+    return {"code": code, "attached": bool(attached), "msg": str(msg), "source": ss.get("brain_source")}
 
-    return {
-        "code": code,
-        "attached": bool(attached),
-        "msg": str(msg),
-        "source": src,
-    }
-# END [06A] 상태 SSOT 헬퍼 =========================================
-# ====================== [06A2] Boot Progress SSOT & UI — START ======================
 def _set_phase(code: str, msg: str = "") -> None:
     """오토플로우 진행 단계를 SSOT로 기록"""
     if st is None: 
@@ -219,7 +215,6 @@ def _render_boot_progress_line():
 
     st.markdown("""
     <style>
-      .metro-wrap{display:flex;align-items:center;gap:10px;margin:6px 2px 2px 2px}
       .metro-step{flex:1}
       .metro-seg{height:2px;border-top:2px dashed #cdd6e1;margin:6px 0 2px 0}
       .metro-seg.done{border-top-style:solid;border-color:#10a37f}
@@ -242,17 +237,15 @@ def _render_boot_progress_line():
         with cols[i]:
             st.markdown(f'<div class="metro-step"><div class="metro-seg {klass}"></div>'
                         f'<div class="metro-lbl">{label}</div></div>', unsafe_allow_html=True)
-# ======================= [06A2] Boot Progress SSOT & UI — END =======================
 
-# ============================== [06] _header — START ===============================
+
+# [07] 헤더(미니멀, 톱니 아이콘, 진행선 포함) ====================================
 def _header():
     """
-    헤더 미니멀:
-    - 상태 아이콘만 사용(텍스트 제거) → SSOT(_get_brain_status)
-    - 타이틀 바로 아래에 '지하철 노선' 진행선 출력
-    - 관리자 진입 아이콘을 사람(👤) → 톱니(⚙️)로 변경
+    - 타이틀/상태 아이콘(SSOT)
+    - 바로 아래에 '지하철 노선' 진행선
+    - 관리자 진입 아이콘: 톱니(⚙️)
     """
-    import streamlit as st
     if st is None:
         return
     ss = st.session_state
@@ -260,14 +253,11 @@ def _header():
 
     status = _get_brain_status()
     code = status["code"]
-
-    # SSOT 상태 → 아이콘 매핑
     badge_icon = {
         "READY": "🟢", "SCANNING": "🟡", "RESTORING": "🟡",
         "WARN": "🟠", "ERROR": "🔴", "MISSING": "🔴",
     }.get(code, "⚪")
 
-    # 안전 팝오버(미지원 시 expander)
     def _safe_popover(label: str, **kw):
         if hasattr(st, "popover"):
             try:
@@ -276,7 +266,6 @@ def _header():
                 pass
         return st.expander(label, expanded=True)
 
-    # 타이틀
     st.markdown("""
     <style>
       .brand-row { display:flex; align-items:center; gap:.5rem; }
@@ -292,15 +281,12 @@ def _header():
             f'<span class="brand-title">LEES AI Teacher</span></div>',
             unsafe_allow_html=True
         )
-        # 👇 진행선(지하철 노선)
         _render_boot_progress_line()
 
     with right:
-        # LLM 상태 캡션(간단)
         label, icon = _llm_health_badge()
         st.caption(f"LLM: {icon} {label}")
 
-        # 관리자(⚙️) 아이콘으로 팝오버
         if not _is_admin_view():
             with _safe_popover("⚙️", use_container_width=True):
                 with st.form(key="admin_login"):
@@ -330,21 +316,15 @@ def _header():
                     st.rerun()
 
     st.divider()
-# =============================== [06] _header — END ================================
 
 
-# START [06B] 배경 완전 비활성 교체 (L262–L345)
+# [08] 배경(완전 비활성) =======================================================
 def _inject_modern_bg_lib():
-    """
-    배경 라이브러리 주입을 완전 비활성화합니다.
-    - 과거: 대량 CSS/JS를 st.markdown(unsafe_allow_html=True)로 삽입
-    - 현재: No-Op 처리(아무 것도 하지 않음)
-    """
+    """배경 라이브러리 주입을 완전 비활성화(No-Op)."""
     try:
-        # 혹시 이전 세션키를 사용하던 코드가 있어도 부작용이 없도록 False로 통일
-        st = globals().get("st", None)
-        if st is not None and hasattr(st, "session_state"):
-            st.session_state["__bg_lib_injected__"] = False
+        s = globals().get("st", None)
+        if s is not None and hasattr(s, "session_state"):
+            s.session_state["__bg_lib_injected__"] = False
     except Exception:
         pass
 
@@ -354,28 +334,43 @@ def _mount_background(
     grid: bool = True, grain: bool = False, blur: int = 0, seed: int = 1234,
     readability_veil: bool = True,
 ) -> None:
-    """
-    배경을 렌더하지 않습니다(하드 OFF).
-    - 호출부(_render_body) 구조를 유지하기 위해 동일 시그니처로 즉시 return.
-    """
+    """배경 렌더 OFF(호출 시 즉시 return)."""
     return
-# END [06B] 배경 완전 비활성 교체 (L262–L345)
 
 
-# [07] 부팅/인덱스 준비(빠른 경로) =============================================
+# [09] 부팅 훅(오케스트레이터 오토플로우 호출) ================================
+def _boot_autoflow_hook():
+    """앱 부팅 시 1회 오토 플로우 실행(관리자=대화형, 학생=자동)"""
+    try:
+        mod = None
+        for name in ("src.ui_orchestrator", "ui_orchestrator"):
+            try:
+                mod = importlib.import_module(name); break
+            except Exception:
+                mod = None
+        if mod and hasattr(mod, "autoflow_boot_check"):
+            mod.autoflow_boot_check(interactive=_is_admin_view())
+    except Exception as e:
+        _errlog(f"boot_autoflow_hook: {e}", where="[boot_hook]", exc=e)
+
+
+# [10] 부팅/인덱스 준비(빠른 경로/깊은검사/자동시작) ===========================
 def _set_brain_status(code: str, msg: str, source: str = "", attached: bool = False):
     """세션 상태를 일관된 방식으로 세팅한다."""
+    if st is None:
+        return
     ss = st.session_state
-    ss["index_status_code"] = code
+    ss["brain_status_code"] = code
     ss["brain_status_msg"]  = msg
-    ss["index_source"]      = source
+    ss["brain_source"]      = source
     ss["brain_attached"]    = bool(attached)
     ss["restore_recommend"] = (code in ("MISSING","ERROR"))
     ss.setdefault("index_decision_needed", False)
     ss.setdefault("index_change_stats", {})
 
 def _quick_local_attach_only():
-    """빠른 부팅: 네트워크 호출 없이 로컬 시그널만 확인."""
+    """빠른 부팅: 네트워크 호출 없이 로컬 신호만 확인."""
+    if st is None: return False
     ss = st.session_state
     man    = (PERSIST_DIR / "manifest.json")
     chunks = (PERSIST_DIR / "chunks.jsonl")
@@ -390,6 +385,7 @@ def _quick_local_attach_only():
 
 def _run_deep_check_and_attach():
     """관리자 버튼 클릭 시 실행되는 네트워크 검사+복구."""
+    if st is None: return
     ss = st.session_state
     idx = _try_import("src.rag.index_build", ["quick_precheck", "diff_with_manifest"])
     rel = _try_import("src.backup.github_release", ["restore_latest"])
@@ -423,8 +419,11 @@ def _run_deep_check_and_attach():
     # 2) GitHub Releases 복구
     restored = False
     if callable(restore_latest):
-        try: restored = bool(restore_latest(PERSIST_DIR))
-        except Exception as e: _errlog(f"restore 실패: {e}", where="[deep_check]")
+        try:
+            # restore_latest가 (dest_dir: Path|str) 모두 수용하도록 사용
+            restored = bool(restore_latest(PERSIST_DIR))
+        except Exception as e:
+            _errlog(f"restore 실패: {e}", where="[deep_check]")
 
     if restored and _is_brain_ready():
         stats = {}
@@ -448,42 +447,6 @@ def _run_deep_check_and_attach():
     ss["index_decision_needed"] = False
     ss["index_change_stats"] = {}
 
-# ============================ [07C] boot hook — START =============================
-def _boot_autoflow_hook():
-    """앱 부팅 시 1회 오토 플로우 실행(관리자=대화형, 학생=자동)"""
-    import importlib
-    try:
-        mod = None
-        for name in ("src.ui_orchestrator", "ui_orchestrator"):
-            try:
-                mod = importlib.import_module(name); break
-            except Exception:
-                mod = None
-        if mod and hasattr(mod, "autoflow_boot_check"):
-            mod.autoflow_boot_check(interactive=_is_admin_view())
-    except Exception as e:
-        # 오타 수정: _error_log -> _errlog
-        _errlog(f"boot_autoflow_hook: {e}", where="[boot_hook]", exc=e)
-# ============================= [07C] boot hook — END ==============================
-
-
-def main():
-    if st is None:
-        print("Streamlit 미탑재/로컬 환경"); return
-    st.set_page_config(page_title="LEES AI Teacher", layout="wide")
-    _header()
-
-    # ← 여기서 1회 실행
-    if not st.session_state.get("_boot_checked"):
-        _boot_autoflow_hook()
-
-    if _is_admin_view():
-        _render_restore_controls()
-        _render_admin_panels()
-    else:
-        _render_body()
-
-# [08] 자동 시작(선택) — 기본 비활성 ==========================================
 def _auto_start_once():
     """AUTO_START_MODE에 따른 1회성 자동 복원."""
     if st is None or st.session_state.get("_auto_started"):
@@ -501,30 +464,26 @@ def _auto_start_once():
         try:
             if fn(dest_dir=PERSIST_DIR):
                 _mark_ready()
-                st.toast("자동 복원 완료", icon="✅")
+                if hasattr(st, "toast"): st.toast("자동 복원 완료", icon="✅")
+                else: st.success("자동 복원 완료")
                 _set_brain_status("READY", "자동 복원 완료", "release", attached=True)
-                # rerun은 단 1회만 허용
                 if not st.session_state.get("_auto_rerun_done"):
                     st.session_state["_auto_rerun_done"] = True
                     st.rerun()
         except Exception as e:
             _errlog(f"auto restore failed: {e}", where="[auto_start]", exc=e)
-# [08] END
 
-# ============================== [09] 관리자 패널 — START ==============================
+
+# [11] 관리자 패널(지연 임포트 + 파일경로 폴백) ===============================
 def _render_admin_panels() -> None:
     """
     관리자 패널(지연 임포트 버전)
     - 토글(또는 체크박스)을 켠 '이후'에만 모듈을 import 및 렌더합니다.
     - import 실패 시 파일 경로에서 직접 로드하는 폴백을 수행합니다.
     """
+    if st is None: return
     import time
-    import importlib
-    import importlib.util
-    import sys
-    from pathlib import Path
     import traceback
-    import streamlit as st
 
     st.subheader("관리자 패널")
 
@@ -592,7 +551,6 @@ def _render_admin_panels() -> None:
             st.error("진단 도구를 불러오지 못했습니다.")
             with st.expander("오류 자세히 보기"):
                 if isinstance(e, ImportError) and len(e.args) > 1:
-                    # 우리가 수집한 시도 내역 출력
                     attempts = e.args[1]
                     st.write("시도 내역:")
                     for line in attempts:
@@ -624,83 +582,53 @@ def _render_admin_panels() -> None:
         elapsed_ms = (time.perf_counter() - load_start) * 1000.0
 
     st.caption(f"✓ 로드/렌더 완료 — {elapsed_ms:.0f} ms")
-# =============================== [09] 관리자 패널 — END ===============================
 
-# [10] 학생 UI (Stable Chatbot): 파스텔 배경 + 말풍선 + 스트리밍 =================
+
+# [12] 채팅 UI(스타일/모드/상단 상태 라벨=SSOT) ===============================
 def _inject_chat_styles_once():
-    """
-    채팅용 전역 CSS 1회 주입:
-    - 커스텀 레이아웃(.row/.bubble)과 Streamlit chat 모두를 타겟팅
-    - 사용자: 보라 톤 / AI: 화이트, 확실한 대비
-    """
-    import streamlit as st  # 안전상 재임포트 허용
+    """채팅용 전역 CSS 1회 주입(사용자: 보라 / AI: 화이트)."""
+    if st is None: return
     if st.session_state.get("_chat_styles_injected"):
         return
     st.session_state["_chat_styles_injected"] = True
 
     st.markdown("""
     <style>
-      /* ===== 공통 컨테이너(있으면 적용, 없으면 무해) ===== */
-      .chat-wrap{
-        background:#f5f7fb !important;border:1px solid #e6ecf5 !important;border-radius:18px;
-        padding:10px 10px 8px;margin-top:10px
-      }
+      .chat-wrap{background:#f5f7fb !important;border:1px solid #e6ecf5 !important;border-radius:18px;
+                 padding:10px 10px 8px;margin-top:10px}
       .chat-box{min-height:240px;max-height:54vh;overflow-y:auto;padding:6px 6px 2px}
-
-      /* ===== 커스텀 말풍선(앱 내 .row/.bubble 구조용) ===== */
       .row{display:flex;margin:8px 0}
       .row.user{justify-content:flex-end}
       .row.ai{justify-content:flex-start}
-      .bubble{
-        max-width:88%;padding:12px 14px;border-radius:16px;line-height:1.6;font-size:15px;
-        box-shadow:0 1px 1px rgba(0,0,0,.05);white-space:pre-wrap;position:relative;border:1px solid #e0e4ea;
-      }
-      /* 사용자(보라 톤) */
-      .bubble.user{
-        background:#EFE6FF !important;
-        color:#201547;
-        border-color:#D6CCFF !important;
-        border-top-right-radius:8px;
-      }
-      /* AI(화이트) */
-      .bubble.ai{
-        background:#FFFFFF;
-        color:#14121f;
-        border-top-left-radius:8px;
-      }
-
-      /* ===== Streamlit chat 기본 위젯에 대한 보정(있을 때만 적용) ===== */
-      /* 사용자 메시지(오른쪽) */
-      [data-testid="stChatMessageUser"] > div{
-        display:flex; justify-content:flex-end;
-      }
+      .bubble{max-width:88%;padding:12px 14px;border-radius:16px;line-height:1.6;font-size:15px;
+              box-shadow:0 1px 1px rgba(0,0,0,.05);white-space:pre-wrap;position:relative;border:1px solid #e0e4ea;}
+      .bubble.user{background:#EFE6FF !important;color:#201547;border-color:#D6CCFF !important;border-top-right-radius:8px;}
+      .bubble.ai{background:#FFFFFF;color:#14121f;border-top-left-radius:8px;}
+      /* streamlit chat 보정 */
+      [data-testid="stChatMessageUser"] > div{display:flex; justify-content:flex-end;}
       [data-testid="stChatMessageUser"] [data-testid="stMarkdownContainer"]{
         max-width:88%; background:#EFE6FF; color:#201547;
         border:1px solid #D6CCFF; border-radius:16px; border-top-right-radius:8px;
-        padding:12px 14px; box-shadow:0 1px 1px rgba(0,0,0,.05);
-      }
-      /* 어시스턴트 메시지(왼쪽) */
-      [data-testid="stChatMessage"] > div{
-        display:flex; justify-content:flex-start;
-      }
+        padding:12px 14px; box-shadow:0 1px 1px rgba(0,0,0,.05);}
+      [data-testid="stChatMessage"] > div{display:flex; justify-content:flex-start;}
       [data-testid="stChatMessage"] [data-testid="stMarkdownContainer"]{
         max-width:88%; background:#FFFFFF; color:#14121f;
         border:1px solid #e0e4ea; border-radius:16px; border-top-left-radius:8px;
-        padding:12px 14px; box-shadow:0 1px 1px rgba(0,0,0,.05);
-      }
-
-      /* ===== 라디오(모드 선택) pill 형태 보정 ===== */
+        padding:12px 14px; box-shadow:0 1px 1px rgba(0,0,0,.05);}
+      /* 라디오 pill 보정 */
       div[data-testid="stRadio"] > div[role="radiogroup"]{display:flex;gap:10px;flex-wrap:wrap}
-      div[data-testid="stRadio"] [role="radio"]{
-        border:2px solid #bcdcff;border-radius:12px;padding:6px 12px;background:#fff;color:#0a2540;
-        font-weight:700;font-size:14px;line-height:1;
-      }
-      div[data-testid="stRadio"] [role="radio"][aria-checked="true"]{
-        background:#eaf6ff;border-color:#9fd1ff;color:#0a2540;
-      }
+      div[data-testid="stRadio"] [role="radio"]{border:2px solid #bcdcff;border-radius:12px;padding:6px 12px;background:#fff;color:#0a2540;
+        font-weight:700;font-size:14px;line-height:1;}
+      div[data-testid="stRadio"] [role="radio"][aria-checked="true"]{background:#eaf6ff;border-color:#9fd1ff;color:#0a2540;}
       div[data-testid="stRadio"] svg{display:none!important}
+      /* 상태 라벨 */
+      .status-btn{display:inline-block;border-radius:10px;padding:4px 10px;font-weight:700; font-size:13px}
+      .status-btn.green{background:#E4FFF3;color:#0f6d53;border:1px solid #bff0df}
+      .status-btn.yellow{background:#FFF8E1;color:#8a6d00;border:1px solid #ffe099}
+      .status-btn.red{background:#FFE8E6;color:#a1302a;border:1px solid #ffc7c2}
     </style>
     """, unsafe_allow_html=True)
+
 def _render_bubble(role:str, text:str):
     import html, re
     klass = "user" if role=="user" else "ai"
@@ -708,41 +636,36 @@ def _render_bubble(role:str, text:str):
     t = re.sub(r"  ","&nbsp;&nbsp;", t)
     st.markdown(f'<div class="row {klass}"><div class="bubble {klass}">{t}</div></div>', unsafe_allow_html=True)
 
-def _render_mode_controls_pills():
-    """
-    질문 모드 라디오: 라벨 문구를 미니멀하게 숨김(label_visibility='collapsed')
-    기존 상태 키(ss['qa_mode_radio'])와 '어법/문장/지문' 맵핑 유지
-    """
-    import streamlit as st
+def _render_mode_controls_pills() -> str:
+    """질문 모드 라디오: 라벨 문구를 미니멀하게 숨김(label_visibility='collapsed')."""
     _inject_chat_styles_once()
     ss = st.session_state
-
     cur = ss.get("qa_mode_radio") or "문법"
     labels = ["어법", "문장", "지문"]
     map_to = {"어법": "문법", "문장": "문장", "지문": "지문"}
     idx = labels.index({"문법": "어법", "문장": "문장", "지문": "지문"}[cur])
-
-    # ⚠️ 라벨 숨김(미니멀): label_visibility="collapsed"
-    sel = st.radio(
-        "질문 모드 선택",
-        options=labels,
-        index=idx,
-        horizontal=True,
-        label_visibility="collapsed",
-    )
+    sel = st.radio("질문 모드 선택", options=labels, index=idx, horizontal=True, label_visibility="collapsed")
     new_key = map_to[sel]
     if new_key != cur:
         ss["qa_mode_radio"] = new_key
         st.rerun()
     return ss.get("qa_mode_radio", new_key)
-def _render_llm_status_minimal():
-    has_g  = bool(os.getenv("GEMINI_API_KEY") or _from_secrets("GEMINI_API_KEY"))
-    has_o  = bool(os.getenv("OPENAI_API_KEY") or _from_secrets("OPENAI_API_KEY"))
-    ok = bool(has_g or has_o)
-    st.markdown(
-        f'<span class="status-btn {"green" if ok else "yellow"}">'
-        f'{"🟢 준비완료" if ok else "🟡 키없음"}</span>', unsafe_allow_html=True)
 
+def _render_llm_status_minimal():
+    """상단 상태 라벨을 SSOT(_get_brain_status)로 통일."""
+    s = _get_brain_status()
+    code = s["code"]
+    if code == "READY":
+        st.markdown('<span class="status-btn green">🟢 준비완료</span>', unsafe_allow_html=True)
+    elif code in ("SCANNING", "RESTORING"):
+        st.markdown('<span class="status-btn yellow">🟡 준비중</span>', unsafe_allow_html=True)
+    elif code == "WARN":
+        st.markdown('<span class="status-btn yellow">🟡 주의</span>', unsafe_allow_html=True)
+    else:
+        st.markdown('<span class="status-btn red">🔴 준비안됨</span>', unsafe_allow_html=True)
+
+
+# [13] 채팅 패널 ==============================================================
 def _render_chat_panel():
     import time, base64, json, urllib.request
     try:
@@ -763,10 +686,10 @@ def _render_chat_panel():
 
     # GitHub prompts 로더(질문이 있을 때만 네트워크)
     def _github_fetch_prompts_text():
-        token  = st.secrets.get("GH_TOKEN") or os.getenv("GH_TOKEN")
-        repo   = st.secrets.get("GH_REPO")  or os.getenv("GH_REPO")
-        branch = st.secrets.get("GH_BRANCH", "main") or os.getenv("GH_BRANCH","main")
-        path   = st.secrets.get("GH_PROMPTS_PATH", "prompts.yaml") or os.getenv("GH_PROMPTS_PATH","prompts.yaml")
+        token  = _from_secrets("GH_TOKEN") or os.getenv("GH_TOKEN")
+        repo   = _from_secrets("GH_REPO")  or os.getenv("GH_REPO")
+        branch = _from_secrets("GH_BRANCH", "main") or os.getenv("GH_BRANCH","main")
+        path   = _from_secrets("GH_PROMPTS_PATH", "prompts.yaml") or os.getenv("GH_PROMPTS_PATH","prompts.yaml")
         if not (token and repo and yaml):
             return None
         url = f"https://api.github.com/repos/{repo}/contents/{path}?ref={branch}"
@@ -829,7 +752,7 @@ def _render_chat_panel():
                 "3) 핵심 규칙 3–5개 (• bullet)",
                 "4) 예문 1개(+한국어 해석)",
                 "5) 한 문장 리마인드",
-                "6) 출처 1개: [출처: 이유문법] / [출처: 책제목(…)] / [출처: AI자체지식]",
+                "6) 출처 1개: [출처: 이유문법] / [출처: 책제목(…)] / [출처: GPT지식] 또는 [출처: GEMINI지식]",
             ]
             usr_p = f"[질문]\n{q}\n\n[작성 지침]\n- 형식을 지켜라.\n" + "\n".join(f"- {x}" for x in lines)
         elif mode_token == "문장구조분석":
@@ -898,7 +821,6 @@ def _render_chat_panel():
             ph.markdown(f'<div class="row ai"><div class="bubble ai">{"답변 준비중…"}</div></div>', unsafe_allow_html=True)
             system_prompt, user_prompt = _resolve_prompts(MODE_TOKEN, qtxt, ev_notes, ev_books, cur_label)
 
-            # LLM 어댑터는 필요할 때만 지연 임포트
             prov = _try_import("src.llm.providers", ["call_with_fallback"])
             call = prov.get("call_with_fallback")
 
@@ -958,51 +880,52 @@ def _render_chat_panel():
         ss["chat"].append({"id": f"a{int(time.time()*1000)}", "role": "assistant", "text": text_final})
         st.rerun()
 
-# [11] 본문 렌더 ===============================================================
+
+# [14] 본문 렌더 ===============================================================
 def _render_body() -> None:
     if st is None:
         return
 
-    # [11A] 부팅 오토플로우 1회 실행 주입
+    # 1) 부팅 오토플로우 1회 실행
     if not st.session_state.get("_boot_checked"):
         try:
             _boot_autoflow_hook()
         except Exception as e:
             _errlog(f"boot check failed: {e}", where="[render_body.boot]", exc=e)
 
-    # 배경(필요 시)
+    # 2) 배경(비활성)
     _mount_background(theme="light", accent="#5B8CFF", density=3,
                       interactive=True, animate=True, gradient="radial",
                       grid=True, grain=False, blur=0, seed=1234, readability_veil=True)
 
+    # 3) 헤더
     _header()
 
-    # 빠른 부팅: 네트워크 없이 로컬만 확인
+    # 4) 빠른 부팅(로컬만 확인)
     try:
         _quick_local_attach_only()
     except Exception as e:
         _errlog(f"quick attach failed: {e}", where="[render_body]", exc=e)
 
-    # 관리자 패널 + 깊은 점검 버튼(네트워크 호출)
+    # 5) 관리자 패널 + 깊은 점검
     if _is_admin_view():
         _render_admin_panels()
         with st.container():
-            if st.button(
-                "🔎 자료 자동 점검(깊은 검사)",
-                help="Drive/Release 점검 및 복구, 변경 감지 수행",
-                use_container_width=True
-            ):
+            if st.button("🔎 자료 자동 점검(깊은 검사)", help="Drive/Release 점검 및 복구, 변경 감지 수행", use_container_width=True):
                 with st.spinner("깊은 점검 중…"):
                     _run_deep_check_and_attach()
                     st.success(st.session_state.get("brain_status_msg", "완료"))
                     st.rerun()
 
+    # 6) (선택) 자동 시작
     _auto_start_once()
 
+    # 7) 본문: 챗
     st.markdown("## 질문은 천재들의 공부 방법이다.")
     _render_chat_panel()
 
-# [12] main ===================================================================
+
+# [15] main ===================================================================
 def main():
     if st is None:
         print("Streamlit 환경이 아닙니다.")
