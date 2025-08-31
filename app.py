@@ -53,14 +53,32 @@ if st:
 
 # [04] 경로/상태 & 에러로그 =====================================================
 def _persist_dir() -> Path:
+    # 1) 인덱서가 정의한 경로 우선
+    try:
+        from src.rag.index_build import PERSIST_DIR as IDX
+        return Path(IDX).expanduser()
+    except Exception:
+        pass
+    # 2) config 경로
     try:
         from src.config import PERSIST_DIR as CFG
         return Path(CFG).expanduser()
     except Exception:
-        return Path.home() / ".maic" / "persist"
+        pass
+    # 3) 최종 폴백
+    return Path.home() / ".maic" / "persist"
 
 PERSIST_DIR = _persist_dir()
 PERSIST_DIR.mkdir(parents=True, exist_ok=True)
+
+# Streamlit 세션에 공유(오케스트레이터와 SSOT 동기화)
+def _share_persist_dir_into_session(p: Path) -> None:
+    try:
+        if st is not None:
+            st.session_state["_PERSIST_DIR"] = p
+    except Exception:
+        pass
+_share_persist_dir_into_session(PERSIST_DIR)
 
 def _is_brain_ready() -> bool:
     p = PERSIST_DIR
@@ -139,8 +157,8 @@ def _get_brain_status() -> dict[str, Any]:
     헤더/UI가 공유하는 단일 진실 소스(SSOT) 상태 객체를 반환.
     Fields:
       - code: 'READY' | 'SCANNING' | 'RESTORING' | 'WARN' | 'ERROR' | 'MISSING'
-      - attached: bool  (Q&A 가능한 상태인지)
-      - msg: 사용자용 짧은 메시지
+      - attached: bool
+      - msg: 사용자 메시지
       - source: 'local' | 'drive' | None
     """
     if st is None:
@@ -152,8 +170,6 @@ def _get_brain_status() -> dict[str, Any]:
         }
 
     ss = st.session_state
-
-    # 0) 부팅 단계 우선 반영(진행 시 시각화와 일치)
     phase = (ss.get("_boot_phase") or "").upper()
     phase_map = {
         "LOCAL_CHECK": "SCANNING",
@@ -165,13 +181,10 @@ def _get_brain_status() -> dict[str, Any]:
         "ERROR": "ERROR",
     }
     phase_code = phase_map.get(phase, "")
-
-    # 1) 명시 코드(이전 로직 호환)
     code = (ss.get("brain_status_code") or "").upper().strip()
     if not code:
         code = phase_code or ("READY" if _is_brain_ready() else "MISSING")
 
-    # 2) 메시지
     msg  = ss.get("brain_status_msg")
     if not msg:
         default_msgs = {
@@ -188,16 +201,15 @@ def _get_brain_status() -> dict[str, Any]:
     return {"code": code, "attached": bool(attached), "msg": str(msg), "source": ss.get("brain_source")}
 
 def _set_phase(code: str, msg: str = "") -> None:
-    """오토플로우 진행 단계를 SSOT로 기록"""
     if st is None: 
         return
     ss = st.session_state
-    ss["_boot_phase"] = code  # e.g., LOCAL_CHECK, RESTORE_FROM_RELEASE, DIFF_CHECK, REINDEXING, READY_MARK, READY, ERROR
+    ss["_boot_phase"] = code
     if msg:
         ss["_boot_msg"] = msg
 
 def _render_boot_progress_line():
-    """지하철 노선 스타일 진행 표시(점선=진행/예정, 실선=완료, 붉은 실선=오류)"""
+    """지하철 노선 스타일 진행 표시(READY=모두 실선)"""
     if st is None:
         return
     ss = st.session_state
@@ -211,7 +223,8 @@ def _render_boot_progress_line():
     ]
     phase = (ss.get("_boot_phase") or ("READY" if _is_brain_ready() else "LOCAL_CHECK")).upper()
     has_error = (phase == "ERROR")
-    idx = next((i for i,(k,_) in enumerate(steps) if k == phase), (len(steps)-1 if phase=="READY" else 0))
+    ready_all = (phase == "READY")
+    idx = next((i for i,(k,_) in enumerate(steps) if k == phase), 0)
 
     st.markdown("""
     <style>
@@ -227,9 +240,10 @@ def _render_boot_progress_line():
 
     cols = st.columns(len(steps))
     for i,(code,label) in enumerate(steps):
-        klass = "todo"
         if has_error:
             klass = "error" if i == idx else "todo"
+        elif ready_all:
+            klass = "done"  # READY: 전 구간 실선
         else:
             if i < idx:  klass = "done"
             elif i == idx: klass = "doing"
