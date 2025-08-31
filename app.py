@@ -634,22 +634,22 @@ def _render_bubble(role:str, text:str):
         "display:flex;justify-content:flex-end;margin:8px 0;" if is_user
         else "display:flex;justify-content:flex-start;margin:8px 0;"
     )
+    # 색상: 질문=파스텔 노랑, 답변=파스텔 하늘색
     bubble_style = (
-        # 사용자(보라)
+        # 사용자(파스텔 노랑)
         "max-width:88%;padding:12px 14px;border-radius:16px;border-top-right-radius:8px;"
         "line-height:1.6;font-size:15px;box-shadow:0 1px 1px rgba(0,0,0,.05);white-space:pre-wrap;"
-        "position:relative;border:1px solid #D6CCFF;background:#EFE6FF;color:#201547;"
+        "position:relative;border:1px solid #FFE18A;background:#FFF7C2;color:#3d3a00;"
         if is_user else
-        # AI(화이트/연한 회색)
+        # AI(파스텔 하늘색)
         "max-width:88%;padding:12px 14px;border-radius:16px;border-top-left-radius:8px;"
         "line-height:1.6;font-size:15px;box-shadow:0 1px 1px rgba(0,0,0,.05);white-space:pre-wrap;"
-        "position:relative;border:1px solid #e0e4ea;background:#FAFAFB;color:#14121f;"
+        "position:relative;border:1px solid #BEE3FF;background:#EAF6FF;color:#0a2540;"
     )
     label_style = (
-        "position:absolute;top:-10px;left:8px;font-size:11px;font-weight:700;opacity:.7;"
-        "color:#6b3fa0;" if is_user else
-        "position:absolute;top:-10px;left:8px;font-size:11px;font-weight:700;opacity:.7;"
-        "color:#6b7280;"
+        "position:absolute;top:-10px;left:8px;font-size:11px;font-weight:700;opacity:.75;color:#8a6d00;"
+        if is_user else
+        "position:absolute;top:-10px;left:8px;font-size:11px;font-weight:700;opacity:.75;color:#0f5b86;"
     )
     t = html.escape(text or "").replace("\n","<br/>")
     t = re.sub(r"  ","&nbsp;&nbsp;", t)
@@ -853,13 +853,13 @@ def _render_chat_panel():
             # 사용자 직후에 답변이 이어질 때 '턴 구분선' 먼저
             st.markdown('<div class="turn-sep"></div>', unsafe_allow_html=True)
             ph = st.empty()
-            # 프리페치 말풍선
+            # 답변 프리페치 말풍선(파스텔 하늘색)
             ph.markdown(
                 '<div style="display:flex;justify-content:flex-start;margin:8px 0;">'
                 '  <div style="max-width:88%;padding:12px 14px;border-radius:16px;border-top-left-radius:8px;'
                 '              line-height:1.6;font-size:15px;box-shadow:0 1px 1px rgba(0,0,0,.05);white-space:pre-wrap;'
-                '              position:relative;border:1px solid #e0e4ea;background:#FAFAFB;color:#14121f;">'
-                '    <div style="position:absolute;top:-10px;left:8px;font-size:11px;font-weight:700;opacity:.7;color:#6b7280;">답변</div>'
+                '              position:relative;border:1px solid #BEE3FF;background:#EAF6FF;color:#0a2540;">'
+                '    <div style="position:absolute;top:-10px;left:8px;font-size:11px;font-weight:700;opacity:.75;color:#0f5b86;">답변</div>'
                 '    답변 준비중…'
                 '  </div>'
                 '</div>', unsafe_allow_html=True
@@ -869,20 +869,27 @@ def _render_chat_panel():
             prov = _try_import("src.llm.providers", ["call_with_fallback"])
             call = prov.get("call_with_fallback")
 
-            if not callable(call):
-                text_final = "(오류) LLM 어댑터를 사용할 수 없습니다."
+            def _render_ai(text_html: str):
                 ph.markdown(
                     '<div style="display:flex;justify-content:flex-start;margin:8px 0;">'
                     '  <div style="max-width:88%;padding:12px 14px;border-radius:16px;border-top-left-radius:8px;'
                     '              line-height:1.6;font-size:15px;box-shadow:0 1px 1px rgba(0,0,0,.05);white-space:pre-wrap;'
-                    '              position:relative;border:1px solid #e0e4ea;background:#FAFAFB;color:#14121f;">'
-                    '    <div style="position:absolute;top:-10px;left:8px;font-size:11px;font-weight:700;opacity:.7;color:#6b7280;">답변</div>'
-                    f'    {text_final}'
+                    '              position:relative;border:1px solid #BEE3FF;background:#EAF6FF;color:#0a2540;">'
+                    '    <div style="position:absolute;top:-10px;left:8px;font-size:11px;font-weight:700;opacity:.75;color:#0f5b86;">답변</div>'
+                    f'    {text_html}'
                     '  </div>'
                     '</div>', unsafe_allow_html=True
                 )
+
+            if not callable(call):
+                text_final = "(오류) LLM 어댑터를 사용할 수 없습니다."
+                _render_ai(text_final)
             else:
-                import inspect
+                import html, re, inspect
+                def esc(t: str) -> str:
+                    t = html.escape(t or "").replace("\n","<br/>")
+                    return re.sub(r"  ","&nbsp;&nbsp;", t)
+
                 sig = inspect.signature(call); params = sig.parameters.keys(); kwargs = {}
                 if "messages" in params:
                     kwargs["messages"] = [
@@ -907,16 +914,7 @@ def _render_chat_panel():
                 def _emit(piece: str):
                     nonlocal acc
                     acc += str(piece)
-                    ph.markdown(
-                        '<div style="display:flex;justify-content:flex-start;margin:8px 0;">'
-                        '  <div style="max-width:88%;padding:12px 14px;border-radius:16px;border-top-left-radius:8px;'
-                        '              line-height:1.6;font-size:15px;box-shadow:0 1px 1px rgba(0,0,0,.05);white-space:pre-wrap;'
-                        '              position:relative;border:1px solid #e0e4ea;background:#FAFAFB;color:#14121f;">'
-                        '    <div style="position:absolute;top:-10px;left:8px;font-size:11px;font-weight:700;opacity:.7;color:#6b7280;">답변</div>'
-                        f'    {acc}'
-                        '  </div>'
-                        '</div>', unsafe_allow_html=True
-                    )
+                    _render_ai(esc(acc))
 
                 supports_stream = ("stream" in params) or ("on_token" in params) or ("on_delta" in params) or ("yield_text" in params)
                 try:
@@ -931,17 +929,16 @@ def _render_chat_panel():
                         res  = call(**kwargs)
                         text_final = res.get("text") if isinstance(res, dict) else str(res)
                         if not text_final: text_final = "(응답이 비어있어요)"
-                        _emit(text_final)
+                        _render_ai(esc(text_final))
                 except Exception as e:
                     text_final = f"(오류) {type(e).__name__}: {e}"
-                    _emit(text_final)
+                    _render_ai(esc(text_final))
 
         st.markdown('</div></div>', unsafe_allow_html=True)
 
     if do_stream:
         ss["chat"].append({"id": f"a{int(time.time()*1000)}", "role": "assistant", "text": text_final})
         st.rerun()
-
 
 # ============================ [14] 본문 렌더 — START ============================
 def _render_body() -> None:
