@@ -264,11 +264,11 @@ def _render_boot_progress_line():
                 unsafe_allow_html=True
             )
 
-# [07] 헤더(배지·타이틀·⚙️ 같은 줄, 진행선은 READY시 숨김) =========================
+# [07] 헤더(배지·타이틀·⚙️ 한 줄 고정) =============================================
 def _header():
     """
-    - [좌] 상태 배지, [가운데] 타이틀, [우] ⚙️(아이콘만) — 한 줄에 고정
-    - 모바일에서도 줄바꿈 방지(flex-nowrap)
+    - 상태 배지(준비완료/준비중/오류) + 'LEES AI Teacher' + ⚙️(아이콘만)을 '같은 줄'에 고정
+    - 모바일에서도 줄바꿈 방지(flex nowrap)
     - 진행선은 READY일 때 숨김
     """
     if st is None:
@@ -297,52 +297,50 @@ def _header():
                 pass
         return st.expander(label, expanded=True)
 
-    # ── 스타일
+    # ── 헤더 전용 스타일
     st.markdown("""
     <style>
-      /* 상태 배지 */
-      .status-btn{display:inline-block;border-radius:10px;padding:4px 10px;
-                  font-weight:700;font-size:13px;margin-right:.5rem}
-      .status-btn.green{background:#E4FFF3;color:#0f6d53;border:1px solid #bff0df}
-      .status-btn.yellow{background:#FFF8E1;color:#8a6d00;border:1px solid #ffe099}
-      .status-btn.red{background:#FFE8E6;color:#a1302a;border:1px solid #ffc7c2}
-
-      /* 3-열을 한 줄(flex-nowrap)로 강제: 배지 · 타이틀 · ⚙️ */
-      #brand-flex + div{ display:flex !important; align-items:flex-end !important; gap:.5rem;
-                         flex-wrap:nowrap !important; }
-      #brand-flex + div [data-testid="column"]{ flex:0 0 auto !important; }
-      /* 가운데 열(타이틀)은 유연하게 늘어나고 줄어듦 */
-      #brand-flex + div [data-testid="column"]:nth-child(2){ flex:1 1 auto !important; min-width:0; }
-
-      /* 타이틀: 60% 확대 */
+      /* 한 줄 고정 바 */
+      .header-bar{
+        display:flex; align-items:flex-end; gap:.5rem; flex-wrap:nowrap;
+        white-space:nowrap;              /* 텍스트 줄바꿈 차단 */
+      }
       .brand-title{ font-size:2.4em; font-weight:800; letter-spacing:.2px; line-height:1; }
+      .status-btn{
+        display:inline-block; border-radius:10px; padding:4px 10px;
+        font-weight:700; font-size:13px; margin-right:.25rem;
+        white-space:nowrap;              /* '준비완료' 세로 깨짐 방지 */
+      }
+      .status-btn.green { background:#E4FFF3; color:#0f6d53; border:1px solid #bff0df; }
+      .status-btn.yellow{ background:#FFF8E1; color:#8a6d00; border:1px solid #ffe099; }
+      .status-btn.red   { background:#FFE8E6; color:#a1302a; border:1px solid #ffc7c2; }
 
-      /* ⚙️ 팝오버 버튼 — 아이콘만(좁은 폭에서도 한 줄 유지) */
-      #brand-flex + div [data-testid="stPopover"] > button{
+      /* ⚙️ 아이콘만(고정 폭) */
+      .gear-slot [data-testid="stPopover"] > button{
         width:28px; height:28px; min-width:28px; padding:0; border-radius:14px;
       }
-      #brand-flex + div [data-testid="stPopover"] > button p{ margin:0; font-size:18px; line-height:1; }
+      .gear-slot [data-testid="stPopover"] > button p{ margin:0; font-size:18px; line-height:1; }
 
       /* 아주 좁은 폭 대응: 타이틀만 살짝 축소 */
-      @media (max-width:420px){
-        .brand-title{ font-size:2.1em; }
-      }
+      @media (max-width: 420px){ .brand-title{ font-size:2.1em; } }
 
       /* 본문 타이틀(요청대로 30% 축소) */
       .hero-ask{ font-size:1.54rem; font-weight:800; letter-spacing:.2px; margin: 4px 0 8px; }
     </style>
     """, unsafe_allow_html=True)
 
-    # ── 앵커 → 바로 다음 columns 묶음을 flex-nowrap로 제어
-    st.markdown('<div id="brand-flex"></div>', unsafe_allow_html=True)
-
-    # [좌] 배지 · [가운데] 타이틀 · [우] ⚙️(아이콘만)
-    c_badge, c_title, c_gear = st.columns([0.0001, 1, 0.0001], gap="small")
-    with c_badge:
-        st.markdown(f'<span class="status-btn {badge_class}">{badge_txt}</span>', unsafe_allow_html=True)
-    with c_title:
-        st.markdown('<span class="brand-title">LEES AI Teacher</span>', unsafe_allow_html=True)
-    with c_gear:
+    # ── 두 컬럼: [왼쪽] 배지+타이틀(같은 줄) / [오른쪽] ⚙️(아이콘만, 고정 폭)
+    left, right = st.columns([1, 0.0001], gap="small")
+    with left:
+        st.markdown(
+            f'<div class="header-bar">'
+            f'  <span class="status-btn {badge_class}">{badge_txt}</span>'
+            f'  <span class="brand-title">LEES AI Teacher</span>'
+            f'</div>',
+            unsafe_allow_html=True
+        )
+    with right:
+        st.markdown('<div class="gear-slot">', unsafe_allow_html=True)
         if not _is_admin_view():
             with _safe_popover("⚙️"):
                 with st.form(key="admin_login"):
@@ -370,11 +368,11 @@ def _header():
                     st.success("로그아웃"); st.rerun()
                 elif close:
                     st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
 
     # 진행선(READY면 자동 숨김)
     _render_boot_progress_line()
     st.divider()
-
 
 
 # [08] 배경(완전 비활성) =======================================================
@@ -740,34 +738,30 @@ def _render_chat_panel():
         yaml = None
 
     ss = st.session_state
-    if "chat" not in ss:
-        ss["chat"] = []
+    if "chat" not in ss: ss["chat"] = []
 
-    # 전역 스타일(구분선/라디오 pill/배지) 주입
     _inject_chat_styles_once()
 
-    # 상단 배지는 헤더에서만 보여주기로 했으므로 호출 생략
-    cur_label = _render_mode_controls_pills()     # "문법" / "문장" / "지문"
-    MODE_TOKEN = {"문법": "문법설명", "문장": "문장구조분석", "지문": "지문분석"}[cur_label]
+    # 상단 배지는 헤더에서만 노출하므로 호출하지 않음
+    cur_label = _render_mode_controls_pills()
+    MODE_TOKEN = {"문법":"문법설명","문장":"문장구조분석","지문":"지문분석"}[cur_label]
 
-    ev_notes = ss.get("__evidence_class_notes", "")
-    ev_books = ss.get("__evidence_grammar_books", "")
+    ev_notes  = ss.get("__evidence_class_notes", "")
+    ev_books  = ss.get("__evidence_grammar_books", "")
 
-    # ---------- 프롬프트 소스: GitHub(우선) → Drive → Fallback ----------
+    # ── GitHub / Drive / Fallback 프롬프트 로더 (생략 없이 포함)
     def _github_fetch_prompts_text():
         token  = _from_secrets("GH_TOKEN") or os.getenv("GH_TOKEN")
         repo   = _from_secrets("GH_REPO")  or os.getenv("GH_REPO")
-        branch = _from_secrets("GH_BRANCH", "main") or os.getenv("GH_BRANCH", "main")
-        path   = _from_secrets("GH_PROMPTS_PATH", "prompts.yaml") or os.getenv("GH_PROMPTS_PATH", "prompts.yaml")
-        if not (token and repo and yaml):
-            return None
+        branch = _from_secrets("GH_BRANCH","main") or os.getenv("GH_BRANCH","main")
+        path   = _from_secrets("GH_PROMPTS_PATH","prompts.yaml") or os.getenv("GH_PROMPTS_PATH","prompts.yaml")
+        if not (token and repo and yaml): return None
         url = f"https://api.github.com/repos/{repo}/contents/{path}?ref={branch}"
-        req = urllib.request.Request(url, headers={"Authorization": f"token {token}", "User-Agent": "maic-app"})
+        req = urllib.request.Request(url, headers={"Authorization": f"token {token}","User-Agent":"maic-app"})
         try:
             with urllib.request.urlopen(req) as r:
                 meta = json.loads(r.read().decode("utf-8"))
-                content_b64 = meta.get("content") or ""
-                text = base64.b64decode(content_b64.encode("utf-8")).decode("utf-8")
+                text = base64.b64decode((meta.get("content") or "").encode()).decode("utf-8")
                 ss["__gh_prompts_cache"] = {"sha": meta.get("sha"), "text": text}
                 return text
         except Exception:
@@ -775,22 +769,17 @@ def _render_chat_panel():
 
     def _build_prompt_from_github(mode_token: str, q: str, ev1: str, ev2: str):
         txt = _github_fetch_prompts_text()
-        if not (txt and yaml):
-            return None
+        if not (txt and yaml): return None
         try:
             data = yaml.safe_load(txt) or {}
             node = (data.get("modes") or {}).get(mode_token)
-            if not node:
-                return None
+            if not node: return None
             sys_p = node.get("system") if isinstance(node, dict) else None
-            usr_p = node.get("user") if isinstance(node, dict) else (node if isinstance(node, str) else None)
-            if usr_p is None:
-                return None
-            usr_p = (
-                usr_p.replace("{QUESTION}", q)
-                .replace("{EVIDENCE_CLASS_NOTES}", ev1 or "")
-                .replace("{EVIDENCE_GRAMMAR_BOOKS}", ev2 or "")
-            )
+            usr_p = node.get("user")   if isinstance(node, dict) else (node if isinstance(node, str) else None)
+            if usr_p is None: return None
+            usr_p = (usr_p.replace("{QUESTION}", q)
+                        .replace("{EVIDENCE_CLASS_NOTES}", ev1 or "")
+                        .replace("{EVIDENCE_GRAMMAR_BOOKS}", ev2 or ""))
             return {"system": sys_p, "user": usr_p}
         except Exception:
             return None
@@ -798,62 +787,40 @@ def _render_chat_panel():
     def _build_prompt_from_drive(mode_token: str, q: str, ev1: str, ev2: str):
         _prompt_mod = _try_import("src.prompt_modes", ["build_prompt"]) or {}
         fn = _prompt_mod.get("build_prompt")
-        if not callable(fn):
-            return None
+        if not callable(fn): return None
         try:
             parts = fn(mode_token, q) or {}
-            sys_p = parts.get("system")
-            usr_p = parts.get("user")
+            sys_p = parts.get("system"); usr_p = parts.get("user")
             if usr_p:
-                usr_p = (
-                    usr_p.replace("{QUESTION}", q)
-                    .replace("{EVIDENCE_CLASS_NOTES}", ev1 or "")
-                    .replace("{EVIDENCE_GRAMMAR_BOOKS}", ev2 or "")
-                )
+                usr_p = (usr_p.replace("{QUESTION}", q)
+                            .replace("{EVIDENCE_CLASS_NOTES}", ev1 or "")
+                            .replace("{EVIDENCE_GRAMMAR_BOOKS}", ev2 or ""))
             return {"system": sys_p, "user": usr_p}
         except Exception:
             return None
 
     def _fallback_prompts(mode_token: str, q: str, ev1: str, ev2: str, cur_label: str):
-        NOTICE = "안내: 현재 자료 연결이 원활하지 않아 '간단 모드'로 답변합니다. 핵심만 짧게 안내할게요."
-        BASE = "너는 한국의 영어학원의 LEES Teacher이야. 따뜻하고 명확하게 설명한다. 모든 출력은 한국어로 간결하게."
+        NOTICE = "안내: 현재 자료 연결이 원활하지 않아 간단 모드로 답변합니다. 핵심만 짧게 안내할게요."
+        BASE = "너는 한국의 영어학원 원장처럼 따뜻하고 명확하게 설명한다. 모든 출력은 한국어로 간결하게."
         if mode_token == "문법설명":
             sys_p = BASE + " 주제에서 벗어난 장황한 배경설명은 금지한다."
             lines = []
-            if not ev1 and not ev2:
-                lines.append(NOTICE)
+            if not ev1 and not ev2: lines.append(NOTICE)
             lines += [
-                "1) 한 줄 핵심",
-                "2) 이미지/비유 (짧게)",
-                "3) 핵심 규칙 3–5개 (• bullet)",
-                "4) 예문 1개(+한국어 해석)",
-                "5) 한 문장 리마인드",
-                "6) 출처 1개: [출처: 이유문법] / [출처: 책제목(…)] / [출처: GPT지식] 또는 [출처: GEMINI지식]",
+                "1) 한 줄 핵심","2) 이미지/비유 (짧게)","3) 핵심 규칙 3–5개 (• bullet)",
+                "4) 예문 1개(+한국어 해석)","5) 한 문장 리마인드",
+                "6) 출처 1개: [출처: GPT지식/GEMINI지식/자료명]"
             ]
             usr_p = f"[질문]\n{q}\n\n[작성 지침]\n- 형식을 지켜라.\n" + "\n".join(f"- {x}" for x in lines)
         elif mode_token == "문장구조분석":
             sys_p = BASE + " 불확실한 판단은 '약 ~% 불확실'로 명시한다."
-            usr_p = (
-                "[출력 형식]\n"
-                "0) 모호성 점검\n"
-                "1) 괄호 규칙 요약\n"
-                "2) 핵심 골격 S–V–O–C–M 한 줄 개요\n"
-                "3) 성분 식별: 표/리스트\n"
-                "4) 구조/구문: 수식 관계·It-cleft·가주어/진주어·생략 복원 등 단계적 설명\n"
-                "5) 핵심 포인트 2–3개\n"
-                "6) 출처(보수): [규칙/자료/수업노트 등 ‘출처 유형’만]\n\n"
-                f"[문장]\n{q}"
-            )
+            usr_p = ("[출력 형식]\n0) 모호성 점검\n1) 괄호 규칙 요약\n2) S–V–O–C–M 한 줄 개요\n"
+                     "3) 성분 식별: 표/리스트\n4) 구조·구문 단계적 설명\n5) 핵심 포인트 2–3개\n6) 출처 유형만 표기\n\n"
+                     f"[문장]\n{q}")
         else:
             sys_p = BASE + " 불확실한 판단은 '약 ~% 불확실'로 명시한다."
-            usr_p = (
-                "[출력 형식]\n"
-                "1) 한 줄 요지(명사구)\n"
-                "2) 구조 요약: (서론–본론–결론) 또는 단락별 핵심 문장\n"
-                "3) 핵심어/표현 3–6개 + 이유\n"
-                "4) 문제풀이 힌트(있다면)\n\n"
-                f"[지문/질문]\n{q}"
-            )
+            usr_p = ("[출력 형식]\n1) 한 줄 요지\n2) 구조 요약(단락별 핵심)\n3) 핵심어 3–6개+이유\n4) 풀이 힌트\n\n"
+                     f"[지문/질문]\n{q}")
         st.session_state["__prompt_source"] = "Fallback"
         return sys_p, usr_p
 
@@ -864,54 +831,47 @@ def _render_chat_panel():
             sys_p = gh.get("system") or ""
             usr_p = gh.get("user") or f"[모드:{mode_token}]\n{q}"
             if mode_token == "문법설명" and not ev1 and not ev2:
-                usr_p += "\n\n[지시]\n- 답변 첫 줄을 다음 문장으로 시작: '안내: 현재 자료 연결이 원활하지 않아 간단 모드로 답변합니다. 핵심만 짧게 안내할게요.'"
+                usr_p += "\n\n[지시]\n- 첫 줄: '안내: 현재 자료 연결이 원활하지 않아 간단 모드로 답변합니다. 핵심만 짧게 안내할게요.'"
             return sys_p, usr_p
-
         dv = _build_prompt_from_drive(mode_token, q, ev1, ev2)
         if dv and (dv.get("system") or dv.get("user")):
             st.session_state["__prompt_source"] = "Drive"
             sys_p = dv.get("system") or ""
             usr_p = dv.get("user") or f"[모드:{mode_token}]\n{q}"
             if mode_token == "문법설명" and not ev1 and not ev2:
-                usr_p += "\n\n[지시]\n- 답변 첫 줄을 다음 문장으로 시작: '안내: 현재 자료 연결이 원활하지 않아 간단 모드로 답변합니다. 핵심만 짧게 안내할게요.'"
+                usr_p += "\n\n[지시]\n- 첫 줄: '안내: 현재 자료 연결이 원활하지 않아 간단 모드로 답변합니다. 핵심만 짧게 안내할게요.'"
             return sys_p, usr_p
-
         return _fallback_prompts(mode_token, q, ev1, ev2, cur_label)
 
-    # ---------- 입력창(항상 렌더) + 로그 기록 ----------
+    # ── 입력창(항상 렌더)
     user_q = st.chat_input("예) 분사구문이 뭐예요?  예) 이 문장 구조 분석해줘")
     qtxt = user_q.strip() if user_q and user_q.strip() else None
     do_stream = qtxt is not None
     if do_stream:
-        ts = int(time.time() * 1000)
-        ss["chat"].append({"id": f"u{ts}", "role": "user", "text": qtxt})
+        ss["chat"].append({"id": f"u{int(time.time()*1000)}", "role": "user", "text": qtxt})
 
-    # ---------- 메시지 영역 ----------
+    # ── 메시지 박스(있을 때만 렌더 → 빈 회색칸 제거)
     has_msgs = bool(ss["chat"])
-
-    # 메시지가 있을 때만 대화 상자를 띄워 ‘떠 있는 박스’ 느낌 제거
     if has_msgs:
         st.markdown(
             '<div style="background:#f5f7fb;border:1px solid #e6ecf5;border-radius:18px;'
             'padding:8px 8px 6px;"><div style="max-height:60vh;overflow-y:auto;padding:6px;">',
-            unsafe_allow_html=True,
+            unsafe_allow_html=True
         )
 
+    # 기록 렌더
     prev_role = None
     for m in ss["chat"]:
-        role = m.get("role", "assistant")
+        role = m.get("role","assistant")
         if prev_role is not None and prev_role != role:
             st.markdown('<div class="turn-sep"></div>', unsafe_allow_html=True)
-        _render_bubble(role, m.get("text", ""))
+        _render_bubble(role, m.get("text",""))
         prev_role = role
 
-    # ---------- 스트리밍 출력 ----------
+    # ── 스트리밍 출력
     text_final = ""
     if do_stream:
-        # 사용자 직후에 답변이 이어질 때 구분선
-        if has_msgs:
-            st.markdown('<div class="turn-sep"></div>', unsafe_allow_html=True)
-
+        if has_msgs: st.markdown('<div class="turn-sep"></div>', unsafe_allow_html=True)
         ph = st.empty()
 
         def _render_ai(text_html: str):
@@ -925,97 +885,69 @@ def _render_chat_panel():
                 '                 border:1px solid #BEE3FF;">답변</span><br/>'
                 f'    {text_html}'
                 '  </div>'
-                '</div>',
-                unsafe_allow_html=True,
+                '</div>', unsafe_allow_html=True
             )
 
         _render_ai("답변 준비중…")
-
         system_prompt, user_prompt = _resolve_prompts(MODE_TOKEN, qtxt, ev_notes, ev_books, cur_label)
+
         prov = _try_import("src.llm.providers", ["call_with_fallback"])
         call = prov.get("call_with_fallback")
-
         if not callable(call):
             text_final = "(오류) LLM 어댑터를 사용할 수 없습니다."
             _render_ai(text_final)
         else:
             import html, re, inspect
-
             def esc(t: str) -> str:
-                t = html.escape(t or "").replace("\n", "<br/>")
-                return re.sub(r"  ", "&nbsp;&nbsp;", t)
+                t = html.escape(t or "").replace("\n","<br/>")
+                return re.sub(r"  ","&nbsp;&nbsp;", t)
 
-            sig = inspect.signature(call)
-            params = sig.parameters.keys()
-            kwargs = {}
-
+            sig = inspect.signature(call); params = sig.parameters.keys(); kwargs = {}
             if "messages" in params:
-                kwargs["messages"] = [
-                    {"role": "system", "content": system_prompt or ""},
-                    {"role": "user", "content": user_prompt},
-                ]
+                kwargs["messages"] = [{"role":"system","content":system_prompt or ""},
+                                      {"role":"user","content":user_prompt}]
             else:
-                if "prompt" in params:
-                    kwargs["prompt"] = user_prompt
-                elif "user_prompt" in params:
-                    kwargs["user_prompt"] = user_prompt
-                if "system_prompt" in params:
-                    kwargs["system_prompt"] = (system_prompt or "")
-                elif "system" in params:
-                    kwargs["system"] = (system_prompt or "")
-
-            if "mode_token" in params:
-                kwargs["mode_token"] = MODE_TOKEN
-            elif "mode" in params:
-                kwargs["mode"] = MODE_TOKEN
-            if "temperature" in params:
-                kwargs["temperature"] = 0.2
-            elif "temp" in params:
-                kwargs["temp"] = 0.2
-            if "timeout_s" in params:
-                kwargs["timeout_s"] = 90
-            elif "timeout" in params:
-                kwargs["timeout"] = 90
-            if "extra" in params:
-                kwargs["extra"] = {"question": qtxt, "mode_key": cur_label}
+                if "prompt" in params: kwargs["prompt"] = user_prompt
+                elif "user_prompt" in params: kwargs["user_prompt"] = user_prompt
+                if "system_prompt" in params: kwargs["system_prompt"] = (system_prompt or "")
+                elif "system" in params:      kwargs["system"] = (system_prompt or "")
+            if "mode_token" in params: kwargs["mode_token"] = MODE_TOKEN
+            elif "mode" in params:     kwargs["mode"] = MODE_TOKEN
+            if "temperature" in params: kwargs["temperature"] = 0.2
+            elif "temp" in params:      kwargs["temp"] = 0.2
+            if "timeout_s" in params:   kwargs["timeout_s"] = 90
+            elif "timeout" in params:   kwargs["timeout"] = 90
+            if "extra" in params:       kwargs["extra"] = {"question": qtxt, "mode_key": cur_label}
 
             acc = ""
-
             def _emit(piece: str):
                 nonlocal acc
                 acc += str(piece)
                 _render_ai(esc(acc))
 
-            supports_stream = (
-                ("stream" in params) or ("on_token" in params) or ("on_delta" in params) or ("yield_text" in params)
-            )
+            supports_stream = ("stream" in params) or ("on_token" in params) or ("on_delta" in params) or ("yield_text" in params)
             try:
                 if supports_stream:
-                    if "stream" in params:
-                        kwargs["stream"] = True
-                    if "on_token" in params:
-                        kwargs["on_token"] = _emit
-                    if "on_delta" in params:
-                        kwargs["on_delta"] = _emit
-                    if "yield_text" in params:
-                        kwargs["yield_text"] = _emit
+                    if "stream" in params:   kwargs["stream"] = True
+                    if "on_token" in params: kwargs["on_token"] = _emit
+                    if "on_delta" in params: kwargs["on_delta"] = _emit
+                    if "yield_text" in params: kwargs["yield_text"] = _emit
                     res = call(**kwargs)
                     text_final = (res.get("text") if isinstance(res, dict) else acc) or acc
                 else:
-                    res = call(**kwargs)
+                    res  = call(**kwargs)
                     text_final = res.get("text") if isinstance(res, dict) else str(res)
-                    if not text_final:
-                        text_final = "(응답이 비어있어요)"
+                    if not text_final: text_final = "(응답이 비어있어요)"
                     _render_ai(esc(text_final))
             except Exception as e:
                 text_final = f"(오류) {type(e).__name__}: {e}"
                 _render_ai(esc(text_final))
 
     if has_msgs:
-        st.markdown("</div></div>", unsafe_allow_html=True)  # 스크롤 박스 닫기
+        st.markdown('</div></div>', unsafe_allow_html=True)  # 스크롤 박스 닫기
 
     if do_stream:
-        ss["chat"].append({"id": f"a{int(time.time() * 1000)}", "role": "assistant", "text": text_final})
+        ss["chat"].append({"id": f"a{int(time.time()*1000)}", "role": "assistant", "text": text_final})
         st.rerun()
 
 # ============================ [14] 본문 렌더 — START ============================
