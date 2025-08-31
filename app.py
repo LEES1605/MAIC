@@ -691,7 +691,7 @@ def _render_admin_panels() -> None:
 
 # [12] 채팅 UI(스타일/모드/상단 상태 라벨=SSOT) ===============================
 def _inject_chat_styles_once():
-    """전역 CSS: 턴 구분선/라디오 pill/상태 배지만. 말풍선 색은 인라인 스타일."""
+    """전역 CSS: 말풍선/라디오 pill + ChatPane(단일 틀) + '모드=카드 하단' 시각 접합."""
     if st is None: return
     if st.session_state.get("_chat_styles_injected"):
         return
@@ -699,82 +699,38 @@ def _inject_chat_styles_once():
 
     st.markdown("""
     <style>
-      /* 턴(질문↔답변) 사이 구분선 */
-      .turn-sep{height:0; border-top:1px dashed #E5EAF2; margin:14px 2px; position:relative;}
-      .turn-sep::after{content:''; position:absolute; top:-4px; left:50%; transform:translateX(-50%);
-                       width:8px; height:8px; border-radius:50%; background:#E5EAF2;}
-      /* 라디오 pill 보정 */
+      /* ───────── ChatPane: 단일 틀(항상 표시) ───────── */
+      .chatpane{ background:#f5f7fb;border:1px solid #e6ecf5;border-radius:18px;
+                 padding:8px;margin-top:10px; }
+      .chatpane .messages{ max-height:60vh;overflow-y:auto;padding:6px; }
+
+      /* '질문모드'를 ChatPane 하단처럼 보이도록: marker 다음의 stRadio를 카드-풋터로 스타일 */
+      .pane-foot-marker + div[data-testid="stRadio"]{
+        border-left:1px solid #e6ecf5; border-right:1px solid #e6ecf5; border-bottom:1px solid #e6ecf5;
+        border-bottom-left-radius:18px; border-bottom-right-radius:18px;
+        background:#f5f7fb; padding:10px 12px; margin-top:0; margin-bottom:6px;
+      }
+      /* 라디오 pill 배치/스타일(유지) */
       div[data-testid="stRadio"] > div[role="radiogroup"]{display:flex;gap:10px;flex-wrap:wrap}
-      div[data-testid="stRadio"] [role="radio"]{border:2px solid #bcdcff;border-radius:12px;padding:6px 12px;background:#fff;color:#0a2540;
-        font-weight:700;font-size:14px;line-height:1;}
+      div[data-testid="stRadio"] [role="radio"]{
+        border:2px solid #bcdcff;border-radius:12px;padding:6px 12px;background:#fff;color:#0a2540;
+        font-weight:700;font-size:14px;line-height:1;
+      }
       div[data-testid="stRadio"] [role="radio"][aria-checked="true"]{background:#eaf6ff;border-color:#9fd1ff;color:#0a2540;}
       div[data-testid="stRadio"] svg{display:none!important}
-      /* 상태 라벨 */
-      .status-btn{display:inline-block;border-radius:10px;padding:4px 10px;font-weight:700; font-size:13px}
+
+      /* 턴 구분선(유지) */
+      .turn-sep{height:0;border-top:1px dashed #E5EAF2;margin:14px 2px;position:relative;}
+      .turn-sep::after{content:'';position:absolute;top:-4px;left:50%;transform:translateX(-50%);
+                       width:8px;height:8px;border-radius:50%;background:#E5EAF2;}
+
+      /* 상태 라벨(유지) */
+      .status-btn{display:inline-block;border-radius:10px;padding:4px 10px;font-weight:700;font-size:13px}
       .status-btn.green{background:#E4FFF3;color:#0f6d53;border:1px solid #bff0df}
       .status-btn.yellow{background:#FFF8E1;color:#8a6d00;border:1px solid #ffe099}
       .status-btn.red{background:#FFE8E6;color:#a1302a;border:1px solid #ffc7c2}
     </style>
     """, unsafe_allow_html=True)
-
-def _render_bubble(role:str, text:str):
-    """라벨을 칩 형태로 인라인 배치(absolute 제거) → 들여쓰기/겹침 문제 해결."""
-    import html, re
-    is_user = (role == "user")
-    wrap = "display:flex;justify-content:flex-end;margin:8px 0;" if is_user else "display:flex;justify-content:flex-start;margin:8px 0;"
-    # 말풍선(질문=파스텔 노랑, 답변=파스텔 하늘)
-    base = "max-width:88%;padding:10px 12px;border-radius:16px;line-height:1.6;font-size:15px;box-shadow:0 1px 1px rgba(0,0,0,.05);white-space:pre-wrap;position:relative;"
-    bubble = (
-        base + "border-top-right-radius:8px;border:1px solid #FFE18A;background:#FFF7C2;color:#3d3a00;"
-        if is_user else
-        base + "border-top-left-radius:8px;border:1px solid #BEE3FF;background:#EAF6FF;color:#0a2540;"
-    )
-    # 라벨 칩(인라인)
-    label_chip = (
-        "display:inline-block;margin:-2px 0 6px 0;padding:1px 8px;border-radius:999px;font-size:11px;font-weight:700;"
-        "background:#FFECAA;color:#6b5200;border:1px solid #FFE18A;"
-        if is_user else
-        "display:inline-block;margin:-2px 0 6px 0;padding:1px 8px;border-radius:999px;font-size:11px;font-weight:700;"
-        "background:#DFF1FF;color:#0f5b86;border:1px solid #BEE3FF;"
-    )
-
-    t = html.escape(text or "").replace("\n","<br/>")
-    t = re.sub(r"  ","&nbsp;&nbsp;", t)
-    html_str = (
-        f'<div style="{wrap}">'
-        f'  <div style="{bubble}">'
-        f'    <span style="{label_chip}">{("질문" if is_user else "답변")}</span><br/>'
-        f'    {t}'
-        f'  </div>'
-        f'</div>'
-    )
-    st.markdown(html_str, unsafe_allow_html=True)
-
-def _render_mode_controls_pills() -> str:
-    _inject_chat_styles_once()
-    ss = st.session_state
-    cur = ss.get("qa_mode_radio") or "문법"
-    labels = ["어법", "문장", "지문"]
-    map_to = {"어법": "문법", "문장": "문장", "지문": "지문"}
-    idx = labels.index({"문법": "어법", "문장": "문장", "지문": "지문"}[cur])
-    sel = st.radio("질문 모드 선택", options=labels, index=idx, horizontal=True, label_visibility="collapsed")
-    new_key = map_to[sel]
-    if new_key != cur:
-        ss["qa_mode_radio"] = new_key
-        st.rerun()
-    return ss.get("qa_mode_radio", new_key)
-
-def _render_llm_status_minimal():
-    s = _get_brain_status()
-    code = s["code"]
-    if code == "READY":
-        st.markdown('<span class="status-btn green">🟢 준비완료</span>', unsafe_allow_html=True)
-    elif code in ("SCANNING", "RESTORING"):
-        st.markdown('<span class="status-btn yellow">🟡 준비중</span>', unsafe_allow_html=True)
-    elif code == "WARN":
-        st.markdown('<span class="status-btn yellow">🟡 주의</span>', unsafe_allow_html=True)
-    else:
-        st.markdown('<span class="status-btn red">🔴 준비안됨</span>', unsafe_allow_html=True)
 
 
 # [13] 채팅 패널 ==============================================================
@@ -790,9 +746,16 @@ def _render_chat_panel():
 
     _inject_chat_styles_once()
 
-    # 상단 배지는 헤더에서만 노출하므로 호출하지 않음
-    cur_label = _render_mode_controls_pills()
+    # ── 현재 모드(세션 값) 읽기: 모드-선택 UI는 아래 'pane-foot-marker' 뒤에서 렌더
+    cur_label = ss.get("qa_mode_radio") or "문법"
     MODE_TOKEN = {"문법":"문법설명","문장":"문장구조분석","지문":"지문분석"}[cur_label]
+
+    # ── 입력창: Streamlit 특성상 페이지 하단 고정이므로 '호출 위치'와 무관하게 맨 아래 표시됨
+    user_q = st.chat_input("예) 분사구문이 뭐예요?  예) 이 문장 구조 분석해줘")
+    qtxt = user_q.strip() if user_q and user_q.strip() else None
+    do_stream = qtxt is not None
+    if do_stream:
+        ss["chat"].append({"id": f"u{int(time.time()*1000)}", "role": "user", "text": qtxt})
 
     ev_notes  = ss.get("__evidence_class_notes", "")
     ev_books  = ss.get("__evidence_grammar_books", "")
@@ -891,21 +854,8 @@ def _render_chat_panel():
             return sys_p, usr_p
         return _fallback_prompts(mode_token, q, ev1, ev2, cur_label)
 
-    # ── 입력창(항상 렌더)
-    user_q = st.chat_input("예) 분사구문이 뭐예요?  예) 이 문장 구조 분석해줘")
-    qtxt = user_q.strip() if user_q and user_q.strip() else None
-    do_stream = qtxt is not None
-    if do_stream:
-        ss["chat"].append({"id": f"u{int(time.time()*1000)}", "role": "user", "text": qtxt})
-
-    # ── 메시지 박스(있을 때만 렌더 → 빈 회색칸 제거)
-    has_msgs = bool(ss["chat"])
-    if has_msgs:
-        st.markdown(
-            '<div style="background:#f5f7fb;border:1px solid #e6ecf5;border-radius:18px;'
-            'padding:8px 8px 6px;"><div style="max-height:60vh;overflow-y:auto;padding:6px;">',
-            unsafe_allow_html=True
-        )
+    # ── 항상 보이는 ChatPane(단일 틀) + 메시지 스크롤 영역
+    st.markdown('<div class="chatpane"><div class="messages">', unsafe_allow_html=True)
 
     # 기록 렌더
     prev_role = None
@@ -916,10 +866,11 @@ def _render_chat_panel():
         _render_bubble(role, m.get("text",""))
         prev_role = role
 
-    # ── 스트리밍 출력
+    # ── 스트리밍 출력(메시지 영역 안에서 진행)
     text_final = ""
     if do_stream:
-        if has_msgs: st.markdown('<div class="turn-sep"></div>', unsafe_allow_html=True)
+        if prev_role is not None and prev_role == "user":
+            st.markdown('<div class="turn-sep"></div>', unsafe_allow_html=True)
         ph = st.empty()
 
         def _render_ai(text_html: str):
@@ -937,7 +888,7 @@ def _render_chat_panel():
             )
 
         _render_ai("답변 준비중…")
-        system_prompt, user_prompt = _resolve_prompts(MODE_TOKEN, qtxt, ev_notes, ev_books, cur_label)
+        system_prompt, user_prompt = _resolve_prompts(MODE_TOKEN, qtxt or "", ev_notes, ev_books, cur_label)
 
         prov = _try_import("src.llm.providers", ["call_with_fallback"])
         call = prov.get("call_with_fallback")
@@ -991,9 +942,14 @@ def _render_chat_panel():
                 text_final = f"(오류) {type(e).__name__}: {e}"
                 _render_ai(esc(text_final))
 
-    if has_msgs:
-        st.markdown('</div></div>', unsafe_allow_html=True)  # 스크롤 박스 닫기
+    # ── ChatPane 닫기
+    st.markdown('</div></div>', unsafe_allow_html=True)
 
+    # ── ChatPane 하단처럼 보이도록: 질문모드 UI를 'pane-foot-marker' 바로 뒤에 렌더
+    st.markdown('<div class="pane-foot-marker"></div>', unsafe_allow_html=True)
+    _render_mode_controls_pills()
+
+    # ── 스트림 완료 후 기록 저장/리렌더
     if do_stream:
         ss["chat"].append({"id": f"a{int(time.time()*1000)}", "role": "assistant", "text": text_final})
         st.rerun()
