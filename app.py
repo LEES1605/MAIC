@@ -349,7 +349,7 @@ def _header():
       /* 오버레이를 더 위로: translateY(-120%)로 상향 이동 */
       .lees-header .badge, .lees-header .gear {{
         position: absolute; left: 0; top: 0;
-        transform: translateY(-120%);
+        transform: translateY(-110%);
         font-size: .7em; line-height: 1;
         padding: .18em .55em; border-radius: 999px;
         user-select: none; -webkit-tap-highlight-color: transparent;
