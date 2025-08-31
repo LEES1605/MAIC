@@ -432,102 +432,78 @@ def _render_admin_panels() -> None:
     - 토글이 꺼져 있으면 어떤 무거운 의존성도 로드하지 않습니다.
     - 실패 시 사용자 메시지(간단) + 상세 스택(Expander)로 안내합니다.
     """
-    # 표준 라이브러리(가벼움)
     import time
     import importlib
     import traceback
-
-    # 스트림릿
     import streamlit as st
 
     st.subheader("관리자 패널")
 
     # --- (A) 토글 UI: st.toggle 미지원 환경 대비 체크박스 폴백 ---
-    #   - 세션 상태 키를 고정해 재실행(rerun) 시에도 상태 유지
     toggle_key = "admin_orchestrator_open"
     if toggle_key not in st.session_state:
         st.session_state[toggle_key] = False
 
     try:
         open_panel = st.toggle(
-            "🔧 오케스트레이터 도구 열기 (지연 로드)",
+            "🔧 진단 도구 열기",   # ← 라벨만 교체
             value=st.session_state[toggle_key],
             help="클릭 시 필요한 모듈을 즉시 로드합니다."
         )
     except Exception:
         open_panel = st.checkbox(
-            "🔧 오케스트레이터 도구 열기 (지연 로드)",
+            "🔧 진단 도구 열기",   # ← 라벨만 교체
             value=st.session_state[toggle_key],
             help="클릭 시 필요한 모듈을 즉시 로드합니다."
         )
 
-    # 세션 상태 동기화
     st.session_state[toggle_key] = bool(open_panel)
 
-    # 토글이 꺼져 있으면, 어떤 무거운 것도 실행하지 않고 종료
     if not open_panel:
         st.caption("▶ 필요할 때만 로드되도록 최적화되었습니다. 위 토글을 켜면 모듈을 불러옵니다.")
         return
 
     load_start = time.perf_counter()
-    with st.spinner("오케스트레이터 모듈을 불러오는 중…"):
+    with st.spinner("모듈을 불러오는 중…"):
         mod = None
         last_err = None
-
-        # --- (B) 지연 임포트 ---
-        # 프로젝트 구조 변화에 대비해 두 가지 경로를 시도합니다.
         for module_name in ("src.ui_orchestrator", "ui_orchestrator"):
             try:
                 mod = importlib.import_module(module_name)
-                break  # 성공 시 루프 탈출
+                break
             except Exception as e:
                 last_err = e
                 mod = None
 
-    # 임포트 실패 처리
     if mod is None:
-        import textwrap
-        st.error("오케스트레이터 모듈을 불러오지 못했습니다.")
+        st.error("진단 도구를 불러오지 못했습니다.")
         if last_err is not None:
             with st.expander("오류 자세히 보기"):
                 st.code("".join(traceback.format_exception(type(last_err), last_err, last_err.__traceback__)))
-        st.info(textwrap.dedent("""
-            점검 팁:
-            1) 모듈 경로가 맞는지 확인: src/ui_orchestrator.py 또는 ui_orchestrator.py
-            2) 모듈 내 의존 패키지가 누락되지 않았는지 확인
-            3) 모듈 import 시 네트워크 초기화가 과도하지 않은지 확인
-        """).strip())
         return
 
-    # --- (C) 렌더 함수 탐색 ---
-    candidate_names = (
-        "render_index_orchestrator_panel",
-        "render_orchestrator_panel",
-        "render",
-    )
+    candidate_names = ("render_index_orchestrator_panel","render_orchestrator_panel","render")
     render_fn = None
     for fn_name in candidate_names:
         fn = getattr(mod, fn_name, None)
         if callable(fn):
             render_fn = fn
             break
-
     if render_fn is None:
-        st.warning(f"오케스트레이터 렌더 함수를 찾을 수 없습니다: {', '.join(candidate_names)}")
+        st.warning(f"렌더 함수를 찾을 수 없습니다: {', '.join(candidate_names)}")
         return
 
-    # --- (D) 렌더 실행(안전 호출) ---
     try:
-        render_fn()  # 모듈 측에서 Streamlit 컴포넌트를 그립니다.
+        render_fn()
     except Exception as e:
-        st.error("오케스트레이터 렌더링 중 오류가 발생했습니다.")
+        st.error("진단 도구 렌더링 중 오류가 발생했습니다.")
         with st.expander("오류 자세히 보기"):
             st.code("".join(traceback.format_exception(type(e), e, e.__traceback__)))
         return
     finally:
         elapsed_ms = (time.perf_counter() - load_start) * 1000.0
 
-    st.caption(f"✓ 오케스트레이터 로드/렌더 완료 — {elapsed_ms:.0f} ms")
+    st.caption(f"✓ 로드/렌더 완료 — {elapsed_ms:.0f} ms")
 
 # =============================== [09] 관리자 패널 — END ===============================
 
