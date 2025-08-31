@@ -267,8 +267,8 @@ def _render_boot_progress_line():
 # [07] 헤더(오버레이 배지·3D 타이틀·부제목 앵커) ==============================
 def _header():
     """
-    - 제목/부제목 한 블록 렌더.
-    - 오버레이(🟢/⚙)를 더 위로 띄워 부제목과 간격 확보.
+    - 제목/부제목 통합 렌더.
+    - 오버레이(🟢/⚙)를 더 위로 띄우고 앵커 상단 패딩을 늘려 부제목과 간격 확보.
     - 제목: 진한 남색 + 3D 섀도, 폰트 50% 확대.
     """
     if st is None:
@@ -277,9 +277,9 @@ def _header():
     ss = st.session_state
     ss.setdefault("_show_admin_login", False)
 
-    # 쿼리파라미터로 설정패널 열기/닫기
+    # 쿼리파라미터: 설정 패널 열기 토글
     try:
-        qp = st.query_params   # Streamlit ≥1.31
+        qp = st.query_params  # Streamlit ≥1.31
         qp_dict = dict(qp)
         has_new_qp = True
     except Exception:
@@ -309,7 +309,6 @@ def _header():
         "MISSING":   ("🔴 미준비",   "red"),
     }.get(code, ("🔴 미준비", "red"))
 
-    # CSS/HTML (오버레이 더 위로, 앵커 상단 패딩 추가)
     st.markdown(f"""
     <style>
       .lees-header {{ margin: 0 0 .35rem 0; }}
@@ -328,7 +327,7 @@ def _header():
 
       .lees-header .subhead-wrap {{
         position: relative;
-        margin-top: .95rem; /* 제목과 부제목 사이 여유 */
+        margin-top: 1.05rem; /* 제목↔부제목 간격 더 넉넉하게 */
       }}
 
       .lees-header .subhead {{
@@ -340,22 +339,21 @@ def _header():
         word-break: keep-all;
       }}
 
-      /* 앵커 위쪽 여백을 키워 오버레이와 본문 텍스트가 닿지 않게 함 */
+      /* 앵커 상단 패딩 ↑ : 오버레이와 본문 텍스트가 붙지 않게 */
       .lees-header .anchor {{
         position: relative; display: inline-block;
-        padding-top: .45em;  /* ↑ 0.45em */
+        padding-top: .6em;   /* ← 0.6em 로 상향 */
       }}
 
-      /* 오버레이를 더 위로: translateY(-120%)로 상향 이동 */
+      /* 오버레이를 더 위로 띄움: -140% (협의에 따라 ± 조정 가능) */
       .lees-header .badge, .lees-header .gear {{
         position: absolute; left: 0; top: 0;
-        transform: translateY(-100%);
+        transform: translateY(-140%);
         font-size: .7em; line-height: 1;
         padding: .18em .55em; border-radius: 999px;
         user-select: none; -webkit-tap-highlight-color: transparent;
         z-index: 2; white-space: nowrap;
       }}
-
       .lees-header .gear {{
         left: 100%;
         margin-left: -0.6em;
@@ -370,7 +368,7 @@ def _header():
       .lees-header .badge.red    {{ background:#fde8e8; color:#a61b29; border:1px solid #f5b5bb; }}
 
       @media (max-width: 380px) {{
-        .lees-header .badge, .lees-header .gear {{ transform: translateY(-130%); }}
+        .lees-header .badge, .lees-header .gear {{ transform: translateY(-150%); }}
       }}
     </style>
 
@@ -725,7 +723,6 @@ def _inject_chat_styles_once():
     </style>
     """, unsafe_allow_html=True)
 
-
 # [13] 채팅 패널 ==============================================================
 def _render_chat_panel():
     import time, base64, json, urllib.request
@@ -735,33 +732,64 @@ def _render_chat_panel():
         yaml = None
 
     ss = st.session_state
-    if "chat" not in ss: ss["chat"] = []
+    if "chat" not in ss:
+        ss["chat"] = []
 
     _inject_chat_styles_once()
 
-    # ── 현재 모드(세션 값) 읽기: 모드-선택 UI는 아래 'pane-foot-marker' 바로 뒤에 인라인 렌더
-    cur_label = ss.get("qa_mode_radio") or "문법"
-    MODE_TOKEN = {"문법":"문법설명","문장":"문장구조분석","지문":"지문분석"}[cur_label]
+    # ── (수정) 로컬 헬퍼: 말풍선 렌더러
+    def _render_bubble(role: str, text: str):
+        import html, re
+        def esc(t: str) -> str:
+            t = html.escape(t or "").replace("\n", "<br/>")
+            return re.sub(r"  ", "&nbsp;&nbsp;", t)
 
-    # ── 입력창(하단 고정)
+        is_user = (role == "user")
+        align = "flex-end" if is_user else "flex-start"
+        bg = "#FFFFFF" if is_user else "#EAF6FF"
+        fg = "#0a2540"
+        border = "#D7E9FF" if not is_user else "#E5E7EB"
+        radius_fix = "border-top-right-radius:8px;" if is_user else "border-top-left-radius:8px;"
+        label = "나" if is_user else "답변"
+        label_bg = "#F4F7FB" if is_user else "#DFF1FF"
+        label_bd = "#E5E7EB" if is_user else "#BEE3FF"
+        html_box = (
+            '<div style="display:flex;justify-content:%s;margin:8px 0;">'
+            '  <div style="max-width:88%%;padding:10px 12px;border-radius:16px;%s'
+            '              line-height:1.6;font-size:15px;box-shadow:0 1px 1px rgba(0,0,0,.05);white-space:pre-wrap;'
+            '              position:relative;border:1px solid %s;background:%s;color:%s;">'
+            '    <span style="display:inline-block;margin:-2px 0 6px 0;padding:1px 8px;border-radius:999px;'
+            '                 font-size:11px;font-weight:700;background:%s;color:#0f5b86;'
+            '                 border:1px solid %s;">%s</span><br/>%s'
+            '  </div>'
+            '</div>'
+        ) % (align, radius_fix, border, bg, fg, label_bg, label_bd, label, esc(text))
+        st.markdown(html_box, unsafe_allow_html=True)
+
+    # ── 현재 모드(세션 값) 읽기
+    cur_label = ss.get("qa_mode_radio") or "문법"
+    MODE_TOKEN = {"문법": "문법설명", "문장": "문장구조분석", "지문": "지문분석"}[cur_label]
+
+    # ── 입력창(하단 고정 위젯)
     user_q = st.chat_input("예) 분사구문이 뭐예요?  예) 이 문장 구조 분석해줘")
     qtxt = user_q.strip() if user_q and user_q.strip() else None
     do_stream = qtxt is not None
     if do_stream:
         ss["chat"].append({"id": f"u{int(time.time()*1000)}", "role": "user", "text": qtxt})
 
-    ev_notes  = ss.get("__evidence_class_notes", "")
-    ev_books  = ss.get("__evidence_grammar_books", "")
+    ev_notes = ss.get("__evidence_class_notes", "")
+    ev_books = ss.get("__evidence_grammar_books", "")
 
-    # ── GitHub / Drive / Fallback 프롬프트 로더 (생략 없이 포함)
+    # ── GitHub / Drive / Fallback 프롬프트 로더
     def _github_fetch_prompts_text():
-        token  = _from_secrets("GH_TOKEN") or os.getenv("GH_TOKEN")
-        repo   = _from_secrets("GH_REPO")  or os.getenv("GH_REPO")
-        branch = _from_secrets("GH_BRANCH","main") or os.getenv("GH_BRANCH","main")
-        path   = _from_secrets("GH_PROMPTS_PATH","prompts.yaml") or os.getenv("GH_PROMPTS_PATH","prompts.yaml")
-        if not (token and repo and yaml): return None
+        token = _from_secrets("GH_TOKEN") or os.getenv("GH_TOKEN")
+        repo  = _from_secrets("GH_REPO")  or os.getenv("GH_REPO")
+        branch = _from_secrets("GH_BRANCH", "main") or os.getenv("GH_BRANCH", "main")
+        path  = _from_secrets("GH_PROMPTS_PATH", "prompts.yaml") or os.getenv("GH_PROMPTS_PATH", "prompts.yaml")
+        if not (token and repo and yaml):
+            return None
         url = f"https://api.github.com/repos/{repo}/contents/{path}?ref={branch}"
-        req = urllib.request.Request(url, headers={"Authorization": f"token {token}","User-Agent":"maic-app"})
+        req = urllib.request.Request(url, headers={"Authorization": f"token {token}", "User-Agent": "maic-app"})
         try:
             with urllib.request.urlopen(req) as r:
                 meta = json.loads(r.read().decode("utf-8"))
@@ -773,14 +801,17 @@ def _render_chat_panel():
 
     def _build_prompt_from_github(mode_token: str, q: str, ev1: str, ev2: str):
         txt = _github_fetch_prompts_text()
-        if not (txt and yaml): return None
+        if not (txt and yaml):
+            return None
         try:
             data = yaml.safe_load(txt) or {}
             node = (data.get("modes") or {}).get(mode_token)
-            if not node: return None
+            if not node:
+                return None
             sys_p = node.get("system") if isinstance(node, dict) else None
-            usr_p = node.get("user")   if isinstance(node, dict) else (node if isinstance(node, str) else None)
-            if usr_p is None: return None
+            usr_p = node.get("user") if isinstance(node, dict) else (node if isinstance(node, str) else None)
+            if usr_p is None:
+                return None
             usr_p = (usr_p.replace("{QUESTION}", q)
                         .replace("{EVIDENCE_CLASS_NOTES}", ev1 or "")
                         .replace("{EVIDENCE_GRAMMAR_BOOKS}", ev2 or ""))
@@ -791,10 +822,12 @@ def _render_chat_panel():
     def _build_prompt_from_drive(mode_token: str, q: str, ev1: str, ev2: str):
         _prompt_mod = _try_import("src.prompt_modes", ["build_prompt"]) or {}
         fn = _prompt_mod.get("build_prompt")
-        if not callable(fn): return None
+        if not callable(fn):
+            return None
         try:
             parts = fn(mode_token, q) or {}
-            sys_p = parts.get("system"); usr_p = parts.get("user")
+            sys_p = parts.get("system")
+            usr_p = parts.get("user")
             if usr_p:
                 usr_p = (usr_p.replace("{QUESTION}", q)
                             .replace("{EVIDENCE_CLASS_NOTES}", ev1 or "")
@@ -809,10 +842,11 @@ def _render_chat_panel():
         if mode_token == "문법설명":
             sys_p = BASE + " 주제에서 벗어난 장황한 배경설명은 금지한다."
             lines = []
-            if not ev1 and not ev2: lines.append(NOTICE)
+            if not ev1 and not ev2:
+                lines.append(NOTICE)
             lines += [
-                "1) 한 줄 핵심","2) 이미지/비유 (짧게)","3) 핵심 규칙 3–5개 (• bullet)",
-                "4) 예문 1개(+한국어 해석)","5) 한 문장 리마인드",
+                "1) 한 줄 핵심", "2) 이미지/비유 (짧게)", "3) 핵심 규칙 3–5개 (• bullet)",
+                "4) 예문 1개(+한국어 해석)", "5) 한 문장 리마인드",
                 "6) 출처 1개: [출처: GPT지식/GEMINI지식/자료명]"
             ]
             usr_p = f"[질문]\n{q}\n\n[작성 지침]\n- 형식을 지켜라.\n" + "\n".join(f"- {x}" for x in lines)
@@ -853,13 +887,13 @@ def _render_chat_panel():
     # 기록 렌더
     prev_role = None
     for m in ss["chat"]:
-        role = m.get("role","assistant")
+        role = m.get("role", "assistant")
         if prev_role is not None and prev_role != role:
             st.markdown('<div class="turn-sep"></div>', unsafe_allow_html=True)
-        _render_bubble(role, m.get("text",""))
+        _render_bubble(role, m.get("text", ""))
         prev_role = role
 
-    # ── 스트리밍 출력(메시지 영역 안에서 진행)
+    # ── 스트리밍 출력(메시지 영역 안)
     text_final = ""
     if do_stream:
         if prev_role is not None and prev_role == "user":
@@ -891,13 +925,15 @@ def _render_chat_panel():
         else:
             import html, re, inspect
             def esc(t: str) -> str:
-                t = html.escape(t or "").replace("\n","<br/>")
-                return re.sub(r"  ","&nbsp;&nbsp;", t)
+                t = html.escape(t or "").replace("\n", "<br/>")
+                return re.sub(r"  ", "&nbsp;&nbsp;", t)
 
-            sig = inspect.signature(call); params = sig.parameters.keys(); kwargs = {}
+            sig = inspect.signature(call)
+            params = sig.parameters.keys()
+            kwargs = {}
             if "messages" in params:
-                kwargs["messages"] = [{"role":"system","content":system_prompt or ""},
-                                      {"role":"user","content":user_prompt}]
+                kwargs["messages"] = [{"role": "system", "content": system_prompt or ""},
+                                      {"role": "user", "content": user_prompt}]
             else:
                 if "prompt" in params: kwargs["prompt"] = user_prompt
                 elif "user_prompt" in params: kwargs["user_prompt"] = user_prompt
@@ -927,9 +963,10 @@ def _render_chat_panel():
                     res = call(**kwargs)
                     text_final = (res.get("text") if isinstance(res, dict) else acc) or acc
                 else:
-                    res  = call(**kwargs)
+                    res = call(**kwargs)
                     text_final = res.get("text") if isinstance(res, dict) else str(res)
-                    if not text_final: text_final = "(응답이 비어있어요)"
+                    if not text_final:
+                        text_final = "(응답이 비어있어요)"
                     _render_ai(esc(text_final))
             except Exception as e:
                 text_final = f"(오류) {type(e).__name__}: {e}"
@@ -938,11 +975,11 @@ def _render_chat_panel():
     # ── ChatPane 닫기
     st.markdown('</div></div>', unsafe_allow_html=True)
 
-    # ── ChatPane 하단처럼 보이도록: 질문모드 UI를 'pane-foot-marker' 바로 뒤에 '인라인' 렌더 (함수 호출 제거)
+    # ── 질문모드: ChatPane 풋터처럼 보이도록 바로 뒤에 인라인 렌더
     st.markdown('<div class="pane-foot-marker"></div>', unsafe_allow_html=True)
-    mode = st.radio(
-        "질문 모드", ["문법","문장","지문"],
-        index=["문법","문장","지문"].index(ss.get("qa_mode_radio","문법")),
+    st.radio(
+        "질문 모드", ["문법", "문장", "지문"],
+        index=["문법", "문장", "지문"].index(ss.get("qa_mode_radio", "문법")),
         horizontal=True, key="qa_mode_radio", label_visibility="collapsed"
     )
 
@@ -950,6 +987,7 @@ def _render_chat_panel():
     if do_stream:
         ss["chat"].append({"id": f"a{int(time.time()*1000)}", "role": "assistant", "text": text_final})
         st.rerun()
+
 
 # ============================ [14] 본문 렌더 — START ============================
 def _render_body() -> None:
