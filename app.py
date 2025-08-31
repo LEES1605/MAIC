@@ -396,6 +396,39 @@ def _run_deep_check_and_attach():
     ss["index_decision_needed"] = False
     ss["index_change_stats"] = {}
 
+# ============================ [07C] boot hook — START =============================
+def _boot_autoflow_hook():
+    """앱 부팅 시 1회 오토 플로우 실행(관리자=대화형, 학생=자동)"""
+    import importlib
+    try:
+        mod = None
+        for name in ("src.ui_orchestrator", "ui_orchestrator"):
+            try:
+                mod = importlib.import_module(name); break
+            except Exception:
+                mod = None
+        if mod and hasattr(mod, "autoflow_boot_check"):
+            mod.autoflow_boot_check(interactive=_is_admin_view())
+    except Exception as e:
+        _error_log(f"boot_autoflow_hook: {e}")
+# ============================= [07C] boot hook — END ==============================
+
+def main():
+    if st is None:
+        print("Streamlit 미탑재/로컬 환경"); return
+    st.set_page_config(page_title="LEES AI Teacher", layout="wide")
+    _header()
+
+    # ← 여기서 1회 실행
+    if not st.session_state.get("_boot_checked"):
+        _boot_autoflow_hook()
+
+    if _is_admin_view():
+        _render_restore_controls()
+        _render_admin_panels()
+    else:
+        _render_body()
+
 # [08] 자동 시작(선택) — 기본 비활성 ==========================================
 def _auto_start_once():
     """AUTO_START_MODE에 따른 1회성 자동 복원."""
