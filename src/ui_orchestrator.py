@@ -1,3 +1,8 @@
+# START [00] module header hotfix
+from __future__ import annotations
+from pathlib import Path
+# END [00] module header hotfix
+
 # START [00] _lazy_imports 교체 (GitHub 릴리스 모듈 후보 확장)
 def _lazy_imports() -> dict:
     """
