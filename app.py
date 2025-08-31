@@ -815,8 +815,8 @@ def _render_chat_panel():
             return None
 
     def _fallback_prompts(mode_token: str, q: str, ev1: str, ev2: str, cur_label: str):
-        NOTICE = "안내: 현재 자료 연결이 원활하지 않아 간단 모드로 답변합니다. 핵심만 짧게 안내할게요."
-        BASE = "너는 한국의 영어학원 원장처럼 따뜻하고 명확하게 설명한다. 모든 출력은 한국어로 간결하게."
+        NOTICE = "안내: 현재 자료 연결이 원활하지 않아 '간단 모드'로 답변합니다. 핵심만 짧게 안내할게요."
+        BASE = "너는 한국의 영어학원의 LEES Teacher이야. 따뜻하고 명확하게 설명한다. 모든 출력은 한국어로 간결하게."
         if mode_token == "문법설명":
             sys_p = BASE + " 주제에서 벗어난 장황한 배경설명은 금지한다."
             lines = []
