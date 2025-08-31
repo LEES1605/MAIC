@@ -348,7 +348,7 @@ def _header():
       /* 오버레이를 더 위로 띄움: -140% (협의에 따라 ± 조정 가능) */
       .lees-header .badge, .lees-header .gear {{
         position: absolute; left: 0; top: 0;
-        transform: translateY(-140%);
+        transform: translateY(-100%);
         font-size: .7em; line-height: 1;
         padding: .18em .55em; border-radius: 999px;
         user-select: none; -webkit-tap-highlight-color: transparent;
