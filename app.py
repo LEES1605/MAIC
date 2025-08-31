@@ -598,11 +598,9 @@ def _render_admin_panels() -> None:
     st.caption(f"✓ 로드/렌더 완료 — {elapsed_ms:.0f} ms")
 # ============ [11] 관리자 패널(지연 임포트 + 파일경로 폴백) — END ============
 
-
-
 # [12] 채팅 UI(스타일/모드/상단 상태 라벨=SSOT) ===============================
 def _inject_chat_styles_once():
-    """채팅용 전역 CSS 1회 주입(사용자: 보라 / AI: 화이트) + 턴 구분선"""
+    """전역 CSS 주입: 턴 구분선/라디오 필만 최소히. 말풍선 색은 인라인 스타일로 강제."""
     if st is None: return
     if st.session_state.get("_chat_styles_injected"):
         return
@@ -610,34 +608,10 @@ def _inject_chat_styles_once():
 
     st.markdown("""
     <style>
-      .chat-wrap{background:#f5f7fb !important;border:1px solid #e6ecf5 !important;border-radius:18px;
-                 padding:10px 10px 8px;margin-top:10px}
-      .chat-box{min-height:240px;max-height:54vh;overflow-y:auto;padding:8px 8px 6px}
-      .row{display:flex;margin:8px 0}
-      .row.user{justify-content:flex-end}
-      .row.ai{justify-content:flex-start}
-      .bubble{max-width:88%;padding:12px 14px;border-radius:16px;line-height:1.6;font-size:15px;
-              box-shadow:0 1px 1px rgba(0,0,0,.05);white-space:pre-wrap;position:relative;border:1px solid #e0e4ea;}
-      .bubble.user{background:#EFE6FF !important;color:#201547;border-color:#D6CCFF !important;border-top-right-radius:8px;}
-      .bubble.ai{background:#FFFFFF;color:#14121f;border-top-left-radius:8px;}
-      .bubble .lbl{position:absolute; top:-10px; left:8px; font-size:11px; font-weight:700; opacity:.65}
-      .bubble.user .lbl{color:#6b3fa0}
-      .bubble.ai .lbl{color:#6b7280}
       /* 턴(질문↔답변) 사이 구분선 */
       .turn-sep{height:0; border-top:1px dashed #E5EAF2; margin:16px 2px; position:relative;}
       .turn-sep::after{content:''; position:absolute; top:-4px; left:50%; transform:translateX(-50%);
                        width:8px; height:8px; border-radius:50%; background:#E5EAF2;}
-      /* streamlit chat 기본 위젯 보정은 유지(혹시 사용할 경우) */
-      [data-testid="stChatMessageUser"] > div{display:flex; justify-content:flex-end;}
-      [data-testid="stChatMessageUser"] [data-testid="stMarkdownContainer"]{
-        max-width:88%; background:#EFE6FF; color:#201547;
-        border:1px solid #D6CCFF; border-radius:16px; border-top-right-radius:8px;
-        padding:12px 14px; box-shadow:0 1px 1px rgba(0,0,0,.05);}
-      [data-testid="stChatMessage"] > div{display:flex; justify-content:flex-start;}
-      [data-testid="stChatMessage"] [data-testid="stMarkdownContainer"]{
-        max-width:88%; background:#FFFFFF; color:#14121f;
-        border:1px solid #e0e4ea; border-radius:16px; border-top-left-radius:8px;
-        padding:12px 14px; box-shadow:0 1px 1px rgba(0,0,0,.05);}
       /* 라디오 pill 보정 */
       div[data-testid="stRadio"] > div[role="radiogroup"]{display:flex;gap:10px;flex-wrap:wrap}
       div[data-testid="stRadio"] [role="radio"]{border:2px solid #bcdcff;border-radius:12px;padding:6px 12px;background:#fff;color:#0a2540;
@@ -653,15 +627,41 @@ def _inject_chat_styles_once():
     """, unsafe_allow_html=True)
 
 def _render_bubble(role:str, text:str):
+    """전역 CSS가 막혀도 보이도록 인라인 스타일로 말풍선 컬러/레이아웃을 강제."""
     import html, re
-    klass = "user" if role=="user" else "ai"
-    label = "질문" if role=="user" else "답변"
+    is_user = (role == "user")
+    wrapper_style = (
+        "display:flex;justify-content:flex-end;margin:8px 0;" if is_user
+        else "display:flex;justify-content:flex-start;margin:8px 0;"
+    )
+    bubble_style = (
+        # 사용자(보라)
+        "max-width:88%;padding:12px 14px;border-radius:16px;border-top-right-radius:8px;"
+        "line-height:1.6;font-size:15px;box-shadow:0 1px 1px rgba(0,0,0,.05);white-space:pre-wrap;"
+        "position:relative;border:1px solid #D6CCFF;background:#EFE6FF;color:#201547;"
+        if is_user else
+        # AI(화이트/연한 회색)
+        "max-width:88%;padding:12px 14px;border-radius:16px;border-top-left-radius:8px;"
+        "line-height:1.6;font-size:15px;box-shadow:0 1px 1px rgba(0,0,0,.05);white-space:pre-wrap;"
+        "position:relative;border:1px solid #e0e4ea;background:#FAFAFB;color:#14121f;"
+    )
+    label_style = (
+        "position:absolute;top:-10px;left:8px;font-size:11px;font-weight:700;opacity:.7;"
+        "color:#6b3fa0;" if is_user else
+        "position:absolute;top:-10px;left:8px;font-size:11px;font-weight:700;opacity:.7;"
+        "color:#6b7280;"
+    )
     t = html.escape(text or "").replace("\n","<br/>")
     t = re.sub(r"  ","&nbsp;&nbsp;", t)
-    st.markdown(
-        f'<div class="row {klass}"><div class="bubble {klass}"><div class="lbl">{label}</div>{t}</div></div>',
-        unsafe_allow_html=True
+    html_str = (
+        f'<div style="{wrapper_style}">'
+        f'  <div style="{bubble_style}">'
+        f'    <div style="{label_style}">{("질문" if is_user else "답변")}</div>'
+        f'    {t}'
+        f'  </div>'
+        f'</div>'
     )
+    st.markdown(html_str, unsafe_allow_html=True)
 
 def _render_mode_controls_pills() -> str:
     """질문 모드 라디오: 라벨 문구를 미니멀하게 숨김(label_visibility='collapsed')."""
@@ -838,7 +838,8 @@ def _render_chat_panel():
         ss["chat"].append({"id": uid, "role": "user", "text": qtxt})
 
     with st.container():
-        st.markdown('<div class="chat-wrap"><div class="chat-box">', unsafe_allow_html=True)
+        # 상자 테두리/배경은 전역 CSS 의존 없이 간소화
+        st.markdown('<div style="background:#f5f7fb;border:1px solid #e6ecf5;border-radius:18px;padding:10px 10px 8px;"><div style="min-height:240px;max-height:54vh;overflow-y:auto;padding:8px 8px 6px;">', unsafe_allow_html=True)
         prev_role = None
         for m in ss["chat"]:
             role = m.get("role","assistant")
@@ -849,10 +850,20 @@ def _render_chat_panel():
 
         text_final = ""
         if do_stream:
-            # 사용자 직후에 답변이 이어질 때 '턴 구분선'을 먼저 렌더
+            # 사용자 직후에 답변이 이어질 때 '턴 구분선' 먼저
             st.markdown('<div class="turn-sep"></div>', unsafe_allow_html=True)
             ph = st.empty()
-            ph.markdown(f'<div class="row ai"><div class="bubble ai"><div class="lbl">답변</div>{"답변 준비중…"}</div></div>', unsafe_allow_html=True)
+            # 프리페치 말풍선
+            ph.markdown(
+                '<div style="display:flex;justify-content:flex-start;margin:8px 0;">'
+                '  <div style="max-width:88%;padding:12px 14px;border-radius:16px;border-top-left-radius:8px;'
+                '              line-height:1.6;font-size:15px;box-shadow:0 1px 1px rgba(0,0,0,.05);white-space:pre-wrap;'
+                '              position:relative;border:1px solid #e0e4ea;background:#FAFAFB;color:#14121f;">'
+                '    <div style="position:absolute;top:-10px;left:8px;font-size:11px;font-weight:700;opacity:.7;color:#6b7280;">답변</div>'
+                '    답변 준비중…'
+                '  </div>'
+                '</div>', unsafe_allow_html=True
+            )
             system_prompt, user_prompt = _resolve_prompts(MODE_TOKEN, qtxt, ev_notes, ev_books, cur_label)
 
             prov = _try_import("src.llm.providers", ["call_with_fallback"])
@@ -860,7 +871,16 @@ def _render_chat_panel():
 
             if not callable(call):
                 text_final = "(오류) LLM 어댑터를 사용할 수 없습니다."
-                ph.markdown(f'<div class="row ai"><div class="bubble ai"><div class="lbl">답변</div>{text_final}</div></div>', unsafe_allow_html=True)
+                ph.markdown(
+                    '<div style="display:flex;justify-content:flex-start;margin:8px 0;">'
+                    '  <div style="max-width:88%;padding:12px 14px;border-radius:16px;border-top-left-radius:8px;'
+                    '              line-height:1.6;font-size:15px;box-shadow:0 1px 1px rgba(0,0,0,.05);white-space:pre-wrap;'
+                    '              position:relative;border:1px solid #e0e4ea;background:#FAFAFB;color:#14121f;">'
+                    '    <div style="position:absolute;top:-10px;left:8px;font-size:11px;font-weight:700;opacity:.7;color:#6b7280;">답변</div>'
+                    f'    {text_final}'
+                    '  </div>'
+                    '</div>', unsafe_allow_html=True
+                )
             else:
                 import inspect
                 sig = inspect.signature(call); params = sig.parameters.keys(); kwargs = {}
@@ -887,7 +907,16 @@ def _render_chat_panel():
                 def _emit(piece: str):
                     nonlocal acc
                     acc += str(piece)
-                    ph.markdown(f'<div class="row ai"><div class="bubble ai"><div class="lbl">답변</div>{acc}</div></div>', unsafe_allow_html=True)
+                    ph.markdown(
+                        '<div style="display:flex;justify-content:flex-start;margin:8px 0;">'
+                        '  <div style="max-width:88%;padding:12px 14px;border-radius:16px;border-top-left-radius:8px;'
+                        '              line-height:1.6;font-size:15px;box-shadow:0 1px 1px rgba(0,0,0,.05);white-space:pre-wrap;'
+                        '              position:relative;border:1px solid #e0e4ea;background:#FAFAFB;color:#14121f;">'
+                        '    <div style="position:absolute;top:-10px;left:8px;font-size:11px;font-weight:700;opacity:.7;color:#6b7280;">답변</div>'
+                        f'    {acc}'
+                        '  </div>'
+                        '</div>', unsafe_allow_html=True
+                    )
 
                 supports_stream = ("stream" in params) or ("on_token" in params) or ("on_delta" in params) or ("yield_text" in params)
                 try:
@@ -902,18 +931,16 @@ def _render_chat_panel():
                         res  = call(**kwargs)
                         text_final = res.get("text") if isinstance(res, dict) else str(res)
                         if not text_final: text_final = "(응답이 비어있어요)"
-                        ph.markdown(f'<div class="row ai"><div class="bubble ai"><div class="lbl">답변</div>{text_final}</div></div>', unsafe_allow_html=True)
+                        _emit(text_final)
                 except Exception as e:
                     text_final = f"(오류) {type(e).__name__}: {e}"
-                    ph.markdown(f'<div class="row ai"><div class="bubble ai"><div class="lbl">답변</div>{text_final}</div></div>', unsafe_allow_html=True)
-                    _errlog(f"LLM 예외: {e}", where="[qa_llm]", exc=e)
+                    _emit(text_final)
 
         st.markdown('</div></div>', unsafe_allow_html=True)
 
     if do_stream:
         ss["chat"].append({"id": f"a{int(time.time()*1000)}", "role": "assistant", "text": text_final})
         st.rerun()
-
 
 
 # ============================ [14] 본문 렌더 — START ============================
