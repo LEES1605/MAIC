@@ -100,6 +100,16 @@ def autoflow_boot_check(*, interactive: bool) -> None:
     if ss.get("_boot_checked") is True:
         return
 
+    # 진행 단계 기록 헬퍼
+    def PH(code: str, msg: str = ""):
+        try:
+            # app.py의 _set_phase가 없더라도 세션키는 그대로 사용 가능
+            ss["_boot_phase"] = code
+            if msg:
+                ss["_boot_msg"] = msg
+        except Exception:
+            pass
+
     deps = _lazy_imports()
     PERSIST_DIR = deps.get("PERSIST_DIR")
     restore_latest = deps.get("restore_latest")
@@ -109,8 +119,10 @@ def autoflow_boot_check(*, interactive: bool) -> None:
 
     p = PERSIST_DIR if isinstance(PERSIST_DIR, Path) else Path(str(PERSIST_DIR))
 
-    # 0) 로컬 없으면 → 자동 복원
+    # 0) 로컬 검사
+    PH("LOCAL_CHECK", "로컬 인덱스 확인 중…")
     if not _has_local_index(p):
+        PH("RESTORE_FROM_RELEASE", "백업에서 로컬 복원 중…")
         if callable(restore_latest):
             with st.spinner("초기화: 백업에서 로컬 복원 중…"):
                 ok = False
@@ -119,16 +131,24 @@ def autoflow_boot_check(*, interactive: bool) -> None:
                 except Exception as e:
                     _add_error(e)
             if ok:
+                PH("READY_MARK", "준비 완료 표식 생성…")
                 _ready_mark(p)
                 ss["_boot_checked"] = True
-                st.toast("✅ 백업에서 로컬 인덱스를 복원했습니다.", icon="✅")
+                PH("READY", "준비완료")
+                # 토스트 폴백
+                if hasattr(st, "toast"):
+                    st.toast("✅ 백업에서 로컬 인덱스를 복원했습니다.", icon="✅")
+                else:
+                    st.success("✅ 백업에서 로컬 인덱스를 복원했습니다.")
                 st.rerun()
         else:
             _add_error(RuntimeError("restore_latest 가 없습니다."))
             ss["_boot_checked"] = True
+            PH("ERROR", "복원 함수를 찾을 수 없습니다.")
         return
 
-    # 1) 변경 감지 (index_build의 diff 사용; folder_id=None이면 내부 규칙 사용)
+    # 1) 변경 감지
+    PH("DIFF_CHECK", "변경 감지 중…")
     has_new = False
     try:
         if callable(diff_with_manifest):
@@ -146,23 +166,31 @@ def autoflow_boot_check(*, interactive: bool) -> None:
                 if go:
                     if choice.startswith("재인덱싱"):
                         if callable(build_index_with_checkpoint):
+                            PH("REINDEXING", "재인덱싱 중…")
                             with st.spinner("재인덱싱 중…"):
                                 ok=False
                                 try:
-                                    res = build_index_with_checkpoint(force=False, prefer_release_restore=False, folder_id=_find_folder_id(None) if callable(_find_folder_id) else None)
+                                    res = build_index_with_checkpoint(
+                                        force=False, prefer_release_restore=False,
+                                        folder_id=_find_folder_id(None) if callable(_find_folder_id) else None
+                                    )
                                     ok = bool(res and res.get("ok"))
                                 except Exception as e:
                                     _add_error(e)
                             if ok:
+                                PH("READY_MARK", "준비 완료 표식 생성…")
                                 _ready_mark(p); ss["_boot_checked"] = True
-                                st.success("✅ 재인덱싱 완료 및 로컬 준비됨")
-                                st.rerun()
+                                PH("READY", "준비완료")
+                                st.success("✅ 재인덱싱 완료 및 로컬 준비됨"); st.rerun()
                             else:
+                                PH("ERROR", "재인덱싱 실패")
                                 st.error("재인덱싱이 완료되지 않았습니다.")
                         else:
+                            PH("ERROR", "인덱서 함수를 찾을 수 없습니다.")
                             st.error("인덱서 함수를 찾을 수 없습니다.")
                     else:
                         if callable(restore_latest):
+                            PH("RESTORE_FROM_RELEASE", "백업에서 로컬 복원 중…")
                             with st.spinner("백업을 로컬에 복원 중…"):
                                 ok=False
                                 try:
@@ -170,33 +198,45 @@ def autoflow_boot_check(*, interactive: bool) -> None:
                                 except Exception as e:
                                     _add_error(e)
                             if ok:
+                                PH("READY_MARK", "준비 완료 표식 생성…")
                                 _ready_mark(p); ss["_boot_checked"] = True
-                                st.success("✅ 백업 복원 완료")
-                                st.rerun()
+                                PH("READY", "준비완료")
+                                st.success("✅ 백업 복원 완료"); st.rerun()
+                            else:
+                                PH("ERROR", "백업 복원 실패")
+                                st.error("복원에 실패했습니다.")
                         else:
+                            PH("ERROR", "restore_latest 함수를 찾을 수 없습니다.")
                             st.error("restore_latest 함수를 찾을 수 없습니다.")
             return
         else:
             # 학생 모드: 묻지 않고 백업 사용
             if callable(restore_latest):
+                PH("RESTORE_FROM_RELEASE", "백업에서 로컬 복원 중…")
                 try:
                     restore_latest(dest_dir=p)
+                    PH("READY_MARK", "준비 완료 표식 생성…")
                     _ready_mark(p)
+                    PH("READY", "준비완료")
                 except Exception as e:
-                    _add_error(e)
+                    _add_error(e); PH("ERROR", "복원 실패")
             ss["_boot_checked"] = True
             return
     else:
         # 새 자료 없음 → 백업 동기화 후 ready (보수적 동기화)
         if callable(restore_latest):
             try:
+                PH("RESTORE_FROM_RELEASE", "백업 동기화 중…")
                 restore_latest(dest_dir=p)
             except Exception as e:
                 _add_error(e)
+        PH("READY_MARK", "준비 완료 표식 생성…")
         _ready_mark(p)
         ss["_boot_checked"] = True
+        PH("READY", "준비완료")
         return
 # ========================= [01] autoflow_boot_check — END ==========================
+
 
 # =========== render_index_orchestrator_panel — START ===========
 def render_index_orchestrator_panel() -> None:
