@@ -839,13 +839,20 @@ def _render_chat_panel():
 
     with st.container():
         st.markdown('<div class="chat-wrap"><div class="chat-box">', unsafe_allow_html=True)
+        prev_role = None
         for m in ss["chat"]:
-            _render_bubble(m.get("role","assistant"), m.get("text",""))
+            role = m.get("role","assistant")
+            if prev_role is not None and prev_role != role:
+                st.markdown('<div class="turn-sep"></div>', unsafe_allow_html=True)
+            _render_bubble(role, m.get("text",""))
+            prev_role = role
 
         text_final = ""
         if do_stream:
+            # 사용자 직후에 답변이 이어질 때 '턴 구분선'을 먼저 렌더
+            st.markdown('<div class="turn-sep"></div>', unsafe_allow_html=True)
             ph = st.empty()
-            ph.markdown(f'<div class="row ai"><div class="bubble ai">{"답변 준비중…"}</div></div>', unsafe_allow_html=True)
+            ph.markdown(f'<div class="row ai"><div class="bubble ai"><div class="lbl">답변</div>{"답변 준비중…"}</div></div>', unsafe_allow_html=True)
             system_prompt, user_prompt = _resolve_prompts(MODE_TOKEN, qtxt, ev_notes, ev_books, cur_label)
 
             prov = _try_import("src.llm.providers", ["call_with_fallback"])
@@ -853,7 +860,7 @@ def _render_chat_panel():
 
             if not callable(call):
                 text_final = "(오류) LLM 어댑터를 사용할 수 없습니다."
-                ph.markdown(f'<div class="row ai"><div class="bubble ai">{text_final}</div></div>', unsafe_allow_html=True)
+                ph.markdown(f'<div class="row ai"><div class="bubble ai"><div class="lbl">답변</div>{text_final}</div></div>', unsafe_allow_html=True)
             else:
                 import inspect
                 sig = inspect.signature(call); params = sig.parameters.keys(); kwargs = {}
@@ -880,7 +887,7 @@ def _render_chat_panel():
                 def _emit(piece: str):
                     nonlocal acc
                     acc += str(piece)
-                    ph.markdown(f'<div class="row ai"><div class="bubble ai">{acc}</div></div>', unsafe_allow_html=True)
+                    ph.markdown(f'<div class="row ai"><div class="bubble ai"><div class="lbl">답변</div>{acc}</div></div>', unsafe_allow_html=True)
 
                 supports_stream = ("stream" in params) or ("on_token" in params) or ("on_delta" in params) or ("yield_text" in params)
                 try:
@@ -895,10 +902,10 @@ def _render_chat_panel():
                         res  = call(**kwargs)
                         text_final = res.get("text") if isinstance(res, dict) else str(res)
                         if not text_final: text_final = "(응답이 비어있어요)"
-                        ph.markdown(f'<div class="row ai"><div class="bubble ai">{text_final}</div></div>', unsafe_allow_html=True)
+                        ph.markdown(f'<div class="row ai"><div class="bubble ai"><div class="lbl">답변</div>{text_final}</div></div>', unsafe_allow_html=True)
                 except Exception as e:
                     text_final = f"(오류) {type(e).__name__}: {e}"
-                    ph.markdown(f'<div class="row ai"><div class="bubble ai">{text_final}</div></div>', unsafe_allow_html=True)
+                    ph.markdown(f'<div class="row ai"><div class="bubble ai"><div class="lbl">답변</div>{text_final}</div></div>', unsafe_allow_html=True)
                     _errlog(f"LLM 예외: {e}", where="[qa_llm]", exc=e)
 
         st.markdown('</div></div>', unsafe_allow_html=True)
@@ -906,6 +913,7 @@ def _render_chat_panel():
     if do_stream:
         ss["chat"].append({"id": f"a{int(time.time()*1000)}", "role": "assistant", "text": text_final})
         st.rerun()
+
 
 
 # ============================ [14] 본문 렌더 — START ============================
