@@ -91,19 +91,17 @@ def _has_local_index(persist_dir: Path) -> bool:
 
 def autoflow_boot_check(*, interactive: bool) -> None:
     """
-    앱 부팅 시 1회 실행되는 오토 플로우:
-      - 로컬 인덱스 없으면: 최신 릴리스에서 자동 복원 → .ready 생성
-      - 변경 감지 있으면:
-          - interactive=True(관리자): 재인덱싱 vs 백업 사용 선택
-          - interactive=False(학생): 백업 사용으로 자동 진행
-      - 변경 없으면: 백업 동기화 후 .ready
+    앱 부팅 시 단 한 번 실행되는 오토 플로우(FAST BOOT):
+      - 로컬 인덱스가 있으면 **즉시 READY 로 전환** (네트워크 호출 없음)
+      - 로컬 인덱스가 없을 때만 Releases 에서 복원 시도
+      - 변경 감지/재인덱싱/동기화는 **관리자 버튼(업데이트 점검)** 으로 수동 실행
     """
     import streamlit as st
     ss = st.session_state
     if ss.get("_boot_checked") is True:
         return
 
-    # 진행 단계 기록 헬퍼(SSOT에 반영)
+    # 진행 단계 기록(SSOT)
     def PH(code: str, msg: str = ""):
         try:
             ss["_boot_phase"] = code
@@ -115,129 +113,47 @@ def autoflow_boot_check(*, interactive: bool) -> None:
     deps = _lazy_imports()
     PERSIST_DIR = deps.get("PERSIST_DIR")
     restore_latest = deps.get("restore_latest")
-    diff_with_manifest = deps.get("diff_with_manifest")
-    _find_folder_id = deps.get("_find_folder_id")
-    build_index_with_checkpoint = deps.get("build_index_with_checkpoint")
 
     p = PERSIST_DIR if isinstance(PERSIST_DIR, Path) else Path(str(PERSIST_DIR))
 
-    # 0) 로컬 검사
+    # 0) FAST PATH — 로컬이 이미 있으면 바로 READY
     PH("LOCAL_CHECK", "로컬 인덱스 확인 중…")
-    if not _has_local_index(p):
-        PH("RESTORE_FROM_RELEASE", "백업에서 로컬 복원 중…")
-        if callable(restore_latest):
-            with st.spinner("초기화: 백업에서 로컬 복원 중…"):
-                ok = False
-                try:
-                    ok = bool(restore_latest(dest_dir=p))
-                except Exception as e:
-                    _add_error(e)
-            if ok:
-                PH("READY_MARK", "준비 완료 표식 생성…")
-                _ready_mark(p)
-                ss["_boot_checked"] = True
-                PH("READY", "준비완료")
-                if hasattr(st, "toast"):
-                    st.toast("✅ 백업에서 로컬 인덱스를 복원했습니다.", icon="✅")
-                else:
-                    st.success("✅ 백업에서 로컬 인덱스를 복원했습니다.")
-                st.rerun()
-        else:
-            _add_error(RuntimeError("restore_latest 가 없습니다."))
-            ss["_boot_checked"] = True
-            PH("ERROR", "복원 함수를 찾을 수 없습니다.")
-        return
-
-    # 1) 변경 감지
-    PH("DIFF_CHECK", "변경 감지 중…")
-    has_new = False
-    try:
-        if callable(diff_with_manifest):
-            d = diff_with_manifest(folder_id=None) or {}
-            stats = d.get("stats") or {}
-            has_new = (int(stats.get("added",0)) + int(stats.get("changed",0)) + int(stats.get("removed",0))) > 0
-    except Exception as e:
-        _add_error(e)
-
-    if has_new:
-        if interactive:
-            with st.expander("📢 변경사항 감지 — 처리 방식을 선택하세요", expanded=True):
-                choice = st.radio("처리", ("재인덱싱 후 백업/복사", "현재 백업 사용"), horizontal=True)
-                go = st.button("실행", type="primary")
-                if go:
-                    if choice.startswith("재인덱싱"):
-                        if callable(build_index_with_checkpoint):
-                            PH("REINDEXING", "재인덱싱 중…")
-                            with st.spinner("재인덱싱 중…"):
-                                ok=False
-                                try:
-                                    res = build_index_with_checkpoint(
-                                        force=False, prefer_release_restore=False,
-                                        folder_id=_find_folder_id(None) if callable(_find_folder_id) else None
-                                    )
-                                    ok = bool(res and res.get("ok"))
-                                except Exception as e:
-                                    _add_error(e)
-                            if ok:
-                                PH("READY_MARK", "준비 완료 표식 생성…")
-                                _ready_mark(p); ss["_boot_checked"] = True
-                                PH("READY", "준비완료")
-                                st.success("✅ 재인덱싱 완료 및 로컬 준비됨"); st.rerun()
-                            else:
-                                PH("ERROR", "재인덱싱 실패")
-                                st.error("재인덱싱이 완료되지 않았습니다.")
-                        else:
-                            PH("ERROR", "인덱서 함수를 찾을 수 없습니다.")
-                            st.error("인덱서 함수를 찾을 수 없습니다.")
-                    else:
-                        if callable(restore_latest):
-                            PH("RESTORE_FROM_RELEASE", "백업에서 로컬 복원 중…")
-                            with st.spinner("백업을 로컬에 복원 중…"):
-                                ok=False
-                                try:
-                                    ok = bool(restore_latest(dest_dir=p))
-                                except Exception as e:
-                                    _add_error(e)
-                            if ok:
-                                PH("READY_MARK", "준비 완료 표식 생성…")
-                                _ready_mark(p); ss["_boot_checked"] = True
-                                PH("READY", "준비완료")
-                                st.success("✅ 백업 복원 완료"); st.rerun()
-                            else:
-                                PH("ERROR", "백업 복원 실패")
-                                st.error("복원에 실패했습니다.")
-                        else:
-                            PH("ERROR", "restore_latest 함수를 찾을 수 없습니다.")
-                            st.error("restore_latest 함수를 찾을 수 없습니다.")
-            return
-        else:
-            # 학생 모드: 묻지 않고 백업 사용
-            if callable(restore_latest):
-                PH("RESTORE_FROM_RELEASE", "백업에서 로컬 복원 중…")
-                try:
-                    restore_latest(dest_dir=p)
-                    PH("READY_MARK", "준비 완료 표식 생성…")
-                    _ready_mark(p)
-                    PH("READY", "준비완료")
-                except Exception as e:
-                    _add_error(e); PH("ERROR", "복원 실패")
-            ss["_boot_checked"] = True
-            return
-    else:
-        # 새 자료 없음 → 백업 동기화 후 ready (보수적 동기화)
-        if callable(restore_latest):
-            try:
-                PH("RESTORE_FROM_RELEASE", "백업 동기화 중…")
-                restore_latest(dest_dir=p)
-            except Exception as e:
-                _add_error(e)
+    if _has_local_index(p):
         PH("READY_MARK", "준비 완료 표식 생성…")
         _ready_mark(p)
         ss["_boot_checked"] = True
         PH("READY", "준비완료")
         return
-# ========================= [02] autoflow_boot_check — END ==========================
 
+    # 1) 로컬이 없을 때만 Releases 복원 시도
+    PH("RESTORE_FROM_RELEASE", "백업에서 로컬 복원 중…")
+    if callable(restore_latest):
+        with st.spinner("초기화: 백업에서 로컬 복원 중…"):
+            ok = False
+            try:
+                ok = bool(restore_latest(dest_dir=p))
+            except Exception as e:
+                _add_error(e)
+        if ok:
+            PH("READY_MARK", "준비 완료 표식 생성…")
+            _ready_mark(p)
+            ss["_boot_checked"] = True
+            PH("READY", "준비완료")
+            # 알림(버전 호환 폴백)
+            if hasattr(st, "toast"):
+                st.toast("✅ 백업에서 로컬 인덱스를 복원했습니다.", icon="✅")
+            else:
+                st.success("✅ 백업에서 로컬 인덱스를 복원했습니다.")
+            st.rerun()
+        else:
+            ss["_boot_checked"] = True
+            PH("ERROR", "복원 실패")
+    else:
+        # 복원 함수가 없으면 에러만 기록하고 종료(관리자 수동 처리)
+        _add_error(RuntimeError("restore_latest 가 없습니다."))
+        ss["_boot_checked"] = True
+        PH("ERROR", "복원 함수를 찾을 수 없습니다.")
+# ========================= [02] autoflow_boot_check — END ==========================
 
 # ================== [03] render_index_orchestrator_panel — START ==================
 def render_index_orchestrator_panel() -> None:
