@@ -166,8 +166,16 @@ def _download_file_bytes(svc, file_id: str, mime_type: Optional[str] = None) -> 
         return fh.getvalue()
     except HttpError:
         return b""
-# [03] END
 
+def scan_drive_listing(svc, prepared_folder_id: str) -> List[Dict[str, Any]]:
+    """prepared 폴더의 직속 파일 목록을 반환합니다. 실패 시 빈 리스트 반환."""
+    try:
+        if not svc or not prepared_folder_id:
+            return []
+        return _list_files_in_folder(svc, prepared_folder_id)
+    except Exception:
+        return []
+# [03] END
 
 # [04] 텍스트 추출기  # [04] START
 def _extract_text_from_bytes(name: str, data: bytes) -> str:
