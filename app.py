@@ -264,12 +264,13 @@ def _render_boot_progress_line():
                 unsafe_allow_html=True
             )
 
-# [07] 헤더(배지·타이틀·⚙️ 한 줄, 타이틀 바로 뒤에 아이콘) ==========================
+# [07] 헤더(오버레이 배지·3D 타이틀·부제목 앵커) ==============================
 def _header():
     """
-    - [배지] [LEES AI Teacher] [⚙️] 를 '한 줄'에 배치하고, ⚙️을 타이틀 '바로 뒤'에 붙인다.
-    - 모바일에서도 줄바꿈 방지(flex nowrap) + 아이콘은 '아이콘만'(26~28px) 표시.
-    - 진행선은 READY일 때 숨긴다.
+    - 제목과 부제목을 하나의 헤더 블록에서 렌더링.
+    - 부제목의 '질문은' 위에 상태 배지(70%), '이다.' 위에 ⚙(70%)를 오버레이.
+    - 모바일에서도 줄바꿈/겹침 최소화. 제목-부제목 사이에 라인 없음.
+    - ⚙ 클릭 시 ?settings=1 쿼리로 '관리자 로그인 패널' 열기.
     """
     if st is None:
         return
@@ -277,110 +278,134 @@ def _header():
     ss = st.session_state
     ss.setdefault("_show_admin_login", False)
 
+    # 쿼리파라미터로 설정패널 열기/닫기
+    try:
+        qp = st.query_params   # Streamlit ≥1.31
+        qp_dict = dict(qp)
+        has_new_qp = True
+    except Exception:
+        qp_dict = st.experimental_get_query_params()
+        has_new_qp = False
+
+    if "settings" in qp_dict:
+        flag = str(qp_dict.get("settings", "1"))
+        ss["_show_admin_login"] = flag in ("1", "true", "True")
+        # 소모하여 URL 깔끔히
+        try:
+            if has_new_qp:
+                st.query_params.clear()
+            else:
+                st.experimental_set_query_params()
+        except Exception:
+            pass
+
     # 상태 배지 텍스트/색상
     status = _get_brain_status()
     code = status["code"]
     badge_txt, badge_class = {
-        "READY": ("준비완료", "green"),
-        "SCANNING": ("준비중", "yellow"),
-        "RESTORING": ("복원중", "yellow"),
-        "WARN": ("주의", "yellow"),
-        "ERROR": ("오류", "red"),
-        "MISSING": ("미준비", "red"),
-    }.get(code, ("미준비", "red"))
+        "READY":     ("🟢 준비완료", "green"),
+        "SCANNING":  ("🟡 준비중",   "yellow"),
+        "RESTORING": ("🟡 복원중",   "yellow"),
+        "WARN":      ("🟡 주의",     "yellow"),
+        "ERROR":     ("🔴 오류",     "red"),
+        "MISSING":   ("🔴 미준비",   "red"),
+    }.get(code, ("🔴 미준비", "red"))
 
-    def _safe_popover(label: str, **kw):
-        if hasattr(st, "popover"):
-            try:
-                return st.popover(label, **kw)
-            except Exception:
-                pass
-        return st.expander(label, expanded=True)
-
-    # ── 헤더 전용 스타일 (세 요소를 한 줄로, 타이틀 뒤에 아이콘 밀착)
-    st.markdown("""
+    # 헤더 전용 CSS + HTML (제목 3D, 부제목 앵커·오버레이)
+    st.markdown(f"""
     <style>
-      /* 한 줄 고정 컨테이너 */
-      #brand-inline { display:flex; align-items:flex-end; gap:.45rem; flex-wrap:nowrap; }
-      /* 상태 배지(가로 폭 부족 시 세로 깨짐 방지) */
-      .status-btn{
-        display:inline-block; border-radius:10px; padding:4px 10px;
-        font-weight:700; font-size:13px; white-space:nowrap;
-        border:1px solid transparent;
-      }
-      .status-btn.green { background:#E4FFF3; color:#0f6d53; border-color:#bff0df; }
-      .status-btn.yellow{ background:#FFF8E1; color:#8a6d00; border-color:#ffe099; }
-      .status-btn.red   { background:#FFE8E6; color:#a1302a; border-color:#ffc7c2; }
+      .lees-header {{ margin: 0 0 .25rem 0; }}
+      .lees-header .title-3d {{
+        font-size: clamp(24px, 3.6vw, 42px);
+        font-weight: 800; letter-spacing: .3px; line-height: 1.05;
+        color: #222;
+        text-shadow:
+          0 1px 0 #fff,
+          0 2px 0 #e9e9e9,
+          0 3px 0 #dadada,
+          0 4px 0 #cfcfcf,
+          0 6px 12px rgba(0,0,0,.18);
+        margin: 0;
+      }}
+      .lees-header .subhead-wrap {{ position: relative; margin-top: .25rem; }}
+      .lees-header .subhead {{
+        position: relative;
+        font-weight: 700;
+        font-size: clamp(22px, 3.2vw, 36px);
+        line-height: 1.25;
+        color: #1f2937;  /* neutral-800 */
+        word-break: keep-all;
+      }}
+      .lees-header .anchor {{ position: relative; display: inline-block; }}
 
-      /* 타이틀(60% 확대) */
-      .brand-title{ font-size:2.4em; font-weight:800; letter-spacing:.2px; line-height:1; }
+      /* 오버레이: 부제목 글자 크기의 70% */
+      .lees-header .badge, .lees-header .gear {{
+        position: absolute; top: 0; left: 0;
+        transform: translateY(-90%);
+        font-size: .7em; line-height: 1;
+        padding: .15em .5em; border-radius: 999px;
+        user-select: none; -webkit-tap-highlight-color: transparent;
+        z-index: 2; white-space: nowrap;
+      }}
+      .lees-header .gear {{
+        left: 100%; margin-left: -1.2em; padding: .15em .35em; border-radius: 10px;
+        background: #f3f4f6; color: #111827; border: 1px solid #e5e7eb; text-decoration: none;
+      }}
+      .lees-header .gear:hover {{ filter: brightness(.96); }}
 
-      /* ⚙️ 아이콘만(고정 폭) — 타이틀 뒤에 '바로' 붙일 수 있도록 마진 최소화 */
-      #brand-inline [data-testid="stPopover"] > button{
-        width:28px; height:28px; min-width:28px; padding:0; border-radius:14px; margin-left:.2rem;
-      }
-      #brand-inline [data-testid="stPopover"] > button p{ margin:0; font-size:18px; line-height:1; }
+      /* 배지 색상 */
+      .lees-header .badge.green  {{ background:#e7f7ef; color:#0a7f49; border:1px solid #bfead7; }}
+      .lees-header .badge.yellow {{ background:#fff7e6; color:#9a6a00; border:1px solid #ffe2a8; }}
+      .lees-header .badge.red    {{ background:#fde8e8; color:#a61b29; border:1px solid #f5b5bb; }}
 
-      /* 아주 좁은 폭 대응: 타이틀만 살짝 축소 → 줄바꿈 방지 */
-      @media (max-width:420px){ .brand-title{ font-size:2.1em; } }
-
-      /* 본문 타이틀(요청: 30% 축소)은 별도 클래스 */
-      .hero-ask{ font-size:1.54rem; font-weight:800; letter-spacing:.2px; margin:4px 0 8px; }
+      /* 매우 좁은 화면에서는 조금 더 위로 */
+      @media (max-width: 380px) {{
+        .lees-header .badge, .lees-header .gear {{ transform: translateY(-110%); }}
+      }}
     </style>
+
+    <div class="lees-header" id="lees-header">
+      <h1 class="title-3d">LEES AI Teacher</h1>
+      <div class="subhead-wrap">
+        <div class="subhead">
+          <span class="anchor anchor-left">질문은
+            <span class="badge {badge_class}">{badge_txt}</span>
+          </span>
+          천재들의 공부 방법
+          <span class="anchor anchor-right">이다.
+            <a class="gear" href="?settings=1" aria-label="관리자 설정">⚙</a>
+          </span>
+        </div>
+      </div>
+    </div>
     """, unsafe_allow_html=True)
 
-    # ── 한 줄: [배지][타이틀][⚙️] — 전부 한 컨테이너(#brand-inline) 안에 생성
-    # Streamlit 위젯(⚙️ popover)을 같은 줄에 두기 위해, 3개의 '아주 좁은' 컬럼을 만들고
-    # 컬럼 래퍼 자체를 flex로 쓰지 않고, 우리의 래퍼(#brand-inline) 안에 그대로 렌더한다.
-    left, mid, right = st.columns([0.0001, 0.0001, 0.0001], gap="small")
-    with st.container():
-        # 우리가 만든 flex 래퍼 시작
-        st.markdown('<div id="brand-inline">', unsafe_allow_html=True)
+    # (선택) 설정 패널: 쿼리파라미터로 열기
+    if ss.get("_show_admin_login") and not _is_admin_view():
+        with st.expander("관리자 로그인", expanded=True):
+            pwd_set = (_from_secrets("ADMIN_PASSWORD", "")
+                       or _from_secrets("APP_ADMIN_PASSWORD", "")
+                       or "")
+            pw = st.text_input("관리자 비밀번호", type="password")
+            if st.button("로그인", use_container_width=True):
+                if pw and pwd_set and pw == str(pwd_set):
+                    ss["admin_mode"] = True
+                    st.success("로그인 성공"); st.rerun()
+                else:
+                    st.error("비밀번호가 올바르지 않습니다.")
+    elif _is_admin_view():
+        with st.expander("관리자 메뉴", expanded=False):
+            c1, c2 = st.columns(2)
+            with c1:
+                if st.button("로그아웃", use_container_width=True):
+                    ss["admin_mode"] = False
+                    st.success("로그아웃"); st.rerun()
+            with c2:
+                st.write(" ")
 
-        # 1) 배지
-        with left:
-            st.markdown(f'<span class="status-btn {badge_class}">{badge_txt}</span>', unsafe_allow_html=True)
-
-        # 2) 타이틀
-        with mid:
-            st.markdown('<span class="brand-title">LEES AI Teacher</span>', unsafe_allow_html=True)
-
-        # 3) ⚙️ (아이콘만) — 타이틀 바로 뒤
-        with right:
-            if not _is_admin_view():
-                with _safe_popover("⚙️"):
-                    with st.form(key="admin_login"):
-                        pwd_set = (_from_secrets("ADMIN_PASSWORD", "")
-                                   or _from_secrets("APP_ADMIN_PASSWORD", "")
-                                   or "")
-                        pw = st.text_input("관리자 비밀번호", type="password")
-                        submit = st.form_submit_button("로그인", use_container_width=True)
-                        if submit:
-                            if pw and pwd_set and pw == str(pwd_set):
-                                ss["admin_mode"] = True
-                                st.success("로그인 성공"); st.rerun()
-                            else:
-                                st.error("비밀번호가 올바르지 않습니다.")
-            else:
-                with _safe_popover("⚙️"):
-                    with st.form(key="admin_logout"):
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            submit = st.form_submit_button("로그아웃", use_container_width=True)
-                        with col2:
-                            close  = st.form_submit_button("닫기",   use_container_width=True)
-                    if submit:
-                        ss["admin_mode"] = False
-                        st.success("로그아웃"); st.rerun()
-                    elif close:
-                        st.rerun()
-
-        # flex 래퍼 종료
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    # 준비선(READY면 숨김)
+    # 준비선(READY면 내부 로직에서 자동 숨김)
     _render_boot_progress_line()
-    st.divider()
+    # st.divider()  # ← 제거(요청사항: 제목-부제목 사이 라인 없음)
 
 
 # [08] 배경(완전 비활성) =======================================================
@@ -998,9 +1023,9 @@ def _render_body() -> None:
     _auto_start_once()
 
     # 7) 본문: 챗
-    st.markdown('<h2 class="hero-ask">질문은 천재들의 공부 방법이다.</h2>', unsafe_allow_html=True)
     _render_chat_panel()
 # ============================= [14] 본문 렌더 — END =============================
+
 
 
 
