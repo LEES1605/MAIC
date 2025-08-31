@@ -602,7 +602,7 @@ def _render_admin_panels() -> None:
 
 # [12] 채팅 UI(스타일/모드/상단 상태 라벨=SSOT) ===============================
 def _inject_chat_styles_once():
-    """채팅용 전역 CSS 1회 주입(사용자: 보라 / AI: 화이트)."""
+    """채팅용 전역 CSS 1회 주입(사용자: 보라 / AI: 화이트) + 턴 구분선"""
     if st is None: return
     if st.session_state.get("_chat_styles_injected"):
         return
@@ -612,7 +612,7 @@ def _inject_chat_styles_once():
     <style>
       .chat-wrap{background:#f5f7fb !important;border:1px solid #e6ecf5 !important;border-radius:18px;
                  padding:10px 10px 8px;margin-top:10px}
-      .chat-box{min-height:240px;max-height:54vh;overflow-y:auto;padding:6px 6px 2px}
+      .chat-box{min-height:240px;max-height:54vh;overflow-y:auto;padding:8px 8px 6px}
       .row{display:flex;margin:8px 0}
       .row.user{justify-content:flex-end}
       .row.ai{justify-content:flex-start}
@@ -620,7 +620,14 @@ def _inject_chat_styles_once():
               box-shadow:0 1px 1px rgba(0,0,0,.05);white-space:pre-wrap;position:relative;border:1px solid #e0e4ea;}
       .bubble.user{background:#EFE6FF !important;color:#201547;border-color:#D6CCFF !important;border-top-right-radius:8px;}
       .bubble.ai{background:#FFFFFF;color:#14121f;border-top-left-radius:8px;}
-      /* streamlit chat 보정 */
+      .bubble .lbl{position:absolute; top:-10px; left:8px; font-size:11px; font-weight:700; opacity:.65}
+      .bubble.user .lbl{color:#6b3fa0}
+      .bubble.ai .lbl{color:#6b7280}
+      /* 턴(질문↔답변) 사이 구분선 */
+      .turn-sep{height:0; border-top:1px dashed #E5EAF2; margin:16px 2px; position:relative;}
+      .turn-sep::after{content:''; position:absolute; top:-4px; left:50%; transform:translateX(-50%);
+                       width:8px; height:8px; border-radius:50%; background:#E5EAF2;}
+      /* streamlit chat 기본 위젯 보정은 유지(혹시 사용할 경우) */
       [data-testid="stChatMessageUser"] > div{display:flex; justify-content:flex-end;}
       [data-testid="stChatMessageUser"] [data-testid="stMarkdownContainer"]{
         max-width:88%; background:#EFE6FF; color:#201547;
@@ -648,9 +655,13 @@ def _inject_chat_styles_once():
 def _render_bubble(role:str, text:str):
     import html, re
     klass = "user" if role=="user" else "ai"
+    label = "질문" if role=="user" else "답변"
     t = html.escape(text or "").replace("\n","<br/>")
     t = re.sub(r"  ","&nbsp;&nbsp;", t)
-    st.markdown(f'<div class="row {klass}"><div class="bubble {klass}">{t}</div></div>', unsafe_allow_html=True)
+    st.markdown(
+        f'<div class="row {klass}"><div class="bubble {klass}"><div class="lbl">{label}</div>{t}</div></div>',
+        unsafe_allow_html=True
+    )
 
 def _render_mode_controls_pills() -> str:
     """질문 모드 라디오: 라벨 문구를 미니멀하게 숨김(label_visibility='collapsed')."""
