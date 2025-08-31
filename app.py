@@ -461,12 +461,14 @@ def _auto_start_once():
 def _render_admin_panels() -> None:
     """
     관리자 패널(지연 임포트 버전)
-    - 토글(또는 체크박스)을 켠 '이후'에만 오케스트레이터 모듈을 import 및 렌더합니다.
-    - 토글이 꺼져 있으면 어떤 무거운 의존성도 로드하지 않습니다.
-    - 실패 시 사용자 메시지(간단) + 상세 스택(Expander)로 안내합니다.
+    - 토글(또는 체크박스)을 켠 '이후'에만 모듈을 import 및 렌더합니다.
+    - import 실패 시 파일 경로에서 직접 로드하는 폴백을 수행합니다.
     """
     import time
     import importlib
+    import importlib.util
+    import sys
+    from pathlib import Path
     import traceback
     import streamlit as st
 
@@ -479,13 +481,13 @@ def _render_admin_panels() -> None:
 
     try:
         open_panel = st.toggle(
-            "🔧 진단 도구 열기",   # ← 라벨만 교체
+            "🔧 진단 도구 열기",
             value=st.session_state[toggle_key],
             help="클릭 시 필요한 모듈을 즉시 로드합니다."
         )
     except Exception:
         open_panel = st.checkbox(
-            "🔧 진단 도구 열기",   # ← 라벨만 교체
+            "🔧 진단 도구 열기",
             value=st.session_state[toggle_key],
             help="클릭 시 필요한 모듈을 즉시 로드합니다."
         )
@@ -496,32 +498,63 @@ def _render_admin_panels() -> None:
         st.caption("▶ 필요할 때만 로드되도록 최적화되었습니다. 위 토글을 켜면 모듈을 불러옵니다.")
         return
 
-    load_start = time.perf_counter()
-    with st.spinner("모듈을 불러오는 중…"):
-        mod = None
-        last_err = None
+    # --- (B) 오케스트레이터 모듈 임포트(경로 폴백 포함) ---
+    def _import_orchestrator_with_fallback():
+        tried_msgs = []
+        # 1) 일반 모듈 임포트 시도
         for module_name in ("src.ui_orchestrator", "ui_orchestrator"):
             try:
-                mod = importlib.import_module(module_name)
-                break
+                return importlib.import_module(module_name), f"import {module_name}"
             except Exception as e:
-                last_err = e
-                mod = None
+                tried_msgs.append(f"import {module_name} → {e!r}")
 
-    if mod is None:
-        st.error("진단 도구를 불러오지 못했습니다.")
-        if last_err is not None:
+        # 2) 파일 경로에서 직접 로드 폴백
+        roots = [
+            Path(__file__).resolve().parent,  # app.py 있는 디렉터리
+            Path.cwd(),                        # 현재 작업 디렉터리
+        ]
+        rels = ("src/ui_orchestrator.py", "ui_orchestrator.py")
+        for root in roots:
+            for rel in rels:
+                candidate = (root / rel)
+                if candidate.exists():
+                    try:
+                        spec = importlib.util.spec_from_file_location("ui_orchestrator", candidate)
+                        mod = importlib.util.module_from_spec(spec)
+                        sys.modules["ui_orchestrator"] = mod
+                        assert spec and spec.loader
+                        spec.loader.exec_module(mod)  # type: ignore[union-attr]
+                        return mod, f"file:{candidate.as_posix()}"
+                    except Exception as e:
+                        tried_msgs.append(f"file:{candidate} → {e!r}")
+
+        raise ImportError("ui_orchestrator not found", tried_msgs)
+
+    load_start = time.perf_counter()
+    with st.spinner("진단 도구 모듈을 불러오는 중…"):
+        try:
+            mod, how = _import_orchestrator_with_fallback()
+        except Exception as e:
+            st.error("진단 도구를 불러오지 못했습니다.")
             with st.expander("오류 자세히 보기"):
-                st.code("".join(traceback.format_exception(type(last_err), last_err, last_err.__traceback__)))
-        return
+                if isinstance(e, ImportError) and len(e.args) > 1:
+                    # 우리가 수집한 시도 내역 출력
+                    attempts = e.args[1]
+                    st.write("시도 내역:")
+                    for line in attempts:
+                        st.write("• ", line)
+                st.code("".join(traceback.format_exception(type(e), e, e.__traceback__)))
+            return
 
-    candidate_names = ("render_index_orchestrator_panel","render_orchestrator_panel","render")
+    # --- (C) 렌더 함수 탐색 및 실행 ---
+    candidate_names = ("render_index_orchestrator_panel", "render_orchestrator_panel", "render")
     render_fn = None
     for fn_name in candidate_names:
         fn = getattr(mod, fn_name, None)
         if callable(fn):
             render_fn = fn
             break
+
     if render_fn is None:
         st.warning(f"렌더 함수를 찾을 수 없습니다: {', '.join(candidate_names)}")
         return
@@ -537,9 +570,7 @@ def _render_admin_panels() -> None:
         elapsed_ms = (time.perf_counter() - load_start) * 1000.0
 
     st.caption(f"✓ 로드/렌더 완료 — {elapsed_ms:.0f} ms")
-
 # =============================== [09] 관리자 패널 — END ===============================
-
 
 # [10] 학생 UI (Stable Chatbot): 파스텔 배경 + 말풍선 + 스트리밍 =================
 def _inject_chat_styles_once():
