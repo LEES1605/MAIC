@@ -87,6 +87,145 @@ def _lazy_imports() -> dict:
 
     return deps
 # ========================= [00] orchestrator helpers — END =========================
+# ======================== [01] autoflow_boot_check — START =========================
+def _has_local_index(persist_dir: Path) -> bool:
+    chunks = persist_dir / "chunks.jsonl"
+    ready  = persist_dir / ".ready"
+    return chunks.exists() and ready.exists()
+
+def autoflow_boot_check(*, interactive: bool) -> None:
+    """
+    앱 부팅 시 1회 실행되는 오토 플로우:
+      - 로컬 인덱스 없으면: 최신 릴리스에서 자동 복원 → .ready 생성
+      - 새 자료가 있으면:
+          - interactive=True(관리자): 재인덱싱 vs 백업 사용 선택 UI
+          - interactive=False(학생): 백업 사용으로 자동 진행
+      - 새 자료가 없으면: 백업 복사 후 .ready
+    """
+    import streamlit as st
+    ss = st.session_state
+    if ss.get("_boot_checked") is True:
+        return
+
+    deps = _lazy_imports()
+    PERSIST_DIR = deps.get("PERSIST_DIR")
+    if not PERSIST_DIR:
+        ss["_boot_checked"] = True
+        return
+    p = Path(PERSIST_DIR)
+
+    restore_latest = deps.get("restore_latest")
+    fetch_manifest_from_release = deps.get("fetch_manifest_from_release")
+    scan_drive_listing = deps.get("scan_drive_listing")
+    diff_with_manifest = deps.get("diff_with_manifest")
+    _find_folder_id = deps.get("_find_folder_id")
+    build_index_with_checkpoint = deps.get("build_index_with_checkpoint")
+
+    # 0) 로컬 없으면 → 자동 복원
+    if not _has_local_index(p):
+        if callable(restore_latest):
+            with st.spinner("초기화: 백업에서 로컬 복원 중…"):
+                ok = False
+                try:
+                    ok = restore_latest(dest_dir=str(PERSIST_DIR))
+                except Exception as e:
+                    _add_error(e)
+            if ok:
+                _ready_mark(p)
+                ss["_boot_checked"] = True
+                st.success("✅ 백업에서 로컬 인덱스를 복원했습니다.")
+                st.rerun()
+        else:
+            st.error("restore_latest 함수를 찾을 수 없습니다.")
+            ss["_boot_checked"] = True
+        return
+
+    # 1) 새 자료 감지
+    has_new = False
+    prepared_id = None
+    try:
+        if callable(_find_folder_id):
+            prepared_id = _find_folder_id("prepared")
+        if callable(scan_drive_listing) and callable(diff_with_manifest) and callable(fetch_manifest_from_release):
+            listing = scan_drive_listing(prepared_id or "prepared")
+            manifest = fetch_manifest_from_release() or {}
+            diff = diff_with_manifest(listing, manifest)
+            has_new = any(diff.get(k) for k in ("added","changed","removed"))
+        else:
+            # 감지를 못하면 보수적으로 '없음' 처리
+            has_new = False
+    except Exception as e:
+        _add_error(e)
+        has_new = False
+
+    if has_new:
+        if interactive:
+            with st.expander("📢 새 자료 감지 — 처리 방식을 선택하세요", expanded=True):
+                choice = st.radio("처리", ("재인덱싱 후 백업/복사", "현재 백업 사용"), horizontal=True)
+                go = st.button("실행", type="primary")
+                if go:
+                    if choice.startswith("재인덱싱"):
+                        if callable(build_index_with_checkpoint):
+                            with st.spinner("재인덱싱 중…"):
+                                ok=False
+                                try:
+                                    res = build_index_with_checkpoint(
+                                        update_pct=lambda v,m=None: None,
+                                        update_msg=lambda s: st.write(s),
+                                        gdrive_folder_id=prepared_id or "prepared",
+                                        gcp_creds={}, persist_dir=str(PERSIST_DIR),
+                                        remote_manifest={}, should_stop=None
+                                    )
+                                    ok = isinstance(res, dict) and res.get("ok")
+                                except Exception as e:
+                                    _add_error(e)
+                            if ok:
+                                _ready_mark(p)
+                                ss["_boot_checked"] = True
+                                st.success("✅ 재인덱싱 완료 및 로컬 준비됨")
+                                st.rerun()
+                            else:
+                                st.error("재인덱싱이 완료되지 않았습니다.")
+                        else:
+                            st.error("인덱서 함수를 찾을 수 없습니다.")
+                    else:
+                        if callable(restore_latest):
+                            with st.spinner("백업을 로컬에 복원 중…"):
+                                ok=False
+                                try:
+                                    ok = restore_latest(dest_dir=str(PERSIST_DIR))
+                                except Exception as e:
+                                    _add_error(e)
+                            if ok:
+                                _ready_mark(p)
+                                ss["_boot_checked"] = True
+                                st.success("✅ 백업 복원 완료")
+                                st.rerun()
+                        else:
+                            st.error("restore_latest 함수를 찾을 수 없습니다.")
+            return
+        else:
+            # 학생 모드: 묻지 않고 백업 사용
+            if callable(restore_latest):
+                try:
+                    restore_latest(dest_dir=str(PERSIST_DIR))
+                    _ready_mark(p)
+                except Exception as e:
+                    _add_error(e)
+            ss["_boot_checked"] = True
+            return
+    else:
+        # 새 자료 없음 → 백업 싱크 후 ready (동기화 보수)
+        if callable(restore_latest):
+            try:
+                restore_latest(dest_dir=str(PERSIST_DIR))
+            except Exception as e:
+                _add_error(e)
+        _ready_mark(p)
+        ss["_boot_checked"] = True
+        return
+# ========================= [01] autoflow_boot_check — END ==========================
+
 # =========== render_index_orchestrator_panel — START ===========
 def render_index_orchestrator_panel() -> None:
     """
