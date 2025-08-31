@@ -1,15 +1,45 @@
-# START [00] module header hotfix
+# ======================== [00] orchestrator helpers — START ========================
 from __future__ import annotations
+import traceback
 from pathlib import Path
-# END [00] module header hotfix
 
-# START [00] _lazy_imports 교체 (GitHub 릴리스 모듈 후보 확장)
+def _add_error(e) -> None:
+    """에러를 세션에 누적(최대 200개)"""
+    try:
+        import streamlit as st
+        lst = st.session_state.setdefault("_orchestrator_errors", [])
+        lst.append("".join(traceback.format_exception(type(e), e, e.__traceback__)))
+        if len(lst) > 200:
+            del lst[:-200]
+    except Exception:
+        pass
+
+def _errors_text() -> str:
+    """누적 에러를 텍스트로 반환(비어 있으면 대시)"""
+    try:
+        import streamlit as st
+        lst = st.session_state.get("_orchestrator_errors") or []
+        return "\n\n".join(lst) if lst else "—"
+    except Exception:
+        return "—"
+
+def _ready_mark(persist_dir: Path) -> None:
+    """인덱싱/복원 완료 표시 파일(.ready) 생성"""
+    try:
+        persist_dir.mkdir(parents=True, exist_ok=True)
+        (persist_dir / ".ready").write_text("ready", encoding="utf-8")
+    except Exception as e:
+        _add_error(e)
+# ========================== [00B] lazy imports — START ============================
 def _lazy_imports() -> dict:
     """
     의존 모듈을 '가능한 이름들'로 느슨하게 임포트해 dict로 반환.
-    - 프로젝트마다 모듈명/함수명이 조금씩 달라도 최대한 맞춰봅니다.
+    - PERSIST_DIR: (우선) src.rag.index_build.PERSIST_DIR → (또는) src.config.PERSIST_DIR → (폴백) ~/.maic/persist
+    - Drive/Index/GitHub 릴리스 유틸은 실제 파일에 맞춰 탐색
     """
     import importlib
+    from pathlib import Path as _P
+
     def _imp(name):
         try:
             return importlib.import_module(name)
@@ -18,79 +48,52 @@ def _lazy_imports() -> dict:
 
     deps = {}
 
-    # config → PERSIST_DIR
-    for m in ("src.config", "config"):
-        mod = _imp(m)
-        if mod and hasattr(mod, "PERSIST_DIR"):
-            deps["PERSIST_DIR"] = getattr(mod, "PERSIST_DIR")
-            break
+    # --- PERSIST_DIR ---
+    # 1) index_build 내부 상수
+    mod_idx = _imp("src.rag.index_build")
+    if mod_idx and hasattr(mod_idx, "PERSIST_DIR"):
+        deps["PERSIST_DIR"] = getattr(mod_idx, "PERSIST_DIR")
+    # 2) config 상수(있을 경우)
+    if "PERSIST_DIR" not in deps:
+        mod_cfg = _imp("src.config")
+        if mod_cfg and hasattr(mod_cfg, "PERSIST_DIR"):
+            deps["PERSIST_DIR"] = _P(getattr(mod_cfg, "PERSIST_DIR"))
+    # 3) 최종 폴백
+    if "PERSIST_DIR" not in deps or not deps["PERSIST_DIR"]:
+        deps["PERSIST_DIR"] = _P.home() / ".maic" / "persist"
 
-    # GitHub release / manifest  ⟵ ★ 'src.backup.github_release' 우선 시도
-    for m in ("src.backup.github_release", "src.release", "release",
-              "src.tools.release", "src.utils.release"):
-        mod = _imp(m)
-        if not mod:
-            continue
-        deps.setdefault("get_latest_release", getattr(mod, "get_latest_release", None))
-        deps.setdefault("fetch_manifest_from_release", getattr(mod, "fetch_manifest_from_release", None))
-        deps.setdefault("restore_latest", getattr(mod, "restore_latest", None))
-        if all(deps.get(k) for k in ("get_latest_release","fetch_manifest_from_release","restore_latest")):
-            break
+    # --- GitHub release / manifest ---
+    # 실제 파일: src.backup.github_release
+    mod_rel = _imp("src.backup.github_release")
+    if mod_rel:
+        deps["get_latest_release"] = getattr(mod_rel, "get_latest_release", None)
+        deps["fetch_manifest_from_release"] = getattr(mod_rel, "fetch_manifest_from_release", None)
+        deps["restore_latest"] = getattr(mod_rel, "restore_latest", None)
 
-    # Google Drive 도우미
-    for m in ("src.drive", "drive", "src.gdrive", "gdrive", "src.google_drive", "google_drive"):
-        mod = _imp(m)
-        if not mod:
-            continue
-        deps.setdefault("_drive_client",
-            getattr(mod, "_drive_client", None) or getattr(mod, "drive_client", None) or getattr(mod, "client", None))
-        deps.setdefault("_find_folder_id",
-            getattr(mod, "_find_folder_id", None) or getattr(mod, "find_folder_id", None))
-        deps.setdefault("scan_drive_listing",
-            getattr(mod, "scan_drive_listing", None) or getattr(mod, "scan_listing", None))
-        if all(deps.get(k) for k in ("_drive_client","_find_folder_id","scan_drive_listing")):
-            break
-
-    # 인덱서
-    for m in ("src.index_build", "index_build", "src.rag.index_build", "src.rag.indexer", "src.rag.build"):
-        mod = _imp(m)
-        if not mod:
-            continue
-        deps.setdefault("build_index_with_checkpoint",
-            getattr(mod, "build_index_with_checkpoint", None) or getattr(mod, "build_index", None))
-        if deps.get("build_index_with_checkpoint"):
-            break
-
-    # diff 유틸
-    for m in ("src.manifest", "manifest", "src.release", "release", "src.utils.manifest", "src.utils"):
-        mod = _imp(m)
-        if not mod:
-            continue
-        for cand in ("diff_with_manifest", "diff_listing_with_manifest", "diff_manifest"):
-            fn = getattr(mod, cand, None)
-            if callable(fn):
-                deps["diff_with_manifest"] = fn
-                break
-        if deps.get("diff_with_manifest"):
-            break
+    # --- Google Drive / Index 유틸 (index_build 안에 구현되어 있음) ---
+    if mod_idx:
+        deps.setdefault("_drive_client", getattr(mod_idx, "_drive_client", None))
+        deps.setdefault("_find_folder_id", getattr(mod_idx, "_find_folder_id", None))
+        deps.setdefault("scan_drive_listing", getattr(mod_idx, "scan_drive_listing", None))
+        deps.setdefault("diff_with_manifest", getattr(mod_idx, "diff_with_manifest", None))
+        deps.setdefault("build_index_with_checkpoint", getattr(mod_idx, "build_index_with_checkpoint", None))
 
     return deps
-# END [00] _lazy_imports 교체
+# =========================== [00B] lazy imports — END =============================
+
 
 # ======================== [01] autoflow_boot_check — START =========================
 def _has_local_index(persist_dir: Path) -> bool:
-    chunks = persist_dir / "chunks.jsonl"
-    ready  = persist_dir / ".ready"
-    return chunks.exists() and ready.exists()
+    return (persist_dir / "chunks.jsonl").exists() and (persist_dir / ".ready").exists()
 
 def autoflow_boot_check(*, interactive: bool) -> None:
     """
     앱 부팅 시 1회 실행되는 오토 플로우:
       - 로컬 인덱스 없으면: 최신 릴리스에서 자동 복원 → .ready 생성
-      - 새 자료가 있으면:
-          - interactive=True(관리자): 재인덱싱 vs 백업 사용 선택 UI
+      - 변경 감지 있으면:
+          - interactive=True(관리자): 재인덱싱 vs 백업 사용 선택
           - interactive=False(학생): 백업 사용으로 자동 진행
-      - 새 자료가 없으면: 백업 복사 후 .ready
+      - 변경 없으면: 백업 동기화 후 .ready
     """
     import streamlit as st
     ss = st.session_state
@@ -99,17 +102,12 @@ def autoflow_boot_check(*, interactive: bool) -> None:
 
     deps = _lazy_imports()
     PERSIST_DIR = deps.get("PERSIST_DIR")
-    if not PERSIST_DIR:
-        ss["_boot_checked"] = True
-        return
-    p = Path(PERSIST_DIR)
-
     restore_latest = deps.get("restore_latest")
-    fetch_manifest_from_release = deps.get("fetch_manifest_from_release")
-    scan_drive_listing = deps.get("scan_drive_listing")
     diff_with_manifest = deps.get("diff_with_manifest")
     _find_folder_id = deps.get("_find_folder_id")
     build_index_with_checkpoint = deps.get("build_index_with_checkpoint")
+
+    p = PERSIST_DIR if isinstance(PERSIST_DIR, Path) else Path(str(PERSIST_DIR))
 
     # 0) 로컬 없으면 → 자동 복원
     if not _has_local_index(p):
@@ -117,36 +115,28 @@ def autoflow_boot_check(*, interactive: bool) -> None:
             with st.spinner("초기화: 백업에서 로컬 복원 중…"):
                 ok = False
                 try:
-                    ok = restore_latest(dest_dir=str(PERSIST_DIR))
+                    ok = bool(restore_latest(dest_dir=p))
                 except Exception as e:
                     _add_error(e)
             if ok:
                 _ready_mark(p)
                 ss["_boot_checked"] = True
-                st.success("✅ 백업에서 로컬 인덱스를 복원했습니다.")
+                st.toast("✅ 백업에서 로컬 인덱스를 복원했습니다.", icon="✅")
                 st.rerun()
         else:
-            st.error("restore_latest 함수를 찾을 수 없습니다.")
+            _add_error(RuntimeError("restore_latest 가 없습니다."))
             ss["_boot_checked"] = True
         return
 
-    # 1) 새 자료 감지
+    # 1) 변경 감지 (index_build의 diff 사용; folder_id=None이면 내부 규칙 사용)
     has_new = False
-    prepared_id = None
     try:
-        if callable(_find_folder_id):
-            prepared_id = _find_folder_id("prepared")
-        if callable(scan_drive_listing) and callable(diff_with_manifest) and callable(fetch_manifest_from_release):
-            listing = scan_drive_listing(prepared_id or "prepared")
-            manifest = fetch_manifest_from_release() or {}
-            diff = diff_with_manifest(listing, manifest)
-            has_new = any(diff.get(k) for k in ("added","changed","removed"))
-        else:
-            # 감지를 못하면 보수적으로 '없음' 처리
-            has_new = False
+        if callable(diff_with_manifest):
+            d = diff_with_manifest(folder_id=None) or {}
+            stats = d.get("stats") or {}
+            has_new = (int(stats.get("added",0)) + int(stats.get("changed",0)) + int(stats.get("removed",0))) > 0
     except Exception as e:
         _add_error(e)
-        has_new = False
 
     if has_new:
         if interactive:
@@ -159,19 +149,12 @@ def autoflow_boot_check(*, interactive: bool) -> None:
                             with st.spinner("재인덱싱 중…"):
                                 ok=False
                                 try:
-                                    res = build_index_with_checkpoint(
-                                        update_pct=lambda v,m=None: None,
-                                        update_msg=lambda s: st.write(s),
-                                        gdrive_folder_id=prepared_id or "prepared",
-                                        gcp_creds={}, persist_dir=str(PERSIST_DIR),
-                                        remote_manifest={}, should_stop=None
-                                    )
-                                    ok = isinstance(res, dict) and res.get("ok")
+                                    res = build_index_with_checkpoint(force=False, prefer_release_restore=False, folder_id=_find_folder_id(None) if callable(_find_folder_id) else None)
+                                    ok = bool(res and res.get("ok"))
                                 except Exception as e:
                                     _add_error(e)
                             if ok:
-                                _ready_mark(p)
-                                ss["_boot_checked"] = True
+                                _ready_mark(p); ss["_boot_checked"] = True
                                 st.success("✅ 재인덱싱 완료 및 로컬 준비됨")
                                 st.rerun()
                             else:
@@ -183,12 +166,11 @@ def autoflow_boot_check(*, interactive: bool) -> None:
                             with st.spinner("백업을 로컬에 복원 중…"):
                                 ok=False
                                 try:
-                                    ok = restore_latest(dest_dir=str(PERSIST_DIR))
+                                    ok = bool(restore_latest(dest_dir=p))
                                 except Exception as e:
                                     _add_error(e)
                             if ok:
-                                _ready_mark(p)
-                                ss["_boot_checked"] = True
+                                _ready_mark(p); ss["_boot_checked"] = True
                                 st.success("✅ 백업 복원 완료")
                                 st.rerun()
                         else:
@@ -198,17 +180,17 @@ def autoflow_boot_check(*, interactive: bool) -> None:
             # 학생 모드: 묻지 않고 백업 사용
             if callable(restore_latest):
                 try:
-                    restore_latest(dest_dir=str(PERSIST_DIR))
+                    restore_latest(dest_dir=p)
                     _ready_mark(p)
                 except Exception as e:
                     _add_error(e)
             ss["_boot_checked"] = True
             return
     else:
-        # 새 자료 없음 → 백업 싱크 후 ready (동기화 보수)
+        # 새 자료 없음 → 백업 동기화 후 ready (보수적 동기화)
         if callable(restore_latest):
             try:
-                restore_latest(dest_dir=str(PERSIST_DIR))
+                restore_latest(dest_dir=p)
             except Exception as e:
                 _add_error(e)
         _ready_mark(p)
@@ -220,42 +202,31 @@ def autoflow_boot_check(*, interactive: bool) -> None:
 def render_index_orchestrator_panel() -> None:
     """
     관리자 진단 도구 패널(네트워크 호출 지연 + 버튼 클릭 시 실행)
-    - 패널을 열어도 즉시 네트워크에 접근하지 않습니다.
-    - "진단 실행" 버튼 클릭 시에만 Drive/GitHub 상태를 점검합니다.
-    - 버튼 실행 중에는 spinner를 표시합니다.
+    - Drive/GitHub/Index 연동은 index_build/backup 모듈의 실제 시그니처에 맞춤
+    - 버튼 실행 중에는 spinner를 표시하고, 에러는 하단 로그에 누적
     """
     import time
     import streamlit as st
-    from pathlib import Path
 
-    st.markdown("## 🧠 인덱스 진단 도구")  # ← 헤더만 교체 (기존: 인덱스 오케스트레이터)
+    st.markdown("## 🧠 인덱스 진단 도구")
 
-    # 1) 의존성 지연 임포트
+    # 1) 의존성
     deps = _lazy_imports()
+    PERSIST_DIR = deps.get("PERSIST_DIR")
+    p = PERSIST_DIR if isinstance(PERSIST_DIR, Path) else Path(str(PERSIST_DIR))
+
     get_latest_release = deps.get("get_latest_release")
-    fetch_manifest_from_release = deps.get("fetch_manifest_from_release")
     restore_latest = deps.get("restore_latest")
     _drive_client = deps.get("_drive_client")
     _find_folder_id = deps.get("_find_folder_id")
-    build_index_with_checkpoint = deps.get("build_index_with_checkpoint")
-    scan_drive_listing = deps.get("scan_drive_listing")
     diff_with_manifest = deps.get("diff_with_manifest")
-    PERSIST_DIR = deps.get("PERSIST_DIR")
+    build_index_with_checkpoint = deps.get("build_index_with_checkpoint")
 
-    # 내부 유틸
-    def _lines(items, label):
-        if not items:
-            st.write(f"- {label}: 없음"); return
-        with st.expander(f"{label} {len(items)}개 보기"):
-            for x in items:
-                st.write("•", x)
-
-    # 결과 캐시
     ss = st.session_state
     ss.setdefault("_orch_diag", {})
     ss.setdefault("_orchestrator_errors", [])
 
-    # 1) 상태 점검(지연 실행)
+    # 2) 상태 점검 섹션
     with st.container(border=True):
         st.markdown("### 상태 점검")
         c1, c2, c3 = st.columns([0.38,0.34,0.28])
@@ -268,7 +239,8 @@ def render_index_orchestrator_panel() -> None:
 
         if clear_diag:
             ss["_orch_diag"] = {}
-            st.success("진단 결과를 초기화했습니다.")
+            ss["_orchestrator_errors"] = []   # ← 오류도 함께 초기화
+            st.success("진단 결과와 오류 로그를 초기화했습니다.")
 
         if run_diag:
             t0 = time.perf_counter()
@@ -288,14 +260,12 @@ def render_index_orchestrator_panel() -> None:
                 if callable(get_latest_release):
                     try:
                         gh_latest = get_latest_release()
-                        gh_ok = gh_latest is not None
+                        gh_ok = bool(gh_latest)
                         gh_tag = gh_latest.get("tag_name") if gh_latest else None
                     except Exception as e:
                         _add_error(e)
-                ss["_orch_diag"] = {
-                    "drive_ok": drive_ok, "drive_email": drive_email,
-                    "gh_ok": gh_ok, "gh_tag": gh_tag,
-                }
+                ss["_orch_diag"] = {"drive_ok": drive_ok, "drive_email": drive_email,
+                                    "gh_ok": gh_ok, "gh_tag": gh_tag}
             st.success(f"진단 완료 ({(time.perf_counter()-t0)*1000:.0f} ms)")
 
         # 결과 표시
@@ -304,64 +274,45 @@ def render_index_orchestrator_panel() -> None:
             if ok is True:  return f"✅ {label}"
             if ok is False: return f"❌ {label}"
             return f"— {label}"
-        if PERSIST_DIR:
-            from pathlib import Path
-            chunks = Path(PERSIST_DIR) / "chunks.jsonl"
-            ready  = Path(PERSIST_DIR) / ".ready"
-            local_ok = chunks.exists() and ready.exists()
-        else:
-            local_ok = None
+        local_ok = (p / "chunks.jsonl").exists() and (p / ".ready").exists()
         st.write("- Drive:", _badge(d.get('drive_ok'), f"연결" + (f"(`{d.get('drive_email')}`)" if d.get('drive_email') else "")))
         st.write("- GitHub:", _badge(d.get('gh_ok'), f"최신 릴리스: {d.get('gh_tag') or '없음'}"))
         st.write("- 로컬:", _badge(local_ok, "인덱스/ready 파일 상태"))
 
-    # 2) 신규 자료 감지(Drive/Release 비교)
+    # 3) 신규 자료 감지(Drive/Manifest diff)
     with st.container(border=True):
         st.markdown("### 신규 자료 감지")
-        prepared_id = None
-        if callable(_find_folder_id):
-            try:
-                prepared_id = _find_folder_id("prepared")
-            except Exception as e:
-                _add_error(e)
-
         added = changed = removed = 0
-        diff = {}
-        if callable(scan_drive_listing) and callable(diff_with_manifest) and callable(fetch_manifest_from_release):
+        details = {"added": [], "changed": [], "removed": []}
+        if callable(diff_with_manifest):
             try:
-                listing = scan_drive_listing(prepared_id or "prepared")
-                manifest = fetch_manifest_from_release() or {}
-                diff = diff_with_manifest(listing, manifest)
-                added = len(diff.get("added", []))
-                changed = len(diff.get("changed", []))
-                removed = len(diff.get("removed", []))
+                d = diff_with_manifest(folder_id=None) or {}
+                stats = d.get("stats") or {}
+                added = int(stats.get("added",0)); changed = int(stats.get("changed",0)); removed = int(stats.get("removed",0))
+                details["added"]   = d.get("added") or []
+                details["changed"] = d.get("changed") or []
+                details["removed"] = d.get("removed") or []
             except Exception as e:
                 _add_error(e)
-
         st.write(f"새 항목: **{added}** · 변경: **{changed}** · 삭제: **{removed}**")
-        _lines(diff.get("added", []), "신규")
-        _lines(diff.get("changed", []), "변경")
-        _lines(diff.get("removed", []), "삭제")
+        for label, arr in (("신규", details["added"]), ("변경", details["changed"]), ("삭제", details["removed"])):
+            if arr:
+                with st.expander(f"{label} {len(arr)}개 보기"):
+                    for x in arr: st.write("•", x)
 
         has_new = (added + changed + removed) > 0
         if has_new:
             st.info("📢 신규/변경 자료가 감지되었습니다. 어떻게 할까요?")
             c1, c2 = st.columns(2)
             with c1:
-                if st.button("Yes — 업데이트 진행 (인덱싱→릴리스→로컬백업)", use_container_width=True, type="primary"):
-                    if callable(build_index_with_checkpoint) and PERSIST_DIR:
+                if st.button("Yes — 업데이트 진행 (재인덱싱)", use_container_width=True, type="primary"):
+                    if callable(build_index_with_checkpoint):
                         try:
-                            with st.spinner("업데이트 중…(인덱싱/릴리스/로컬백업)"):
-                                res = build_index_with_checkpoint(
-                                    update_pct=lambda v, m=None: None,
-                                    update_msg=lambda s: st.write(s),
-                                    gdrive_folder_id=prepared_id or "prepared",
-                                    gcp_creds={}, persist_dir=str(PERSIST_DIR),
-                                    remote_manifest={}, should_stop=None
-                                )
+                            with st.spinner("업데이트 중…(재인덱싱)"):
+                                res = build_index_with_checkpoint(force=False, prefer_release_restore=False, folder_id=_find_folder_id(None) if callable(_find_folder_id) else None)
                             if isinstance(res, dict) and res.get("ok"):
-                                _ready_mark(Path(PERSIST_DIR))
-                                st.success("✅ 업데이트 완료(릴리스 업로드 및 로컬 백업 포함)")
+                                _ready_mark(p)
+                                st.success("✅ 업데이트 완료(재인덱싱)")
                             else:
                                 st.error("업데이트가 완료되지 않았습니다.")
                         except Exception as e:
@@ -370,12 +321,12 @@ def render_index_orchestrator_panel() -> None:
                         st.error("build_index_with_checkpoint 사용 불가(임포트 실패)")
             with c2:
                 if st.button("No — 최신 릴리스에서 복원", use_container_width=True):
-                    if callable(restore_latest) and PERSIST_DIR:
+                    if callable(restore_latest):
                         try:
                             with st.spinner("최신 릴리스에서 복원 중…"):
-                                ok = restore_latest(dest_dir=str(PERSIST_DIR))
+                                ok = bool(restore_latest(dest_dir=p))
                             if ok:
-                                _ready_mark(Path(PERSIST_DIR))
+                                _ready_mark(p)
                                 st.success("✅ 최신 릴리스에서 복원 완료")
                             else:
                                 st.error("복원에 실패했습니다.")
@@ -383,26 +334,19 @@ def render_index_orchestrator_panel() -> None:
                             _add_error(e); st.error("복원 중 오류가 발생했습니다.")
                     else:
                         st.error("restore_latest 사용 불가(임포트 실패)")
-
         else:
             st.success("변경 사항이 없습니다. (최신 상태)")
 
-    # 3) 수동 인덱싱
+    # 4) 수동 인덱싱
     with st.container(border=True):
         st.markdown("### 수동 인덱싱")
         if st.button("로컬에서 강제 인덱싱", use_container_width=True):
-            if callable(build_index_with_checkpoint) and PERSIST_DIR:
+            if callable(build_index_with_checkpoint):
                 try:
                     with st.spinner("로컬 인덱싱 중…"):
-                        res = build_index_with_checkpoint(
-                            update_pct=lambda v, m=None: None,
-                            update_msg=lambda s: st.write(s),
-                            gdrive_folder_id=None, gcp_creds={},
-                            persist_dir=str(PERSIST_DIR), remote_manifest={},
-                            should_stop=None
-                        )
+                        res = build_index_with_checkpoint(force=True, prefer_release_restore=False, folder_id=_find_folder_id(None) if callable(_find_folder_id) else None)
                     if isinstance(res, dict) and res.get("ok"):
-                        _ready_mark(Path(PERSIST_DIR))
+                        _ready_mark(p)
                         st.success("✅ 인덱싱 완료")
                     else:
                         st.error("인덱싱이 완료되지 않았습니다.")
@@ -411,7 +355,7 @@ def render_index_orchestrator_panel() -> None:
             else:
                 st.error("build_index_with_checkpoint 사용 불가(임포트 실패)")
 
-    # 4) 에러/로그 카드
+    # 5) 에러/로그 카드
     with st.container(border=True):
         st.markdown("### 에러/로그")
         txt = _errors_text()
