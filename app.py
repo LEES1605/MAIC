@@ -209,10 +209,17 @@ def _set_phase(code: str, msg: str = "") -> None:
         ss["_boot_msg"] = msg
 
 def _render_boot_progress_line():
-    """지하철 노선 스타일 진행 표시(READY=모두 실선)"""
+    """지하철 노선 스타일 진행 표시
+       - READY면 모바일에서 공간 차지 방지를 위해 **완전히 숨김**
+       - 모바일(≤640px)에서는 진행선 자체를 한 줄로 숨김(상태 배지로만 표현)
+    """
     if st is None:
         return
     ss = st.session_state
+    ready_now = _is_brain_ready() or (ss.get("_boot_phase") == "READY")
+    if ready_now:
+        return  # 준비완료면 진행선 자체를 숨김
+
     steps = [
         ("LOCAL_CHECK", "로컬검사"),
         ("RESTORE_FROM_RELEASE", "백업복원"),
@@ -221,47 +228,53 @@ def _render_boot_progress_line():
         ("READY_MARK", "마킹"),
         ("READY", "준비완료"),
     ]
-    phase = (ss.get("_boot_phase") or ("READY" if _is_brain_ready() else "LOCAL_CHECK")).upper()
+    phase = (ss.get("_boot_phase") or "LOCAL_CHECK").upper()
     has_error = (phase == "ERROR")
-    ready_all = (phase == "READY")
     idx = next((i for i,(k,_) in enumerate(steps) if k == phase), 0)
 
     st.markdown("""
     <style>
+      /* 모바일에서는 전체 진행선 블록 숨김(상태 배지로 대체) */
+      @media (max-width: 640px){
+        .metro-wrap{ display:none !important; }
+      }
+      .metro-wrap{ margin-top:.25rem; }
       .metro-step{flex:1}
       .metro-seg{height:2px;border-top:2px dashed #cdd6e1;margin:6px 0 2px 0}
       .metro-seg.done{border-top-style:solid;border-color:#10a37f}
       .metro-seg.doing{border-top-style:dashed;border-color:#f0ad00}
       .metro-seg.todo{border-top-style:dashed;border-color:#cdd6e1}
       .metro-seg.error{border-top-style:solid;border-color:#c5362c}
-      .metro-lbl{font-size:.78rem;color:#536273;text-align:center}
+      .metro-lbl{font-size:.78rem;color:#536273;text-align:center;white-space:nowrap}
     </style>
     """, unsafe_allow_html=True)
 
-    cols = st.columns(len(steps))
+    cols = st.columns(len(steps), gap="small")
     for i,(code,label) in enumerate(steps):
         if has_error:
             klass = "error" if i == idx else "todo"
-        elif ready_all:
-            klass = "done"  # READY: 전 구간 실선
         else:
             if i < idx:  klass = "done"
             elif i == idx: klass = "doing"
             else: klass = "todo"
         with cols[i]:
-            st.markdown(f'<div class="metro-step"><div class="metro-seg {klass}"></div>'
-                        f'<div class="metro-lbl">{label}</div></div>', unsafe_allow_html=True)
+            st.markdown(
+                f'<div class="metro-wrap"><div class="metro-step"><div class="metro-seg {klass}"></div>'
+                f'<div class="metro-lbl">{label}</div></div></div>',
+                unsafe_allow_html=True
+            )
 
 
 # [07] 헤더(미니멀, 톱니 아이콘, 진행선 포함) ====================================
 def _header():
     """
     - 타이틀/상태 아이콘(SSOT)
-    - 바로 아래에 '지하철 노선' 진행선
-    - 관리자 진입 아이콘: 톱니(⚙️)
+    - 바로 아래에 '지하철 노선' 진행선(READY면 숨김)
+    - 관리자 진입 아이콘: 톱니(⚙️) — 트리거 버튼을 32px로 축소
     """
     if st is None:
         return
+
     ss = st.session_state
     ss.setdefault("_show_admin_login", False)
 
@@ -284,7 +297,14 @@ def _header():
     <style>
       .brand-row { display:flex; align-items:center; gap:.5rem; }
       .brand-badge { font-size:1.25em; }
-      .brand-title { font-size:1.5em; font-weight:800; letter-spacing:.2px; }
+      .brand-title { font-size:2.4em; font-weight:800; letter-spacing:.2px; } /* 60% 확대 */
+      /* ⚙️ popover 트리거를 32px로 축소 */
+      div[data-testid="stPopover"] > button{
+        width:32px;height:32px;min-width:32px;padding:0;border-radius:16px;
+      }
+      div[data-testid="stPopover"] > button p{ margin:0; font-size:18px; line-height:1; }
+      /* 질문 타이틀 30% 축소 */
+      .hero-ask{ font-size:1.54rem; font-weight:800; letter-spacing:.2px; margin: 4px 0 8px; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -302,7 +322,7 @@ def _header():
         st.caption(f"LLM: {icon} {label}")
 
         if not _is_admin_view():
-            with _safe_popover("⚙️", use_container_width=True):
+            with _safe_popover("⚙️"):
                 with st.form(key="admin_login"):
                     pwd_set = (_from_secrets("ADMIN_PASSWORD", "")
                                or _from_secrets("APP_ADMIN_PASSWORD", "")
@@ -316,7 +336,7 @@ def _header():
                         else:
                             st.error("비밀번호가 올바르지 않습니다.")
         else:
-            with _safe_popover("⚙️", use_container_width=True):
+            with _safe_popover("⚙️"):
                 with st.form(key="admin_logout"):
                     col1, col2 = st.columns(2)
                     with col1:
@@ -600,7 +620,7 @@ def _render_admin_panels() -> None:
 
 # [12] 채팅 UI(스타일/모드/상단 상태 라벨=SSOT) ===============================
 def _inject_chat_styles_once():
-    """전역 CSS 주입: 턴 구분선/라디오 필만 최소히. 말풍선 색은 인라인 스타일로 강제."""
+    """전역 CSS: 턴 구분선/라디오 pill/상태 배지만. 말풍선 색은 인라인 스타일."""
     if st is None: return
     if st.session_state.get("_chat_styles_injected"):
         return
@@ -609,7 +629,7 @@ def _inject_chat_styles_once():
     st.markdown("""
     <style>
       /* 턴(질문↔답변) 사이 구분선 */
-      .turn-sep{height:0; border-top:1px dashed #E5EAF2; margin:16px 2px; position:relative;}
+      .turn-sep{height:0; border-top:1px dashed #E5EAF2; margin:14px 2px; position:relative;}
       .turn-sep::after{content:''; position:absolute; top:-4px; left:50%; transform:translateX(-50%);
                        width:8px; height:8px; border-radius:50%; background:#E5EAF2;}
       /* 라디오 pill 보정 */
@@ -627,36 +647,32 @@ def _inject_chat_styles_once():
     """, unsafe_allow_html=True)
 
 def _render_bubble(role:str, text:str):
-    """전역 CSS가 막혀도 보이도록 인라인 스타일로 말풍선 컬러/레이아웃을 강제."""
+    """라벨을 칩 형태로 인라인 배치(absolute 제거) → 들여쓰기/겹침 문제 해결."""
     import html, re
     is_user = (role == "user")
-    wrapper_style = (
-        "display:flex;justify-content:flex-end;margin:8px 0;" if is_user
-        else "display:flex;justify-content:flex-start;margin:8px 0;"
-    )
-    # 색상: 질문=파스텔 노랑, 답변=파스텔 하늘색
-    bubble_style = (
-        # 사용자(파스텔 노랑)
-        "max-width:88%;padding:12px 14px;border-radius:16px;border-top-right-radius:8px;"
-        "line-height:1.6;font-size:15px;box-shadow:0 1px 1px rgba(0,0,0,.05);white-space:pre-wrap;"
-        "position:relative;border:1px solid #FFE18A;background:#FFF7C2;color:#3d3a00;"
+    wrap = "display:flex;justify-content:flex-end;margin:8px 0;" if is_user else "display:flex;justify-content:flex-start;margin:8px 0;"
+    # 말풍선(질문=파스텔 노랑, 답변=파스텔 하늘)
+    base = "max-width:88%;padding:10px 12px;border-radius:16px;line-height:1.6;font-size:15px;box-shadow:0 1px 1px rgba(0,0,0,.05);white-space:pre-wrap;position:relative;"
+    bubble = (
+        base + "border-top-right-radius:8px;border:1px solid #FFE18A;background:#FFF7C2;color:#3d3a00;"
         if is_user else
-        # AI(파스텔 하늘색)
-        "max-width:88%;padding:12px 14px;border-radius:16px;border-top-left-radius:8px;"
-        "line-height:1.6;font-size:15px;box-shadow:0 1px 1px rgba(0,0,0,.05);white-space:pre-wrap;"
-        "position:relative;border:1px solid #BEE3FF;background:#EAF6FF;color:#0a2540;"
+        base + "border-top-left-radius:8px;border:1px solid #BEE3FF;background:#EAF6FF;color:#0a2540;"
     )
-    label_style = (
-        "position:absolute;top:-10px;left:8px;font-size:11px;font-weight:700;opacity:.75;color:#8a6d00;"
+    # 라벨 칩(인라인)
+    label_chip = (
+        "display:inline-block;margin:-2px 0 6px 0;padding:1px 8px;border-radius:999px;font-size:11px;font-weight:700;"
+        "background:#FFECAA;color:#6b5200;border:1px solid #FFE18A;"
         if is_user else
-        "position:absolute;top:-10px;left:8px;font-size:11px;font-weight:700;opacity:.75;color:#0f5b86;"
+        "display:inline-block;margin:-2px 0 6px 0;padding:1px 8px;border-radius:999px;font-size:11px;font-weight:700;"
+        "background:#DFF1FF;color:#0f5b86;border:1px solid #BEE3FF;"
     )
+
     t = html.escape(text or "").replace("\n","<br/>")
     t = re.sub(r"  ","&nbsp;&nbsp;", t)
     html_str = (
-        f'<div style="{wrapper_style}">'
-        f'  <div style="{bubble_style}">'
-        f'    <div style="{label_style}">{("질문" if is_user else "답변")}</div>'
+        f'<div style="{wrap}">'
+        f'  <div style="{bubble}">'
+        f'    <span style="{label_chip}">{("질문" if is_user else "답변")}</span><br/>'
         f'    {t}'
         f'  </div>'
         f'</div>'
@@ -664,7 +680,6 @@ def _render_bubble(role:str, text:str):
     st.markdown(html_str, unsafe_allow_html=True)
 
 def _render_mode_controls_pills() -> str:
-    """질문 모드 라디오: 라벨 문구를 미니멀하게 숨김(label_visibility='collapsed')."""
     _inject_chat_styles_once()
     ss = st.session_state
     cur = ss.get("qa_mode_radio") or "문법"
@@ -679,7 +694,6 @@ def _render_mode_controls_pills() -> str:
     return ss.get("qa_mode_radio", new_key)
 
 def _render_llm_status_minimal():
-    """상단 상태 라벨을 SSOT(_get_brain_status)로 통일."""
     s = _get_brain_status()
     code = s["code"]
     if code == "READY":
@@ -837,104 +851,102 @@ def _render_chat_panel():
         ts = int(time.time()*1000); uid = f"u{ts}"
         ss["chat"].append({"id": uid, "role": "user", "text": qtxt})
 
-    with st.container():
-        # 상자 테두리/배경은 전역 CSS 의존 없이 간소화
-        st.markdown('<div style="background:#f5f7fb;border:1px solid #e6ecf5;border-radius:18px;padding:10px 10px 8px;"><div style="min-height:240px;max-height:54vh;overflow-y:auto;padding:8px 8px 6px;">', unsafe_allow_html=True)
-        prev_role = None
-        for m in ss["chat"]:
-            role = m.get("role","assistant")
-            if prev_role is not None and prev_role != role:
-                st.markdown('<div class="turn-sep"></div>', unsafe_allow_html=True)
-            _render_bubble(role, m.get("text",""))
-            prev_role = role
+    has_msgs = bool(ss["chat"])
 
-        text_final = ""
-        if do_stream:
-            # 사용자 직후에 답변이 이어질 때 '턴 구분선' 먼저
+    # 메시지가 있을 때만 '대화 박스' 렌더 → 떠 있는 박스 제거
+    if has_msgs:
+        st.markdown(
+            '<div style="background:#f5f7fb;border:1px solid #e6ecf5;border-radius:18px;padding:8px 8px 6px;">'
+            '<div style="max-height:60vh;overflow-y:auto;padding:6px;">',
+            unsafe_allow_html=True
+        )
+
+    # 기록 렌더
+    prev_role = None
+    for m in ss["chat"]:
+        role = m.get("role","assistant")
+        if prev_role is not None and prev_role != role:
             st.markdown('<div class="turn-sep"></div>', unsafe_allow_html=True)
-            ph = st.empty()
-            # 답변 프리페치 말풍선(파스텔 하늘색)
+        _render_bubble(role, m.get("text",""))
+        prev_role = role
+
+    text_final = ""
+    if do_stream:
+        # 사용자 직후에 답변이 이어질 때 '턴 구분선' 먼저
+        if has_msgs: st.markdown('<div class="turn-sep"></div>', unsafe_allow_html=True)
+        ph = st.empty()
+
+        # 답변 프리페치 말풍선(파스텔 하늘색)
+        def _render_ai(text_html: str):
             ph.markdown(
                 '<div style="display:flex;justify-content:flex-start;margin:8px 0;">'
-                '  <div style="max-width:88%;padding:12px 14px;border-radius:16px;border-top-left-radius:8px;'
+                '  <div style="max-width:88%;padding:10px 12px;border-radius:16px;border-top-left-radius:8px;'
                 '              line-height:1.6;font-size:15px;box-shadow:0 1px 1px rgba(0,0,0,.05);white-space:pre-wrap;'
                 '              position:relative;border:1px solid #BEE3FF;background:#EAF6FF;color:#0a2540;">'
-                '    <div style="position:absolute;top:-10px;left:8px;font-size:11px;font-weight:700;opacity:.75;color:#0f5b86;">답변</div>'
-                '    답변 준비중…'
+                '    <span style="display:inline-block;margin:-2px 0 6px 0;padding:1px 8px;border-radius:999px;'
+                '                 font-size:11px;font-weight:700;background:#DFF1FF;color:#0f5b86;'
+                '                 border:1px solid #BEE3FF;">답변</span><br/>'
+                f'    {text_html}'
                 '  </div>'
                 '</div>', unsafe_allow_html=True
             )
-            system_prompt, user_prompt = _resolve_prompts(MODE_TOKEN, qtxt, ev_notes, ev_books, cur_label)
 
-            prov = _try_import("src.llm.providers", ["call_with_fallback"])
-            call = prov.get("call_with_fallback")
+        _render_ai("답변 준비중…")
+        system_prompt, user_prompt = _resolve_prompts(MODE_TOKEN, qtxt, ev_notes, ev_books, cur_label)
+        prov = _try_import("src.llm.providers", ["call_with_fallback"])
+        call = prov.get("call_with_fallback")
 
-            def _render_ai(text_html: str):
-                ph.markdown(
-                    '<div style="display:flex;justify-content:flex-start;margin:8px 0;">'
-                    '  <div style="max-width:88%;padding:12px 14px;border-radius:16px;border-top-left-radius:8px;'
-                    '              line-height:1.6;font-size:15px;box-shadow:0 1px 1px rgba(0,0,0,.05);white-space:pre-wrap;'
-                    '              position:relative;border:1px solid #BEE3FF;background:#EAF6FF;color:#0a2540;">'
-                    '    <div style="position:absolute;top:-10px;left:8px;font-size:11px;font-weight:700;opacity:.75;color:#0f5b86;">답변</div>'
-                    f'    {text_html}'
-                    '  </div>'
-                    '</div>', unsafe_allow_html=True
-                )
+        if not callable(call):
+            text_final = "(오류) LLM 어댑터를 사용할 수 없습니다."
+            _render_ai(text_final)
+        else:
+            import html, re, inspect
+            def esc(t: str) -> str:
+                t = html.escape(t or "").replace("\n","<br/>")
+                return re.sub(r"  ","&nbsp;&nbsp;", t)
 
-            if not callable(call):
-                text_final = "(오류) LLM 어댑터를 사용할 수 없습니다."
-                _render_ai(text_final)
+            sig = inspect.signature(call); params = sig.parameters.keys(); kwargs = {}
+            if "messages" in params:
+                kwargs["messages"] = [{"role":"system","content":system_prompt or ""},{"role":"user","content":user_prompt}]
             else:
-                import html, re, inspect
-                def esc(t: str) -> str:
-                    t = html.escape(t or "").replace("\n","<br/>")
-                    return re.sub(r"  ","&nbsp;&nbsp;", t)
+                if "prompt" in params: kwargs["prompt"] = user_prompt
+                elif "user_prompt" in params: kwargs["user_prompt"] = user_prompt
+                if "system_prompt" in params: kwargs["system_prompt"] = (system_prompt or "")
+                elif "system" in params:      kwargs["system"] = (system_prompt or "")
+            if "mode_token" in params: kwargs["mode_token"] = MODE_TOKEN
+            elif "mode" in params:     kwargs["mode"] = MODE_TOKEN
+            if "temperature" in params: kwargs["temperature"] = 0.2
+            elif "temp" in params:      kwargs["temp"] = 0.2
+            if "timeout_s" in params:   kwargs["timeout_s"] = 90
+            elif "timeout" in params:   kwargs["timeout"] = 90
+            if "extra" in params:       kwargs["extra"] = {"question": qtxt, "mode_key": cur_label}
 
-                sig = inspect.signature(call); params = sig.parameters.keys(); kwargs = {}
-                if "messages" in params:
-                    kwargs["messages"] = [
-                        {"role":"system","content":system_prompt or ""},
-                        {"role":"user","content":user_prompt},
-                    ]
+            acc = ""
+            def _emit(piece: str):
+                nonlocal acc
+                acc += str(piece)
+                _render_ai(esc(acc))
+
+            supports_stream = ("stream" in params) or ("on_token" in params) or ("on_delta" in params) or ("yield_text" in params)
+            try:
+                if supports_stream:
+                    if "stream" in params:   kwargs["stream"] = True
+                    if "on_token" in params: kwargs["on_token"] = _emit
+                    if "on_delta" in params: kwargs["on_delta"] = _emit
+                    if "yield_text" in params: kwargs["yield_text"] = _emit
+                    res = call(**kwargs)
+                    text_final = (res.get("text") if isinstance(res, dict) else acc) or acc
                 else:
-                    if "prompt" in params: kwargs["prompt"] = user_prompt
-                    elif "user_prompt" in params: kwargs["user_prompt"] = user_prompt
-                    if "system_prompt" in params: kwargs["system_prompt"] = (system_prompt or "")
-                    elif "system" in params:      kwargs["system"] = (system_prompt or "")
-
-                if "mode_token" in params: kwargs["mode_token"] = MODE_TOKEN
-                elif "mode" in params:     kwargs["mode"] = MODE_TOKEN
-                if "temperature" in params: kwargs["temperature"] = 0.2
-                elif "temp" in params:      kwargs["temp"] = 0.2
-                if "timeout_s" in params:   kwargs["timeout_s"] = 90
-                elif "timeout" in params:   kwargs["timeout"] = 90
-                if "extra" in params:       kwargs["extra"] = {"question": qtxt, "mode_key": cur_label}
-
-                acc = ""
-                def _emit(piece: str):
-                    nonlocal acc
-                    acc += str(piece)
-                    _render_ai(esc(acc))
-
-                supports_stream = ("stream" in params) or ("on_token" in params) or ("on_delta" in params) or ("yield_text" in params)
-                try:
-                    if supports_stream:
-                        if "stream" in params:   kwargs["stream"] = True
-                        if "on_token" in params: kwargs["on_token"] = _emit
-                        if "on_delta" in params: kwargs["on_delta"] = _emit
-                        if "yield_text" in params: kwargs["yield_text"] = _emit
-                        res = call(**kwargs)
-                        text_final = (res.get("text") if isinstance(res, dict) else acc) or acc
-                    else:
-                        res  = call(**kwargs)
-                        text_final = res.get("text") if isinstance(res, dict) else str(res)
-                        if not text_final: text_final = "(응답이 비어있어요)"
-                        _render_ai(esc(text_final))
-                except Exception as e:
-                    text_final = f"(오류) {type(e).__name__}: {e}"
+                    res  = call(**kwargs)
+                    text_final = res.get("text") if isinstance(res, dict) else str(res)
+                    if not text_final: text_final = "(응답이 비어있어요)"
                     _render_ai(esc(text_final))
+            except Exception as e:
+                text_final = f"(오류) {type(e).__name__}: {e}"
+                _render_ai(esc(text_final))
 
-        st.markdown('</div></div>', unsafe_allow_html=True)
+    if has_msgs:
+        st.markdown('</div></div>', unsafe_allow_html=True)  # 스크롤 박스 닫기
 
     if do_stream:
         ss["chat"].append({"id": f"a{int(time.time()*1000)}", "role": "assistant", "text": text_final})
@@ -980,7 +992,7 @@ def _render_body() -> None:
     _auto_start_once()
 
     # 7) 본문: 챗
-    st.markdown("## 질문은 천재들의 공부 방법이다.")
+    st.markdown('<h2 class="hero-ask">질문은 천재들의 공부 방법이다.</h2>', unsafe_allow_html=True)
     _render_chat_panel()
 # ============================= [14] 본문 렌더 — END =============================
 
