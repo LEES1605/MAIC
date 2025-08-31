@@ -344,136 +344,119 @@ def _mount_background(
     """, unsafe_allow_html=True)
 
 # [07] 부팅/인덱스 준비(빠른 경로) =============================================
-def _quick_local_attach_only():
+def _set_brain_status(code: str, msg: str, source: str = "", attached: bool = False):
+    """세션 상태를 일관된 방식으로 세팅한다."""
     ss = st.session_state
-    ss.setdefault("brain_attached", False)
-    ss.setdefault("brain_status_msg", "초기화 중…")
-    ss.setdefault("index_status_code", "INIT")
-    ss.setdefault("index_source", "")
-    ss.setdefault("restore_recommend", False)
+    ss["index_status_code"] = code
+    ss["brain_status_msg"]  = msg
+    ss["index_source"]      = source
+    ss["brain_attached"]    = bool(attached)
+    ss["restore_recommend"] = (code in ("MISSING","ERROR"))
     ss.setdefault("index_decision_needed", False)
     ss.setdefault("index_change_stats", {})
 
-    man = (PERSIST_DIR / "manifest.json")
+def _quick_local_attach_only():
+    """빠른 부팅: 네트워크 호출 없이 로컬 시그널만 확인."""
+    ss = st.session_state
+    man    = (PERSIST_DIR / "manifest.json")
     chunks = (PERSIST_DIR / "chunks.jsonl")
-    ready = (PERSIST_DIR / ".ready")
-    if (chunks.exists() and chunks.stat().st_size > 0) or (man.exists() and man.stat().st_size > 0) or (ready.exists()):
-        ss["brain_attached"] = True
-        ss["brain_status_msg"] = "로컬 인덱스 연결됨(빠른 부팅)"
-        ss["index_status_code"] = "READY"
-        ss["index_source"] = "local"
-        ss["restore_recommend"] = False
-        return True
+    ready  = (PERSIST_DIR / ".ready")
 
-    ss["brain_attached"] = False
-    ss["brain_status_msg"] = "인덱스 없음(관리자에서 '깊은 점검'으로 복구)"
-    ss["index_status_code"] = "MISSING"
-    ss["index_source"] = ""
-    ss["restore_recommend"] = True
-    return False
+    if (chunks.exists() and chunks.stat().st_size > 0) or (man.exists() and man.stat().st_size > 0) or ready.exists():
+        _set_brain_status("READY", "로컬 인덱스 연결됨(빠른 부팅)", "local", attached=True)
+        return True
+    else:
+        _set_brain_status("MISSING", "인덱스 없음(관리자에서 '깊은 점검' 필요)", "", attached=False)
+        return False
 
 def _run_deep_check_and_attach():
+    """관리자 버튼 클릭 시 실행되는 네트워크 검사+복구."""
     ss = st.session_state
     idx = _try_import("src.rag.index_build", ["quick_precheck", "diff_with_manifest"])
     rel = _try_import("src.backup.github_release", ["restore_latest"])
-    quick = idx.get("quick_precheck"); diff  = idx.get("diff_with_manifest")
+    quick  = idx.get("quick_precheck")
+    diff   = idx.get("diff_with_manifest")
     restore_latest = rel.get("restore_latest")
-
-    def _attach_success(source: str, msg: str):
-        try: (PERSIST_DIR / ".ready").write_text("ok", encoding="utf-8")
-        except Exception: pass
-        ss["brain_attached"] = True
-        ss["brain_status_msg"] = msg
-        ss["index_status_code"] = "READY"
-        ss["index_source"] = source
-        ss["restore_recommend"] = False
-
-    def _set_decision(wait: bool, stats: dict | None = None):
-        ss["index_decision_needed"] = bool(wait)
-        ss["index_change_stats"] = stats or {}
 
     # 0) 로컬 먼저
     if _is_brain_ready():
-        ch, stts = (None, {})
+        stats = {}
+        changed = False
         if callable(diff):
             try:
                 d = diff() or {}
-                stts = d.get("stats") or {}
-                total = int(stts.get("added", 0)) + int(stts.get("changed", 0)) + int(stts.get("removed", 0))
-                ch = (total > 0)
+                stats = d.get("stats") or {}
+                total = int(stats.get("added",0))+int(stats.get("changed",0))+int(stats.get("removed",0))
+                changed = total > 0
             except Exception as e:
                 _errlog(f"diff 실패: {e}", where="[deep_check]")
-        if ch is True:
-            _attach_success("local", "로컬 인덱스 연결됨(신규/변경 감지)")
-            _set_decision(True, stts)
-        else:
-            _attach_success("local", "로컬 인덱스 연결됨(변경 없음/판단 불가)")
-            _set_decision(False, stts)
+        msg = "로컬 인덱스 연결됨" + ("(신규/변경 감지)" if changed else "(변경 없음/판단 불가)")
+        _set_brain_status("READY", msg, "local", attached=True)
+        ss["index_decision_needed"] = changed
+        ss["index_change_stats"] = stats
         return
 
-    # 1) Drive 상태 확인(있으면)
+    # 1) Drive precheck (선택적)
     if callable(quick):
-        try:
-            _ = quick() or {}
-        except Exception as e:
-            _errlog(f"precheck 예외: {e}", where="[deep_check]")
+        try: _ = quick() or {}
+        except Exception as e: _errlog(f"precheck 예외: {e}", where="[deep_check]")
 
     # 2) GitHub Releases 복구
     restored = False
     if callable(restore_latest):
-        try:
-            restored = bool(restore_latest(PERSIST_DIR))
-        except Exception as e:
-            _errlog(f"restore 실패: {e}", where="[deep_check]")
+        try: restored = bool(restore_latest(PERSIST_DIR))
+        except Exception as e: _errlog(f"restore 실패: {e}", where="[deep_check]")
 
     if restored and _is_brain_ready():
-        ch2, stts2 = (None, {})
+        stats = {}
+        changed = False
         if callable(diff):
             try:
                 d = diff() or {}
-                stts2 = d.get("stats") or {}
-                total = int(stts2.get("added", 0)) + int(stts2.get("changed", 0)) + int(stts2.get("removed", 0))
-                ch2 = (total > 0)
+                stats = d.get("stats") or {}
+                total = int(stats.get("added",0))+int(stats.get("changed",0))+int(stats.get("removed",0))
+                changed = total > 0
             except Exception as e:
                 _errlog(f"diff 실패(복구후): {e}", where="[deep_check]")
-        if ch2 is True:
-            _attach_success("release", "Releases에서 복구·연결(신규/변경 감지)")
-            _set_decision(True, stts2)
-        else:
-            _attach_success("release", "Releases에서 복구·연결(변경 없음/판단 불가)")
-            _set_decision(False, stts2)
+        msg = "Releases에서 복구·연결" + ("(신규/변경 감지)" if changed else "(변경 없음/판단 불가)")
+        _set_brain_status("READY", msg, "release", attached=True)
+        ss["index_decision_needed"] = changed
+        ss["index_change_stats"] = stats
         return
 
     # 3) 실패
-    ss["brain_attached"] = False
-    ss["brain_status_msg"] = "깊은 점검 실패(인덱스 없음). 관리자: 재빌드/복구 필요"
-    ss["index_status_code"] = "MISSING"
-    ss["index_source"] = ""
-    ss["restore_recommend"] = True
+    _set_brain_status("MISSING", "깊은 점검 실패(인덱스 없음). 관리자: 재빌드/복구 필요", "", attached=False)
     ss["index_decision_needed"] = False
     ss["index_change_stats"] = {}
-    return
 
 # [08] 자동 시작(선택) — 기본 비활성 ==========================================
 def _auto_start_once():
+    """AUTO_START_MODE에 따른 1회성 자동 복원."""
     if st is None or st.session_state.get("_auto_started"):
         return
     st.session_state["_auto_started"] = True
+
     if _is_brain_ready():
         return
+
     mode = (os.getenv("AUTO_START_MODE") or _from_secrets("AUTO_START_MODE", "off") or "off").lower()
-    if mode in ("restore", "on"):
+    if mode in ("restore","on"):
         rel = _try_import("src.backup.github_release", ["restore_latest"])
         fn = rel.get("restore_latest")
-        if not callable(fn):
-            return
+        if not callable(fn): return
         try:
             if fn(dest_dir=PERSIST_DIR):
                 _mark_ready()
                 st.toast("자동 복원 완료", icon="✅")
-                st.rerun()
+                _set_brain_status("READY", "자동 복원 완료", "release", attached=True)
+                # rerun은 단 1회만 허용
+                if not st.session_state.get("_auto_rerun_done"):
+                    st.session_state["_auto_rerun_done"] = True
+                    st.rerun()
         except Exception as e:
             _errlog(f"auto restore failed: {e}", where="[auto_start]", exc=e)
+# [08] END
+
 
 # [09] 관리자 패널 ==============================================================
 def _render_admin_panels() -> None:
