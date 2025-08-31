@@ -267,10 +267,9 @@ def _render_boot_progress_line():
 # [07] 헤더(오버레이 배지·3D 타이틀·부제목 앵커) ==============================
 def _header():
     """
-    - 제목과 부제목을 하나의 헤더 블록에서 렌더링.
-    - 부제목의 '질문은' 위에 상태 배지(70%), '이다.' 위에 ⚙(70%)를 오버레이.
+    - 제목/부제목 한 블록 렌더.
+    - 오버레이(🟢/⚙)를 더 위로 띄워 부제목과 간격 확보.
     - 제목: 진한 남색 + 3D 섀도, 폰트 50% 확대.
-    - ⚙ 클릭 시 ?settings=1 쿼리로 '관리자 로그인 패널' 열기.
     """
     if st is None:
         return
@@ -310,17 +309,15 @@ def _header():
         "MISSING":   ("🔴 미준비",   "red"),
     }.get(code, ("🔴 미준비", "red"))
 
-    # 헤더 전용 CSS + HTML (진남색 3D + 폰트 1.5×, 간격 ↑)
+    # CSS/HTML (오버레이 더 위로, 앵커 상단 패딩 추가)
     st.markdown(f"""
     <style>
       .lees-header {{ margin: 0 0 .35rem 0; }}
 
-      /* 3D 타이틀: 진한 남색 + 엠보싱 섀도, 폰트 50% 확대
-         (기존 clamp(24, 3.6vw, 42) -> 1.5× = clamp(36, 5.4vw, 63)) */
       .lees-header .title-3d {{
         font-size: clamp(36px, 5.4vw, 63px);
         font-weight: 800; letter-spacing: .3px; line-height: 1.04;
-        color: #0B1B45; /* 진한 남색 */
+        color: #0B1B45;
         text-shadow:
           0 1px 0 #ffffff,
           0 2px 0 #e9eef9,
@@ -331,8 +328,7 @@ def _header():
 
       .lees-header .subhead-wrap {{
         position: relative;
-        /* 제목↔부제목/오버레이 사이 간격 확대(.6rem -> .9rem) */
-        margin-top: .9rem;
+        margin-top: .95rem; /* 제목과 부제목 사이 여유 */
       }}
 
       .lees-header .subhead {{
@@ -340,20 +336,20 @@ def _header():
         font-weight: 700;
         font-size: clamp(22px, 3.2vw, 36px);
         line-height: 1.25;
-        color: #1f2937;  /* neutral-800 */
+        color: #1f2937;
         word-break: keep-all;
       }}
+
+      /* 앵커 위쪽 여백을 키워 오버레이와 본문 텍스트가 닿지 않게 함 */
       .lees-header .anchor {{
         position: relative; display: inline-block;
-        /* 오버레이와 본문 텍스트가 닿지 않도록 앵커 자체 위에 여백 부여 */
-        padding-top: .25em;
+        padding-top: .45em;  /* ↑ 0.45em */
       }}
 
-      /* 오버레이: 부제목 글자 크기의 70% */
+      /* 오버레이를 더 위로: translateY(-120%)로 상향 이동 */
       .lees-header .badge, .lees-header .gear {{
-        position: absolute; left: 0;
-        /* 더 멀어지도록: -80% -> -65% + 위쪽으로 0.15em */
-        top: -0.15em; transform: translateY(-65%);
+        position: absolute; left: 0; top: 0;
+        transform: translateY(-120%);
         font-size: .7em; line-height: 1;
         padding: .18em .55em; border-radius: 999px;
         user-select: none; -webkit-tap-highlight-color: transparent;
@@ -362,7 +358,6 @@ def _header():
 
       .lees-header .gear {{
         left: 100%;
-        /* 단어와 수평 간격도 조금 띄움: -1.0em -> -0.6em */
         margin-left: -0.6em;
         padding: .18em .4em; border-radius: 10px;
         background: #f3f4f6; color: #111827; border: 1px solid #e5e7eb; text-decoration: none;
@@ -374,9 +369,8 @@ def _header():
       .lees-header .badge.yellow {{ background:#fff7e6; color:#9a6a00; border:1px solid #ffe2a8; }}
       .lees-header .badge.red    {{ background:#fde8e8; color:#a61b29; border:1px solid #f5b5bb; }}
 
-      /* 아주 좁은 화면: 겹침 방지 위해 더 위로 */
       @media (max-width: 380px) {{
-        .lees-header .badge, .lees-header .gear {{ transform: translateY(-85%); }}
+        .lees-header .badge, .lees-header .gear {{ transform: translateY(-130%); }}
       }}
     </style>
 
@@ -421,7 +415,6 @@ def _header():
 
     _render_boot_progress_line()
     # st.divider()  # ← 유지 금지(제목-부제목 사이 라인 없음)
-
 
 # [08] 배경(완전 비활성) =======================================================
 def _inject_modern_bg_lib():
@@ -746,11 +739,11 @@ def _render_chat_panel():
 
     _inject_chat_styles_once()
 
-    # ── 현재 모드(세션 값) 읽기: 모드-선택 UI는 아래 'pane-foot-marker' 뒤에서 렌더
+    # ── 현재 모드(세션 값) 읽기: 모드-선택 UI는 아래 'pane-foot-marker' 바로 뒤에 인라인 렌더
     cur_label = ss.get("qa_mode_radio") or "문법"
     MODE_TOKEN = {"문법":"문법설명","문장":"문장구조분석","지문":"지문분석"}[cur_label]
 
-    # ── 입력창: Streamlit 특성상 페이지 하단 고정이므로 '호출 위치'와 무관하게 맨 아래 표시됨
+    # ── 입력창(하단 고정)
     user_q = st.chat_input("예) 분사구문이 뭐예요?  예) 이 문장 구조 분석해줘")
     qtxt = user_q.strip() if user_q and user_q.strip() else None
     do_stream = qtxt is not None
@@ -945,9 +938,13 @@ def _render_chat_panel():
     # ── ChatPane 닫기
     st.markdown('</div></div>', unsafe_allow_html=True)
 
-    # ── ChatPane 하단처럼 보이도록: 질문모드 UI를 'pane-foot-marker' 바로 뒤에 렌더
+    # ── ChatPane 하단처럼 보이도록: 질문모드 UI를 'pane-foot-marker' 바로 뒤에 '인라인' 렌더 (함수 호출 제거)
     st.markdown('<div class="pane-foot-marker"></div>', unsafe_allow_html=True)
-    _render_mode_controls_pills()
+    mode = st.radio(
+        "질문 모드", ["문법","문장","지문"],
+        index=["문법","문장","지문"].index(ss.get("qa_mode_radio","문법")),
+        horizontal=True, key="qa_mode_radio", label_visibility="collapsed"
+    )
 
     # ── 스트림 완료 후 기록 저장/리렌더
     if do_stream:
