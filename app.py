@@ -264,12 +264,12 @@ def _render_boot_progress_line():
                 unsafe_allow_html=True
             )
 
-# [07] 헤더(타이틀 옆에 ⚙️ 고정, 진행선 포함) ====================================
+# [07] 헤더(타이틀 옆에 ⚙️, 상태 배지 앞쪽으로 이동) =============================
 def _header():
     """
-    - 타이틀/상태 아이콘(SSOT)
-    - 타이틀 **같은 줄**에 ⚙️(관리자) 버튼을 바로 옆에 고정(마지막 열을 36px로 강제)
-    - LLM 상태 캡션은 타이틀 아래 오른쪽 정렬(모바일에서는 자동 숨김)
+    - 상태 배지(🟢 준비완료/🟡 준비중/🔴 오류)를 'LEES AI Teacher' 앞에 표시
+    - ⚙️(관리자) 버튼은 '아이콘만' 표시하고, 타이틀 바로 옆 같은 줄에 고정
+    - LLM 상태 캡션은 제거(중복 치움) — 필요시 admin 패널에서 확인
     - 진행선은 READY면 숨김
     """
     if st is None:
@@ -278,12 +278,17 @@ def _header():
     ss = st.session_state
     ss.setdefault("_show_admin_login", False)
 
-    status = _get_brain_status()
-    code = status["code"]
-    badge_icon = {
-        "READY": "🟢", "SCANNING": "🟡", "RESTORING": "🟡",
-        "WARN": "🟠", "ERROR": "🔴", "MISSING": "🔴",
-    }.get(code, "⚪")
+    # 상태 배지 텍스트/색
+    s = _get_brain_status()
+    code = s["code"]
+    badge_txt, badge_class = {
+        "READY": ("준비완료", "green"),
+        "SCANNING": ("준비중", "yellow"),
+        "RESTORING": ("복원중", "yellow"),
+        "WARN": ("주의", "yellow"),
+        "ERROR": ("오류", "red"),
+        "MISSING": ("미준비", "red"),
+    }.get(code, ("미준비", "red"))
 
     def _safe_popover(label: str, **kw):
         if hasattr(st, "popover"):
@@ -293,41 +298,47 @@ def _header():
                 pass
         return st.expander(label, expanded=True)
 
-    # ── 헤더 전용 스타일 + '바로 다음 컬럼 묶음'의 마지막 열을 36px로 고정
+    # ── 헤더 전용 스타일
     st.markdown("""
     <style>
-      .brand-row { display:flex; align-items:center; gap:.5rem; }
-      .brand-badge { font-size:1.25em; }
-      .brand-title { font-size:2.4em; font-weight:800; letter-spacing:.2px; } /* 60% 확대 */
-      /* LLM 캡션: 모바일에서는 숨김 */
-      .llm-cap { text-align:right; color:#6b7280; font-size:.82rem; margin-top:.25rem; }
-      @media (max-width:640px){ .llm-cap{ display:none; } }
+      /* 상태 배지 재사용 */
+      .status-btn{display:inline-block;border-radius:10px;padding:4px 10px;
+                  font-weight:700;font-size:13px;margin-right:.5rem}
+      .status-btn.green{background:#E4FFF3;color:#0f6d53;border:1px solid #bff0df}
+      .status-btn.yellow{background:#FFF8E1;color:#8a6d00;border:1px solid #ffe099}
+      .status-btn.red{background:#FFE8E6;color:#a1302a;border:1px solid #ffc7c2}
 
-      /* 'brand-anchor' 바로 다음에 나오는 컬럼 컨테이너의 마지막 열을 고정 폭으로 */
-      #brand-anchor + div [data-testid="column"]:last-child{
-        flex: 0 0 36px !important;
-        max-width: 36px !important;
-        min-width: 36px !important;
+      /* 타이틀 행: 줄바꿈 금지 + 아이콘 옆붙임 */
+      #brand-line + div{ display:flex !important; align-items:flex-end !important; gap:.5rem; flex-wrap:nowrap !important; }
+      #brand-line + div [data-testid="column"]{ flex:0 0 auto !important; }
+      #brand-line + div [data-testid="column"]:first-child{ flex:1 1 auto !important; min-width:0; }
+
+      /* 타이틀 서체(60% 확대) */
+      .brand-title{ font-size:2.4em; font-weight:800; letter-spacing:.2px; }
+
+      /* ⚙️ 아이콘 버튼: 아이콘만(폭 고정) */
+      #brand-line + div [data-testid="stPopover"] > button{
+        width:28px; height:28px; min-width:28px; padding:0; border-radius:14px;
       }
-      /* ⚙️ 트리거 버튼 28~32px로 축소(가로세로 동일) */
-      #brand-anchor + div [data-testid="stPopover"] > button{
-        width:32px;height:32px;min-width:32px;padding:0;border-radius:16px;
+      #brand-line + div [data-testid="stPopover"] > button p{ margin:0; font-size:18px; line-height:1; }
+      /* 아주 좁은 폭에서도 줄바꿈 방지 */
+      @media (max-width: 420px){
+        .brand-title{ font-size:2.0em; }           /* 살짝 축소해 줄바꿈 여지 확보 */
       }
-      #brand-anchor + div [data-testid="stPopover"] > button p{ margin:0; font-size:18px; line-height:1; }
-      /* 질문 타이틀 30% 축소(.hero-ask는 본문에서 사용) */
+      /* 본문 타이틀(요청대로 30% 축소)은 .hero-ask에서 처리 */
       .hero-ask{ font-size:1.54rem; font-weight:800; letter-spacing:.2px; margin: 4px 0 8px; }
     </style>
     """, unsafe_allow_html=True)
 
-    # ── 이 앵커 바로 "다음"에 만드는 columns 묶음을 CSS로 제어한다
-    st.markdown('<div id="brand-anchor"></div>', unsafe_allow_html=True)
+    # ── 앵커 → 바로 다음 columns 묶음을 CSS로 flex 처리
+    st.markdown('<div id="brand-line"></div>', unsafe_allow_html=True)
 
-    # 타이틀(왼쪽) · ⚙️(오른쪽, 36px 고정) — 어떤 화면 폭에서도 같은 줄 유지
-    c_left, c_gear = st.columns([1, 0.001], gap="small")
+    # 왼쪽: 상태배지 + 타이틀 / 오른쪽: ⚙️(아이콘만)
+    c_left, c_gear = st.columns([1, 0.0001], gap="small")
     with c_left:
         st.markdown(
-            f'<div class="brand-row"><span class="brand-badge">{badge_icon}</span>'
-            f'<span class="brand-title">LEES AI Teacher</span></div>',
+            f'<span class="status-btn {badge_class}">{badge_txt}</span>'
+            f'<span class="brand-title">LEES AI Teacher</span>',
             unsafe_allow_html=True
         )
     with c_gear:
@@ -359,16 +370,10 @@ def _header():
                 elif close:
                     st.rerun()
 
-    # ── LLM 상태 캡션(타이틀 아래, 우측 정렬)
-    try:
-        label, icon = _llm_health_badge()
-        st.markdown(f'<div class="llm-cap">LLM: {icon} {label}</div>', unsafe_allow_html=True)
-    except Exception:
-        pass
-
     # 진행선(READY면 자동 숨김)
     _render_boot_progress_line()
     st.divider()
+
 
 
 # [08] 배경(완전 비활성) =======================================================
