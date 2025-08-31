@@ -457,36 +457,99 @@ def _auto_start_once():
             _errlog(f"auto restore failed: {e}", where="[auto_start]", exc=e)
 # [08] END
 
-
-# [09] 관리자 패널 ==============================================================
+# ============================== [09] 관리자 패널 — START ==============================
 def _render_admin_panels() -> None:
-    if st is None or not _is_admin_view():
+    """
+    관리자 패널(지연 임포트 버전)
+    - 오케스트레이터 모듈은 '토글 ON' 이후에만 import 및 렌더합니다.
+    - 토글 OFF 상태에서는 어떤 무거운 의존성도 로드하지 않습니다.
+    - 실패 시 사용자 메시지(가벼움) + 상세 오류(Expander)로 안내합니다.
+    """
+    # 가벼운 표준 라이브러리만 먼저 임포트(지연 로드에 영향 없음)
+    import time
+    import importlib
+    import traceback
+
+    # Streamlit 임포트는 앱 전역에 이미 있을 수 있으나, 중복 임포트는 무해합니다.
+    import streamlit as st
+
+    st.subheader("관리자 패널")
+
+    # --- (A) 토글 UI: 토글/체크박스 둘 중 가용한 위젯 사용 ---
+    # 일부 환경에서 st.toggle 미지원일 수 있으므로 안전한 폴백을 둡니다.
+    try:
+        open_panel = st.toggle(
+            "🔧 오케스트레이터 도구 열기 (지연 로드)",
+            value=False,
+            help="클릭 시 필요한 모듈을 즉시 로드합니다."
+        )
+    except Exception:
+        open_panel = st.checkbox(
+            "🔧 오케스트레이터 도구 열기 (지연 로드)",
+            value=False,
+            help="클릭 시 필요한 모듈을 즉시 로드합니다."
+        )
+
+    # 토글이 꺼져 있으면, 어떤 무거운 것도 실행하지 않고 가볍게 종료
+    if not open_panel:
+        st.caption("▶ 필요할 때만 로드되도록 최적화되었습니다. 위 토글을 켜면 모듈을 불러옵니다.")
         return
 
-    ui_admin = _try_import("src.ui_admin", [
-        "ensure_admin_session_keys", "render_admin_controls", "render_role_caption", "render_mode_radio_admin"
-    ])
-    ui_orch = _try_import("src.ui_orchestrator", ["render_index_orchestrator_panel"])
+    load_start = time.perf_counter()
+    with st.spinner("오케스트레이터 모듈을 불러오는 중…"):
+        mod = None
+        last_err = None
 
-    if ui_admin.get("ensure_admin_session_keys"): ui_admin["ensure_admin_session_keys"]()
-    if ui_admin.get("render_admin_controls"):     ui_admin["render_admin_controls"]()
-    if ui_admin.get("render_role_caption"):       ui_admin["render_role_caption"]()
-    st.divider()
+        # --- (B) 지연 임포트 ---
+        # 프로젝트 구조에 따라 'src.ui_orchestrator' 또는 'ui_orchestrator' 중 하나를 시도합니다.
+        for module_name in ("src.ui_orchestrator", "ui_orchestrator"):
+            try:
+                mod = importlib.import_module(module_name)
+                break  # 성공 시 루프 탈출
+            except Exception as e:
+                last_err = e
+                mod = None
 
-    st.markdown("## 관리자: 자료/인덱스 관리")
-    if ui_orch.get("render_index_orchestrator_panel"):
-        try:
-            ui_orch["render_index_orchestrator_panel"]()
-        except Exception as e:
-            st.error(f"오케스트레이터 패널 오류: {type(e).__name__}: {e}")
-            _errlog(f"ui_orchestrator error: {e}", where="[admin_panel]", exc=e)
-    else:
-        st.info("오케스트레이터 모듈이 없습니다: src.ui_orchestrator")
+    if mod is None:
+        st.error("오케스트레이터 모듈을 불러오지 못했습니다.")
+        if last_err is not None:
+            with st.expander("오류 자세히 보기"):
+                st.code("".join(traceback.format_exception(type(last_err), last_err, last_err.__traceback__)))
+        return
 
-    with st.expander("오류 로그", expanded=False):
-        txt = _errlog_text()
-        st.text_area("최근 오류", value=txt, height=180)
-        st.download_button("로그 다운로드", data=txt.encode("utf-8"), file_name="app_error_log.txt")
+    # --- (C) 렌더 함수 탐색 ---
+    # 다양한 프로젝트 변형을 고려한 후보 이름들
+    candidate_names = (
+        "render_index_orchestrator_panel",
+        "render_orchestrator_panel",
+        "render",
+    )
+    render_fn = None
+    for fn_name in candidate_names:
+        fn = getattr(mod, fn_name, None)
+        if callable(fn):
+            render_fn = fn
+            break
+
+    if render_fn is None:
+        st.warning(f"오케스트레이터 렌더 함수를 찾을 수 없습니다: {', '.join(candidate_names)}")
+        return
+
+    # --- (D) 렌더 실행 (안전 호출) ---
+    try:
+        render_fn()  # 모듈 측 렌더 함수가 내부에서 Streamlit 컴포넌트를 그립니다.
+    except Exception as e:
+        st.error("오케스트레이터 렌더링 중 오류가 발생했습니다.")
+        with st.expander("오류 자세히 보기"):
+            st.code("".join(traceback.format_exception(type(e), e, e.__traceback__)))
+        return
+    finally:
+        elapsed_ms = (time.perf_counter() - load_start) * 1000.0
+
+    st.caption(f"✓ 오케스트레이터 로드/렌더 완료 — {elapsed_ms:.0f} ms")
+
+# =============================== [09] 관리자 패널 — END ===============================
+
 
 # [10] 학생 UI (Stable Chatbot): 파스텔 배경 + 말풍선 + 스트리밍 =================
 def _inject_chat_styles_once():
