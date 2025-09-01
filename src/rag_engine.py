@@ -456,7 +456,7 @@ class _LocalQueryEngine:
 
 
 
-# ===== [09] PUBLIC API =======================================================
+# ===== [09] PUBLIC API =======================================================  # [09] START
 def get_or_build_index(
     update_pct: Optional[Callable[[int], None]] = None,  # noqa: ARG001 (향후용)
     update_msg: Optional[Callable[[str], None]] = None,  # noqa: ARG001 (향후용)
@@ -470,14 +470,26 @@ def get_or_build_index(
     1) 로컬에 인덱스가 있으면 그대로 사용
     2) 없으면 Google Drive의 최신 백업 ZIP을 '메모리로' 읽어 로드(로컬 저장 X)
     """
+
+    # 전역 심볼(_Index) 의존 제거: 함수 내부 래퍼로 동일 인터페이스 제공
+    class _IndexObj:
+        def __init__(self, data: Dict[str, Any]) -> None:
+            self.data = data
+
+        def as_query_engine(self, **kw: Any) -> _LocalQueryEngine:
+            top_k = int(kw.get("top_k", 5)) if kw else 5
+            return _LocalQueryEngine(self.data, top_k_default=top_k)
+
     # 1) 로컬 우선
     try:
         if _index_exists(persist_dir):
-            return _Index(_load_index_from_disk(persist_dir))
+            return _IndexObj(_load_index_from_disk(persist_dir))
     except Exception:
-        pass  # 로컬이 망가져도 원격 시도
+        # 로컬이 망가져도 원격 시도
+        pass
 
     # 2) 원격(in-memory)
     data = _load_index_in_memory_from_drive()
-    return _Index(data)
-# ===== [10] END ==============================================================
+    return _IndexObj(data)
+# ===== [09] END ===============================================================
+
