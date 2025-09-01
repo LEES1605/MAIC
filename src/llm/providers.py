@@ -3,9 +3,10 @@ from __future__ import annotations
 
 import json
 import os
-import requests
 import traceback
 from typing import Any, Dict, Optional
+
+import requests
 
 
 def _secret(name: str, default: Optional[str] = None) -> Optional[str]:
