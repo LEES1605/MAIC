@@ -15,9 +15,6 @@ import streamlit as st
 from src.compat.config_bridge import PERSIST_DIR  # 호환용(로컬 인덱스가 있을 때만 사용)
 # [01] END
 
-
-
-
 # ===== [02] ERRORS ===========================================================
 class RAGEngineError(Exception):
     """기본 RAG 엔진 예외"""
@@ -291,7 +288,7 @@ def _load_index_from_disk(persist_dir: str | PathLike[str]) -> Dict[str, Any]:
     return data
 
 
-# ===== [08] LOCAL TF-IDF QUERY ENGINE =======================================
+# ===== [08] LOCAL TF-IDF QUERY ENGINE =======================================  # [08] START
 class _LocalQueryEngine:
     """
     간단한 TF-IDF 코사인 유사도 기반 검색기.
@@ -303,6 +300,14 @@ class _LocalQueryEngine:
     def __init__(self, idx: Dict[str, Any], top_k_default: int = 5) -> None:
         self.idx = idx
         self.top_k_default = int(top_k_default)
+
+        # mypy 안정화: 내부 필드 선 선언(지연 초기화 경고 방지)
+        self._texts: List[str] = []
+        self._metas: List[Dict[str, Any]] = []
+        self._vectors: List[Dict[str, float]] = []
+        self._norms: List[float] = []
+        self._idf: Dict[str, float] = {}
+
         self._build_vectors()
 
     # ------------------------ 내부 유틸 -------------------------------------
@@ -318,11 +323,12 @@ class _LocalQueryEngine:
         import math
 
         chunks = self.idx.get("chunks", [])
-        self._texts: List[str] = []
-        self._metas: List[Dict[str, Any]] = []
-        self._vectors: List[Dict[str, float]] = []
-        self._norms: List[float] = []
+        self._texts = []
+        self._metas = []
+        self._vectors = []
+        self._norms = []
         df: Dict[str, int] = {}
+
         # 1) DF 수집
         for rec in chunks:
             txt = rec.get("text", "") or ""
@@ -330,17 +336,22 @@ class _LocalQueryEngine:
             for t in toks:
                 df[t] = df.get(t, 0) + 1
         N = max(1, len(chunks))
+
         # 2) IDF
-        self._idf: Dict[str, float] = {t: math.log((N + 1) / (c + 1)) + 1.0 for t, c in df.items()}
+        self._idf = {t: math.log((N + 1) / (c + 1)) + 1.0 for t, c in df.items()}
+
         # 3) 각 청크 벡터
         for rec in chunks:
             txt = rec.get("text", "") or ""
-            meta = rec.get("meta", {}) or {}
+            # ✨ 타입 확정: meta는 dict[str, Any]
+            meta: Dict[str, Any] = rec.get("meta", {}) or {}
             toks = self._tokenize(txt)
+
             # TF
             tf: Dict[str, int] = {}
             for t in toks:
                 tf[t] = tf.get(t, 0) + 1
+
             # TF-IDF
             vec: Dict[str, float] = {}
             for t, f in tf.items():
@@ -348,6 +359,7 @@ class _LocalQueryEngine:
                 if idf is None:
                     continue
                 vec[t] = (1.0 + math.log(f)) * idf
+
             # 노름
             norm = math.sqrt(sum(v * v for v in vec.values())) if vec else 0.0
 
@@ -405,7 +417,7 @@ class _LocalQueryEngine:
 
         # 점수 내림차순 정렬
         heap.sort(reverse=True)
-        hits = []
+        hits: List[Dict[str, Any]] = []
         for score, i in heap:
             meta = self._metas[i] or {}
             txt = self._texts[i]
@@ -421,7 +433,7 @@ class _LocalQueryEngine:
             )
 
         # 사람이 읽기 쉬운 응답 문자열
-        lines = []
+        lines: List[str] = []
         for h in hits:
             name = h["meta"].get("file_name") or h["meta"].get("doc_name") or "(unknown)"
             page = h["meta"].get("page_approx")
@@ -440,15 +452,8 @@ class _LocalQueryEngine:
 
         resp = "Top matches:\n" + "\n".join(lines)
         return type("R", (), {"response": resp, "hits": hits})
+# [08] END
 
-
-class _Index:
-    def __init__(self, data: Dict[str, Any]) -> None:
-        self.data = data
-
-    def as_query_engine(self, **kw: Any) -> _LocalQueryEngine:
-        top_k = int(kw.get("top_k", 5)) if kw else 5
-        return _LocalQueryEngine(self.data, top_k_default=top_k)
 
 
 # ===== [09] PUBLIC API =======================================================
