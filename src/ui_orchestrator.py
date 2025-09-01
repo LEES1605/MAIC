@@ -208,10 +208,7 @@ def autoflow_boot_check(*, interactive: bool) -> None:  # noqa: ARG001 (인터�
         ss["_boot_checked"] = True
         PH("ERROR", "복원 함수를 찾을 수 없습니다.")
 
-
 # ========================= [02] autoflow_boot_check — END ==========================
-
-
 # ================== [03] render_index_orchestrator_panel — START ==================
 def render_index_orchestrator_panel() -> None:
     """
@@ -232,7 +229,6 @@ def render_index_orchestrator_panel() -> None:
     p = PERSIST_DIR if isinstance(PERSIST_DIR, Path) else Path(str(PERSIST_DIR))
 
     get_latest_release = deps.get("get_latest_release")
-    restore_latest = deps.get("restore_latest")
     _drive_client = deps.get("_drive_client")
     _find_folder_id = deps.get("_find_folder_id")
     diff_with_manifest = deps.get("diff_with_manifest")
@@ -394,4 +390,6 @@ def render_index_orchestrator_panel() -> None:
             "오류 로그 다운로드", data=txt.encode("utf-8"), file_name="orchestrator_errors.txt"
         )
 # =================== [03] render_index_orchestrator_panel — END ===================
+
+
 
