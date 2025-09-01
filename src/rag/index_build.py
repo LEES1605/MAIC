@@ -1,4 +1,3 @@
-# src/rag/index_build.py  — 전체 교체본
 # [01] 기본 설정 & 상수  # [01] START
 from __future__ import annotations
 
@@ -7,7 +6,7 @@ import json
 import os
 import zipfile
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict  # List, Optional, Tuple 제거 (ruff F401 대응)
 
 # 퍼시스트 디렉토리(인덱스/매니페스트 저장)
 PERSIST_DIR = Path.home() / ".maic" / "persist"
