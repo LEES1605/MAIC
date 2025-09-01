@@ -15,6 +15,7 @@ from src.compat.config_bridge import PERSIST_DIR  # 호환용(로컬 인덱스�
 # [01] END
 
 
+
 # ===== [02] ERRORS ===========================================================
 class RAGEngineError(Exception):
     """기본 RAG 엔진 예외"""
