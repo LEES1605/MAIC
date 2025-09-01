@@ -1,52 +1,62 @@
-# ================================= ui_admin.py — START ==========================
+# ============================ ui_admin.py — START ============================
 from __future__ import annotations
 
+import json
+import os
+import time
 from typing import Optional
 
 import streamlit as st
 
 
-ADMIN_KEY = "is_admin"  # 세션키 단일화
+def _secret(name: str, default: Optional[str] = None) -> Optional[str]:
+    try:
+        val = st.secrets.get(name)  # type: ignore[attr-defined]
+        if val is None:
+            return os.getenv(name, default)
+        if isinstance(val, str):
+            return val
+        return json.dumps(val, ensure_ascii=False)
+    except Exception:
+        return os.getenv(name, default)
 
 
 def ensure_admin_session_keys() -> None:
-    st.session_state.setdefault(ADMIN_KEY, False)
-    st.session_state.setdefault("_admin_since", "")
+    ss = st.session_state
+    ss.setdefault("is_admin", False)
+    ss.setdefault("admin_login_ts", "")
+    ss.setdefault("qa_mode_radio", "문법설명")
+    ss.setdefault("_show_admin_login", False)
 
 
-def _login_form() -> None:
-    st.markdown("#### 🔐 관리자 로그인")
-    pw = st.text_input("비밀번호", type="password", key="admin_pw_input")
-    if st.button("로그인", type="primary"):
-        correct = st.secrets.get("APP_ADMIN_PASSWORD") or st.secrets.get("ADMIN_PASSWORD")
-        if correct and pw and str(pw) == str(correct):
-            st.session_state[ADMIN_KEY] = True
-            st.session_state["_admin_since"] = st.session_state.get("_admin_since") or "now"
-            st.success("관리자 모드로 전환되었습니다.")
-            st.rerun()
-        else:
-            st.error("비밀번호가 올바르지 않습니다.")
-
-
-def _logout_box() -> None:
-    st.markdown("#### 👤 관리자")
-    st.caption(f"since: {st.session_state.get('_admin_since') or '-'}")
-    if st.button("로그아웃", key="btn_admin_logout"):
-        st.session_state[ADMIN_KEY] = False
-        st.success("로그아웃 되었습니다.")
-        st.rerun()
-
-
-def render_admin_panel() -> None:
-    """
-    헤더의 ⚙️ 버튼 클릭 시 아래에 표시되는 관리자 패널(간단 버전).
-    """
+def render_admin_controls() -> None:
     ensure_admin_session_keys()
-    if st.session_state.get(ADMIN_KEY):
-        _logout_box()
-        with st.expander("진단 도구", expanded=False):
-            st.write("여기에 '지하철 진행선' 진단 UI가 렌더됩니다.")
-            st.info("관리자 기능은 오케스트레이터 패널에서 동작합니다.")
-    else:
-        _login_form()
-# ================================== ui_admin.py — END ===========================
+    ss = st.session_state
+
+    col1, col2 = st.columns([0.7, 0.3])
+    with col1:
+        st.caption("관리자 도구 · Admin tools")
+    with col2:
+        if not ss.get("is_admin"):
+            if st.button("관리자 로그인", key="btn_admin_login"):
+                ss["_show_admin_login"] = True
+        else:
+            if st.button("관리자 로그아웃", key="btn_admin_logout"):
+                ss["is_admin"] = False
+                st.success("로그아웃 되었습니다.")
+                st.rerun()
+
+    if ss.get("_show_admin_login") and not ss.get("is_admin"):
+        st.markdown("#### 🔐 관리자 로그인")
+        pw = st.text_input("비밀번호", type="password")
+        if st.button("로그인", type="primary"):
+            correct = _secret("APP_ADMIN_PASSWORD") or _secret("ADMIN_PASSWORD")
+            if correct and pw and str(pw) == str(correct):
+                ss["is_admin"] = True
+                ss["admin_login_ts"] = time.strftime("%Y-%m-%d %H:%M:%S")
+                st.success("관리자 모드로 전환되었습니다.")
+                ss["_show_admin_login"] = False
+                st.rerun()
+            else:
+                st.error("비밀번호가 올바르지 않습니다.")
+# ============================= ui_admin.py — END =============================
