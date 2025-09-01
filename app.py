@@ -2,7 +2,14 @@
 from __future__ import annotations
 
 # [02] imports & bootstrap ====================================================
-import os, io, json, time, traceback, importlib, importlib.util, sys
+import importlib
+import importlib.util
+import io
+import json
+import os
+import sys
+import time
+import traceback
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -51,35 +58,6 @@ if st:
     st.set_page_config(page_title="LEES AI Teacher", layout="wide")
 
 
-# [04] 경로/상태 & 에러로그 =====================================================
-def _persist_dir() -> Path:
-    # 1) 인덱서가 정의한 경로 우선
-    try:
-        from src.rag.index_build import PERSIST_DIR as IDX
-        return Path(IDX).expanduser()
-    except Exception:
-        pass
-    # 2) config 경로
-    try:
-        from src.config import PERSIST_DIR as CFG
-        return Path(CFG).expanduser()
-    except Exception:
-        pass
-    # 3) 최종 폴백
-    return Path.home() / ".maic" / "persist"
-
-PERSIST_DIR = _persist_dir()
-PERSIST_DIR.mkdir(parents=True, exist_ok=True)
-
-# Streamlit 세션에 공유(오케스트레이터와 SSOT 동기화)
-def _share_persist_dir_into_session(p: Path) -> None:
-    try:
-        if st is not None:
-            st.session_state["_PERSIST_DIR"] = p
-    except Exception:
-        pass
-_share_persist_dir_into_session(PERSIST_DIR)
-
 def _is_brain_ready() -> bool:
     p = PERSIST_DIR
     if not p.exists():
@@ -94,34 +72,25 @@ def _is_brain_ready() -> bool:
             pass
     return False
 
-def _mark_ready() -> None:
-    try:
-        (PERSIST_DIR / ".ready").write_text("ok", encoding="utf-8")
-    except Exception:
-        pass
-
-def _errlog(msg: str, *, where: str = "", exc: BaseException | None = None) -> None:
+# ✅ [NEW] 헤더 배지에서 사용하는 일관 상태 조회(세션 우선 → 로컬 폴백)
+def _get_brain_status() -> dict:
+    """
+    반환 예: {"code": "READY"|"SCANNING"|"RESTORING"|"WARN"|"ERROR"|"MISSING", "msg": "..."}
+    - 세션에 관리자가 세팅한 상태가 있으면 그것을 사용
+    - 없으면 로컬 인덱스 유무로 READY/MISSING 빠른 판정
+    """
     if st is None:
-        return
+        return {"code": "MISSING", "msg": "Streamlit unavailable"}
+
     ss = st.session_state
-    ss.setdefault("_error_log", [])
-    ss["_error_log"].append({
-        "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "where": where,
-        "msg": str(msg),
-        "trace": traceback.format_exc() if exc else "",
-    })
+    code = ss.get("brain_status_code")
+    msg = ss.get("brain_status_msg")
+    if code and msg:
+        return {"code": str(code), "msg": str(msg)}
 
-def _errlog_text() -> str:
-    if st is None:
-        return ""
-    out = io.StringIO()
-    for i, r in enumerate(st.session_state.get("_error_log", []), 1):
-        out.write(f"[{i}] {r['ts']} {r.get('where','')}\n{r['msg']}\n")
-        if r.get("trace"):
-            out.write(r["trace"] + "\n")
-        out.write("-" * 60 + "\n")
-    return out.getvalue()
+    if _is_brain_ready():
+        return {"code": "READY", "msg": "로컬 인덱스 연결됨(빠른 판정)"}
+    return {"code": "MISSING", "msg": "인덱스 없음(관리자에서 '업데이트 점검' 필요)"}
 
 
 # [05] 모드/LLM/임포트 헬퍼 =====================================================
