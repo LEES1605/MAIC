@@ -48,7 +48,6 @@ def _write_json(path: Path, obj: Any) -> None:
         pass
 # [02] END
 
-
 # [03] ZIP 스냅샷 생성/복원  # [03] START
 def _pack_snapshot(data: Dict[str, Any]) -> bytes:
     """
@@ -66,7 +65,7 @@ def _pack_snapshot(data: Dict[str, Any]) -> bytes:
 
 def _unpack_snapshot(blob: bytes) -> Dict[str, Any]:
     with zipfile.ZipFile(io.BytesIO(blob), "r") as zf:
-        out = {"manifest": {}, "chunks": []}
+        out: Dict[str, Any] = {"manifest": {}, "chunks": []}  # ← 타입 명시 추가
         try:
             out["manifest"] = json.loads(zf.read("manifest.json").decode("utf-8"))
         except Exception:
