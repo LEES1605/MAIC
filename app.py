@@ -682,7 +682,7 @@ def _render_admin_panels() -> None:
 
 # [12] 채팅 UI(스타일/모드/상단 상태 라벨=SSOT) ===============================
 def _inject_chat_styles_once():
-    """전역 CSS: ChatPane(대화 틀) + 라디오 pill + 인-카드 입력창(파스텔 노란색)"""
+    """전역 CSS: ChatPane + 라디오 pill + 인-카드 입력창(노란색) + 화살표 전송 버튼"""
     if st is None:
         return
     if st.session_state.get("_chat_styles_injected"):
@@ -723,22 +723,27 @@ def _inject_chat_styles_once():
       }
       .chatpane div[data-testid="stRadio"] svg{ display:none!important }
 
-      /* 인-카드 입력 폼 (파스텔 노란색 입력창) */
-      .chatpane form[data-testid="stForm"]{
-        background:#EDF4FF;
-        padding:4px 10px 10px 10px;
-        margin:0;
-      }
-      .chatpane textarea, .chatpane input[type="text"]{
+      /* ───────── 인-카드 입력창(파스텔 노란색) + 화살표 전송 ───────── */
+      /* 폼을 기준으로 절대배치 */
+      .chatpane form[data-testid="stForm"]{ position:relative; background:#EDF4FF; padding:8px 10px 12px 10px; margin:0; }
+      .chatpane form[data-testid="stForm"] input[type="text"]{
         background:#FFF8CC !important;      /* 파스텔 노란 */
         border:1px solid #F2E4A2 !important;
-        border-radius:12px !important;
-        color:#333 !important;
+        border-radius:999px !important;
+        color:#333 !important; height:46px;
+        padding-right:56px;                  /* 우측 화살표 버튼 공간 */
       }
-      .chatpane ::placeholder{ color:#8A7F4A !important; }
-      .chatpane button[kind="secondary"]{
-        border-radius:999px; font-weight:700;
+      .chatpane form[data-testid="stForm"] ::placeholder{ color:#8A7F4A !important; }
+
+      /* 전송(화살표) 버튼을 입력창 안쪽 오른쪽에 겹치게 */
+      .chatpane form[data-testid="stForm"] button.send-arrow{
+        position:absolute; right:18px; top:50%; transform:translateY(-50%);
+        width:38px; height:38px; border-radius:50%;
+        background:#0a2540; color:#fff; border:0;
+        box-shadow:0 2px 6px rgba(0,0,0,.15);
+        font-size:18px; line-height:1; cursor:pointer;
       }
+      .chatpane form[data-testid="stForm"] button.send-arrow:hover{ filter:brightness(1.05); }
 
       /* 턴 구분선 */
       .turn-sep{height:0;border-top:1px dashed #E5EAF2;margin:14px 2px;position:relative;}
@@ -762,7 +767,7 @@ def _render_chat_panel():
 
     _inject_chat_styles_once()
 
-    # ── 말풍선 렌더러(로컬 헬퍼)
+    # ── 말풍선 렌더러(로컬 헬퍼) — 사용자 말풍선은 파스텔 노랑
     def _render_bubble(role: str, text: str):
         import html, re
         def esc(t: str) -> str:
@@ -770,21 +775,22 @@ def _render_chat_panel():
             return re.sub(r"  ", "&nbsp;&nbsp;", t)
 
         is_user = (role == "user")
-        align = "flex-end" if is_user else "flex-start"
-        bg = "#FFFFFF" if is_user else "#EAF6FF"
-        fg = "#0a2540"
-        border = "#E5E7EB" if is_user else "#BEE3FF"
+        align   = "flex-end" if is_user else "flex-start"
+        bg      = "#FFF8CC" if is_user else "#EAF6FF"   # ← 사용자=노랑
+        border  = "#F2E4A2" if is_user else "#BEE3FF"   # ← 사용자=노랑 계열
+        fg      = "#333333"
         radius_fix = "border-top-right-radius:8px;" if is_user else "border-top-left-radius:8px;"
-        label = "나" if is_user else "답변"
-        label_bg = "#F4F7FB" if is_user else "#DFF1FF"
-        label_bd = "#E5E7EB" if is_user else "#BEE3FF"
+        label   = "나" if is_user else "답변"
+        label_bg= "#FFF2B8" if is_user else "#DFF1FF"
+        label_bd= "#F2E4A2" if is_user else "#BEE3FF"
+
         html_box = (
             '<div style="display:flex;justify-content:%s;margin:8px 0;">'
             '  <div style="max-width:88%%;padding:10px 12px;border-radius:16px;%s'
             '              line-height:1.6;font-size:15px;box-shadow:0 1px 1px rgba(0,0,0,.05);white-space:pre-wrap;'
             '              position:relative;border:1px solid %s;background:%s;color:%s;">'
             '    <span style="display:inline-block;margin:-2px 0 6px 0;padding:1px 8px;border-radius:999px;'
-            '                 font-size:11px;font-weight:700;background:%s;color:#0f5b86;'
+            '                 font-size:11px;font-weight:700;background:%s;color:#5a5130;'
             '                 border:1px solid %s;">%s</span><br/>%s'
             '  </div>'
             '</div>'
@@ -794,7 +800,7 @@ def _render_chat_panel():
     # ── ChatPane OPEN + 메시지 영역 OPEN
     st.markdown('<div class="chatpane"><div class="messages">', unsafe_allow_html=True)
 
-    # ── 대화 기록 렌더
+    # 대화 기록 렌더
     prev_role = None
     for m in ss["chat"]:
         role = m.get("role", "assistant")
@@ -803,40 +809,48 @@ def _render_chat_panel():
         _render_bubble(role, m.get("text", ""))
         prev_role = role
 
-    # ── 스트리밍용 플레이스홀더(메시지 영역 안)
+    # 스트리밍용 플레이스홀더(메시지 영역 안)
     ph = st.empty()
 
-    # ── 메시지 영역 CLOSE (ChatPane은 유지)
+    # 메시지 영역 CLOSE (ChatPane은 유지)
     st.markdown('</div>', unsafe_allow_html=True)
 
     # ── (ChatPane 내부) 질문모드 + 인-카드 입력 폼
-    #     - 폼 제출 시 라디오/텍스트 모두 함께 반영
     with st.form("inpane_chat_form", clear_on_submit=True):
         cur_label = ss.get("qa_mode_radio", "문법")
-        mode = st.radio(
+        st.radio(
             "질문 모드", ["문법", "문장", "지문"],
             index=["문법", "문장", "지문"].index(cur_label),
             horizontal=True, key="qa_mode_radio", label_visibility="collapsed"
         )
-        qtxt = st.text_area(
-            "질문 입력", value="", height=72, max_chars=3000,
+        # text_input: Enter=Submit 동작 (멀티라인 필요 시 추후 Shift+Enter 지원 버전 별도)
+        qtxt = st.text_input(
+            "질문 입력", value="",
             placeholder="예) 분사구문이 뭐예요?  예) 이 문장 구조 분석해줘",
             label_visibility="collapsed", key="inpane_q"
         )
-        col1, col2 = st.columns([6,1])
-        with col2:
-            send = st.form_submit_button("보내기", use_container_width=True)
+        # 화살표 전송 버튼(시각적으로 입력창 안에 겹치게)
+        send = st.form_submit_button("➤", use_container_width=False, type="secondary")
+        # 위 버튼은 CSS로 .send-arrow 클래스를 적용
+        st.markdown("""
+            <script>
+            // 버튼에 클래스 부여 (Streamlit은 클래스 지정 API가 없어 JS로 후처리)
+            const btns = window.parent.document.querySelectorAll('form[data-testid="stForm"] button');
+            btns.forEach(b=>{ if(!b.classList.contains('send-arrow')) b.classList.add('send-arrow'); });
+            </script>
+        """, unsafe_allow_html=True)
 
-    # ── 폼 제출 처리
-    text_final = ""
-    if send:
+    # ── 폼 제출 처리 (중복 전송 방지 가드 포함)
+    if send and not ss.get("_sending", False):
         question = (qtxt or "").strip()
         if question:
-            # 기록에 사용자 턴 추가
+            ss["_sending"] = True  # 가드 ON
+
+            # 사용자 턴 추가
             ss["chat"].append({"id": f"u{int(time.time()*1000)}", "role": "user", "text": question})
 
             # 스트리밍 준비
-            def _render_ai(text_html: str):
+            def _emit_stream(text_html: str):
                 ph.markdown(
                     '<div style="display:flex;justify-content:flex-start;margin:8px 0;">'
                     '  <div style="max-width:88%;padding:10px 12px;border-radius:16px;border-top-left-radius:8px;'
@@ -850,13 +864,13 @@ def _render_chat_panel():
                     '</div>', unsafe_allow_html=True
                 )
 
-            # 모드 토큰/증거
+            # 모드/증거
             cur_label = ss.get("qa_mode_radio") or "문법"
-            MODE_TOKEN = {"문법":"문법설명", "문장":"문장구조분석", "지문":"지문분석"}[cur_label]
+            MODE_TOKEN = {"문법":"문법설명","문장":"문장구조분석","지문":"지문분석"}[cur_label]
             ev_notes = ss.get("__evidence_class_notes", "")
             ev_books = ss.get("__evidence_grammar_books", "")
 
-            # ── 프롬프트 해석기
+            # 프롬프트 로더들 ---------------------------------------------------
             def _github_fetch_prompts_text():
                 token  = _from_secrets("GH_TOKEN") or os.getenv("GH_TOKEN")
                 repo   = _from_secrets("GH_REPO")  or os.getenv("GH_REPO")
@@ -949,8 +963,9 @@ def _render_chat_panel():
                         usr_p += "\n\n[지시]\n- 첫 줄: '안내: 현재 자료 연결이 원활하지 않아 간단 모드로 답변합니다. 핵심만 짧게 안내할게요.'"
                     return sys_p, usr_p
                 return _fallback_prompts(mode_token, q, ev1, ev2, cur_label)
+            # -------------------------------------------------------------------
 
-            # ── 스트리밍 호출
+            # LLM 호출 + 스트리밍
             system_prompt, user_prompt = _resolve_prompts(MODE_TOKEN, question, ev_notes, ev_books, cur_label)
             prov = _try_import("src.llm.providers", ["call_with_fallback"])
             call = prov.get("call_with_fallback")
@@ -963,27 +978,14 @@ def _render_chat_panel():
                 def esc(t: str) -> str:
                     t = html.escape(t or "").replace("\n","<br/>")
                     return re.sub(r"  ","&nbsp;&nbsp;", t)
-                _render_ai_html = esc(acc)
-                _render_ai_html and _render_ai_html  # noop to silence lint
-                ph.markdown(
-                    '<div style="display:flex;justify-content:flex-start;margin:8px 0;">'
-                    '  <div style="max-width:88%;padding:10px 12px;border-radius:16px;border-top-left-radius:8px;'
-                    '              line-height:1.6;font-size:15px;box-shadow:0 1px 1px rgba(0,0,0,.05);white-space:pre-wrap;'
-                    '              position:relative;border:1px solid #BEE3FF;background:#EAF6FF;color:#0a2540;">'
-                    '    <span style="display:inline-block;margin:-2px 0 6px 0;padding:1px 8px;border-radius:999px;'
-                    '                 font-size:11px;font-weight:700;background:#DFF1FF;color:#0f5b86;'
-                    '                 border:1px solid #BEE3FF;">답변</span><br/>' +
-                    esc(acc) +
-                    '  </div>'
-                    '</div>', unsafe_allow_html=True
-                )
+                _emit_html = esc(acc)
+                _emit_html and _emit_html  # noop
+                _emit_stream(esc(acc))
 
-            if not callable(call):
-                text_final = "(오류) LLM 어댑터를 사용할 수 없습니다."
-                _emit(text_final)
-            else:
+            try:
                 import inspect
-                sig = inspect.signature(call); params = sig.parameters.keys(); kwargs = {}
+                kwargs = {}
+                sig = inspect.signature(call); params = sig.parameters.keys()
                 if "messages" in params:
                     kwargs["messages"] = [{"role":"system","content":system_prompt or ""},
                                           {"role":"user","content":user_prompt}]
@@ -1000,8 +1002,8 @@ def _render_chat_panel():
                 elif "timeout" in params:   kwargs["timeout"] = 90
                 if "extra" in params:       kwargs["extra"] = {"question": question, "mode_key": cur_label}
 
-                try:
-                    supports_stream = ("stream" in params) or ("on_token" in params) or ("on_delta" in params) or ("yield_text" in params)
+                supports_stream = ("stream" in params) or ("on_token" in params) or ("on_delta" in params) or ("yield_text" in params)
+                if callable(call):
                     if supports_stream:
                         if "stream" in params:   kwargs["stream"] = True
                         if "on_token" in params: kwargs["on_token"] = _emit
@@ -1014,15 +1016,19 @@ def _render_chat_panel():
                         text_final = res.get("text") if isinstance(res, dict) else str(res)
                         if not text_final: text_final = "(응답이 비어있어요)"
                         _emit(text_final)
-                except Exception as e:
-                    text_final = f"(오류) {type(e).__name__}: {e}"
+                else:
+                    text_final = "(오류) LLM 어댑터를 사용할 수 없습니다."
                     _emit(text_final)
+            except Exception as e:
+                text_final = f"(오류) {type(e).__name__}: {e}"
+                _emit(text_final)
 
-            # 기록에 어시스턴트 턴 추가 후 리렌더
+            # 어시스턴트 턴 저장 후 가드 해제 → 리렌더
             ss["chat"].append({"id": f"a{int(time.time()*1000)}", "role": "assistant", "text": text_final})
+            ss["_sending"] = False
             st.rerun()
 
-    # ── ChatPane CLOSE
+    # ChatPane CLOSE
     st.markdown('</div>', unsafe_allow_html=True)
 
 
