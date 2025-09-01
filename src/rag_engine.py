@@ -141,8 +141,8 @@ def _find_folder_id(kind: str) -> Optional[str]:
     return None
 
 
-# ===== [05] GOOGLE DRIVE AUTH (OAuth 우선, SA 폴백) ==========================
-def _get_drive_credentials():
+# ===== [05] GOOGLE DRIVE AUTH (OAuth 우선, SA 폴백) ==========================  # [05] START
+def _get_drive_credentials() -> tuple[Any, str]:
     # 1) 사용자 OAuth (My Drive에 '생성/업로드' 가능)
     cid = st.secrets.get("GDRIVE_OAUTH_CLIENT_ID") or st.secrets.get("GOOGLE_OAUTH_CLIENT_ID")
     csec = st.secrets.get("GDRIVE_OAUTH_CLIENT_SECRET") or st.secrets.get("GOOGLE_OAUTH_CLIENT_SECRET")
@@ -196,13 +196,13 @@ def _get_drive_credentials():
     return SACreds.from_service_account_info(info, scopes=["https://www.googleapis.com/auth/drive"]), "sa"
 
 
-def _drive_client():
+def _drive_client() -> Any:
     from googleapiclient.discovery import build
 
     creds, mode = _get_drive_credentials()
     st.session_state["gdrive_auth_mode"] = mode  # 디버그 표시에 사용
     return build("drive", "v3", credentials=creds, cache_discovery=False)
-
+# [05] END
 
 # ===== [06] REMOTE-ONLY LOAD =================================================
 def _download_latest_backup_zip_bytes() -> Tuple[bytes, Dict[str, Any]]:
