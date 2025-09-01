@@ -1,16 +1,18 @@
-# ===== [01] IMPORTS ==========================================================
+# ===== [01] IMPORTS ==========================================================  # [01] START
 from __future__ import annotations
 
 import io
 import json
 import os
+import zipfile
 from os import PathLike
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
-import zipfile
 
 import streamlit as st
+
 from src.compat.config_bridge import PERSIST_DIR  # 호환용(로컬 인덱스가 있을 때만 사용)
+# [01] END
 
 
 # ===== [02] ERRORS ===========================================================
