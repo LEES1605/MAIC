@@ -40,22 +40,20 @@ USE_GITHUB_RELEASES = True
 # 하위폴더 재귀 수집 사용 여부(원하면 False로)
 DRIVE_RECURSIVE = True
 
-def _get_gh_conf() -> Optional[dict]:
-    """환경변수 우선 → Streamlit secrets 보조로 GitHub 설정 로드."""
-    token = os.getenv("GH_TOKEN")
-    repo  = os.getenv("GH_REPO")
-    branch = os.getenv("GH_BRANCH", "main")
-    if not (token and repo):
-        try:
-            import streamlit as st  # 실행 맥락에 없을 수 있음
-            token = token or st.secrets.get("GH_TOKEN")
-            repo  = repo  or st.secrets.get("GH_REPO")
-            branch = os.getenv("GH_BRANCH", st.secrets.get("GH_BRANCH", "main"))
-        except Exception:
-            pass
-    if token and repo:
-        return {"token": token, "repo": repo, "branch": branch}
-    return None
+def _gh_request(url: str, method: str = "GET", token: str = "", data: bytes | None = None, headers: dict | None = None):
+    import urllib.request, urllib.parse
+    hdrs = {"User-Agent": "maic-indexer"}
+    if token:
+        hdrs["Authorization"] = f"token {token}"
+    if headers:
+        hdrs.update(headers or {})
+    req = urllib.request.Request(url, data=data, method=method, headers=hdrs)
+    # ✅ timeout 추가(10초) — 무한대기 방지
+    with urllib.request.urlopen(req, timeout=10) as r:
+        code = getattr(r, "status", 200)
+        res = r.read()
+    return code, res
+
 # [01A] END
 
 
