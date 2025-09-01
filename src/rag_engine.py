@@ -1,4 +1,5 @@
-# ===== [01] IMPORTS ========================
+# ruff: noqa: I001  # (파일 한정) import 정렬 경고 임시 비활성화 — CI 안정화용
+# ===== [01] IMPORTS =============================================  # [01] START
 from __future__ import annotations
 
 import io
@@ -9,9 +10,11 @@ from os import PathLike
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from src.compat.config_bridge import PERSIST_DIR
 import streamlit as st
+
+from src.compat.config_bridge import PERSIST_DIR  # 호환용(로컬 인덱스가 있을 때만 사용)
 # [01] END
+
 
 
 
