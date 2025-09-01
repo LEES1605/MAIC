@@ -92,6 +92,75 @@ def _get_brain_status() -> dict:
         return {"code": "READY", "msg": "로컬 인덱스 연결됨(빠른 판정)"}
     return {"code": "MISSING", "msg": "인덱스 없음(관리자에서 '업데이트 점검' 필요)"}
 
+# [04] 경로/상태 & 에러로그 =====================================================
+def _persist_dir() -> Path:
+    # 1) 인덱서 정의 경로
+    try:
+        from src.rag.index_build import PERSIST_DIR as IDX
+        return Path(IDX).expanduser()
+    except Exception:
+        pass
+    # 2) config 경로
+    try:
+        from src.config import PERSIST_DIR as CFG
+        return Path(CFG).expanduser()
+    except Exception:
+        pass
+    # 3) 최종 폴백
+    return Path.home() / ".maic" / "persist"
+
+PERSIST_DIR = _persist_dir()
+PERSIST_DIR.mkdir(parents=True, exist_ok=True)
+
+def _share_persist_dir_into_session(p: Path) -> None:
+    try:
+        if st is not None:
+            st.session_state["_PERSIST_DIR"] = p
+    except Exception:
+        pass
+
+_share_persist_dir_into_session(PERSIST_DIR)
+
+def _is_brain_ready() -> bool:
+    # 세션에 공유된 경로가 있으면 우선 사용, 없으면 즉시 계산
+    p = None
+    try:
+        p = st.session_state.get("_PERSIST_DIR") if st is not None else None
+    except Exception:
+        p = None
+    if not isinstance(p, Path):
+        p = _persist_dir()
+
+    if not p.exists():
+        return False
+
+    # 존재/용량 신호 중 하나라도 있으면 준비로 간주(빠른 판정)
+    for s in ["chunks.jsonl", "manifest.json", ".ready", "faiss.index", "index.faiss", "chroma.sqlite", "docstore.json"]:
+        fp = p / s
+        try:
+            if fp.exists() and fp.stat().st_size > 0:
+                return True
+        except Exception:
+            continue
+    return False
+
+def _get_brain_status() -> dict:
+    """
+    반환 예: {"code": "READY"|"SCANNING"|"RESTORING"|"WARN"|"ERROR"|"MISSING", "msg": "..."}
+    세션 상태가 있으면 우선, 없으면 로컬 인덱스 유무로 READY/MISSING 판정.
+    """
+    if st is None:
+        return {"code": "MISSING", "msg": "Streamlit unavailable"}
+
+    ss = st.session_state
+    code = ss.get("brain_status_code")
+    msg = ss.get("brain_status_msg")
+    if code and msg:
+        return {"code": str(code), "msg": str(msg)}
+
+    if _is_brain_ready():
+        return {"code": "READY", "msg": "로컬 인덱스 연결됨(빠른 판정)"}
+    return {"code": "MISSING", "msg": "인덱스 없음(관리자에서 '업데이트 점검' 필요)"}
 
 # [05] 모드/LLM/임포트 헬퍼 =====================================================
 def _is_admin_view() -> bool:
