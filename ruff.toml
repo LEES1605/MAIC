@@ -7,20 +7,17 @@ target-version = "py311"
 select = ["E", "F", "B", "I"]
 ignore = ["E203"]  # black/ruff newline spacing 차이
 
-# 여러 줄 표기가 가능한 공식 섹션 문법 사용
+# 여러 줄 표기가 가능한 공식 섹션 문법
 [lint.per-file-ignores]
-# 긴 CSS/HTML 문자열
-"app.py" = ["E501"]
-"src/rag/index_build.py" = ["E501"]
-"src/ui_orchestrator.py" = ["E501"]
-"src/prompt_modes.py" = ["E501"]
+# 긴 CSS/HTML 문자열이 많은 파일
+"app.py"                 = ["E501"]
+"src/prompt_modes.py"    = ["E501"]
 "src/features/ui_header.py" = ["E501"]
 
-# ✅ 잔여 형식폭탄(E701/E702)을 한시적으로 눕힐 타겟(안전게이트)
-#    → 뒤 단계에서 파일 단위 리팩터링으로 순차 제거 예정
+# 형식 폭탄이 몰린 타깃(임시로 E701/E702도 무시 → 이후 단계별 리팩터링으로 제거 예정)
 "src/rag/index_build.py" = ["E501", "E701", "E702"]
-"src/ui_orchestrator.py"   = ["E501", "E701", "E702"]
-"src/rag_engine.py"        = ["E501", "E701", "E702"]
+"src/ui_orchestrator.py" = ["E501", "E701", "E702"]
+"src/rag_engine.py"      = ["E501", "E701", "E702"]
 
 [lint.isort]
 known-first-party = ["src"]
