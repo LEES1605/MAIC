@@ -1,47 +1,34 @@
 # ============================ ui_admin.py — START ============================
 from __future__ import annotations
-import os, json, time
+import time
 from typing import Optional
 import streamlit as st
-
-def _secret(name: str, default: Optional[str] = None) -> Optional[str]:
-    try:
-        val = st.secrets.get(name)  # type: ignore[attr-defined]
-        if val is None: return os.getenv(name, default)
-        if isinstance(val, str): return val
-        return json.dumps(val, ensure_ascii=False)
-    except Exception:
-        return os.getenv(name, default)
+from src.common.utils import get_secret  # ✅ 통일 유틸 사용
 
 def ensure_admin_session_keys() -> None:
     ss = st.session_state
     ss.setdefault("is_admin", False)
-    ss.setdefault("admin_login_ts", "")
-    ss.setdefault("qa_mode_radio", "문법설명")
     ss.setdefault("_show_admin_login", False)
+    ss.setdefault("admin_login_ts", "")
 
-def render_admin_controls() -> None:
+def render_admin_controls_inline() -> None:
     ensure_admin_session_keys()
     ss = st.session_state
-
-    col1, col2 = st.columns([0.7, 0.3])
-    with col1:
-        st.caption("관리자 도구 · Admin tools")
-    with col2:
-        if ss.get("is_admin"):
-            if st.button("로그아웃", use_container_width=True):
-                ss["is_admin"] = False
-                ss["admin_login_ts"] = ""
-                st.rerun()
-        else:
-            # 팝오버 대신 고정형 토글 버튼 → 겹침 현상 방지
-            if st.button("관리자 로그인", use_container_width=True):
-                ss["_show_admin_login"] = not ss.get("_show_admin_login", False)
+    with st.container():
+        cols = st.columns([1, 1, 6])
+        with cols[0]:
+            if st.button("관리자 로그인" if not ss.get("is_admin") else "🚪 로그아웃", use_container_width=True):
+                if ss.get("is_admin"):
+                    ss["is_admin"] = False
+                    st.success("로그아웃")
+                    st.rerun()
+                else:
+                    ss["_show_admin_login"] = not ss.get("_show_admin_login", False)
 
     if not ss.get("is_admin") and ss.get("_show_admin_login"):
         with st.container(border=True):
             st.write("### 관리자 로그인")
-            pwd_set = _secret("APP_ADMIN_PASSWORD", "0000") or "0000"
+            pwd_set = get_secret("APP_ADMIN_PASSWORD", "0000") or "0000"  # ✅ 교체
             with st.form("admin_login_form", clear_on_submit=True):
                 pwd_in = st.text_input("비밀번호", type="password")
                 submitted = st.form_submit_button("Login", use_container_width=True)
