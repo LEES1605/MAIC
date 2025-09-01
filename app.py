@@ -151,125 +151,60 @@ def _try_import(mod: str, attrs: List[str]) -> Dict[str, Any]:
     return out
 
 
-# [06] 상태 SSOT + 지하철 노선 진행선 ==========================================
-def _get_brain_status() -> dict[str, Any]:
-    """
-    헤더/UI가 공유하는 단일 진실 소스(SSOT) 상태 객체를 반환.
-    Fields:
-      - code: 'READY' | 'SCANNING' | 'RESTORING' | 'WARN' | 'ERROR' | 'MISSING'
-      - attached: bool
-      - msg: 사용자 메시지
-      - source: 'local' | 'drive' | None
-    """
-    if st is None:
-        return {
-            "code": "READY" if _is_brain_ready() else "MISSING",
-            "attached": bool(_is_brain_ready()),
-            "msg": "테스트 모드: 로컬 인덱스 확인",
-            "source": "local" if _is_brain_ready() else None,
-        }
-
-    ss = st.session_state
-    phase = (ss.get("_boot_phase") or "").upper()
-    phase_map = {
-        "LOCAL_CHECK": "SCANNING",
-        "RESTORE_FROM_RELEASE": "RESTORING",
-        "DIFF_CHECK": "SCANNING",
-        "REINDEXING": "SCANNING",
-        "READY_MARK": "SCANNING",
-        "READY": "READY",
-        "ERROR": "ERROR",
-    }
-    phase_code = phase_map.get(phase, "")
-    code = (ss.get("brain_status_code") or "").upper().strip()
-    if not code:
-        code = phase_code or ("READY" if _is_brain_ready() else "MISSING")
-
-    msg  = ss.get("brain_status_msg")
-    if not msg:
-        default_msgs = {
-            "READY": "두뇌 준비완료",
-            "SCANNING": "자료 검사 중…",
-            "RESTORING": "백업 복원 중…",
-            "WARN": "주의: 부분 불일치/검토 필요",
-            "ERROR": "오류: 복구/연결 실패",
-            "MISSING": "두뇌 없음: 빌드/복원 필요",
-        }
-        msg = default_msgs.get(code, code)
-
-    attached = code in ("READY", "WARN") and _is_brain_ready()
-    return {"code": code, "attached": bool(attached), "msg": str(msg), "source": ss.get("brain_source")}
-
-def _set_phase(code: str, msg: str = "") -> None:
-    if st is None: 
-        return
-    ss = st.session_state
-    ss["_boot_phase"] = code
-    if msg:
-        ss["_boot_msg"] = msg
-
 def _render_boot_progress_line():
     """지하철 노선 스타일 진행 표시
-       - READY면 모바일에서 공간 차지 방지를 위해 **완전히 숨김**
-       - 모바일(≤640px)에서는 진행선 자체를 한 줄로 숨김(상태 배지로만 표현)
+       - 완료여도 항상 보임(완료 상태는 파란 실선)
+       - flex-wrap으로 가로 래핑(세로 길게 늘어지지 않음)
     """
     if st is None:
         return
     ss = st.session_state
-    ready_now = _is_brain_ready() or (ss.get("_boot_phase") == "READY")
-    if ready_now:
-        return  # 준비완료면 진행선 자체를 숨김
-
     steps = [
         ("LOCAL_CHECK", "로컬검사"),
         ("RESTORE_FROM_RELEASE", "백업복원"),
         ("DIFF_CHECK", "변경감지"),
-        ("REINDEXING", "재인덱싱"),
-        ("READY_MARK", "마킹"),
-        ("READY", "준비완료"),
+        ("DOWNLOAD", "다운로드"),
+        ("UNZIP", "복구/해제"),
+        ("BUILD_INDEX", "인덱싱"),
+        ("READY", "완료"),
     ]
-    phase = (ss.get("_boot_phase") or "LOCAL_CHECK").upper()
+    phase = ss.get("_boot_phase") or ("READY" if _is_brain_ready() else "LOCAL_CHECK")
     has_error = (phase == "ERROR")
-    idx = next((i for i,(k,_) in enumerate(steps) if k == phase), 0)
+    idx = next((i for i,(k,_) in enumerate(steps) if k == phase), len(steps)-1)
 
     st.markdown("""
     <style>
-      /* 모바일에서는 전체 진행선 블록 숨김(상태 배지로 대체) */
-      @media (max-width: 640px){
-        .metro-wrap{ display:none !important; }
-      }
-      .metro-wrap{ margin-top:.25rem; }
-      .metro-step{flex:1}
-      .metro-seg{height:2px;border-top:2px dashed #cdd6e1;margin:6px 0 2px 0}
-      .metro-seg.done{border-top-style:solid;border-color:#10a37f}
-      .metro-seg.doing{border-top-style:dashed;border-color:#f0ad00}
-      .metro-seg.todo{border-top-style:dashed;border-color:#cdd6e1}
-      .metro-seg.error{border-top-style:solid;border-color:#c5362c}
-      .metro-lbl{font-size:.78rem;color:#536273;text-align:center;white-space:nowrap}
+      .metro-flex{ display:flex; flex-wrap:wrap; align-items:center; gap:12px 22px; margin:10px 0 6px 0; }
+      .metro-node{ display:flex; flex-direction:column; align-items:center; min-width:80px; }
+      .metro-seg{ width:84px; height:10px; border-top:4px solid #9dc4ff; border-radius:8px; position:relative; }
+      .metro-seg.done{ border-color:#5aa1ff; }
+      .metro-seg.doing{ border-color:#ffd168; }
+      .metro-seg.todo{ border-top-style:dashed; border-color:#cdd6e1; }
+      .metro-seg.error{ border-color:#ef4444; }
+      .metro-dot{ position:absolute; top:-5px; right:-6px; width:14px; height:14px; border-radius:50%; background:#ffd168; }
+      .metro-lbl{ margin-top:4px; font-size:12px; color:#334155; font-weight:700; white-space:nowrap; }
+      @media (max-width:480px){ .metro-seg{ width:72px; } }
     </style>
     """, unsafe_allow_html=True)
 
-    cols = st.columns(len(steps), gap="small")
-    for i,(code,label) in enumerate(steps):
+    html = ['<div class="metro-flex">']
+    for i,(_,label) in enumerate(steps):
         if has_error:
             klass = "error" if i == idx else "todo"
         else:
-            if i < idx:  klass = "done"
-            elif i == idx: klass = "doing"
-            else: klass = "todo"
-        with cols[i]:
-            st.markdown(
-                f'<div class="metro-wrap"><div class="metro-step"><div class="metro-seg {klass}"></div>'
-                f'<div class="metro-lbl">{label}</div></div></div>',
-                unsafe_allow_html=True
-            )
+            klass = "done" if i < idx else ("doing" if i == idx else "todo")
+        dot = '<div class="metro-dot"></div>' if klass == "doing" else ""
+        html.append(f'<div class="metro-node"><div class="metro-seg {klass}">{dot}</div><div class="metro-lbl">{label}</div></div>')
+    html.append("</div>")
+    st.markdown("".join(html), unsafe_allow_html=True)
 
-# [07] 헤더(오버레이 배지·3D 타이틀·부제목 앵커) ==============================
+# [07] 헤더(배지·타이틀·⚙️ 한 줄, 타이틀 바로 뒤에 아이콘) ==========================
 def _header():
     """
-    - 제목/부제목 통합 렌더.
-    - 오버레이(🟢/⚙)를 더 위로 띄우고 앵커 상단 패딩을 늘려 부제목과 간격 확보.
-    - 제목: 진한 남색 + 3D 섀도, 폰트 50% 확대.
+    - [배지] [LEES AI Teacher] [⚙️/로그아웃칩]을 '한 줄'에 배치.
+    - ⚙️ 클릭 시 '바로 아래'에 로그인 폼이 펼쳐짐(새로고침/쿼리파람 없음).
+    - 로그인 후엔 톱니 대신 '🚪 로그아웃' 칩이 즉시 표시.
+    - 진행선은 항상 표시(완료도 보이도록) — [06]에서 처리.
     """
     if st is None:
         return
@@ -277,142 +212,84 @@ def _header():
     ss = st.session_state
     ss.setdefault("_show_admin_login", False)
 
-    # 쿼리파라미터: 설정 패널 열기 토글
-    try:
-        qp = st.query_params  # Streamlit ≥1.31
-        qp_dict = dict(qp)
-        has_new_qp = True
-    except Exception:
-        qp_dict = st.experimental_get_query_params()
-        has_new_qp = False
-
-    if "settings" in qp_dict:
-        flag = str(qp_dict.get("settings", "1"))
-        ss["_show_admin_login"] = flag in ("1", "true", "True")
-        try:
-            if has_new_qp:
-                st.query_params.clear()
-            else:
-                st.experimental_set_query_params()
-        except Exception:
-            pass
-
     # 상태 배지 텍스트/색상
     status = _get_brain_status()
     code = status["code"]
     badge_txt, badge_class = {
-        "READY":     ("🟢 준비완료", "green"),
-        "SCANNING":  ("🟡 준비중",   "yellow"),
-        "RESTORING": ("🟡 복원중",   "yellow"),
-        "WARN":      ("🟡 주의",     "yellow"),
-        "ERROR":     ("🔴 오류",     "red"),
-        "MISSING":   ("🔴 미준비",   "red"),
-    }.get(code, ("🔴 미준비", "red"))
+        "READY":("🟢 준비완료","green"),
+        "SCANNING":("🟡 준비중","yellow"),
+        "RESTORING":("🟡 복원중","yellow"),
+        "WARN":("🟡 주의","yellow"),
+        "ERROR":("🔴 오류","red"),
+        "MISSING":("🔴 미준비","red"),
+    }.get(code, ("🔴 미준비","red"))
 
-    st.markdown(f"""
+    st.markdown("""
     <style>
-      .lees-header {{ margin: 0 0 .35rem 0; }}
+      #brand-inline{ display:flex; align-items:center; gap:.5rem; flex-wrap:nowrap; }
+      .status-btn{ display:inline-block; border-radius:10px; padding:4px 10px; font-weight:700; font-size:13px;
+                   border:1px solid transparent; white-space:nowrap; }
+      .status-btn.green  { background:#E4FFF3; color:#0f6d53; border-color:#bff0df; }
+      .status-btn.yellow { background:#FFF8E1; color:#8a6d00; border-color:#ffe099; }
+      .status-btn.red    { background:#FFE8E6; color:#a1302a; border-color:#ffc7c2; }
 
-      .lees-header .title-3d {{
-        font-size: clamp(36px, 5.4vw, 63px);
-        font-weight: 800; letter-spacing: .3px; line-height: 1.04;
-        color: #0B1B45;
-        text-shadow:
-          0 1px 0 #ffffff,
-          0 2px 0 #e9eef9,
-          0 3px 0 #d2dbf2,
-          0 6px 12px rgba(0,0,0,.22);
-        margin: 0;
-      }}
+      .brand-title{ font-size:clamp(42px, 6vw, 68px); font-weight:800; letter-spacing:.2px; line-height:1; color:#0B1B45;
+                    text-shadow:0 1px 0 #fff, 0 2px 0 #e9eef9, 0 3px 0 #d2dbf2, 0 8px 14px rgba(0,0,0,.22); }
 
-      .lees-header .subhead-wrap {{
-        position: relative;
-        margin-top: 1.05rem; /* 제목↔부제목 간격 더 넉넉하게 */
-      }}
-
-      .lees-header .subhead {{
-        position: relative;
-        font-weight: 700;
-        font-size: clamp(22px, 3.2vw, 36px);
-        line-height: 1.25;
-        color: #1f2937;
-        word-break: keep-all;
-      }}
-
-      /* 앵커 상단 패딩 ↑ : 오버레이와 본문 텍스트가 붙지 않게 */
-      .lees-header .anchor {{
-        position: relative; display: inline-block;
-        padding-top: .6em;   /* ← 0.6em 로 상향 */
-      }}
-
-      /* 오버레이를 더 위로 띄움: -140% (협의에 따라 ± 조정 가능) */
-      .lees-header .badge, .lees-header .gear {{
-        position: absolute; left: 0; top: 0;
-        transform: translateY(-100%);
-        font-size: .7em; line-height: 1;
-        padding: .18em .55em; border-radius: 999px;
-        user-select: none; -webkit-tap-highlight-color: transparent;
-        z-index: 2; white-space: nowrap;
-      }}
-      .lees-header .gear {{
-        left: 100%;
-        margin-left: -0.6em;
-        padding: .18em .4em; border-radius: 10px;
-        background: #f3f4f6; color: #111827; border: 1px solid #e5e7eb; text-decoration: none;
-      }}
-      .lees-header .gear:hover {{ filter: brightness(.96); }}
-
-      /* 배지 색상 */
-      .lees-header .badge.green  {{ background:#e7f7ef; color:#0a7f49; border:1px solid #bfead7; }}
-      .lees-header .badge.yellow {{ background:#fff7e6; color:#9a6a00; border:1px solid #ffe2a8; }}
-      .lees-header .badge.red    {{ background:#fde8e8; color:#a61b29; border:1px solid #f5b5bb; }}
-
-      @media (max-width: 380px) {{
-        .lees-header .badge, .lees-header .gear {{ transform: translateY(-150%); }}
-      }}
+      /* ⚙️/로그아웃 칩 */
+      .gear-btn, .logout-chip{
+        display:inline-flex; align-items:center; justify-content:center;
+        height:28px; min-width:28px; padding:0 10px; border-radius:14px; border:1px solid #e5e7eb;
+        background:#f3f4f6; color:#111827; font-weight:700; cursor:pointer;
+      }
+      .gear-btn{ width:28px; padding:0; }
+      .gear-btn:hover, .logout-chip:hover{ filter:brightness(.96); }
     </style>
-
-    <div class="lees-header" id="lees-header">
-      <h1 class="title-3d">LEES AI Teacher</h1>
-      <div class="subhead-wrap">
-        <div class="subhead">
-          <span class="anchor anchor-left">질문은
-            <span class="badge {badge_class}">{badge_txt}</span>
-          </span>
-          천재들의 공부 방법
-          <span class="anchor anchor-right">이다.
-            <a class="gear" href="?settings=1" aria-label="관리자 설정">⚙</a>
-          </span>
-        </div>
-      </div>
-    </div>
     """, unsafe_allow_html=True)
 
-    # (선택) 설정 패널
-    if ss.get("_show_admin_login") and not _is_admin_view():
-        with st.expander("관리자 로그인", expanded=True):
+    # 한 줄 렌더
+    c1, c2, c3 = st.columns([0.0001, 0.0001, 0.0001], gap="small")
+    with st.container():
+        st.markdown('<div id="brand-inline">', unsafe_allow_html=True)
+        with c1: st.markdown(f'<span class="status-btn {badge_class}">{badge_txt}</span>', unsafe_allow_html=True)
+        with c2: st.markdown('<span class="brand-title">LEES AI Teacher</span>', unsafe_allow_html=True)
+        with c3:
+            if ss.get("admin_mode"):
+                if st.button("🚪 로그아웃", key="logout_now", help="관리자 로그아웃", use_container_width=False):
+                    ss["admin_mode"] = False
+                    ss["_show_admin_login"] = False
+                    st.success("로그아웃")
+                    st.rerun()
+                st.markdown('<span class="logout-chip" style="display:none"></span>', unsafe_allow_html=True)
+            else:
+                if st.button("⚙️", key="open_admin_login", help="관리자 로그인", use_container_width=False):
+                    ss["_show_admin_login"] = not ss.get("_show_admin_login", False)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    # 로그인 폼(제자리 토글)
+    if not ss.get("admin_mode") and ss.get("_show_admin_login"):
+        with st.container(border=True):
             pwd_set = (_from_secrets("ADMIN_PASSWORD", "")
                        or _from_secrets("APP_ADMIN_PASSWORD", "")
                        or "")
             pw = st.text_input("관리자 비밀번호", type="password")
-            if st.button("로그인", use_container_width=True):
-                if pw and pwd_set and pw == str(pwd_set):
-                    ss["admin_mode"] = True
-                    st.success("로그인 성공"); st.rerun()
-                else:
-                    st.error("비밀번호가 올바르지 않습니다.")
-    elif _is_admin_view():
-        with st.expander("관리자 메뉴", expanded=False):
-            c1, c2 = st.columns(2)
-            with c1:
-                if st.button("로그아웃", use_container_width=True):
-                    ss["admin_mode"] = False
-                    st.success("로그아웃"); st.rerun()
-            with c2:
-                st.write(" ")
+            cols = st.columns([1,1,4])
+            with cols[0]:
+                if st.button("로그인"):
+                    if pw and pwd_set and pw == str(pwd_set):
+                        ss["admin_mode"] = True
+                        ss["_show_admin_login"] = False
+                        st.success("로그인 성공"); st.rerun()
+                    else:
+                        st.error("비밀번호가 올바르지 않습니다.")
+            with cols[1]:
+                if st.button("닫기"):
+                    ss["_show_admin_login"] = False
+                    st.rerun()
 
+    # 진행선(완료여도 항상 표시) — [06]에서 구현
     _render_boot_progress_line()
-    # st.divider()  # ← 유지 금지(제목-부제목 사이 라인 없음)
+
 
 # [08] 배경(완전 비활성) =======================================================
 def _inject_modern_bg_lib():
@@ -682,271 +559,243 @@ def _render_admin_panels() -> None:
 
 # [12] 채팅 UI(스타일/모드/상단 상태 라벨=SSOT) ===============================
 def _inject_chat_styles_once():
-    """전역 CSS: ChatPane + 라디오 pill + 인-카드 입력창(노란색) + 화살표 전송 버튼"""
-    if st is None:
-        return
+    """전역 CSS: ChatPane(대화틀) + 라디오 pill + 노란 입력창 + 인풋 내부 화살표 버튼 + 배지."""
+    if st is None: return
     if st.session_state.get("_chat_styles_injected"):
         return
     st.session_state["_chat_styles_injected"] = True
 
     st.markdown("""
     <style>
-      /* ───────── ChatPane: 대화 틀(항상 표시) ───────── */
-      .chatpane{
-        background:#EDF4FF;                 /* 하늘색 */
-        border:1px solid #D5E6FF;
-        border-radius:18px;
-        padding:10px;
-        margin-top:12px;
-      }
-      .chatpane .messages{
-        max-height:60vh;
-        overflow-y:auto;
-        padding:8px;
-      }
+      /* ChatPane */
+      .chatpane{ background:#EDF4FF; border:1px solid #D5E6FF; border-radius:18px; padding:10px; margin-top:12px; }
+      .chatpane .messages{ max-height:60vh; overflow-y:auto; padding:8px; }
 
-      /* ChatPane 내부의 라디오(질문모드) */
-      .chatpane div[data-testid="stRadio"]{
-        background:#EDF4FF;
-        padding:8px 10px 2px 10px;
-        margin:0;
-      }
-      .chatpane div[data-testid="stRadio"] > div[role="radiogroup"]{
-        display:flex; gap:10px; flex-wrap:wrap;
-      }
+      /* 라디오 pill */
+      .chatpane div[data-testid="stRadio"]{ background:#EDF4FF; padding:8px 10px 0 10px; margin:0; }
+      .chatpane div[data-testid="stRadio"] > div[role="radiogroup"]{ display:flex; gap:10px; flex-wrap:wrap; }
       .chatpane div[data-testid="stRadio"] [role="radio"]{
-        border:2px solid #bcdcff; border-radius:12px; padding:6px 12px;
-        background:#fff; color:#0a2540; font-weight:700; font-size:14px; line-height:1;
+        border:2px solid #bcdcff; border-radius:12px; padding:6px 12px; background:#fff; color:#0a2540;
+        font-weight:700; font-size:14px; line-height:1;
       }
       .chatpane div[data-testid="stRadio"] [role="radio"][aria-checked="true"]{
         background:#eaf6ff; border-color:#9fd1ff; color:#0a2540;
       }
       .chatpane div[data-testid="stRadio"] svg{ display:none!important }
 
-      /* ───────── 인-카드 입력창(파스텔 노란색) + 화살표 전송 ───────── */
-      /* 폼을 기준으로 절대배치 */
-      .chatpane form[data-testid="stForm"]{ position:relative; background:#EDF4FF; padding:8px 10px 12px 10px; margin:0; }
+      /* 인-카드 입력폼: 인풋 내부에 화살표 버튼(절대배치) */
+      .chatpane form[data-testid="stForm"]{ position:relative; background:#EDF4FF; padding:8px 10px 10px 10px; margin:0; }
       .chatpane form[data-testid="stForm"] input[type="text"]{
-        background:#FFF8CC !important;      /* 파스텔 노란 */
-        border:1px solid #F2E4A2 !important;
-        border-radius:999px !important;
-        color:#333 !important; height:46px;
-        padding-right:56px;                  /* 우측 화살표 버튼 공간 */
+        background:#FFF8CC !important; border:1px solid #F2E4A2 !important; border-radius:999px !important;
+        color:#333 !important; height:46px; padding-right:56px;
       }
       .chatpane form[data-testid="stForm"] ::placeholder{ color:#8A7F4A !important; }
-
-      /* 전송(화살표) 버튼을 입력창 안쪽 오른쪽에 겹치게 */
-      .chatpane form[data-testid="stForm"] button.send-arrow{
+      .chatpane form[data-testid="stForm"] button[type="submit"]{
         position:absolute; right:18px; top:50%; transform:translateY(-50%);
-        width:38px; height:38px; border-radius:50%;
-        background:#0a2540; color:#fff; border:0;
-        box-shadow:0 2px 6px rgba(0,0,0,.15);
-        font-size:18px; line-height:1; cursor:pointer;
+        width:38px; height:38px; border-radius:50%; border:0; background:#0a2540; color:#fff;
+        font-size:18px; line-height:1; cursor:pointer; box-shadow:0 2px 6px rgba(0,0,0,.15);
       }
-      .chatpane form[data-testid="stForm"] button.send-arrow:hover{ filter:brightness(1.05); }
 
       /* 턴 구분선 */
-      .turn-sep{height:0;border-top:1px dashed #E5EAF2;margin:14px 2px;position:relative;}
-      .turn-sep::after{content:'';position:absolute;top:-4px;left:50%;transform:translateX(-50%);
-                       width:8px;height:8px;border-radius:50%;background:#E5EAF2;}
+      .turn-sep{height:0; border-top:1px dashed #E5EAF2; margin:14px 2px; position:relative;}
+      .turn-sep::after{content:''; position:absolute; top:-4px; left:50%; transform:translateX(-50%);
+                       width:8px; height:8px; border-radius:50%; background:#E5EAF2;}
+
+      /* 상태 배지(헤더 재사용) */
+      .status-btn{display:inline-block;border-radius:10px;padding:4px 10px;font-weight:700; font-size:13px}
+      .status-btn.green{background:#E4FFF3;color:#0f6d53;border:1px solid #bff0df}
+      .status-btn.yellow{background:#FFF8E1;color:#8a6d00;border:1px solid #ffe099}
+      .status-btn.red{background:#FFE8E6;color:#a1302a;border:1px solid #ffc7c2}
     </style>
     """, unsafe_allow_html=True)
 
+def _render_bubble(role:str, text:str):
+    """질문=파스텔 노랑, 답변=파스텔 하늘. 칩은 인라인."""
+    import html, re
+    is_user = (role == "user")
+    wrap = "display:flex;justify-content:flex-end;margin:8px 0;" if is_user else \
+           "display:flex;justify-content:flex-start;margin:8px 0;"
+    base = "max-width:88%;padding:10px 12px;border-radius:16px;line-height:1.6;font-size:15px;" \
+           "box-shadow:0 1px 1px rgba(0,0,0,.05);white-space:pre-wrap;position:relative;"
+    bubble = (base + "border-top-right-radius:8px;border:1px solid #F2E4A2;background:#FFF8CC;color:#333;"
+              if is_user else
+              base + "border-top-left-radius:8px;border:1px solid #BEE3FF;background:#EAF6FF;color:#0a2540;")
+    label_chip = ("display:inline-block;margin:-2px 0 6px 0;padding:1px 8px;border-radius:999px;font-size:11px;font-weight:700;"
+                  "background:#FFF2B8;color:#6b5200;border:1px solid #F2E4A2;"
+                  if is_user else
+                  "display:inline-block;margin:-2px 0 6px 0;padding:1px 8px;border-radius:999px;font-size:11px;font-weight:700;"
+                  "background:#DFF1FF;color:#0f5b86;border:1px solid #BEE3FF;")
+    t = html.escape(text or "").replace("\n","<br/>")
+    t = re.sub(r"  ","&nbsp;&nbsp;", t)
+    st.markdown(
+        f'<div style="{wrap}"><div style="{bubble}"><span style="{label_chip}">'
+        f'{"질문" if is_user else "답변"}</span><br/>{t}</div></div>',
+        unsafe_allow_html=True
+    )
+
+def _render_mode_controls_pills() -> str:
+    _inject_chat_styles_once()
+    ss = st.session_state
+    cur = ss.get("qa_mode_radio") or "문법"
+    labels = ["어법", "문장", "지문"]
+    map_to = {"어법":"문법", "문장":"문장", "지문":"지문"}
+    idx = labels.index({"문법":"어법","문장":"문장","지문":"지문"}[cur])
+    sel = st.radio("질문 모드 선택", options=labels, index=idx, horizontal=True, label_visibility="collapsed")
+    new_key = map_to[sel]
+    if new_key != cur:
+        ss["qa_mode_radio"] = new_key; st.rerun()
+    return ss.get("qa_mode_radio", new_key)
+
+def _render_llm_status_minimal():
+    s = _get_brain_status()
+    code = s["code"]
+    if code == "READY":
+        st.markdown('<span class="status-btn green">🟢 준비완료</span>', unsafe_allow_html=True)
+    elif code in ("SCANNING", "RESTORING"):
+        st.markdown('<span class="status-btn yellow">🟡 준비중</span>', unsafe_allow_html=True)
+    elif code == "WARN":
+        st.markdown('<span class="status-btn yellow">🟡 주의</span>', unsafe_allow_html=True)
+    else:
+        st.markdown('<span class="status-btn red">🔴 준비안됨</span>', unsafe_allow_html=True)
 
 # [13] 채팅 패널 ==============================================================
 def _render_chat_panel():
     import time
     ss = st.session_state
-    if "chat" not in ss:
-        ss["chat"] = []
-
+    if "chat" not in ss: ss["chat"] = []
     _inject_chat_styles_once()
 
-    # ── 말풍선 렌더러(사용자=노란색)
-    def _render_bubble(role: str, text: str):
-        import html, re
-        def esc(t: str) -> str:
-            t = html.escape(t or "").replace("\n", "<br/>")
-            return re.sub(r"  ", "&nbsp;&nbsp;", t)
+    # 모드(상단 라디오) — ChatPane와 시각적으로 연결되지만, 함수 호출은 기존 유지
+    cur_label = _render_mode_controls_pills()
+    MODE_TOKEN = {"문법":"문법설명","문장":"문장구조분석","지문":"지문분석"}[cur_label]
 
-        is_user = (role == "user")
-        align   = "flex-end" if is_user else "flex-start"
-        bg      = "#FFF8CC" if is_user else "#EAF6FF"
-        border  = "#F2E4A2" if is_user else "#BEE3FF"
-        fg      = "#333333"
-        radius_fix = "border-top-right-radius:8px;" if is_user else "border-top-left-radius:8px;"
-        label   = "나" if is_user else "답변"
-        label_bg= "#FFF2B8" if is_user else "#DFF1FF"
-        label_bd= "#F2E4A2" if is_user else "#BEE3FF"
-
-        html_box = (
-            '<div style="display:flex;justify-content:%s;margin:8px 0;">'
-            '  <div style="max-width:88%%;padding:10px 12px;border-radius:16px;%s'
-            '              line-height:1.6;font-size:15px;box-shadow:0 1px 1px rgba(0,0,0,.05);white-space:pre-wrap;'
-            '              position:relative;border:1px solid %s;background:%s;color:%s;">'
-            '    <span style="display:inline-block;margin:-2px 0 6px 0;padding:1px 8px;border-radius:999px;'
-            '                 font-size:11px;font-weight:700;background:%s;color:#5a5130;'
-            '                 border:1px solid %s;">%s</span><br/>%s'
-            '  </div>'
-            '</div>'
-        ) % (align, radius_fix, border, bg, fg, label_bg, label_bd, label, esc(text))
-        st.markdown(html_box, unsafe_allow_html=True)
-
-    # ── ChatPane OPEN + 메시지 영역 OPEN
+    # ChatPane — 항상 표시
     st.markdown('<div class="chatpane"><div class="messages">', unsafe_allow_html=True)
 
-    # 기록 렌더
+    # 대화 렌더
     prev_role = None
     for m in ss["chat"]:
-        role = m.get("role", "assistant")
+        role = m.get("role","assistant")
         if prev_role is not None and prev_role != role:
             st.markdown('<div class="turn-sep"></div>', unsafe_allow_html=True)
-        _render_bubble(role, m.get("text", ""))
+        _render_bubble(role, m.get("text",""))
         prev_role = role
 
-    # 스트리밍용 플레이스홀더(메시지 영역 안)
+    # 스트리밍용 자리
     ph = st.empty()
 
-    # 메시지 영역 CLOSE (ChatPane은 유지)
+    # 메시지 영역 닫기(폼은 같은 ChatPane 안)
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # ── (ChatPane 내부) 질문모드 + 인-카드 입력 폼 (Enter=전송, 화살표 버튼)
+    # 인-카드 입력(form) — Enter=전송, 화살표 버튼은 인풋 내부에 절대배치
     with st.form("inpane_chat_form", clear_on_submit=True):
-        cur_label = ss.get("qa_mode_radio", "문법")
-        st.radio(
-            "질문 모드", ["문법", "문장", "지문"],
-            index=["문법", "문장", "지문"].index(cur_label),
-            horizontal=True, key="qa_mode_radio", label_visibility="collapsed"
-        )
-        qtxt = st.text_input(
-            "질문 입력", value="",
-            placeholder="예) 분사구문이 뭐예요?  예) 이 문장 구조 분석해줘",
-            label_visibility="collapsed", key="inpane_q"
-        )
-        send = st.form_submit_button("➤", use_container_width=False, type="secondary")
-        st.markdown("""
-            <script>
-            // 입력폼의 제출 버튼에 .send-arrow 부여(입력창 내부 우측 원형)
-            const form = window.parent.document.querySelector('form[data-testid="stForm"]');
-            if (form) {
-              const btn = form.querySelector('button[type="submit"]');
-              if (btn && !btn.classList.contains('send-arrow')) btn.classList.add('send-arrow');
-            }
-            </script>
-        """, unsafe_allow_html=True)
+        qtxt = st.text_input("질문 입력", value="",
+                             placeholder="예) 분사구문이 뭐예요?  예) 이 문장 구조 분석해줘",
+                             label_visibility="collapsed", key="inpane_q")
+        send = st.form_submit_button("➤", type="secondary")
+    st.markdown('</div>', unsafe_allow_html=True)  # ChatPane 끝
 
-    # ── 제출 처리(중복 가드)
+    # 제출 처리(중복가드)
     if send and not ss.get("_sending", False):
         question = (qtxt or "").strip()
-        if question:
-            ss["_sending"] = True  # 중복 제출 방지
+        if not question:
+            st.warning("질문을 입력해 주세요.")
+            return
+        ss["_sending"] = True
+        ss["chat"].append({"id": f"u{int(time.time()*1000)}", "role": "user", "text": question})
 
-            # 사용자 턴 기록
-            ss["chat"].append({"id": f"u{int(time.time()*1000)}", "role": "user", "text": question})
-
-            # 모드/증거
-            cur_label = ss.get("qa_mode_radio") or "문법"
-            MODE_TOKEN = {"문법":"문법설명", "문장":"문장구조분석", "지문":"지문분석"}[cur_label]
+        # ── 프롬프트 조립(분리 모듈)
+        try:
+            from src.prompting.resolve import resolve_prompts
             ev_notes  = ss.get("__evidence_class_notes", "")
             ev_books  = ss.get("__evidence_grammar_books", "")
+            system_prompt, user_prompt, source = resolve_prompts(MODE_TOKEN, question, ev_notes, ev_books, cur_label, ss)
+            ss["__prompt_source"] = source
+        except Exception:
+            # 안전 폴백
+            ss["__prompt_source"] = "Fallback(Local)"
+            if MODE_TOKEN == "문법설명":
+                system_prompt = "모든 출력은 한국어. 장황한 배경설명 금지."
+                user_prompt = f"[질문]\n{question}\n- 한 줄 핵심 → 규칙 3~5 → 예문 1"
+            elif MODE_TOKEN == "문장구조분석":
+                system_prompt = "모든 출력은 한국어. 불확실성은 %로."
+                user_prompt = f"[문장]\n{question}\n- S/V/O/C/M 개요 → 단계적 분석"
+            else:
+                system_prompt = "모든 출력은 한국어."
+                user_prompt = f"[지문]\n{question}\n- 한 줄 요지 → 구조 요약"
 
-            # ── 프롬프트 해석: 분리 모듈 호출
-            try:
-                from src.prompting.resolve import resolve_prompts
-                system_prompt, user_prompt, source = resolve_prompts(
-                    MODE_TOKEN, question, ev_notes, ev_books, cur_label, ss
-                )
-                ss["__prompt_source"] = source
-            except Exception:
-                # 최후 안전망(모듈 장애 시): 간이 폴백
-                ss["__prompt_source"] = "Fallback(Local)"
-                if MODE_TOKEN == "문법설명":
-                    system_prompt = "너는 한국의 영어학원 원장처럼 따뜻하고 명확하게 설명한다. 모든 출력은 한국어."
-                    user_prompt = f"[질문]\n{question}\n- 한 줄 핵심 → bullet 3~5 → 예문 1개"
-                elif MODE_TOKEN == "문장구조분석":
-                    system_prompt = "모든 출력은 한국어. 불확실하면 퍼센트로 표시."
-                    user_prompt = f"[문장]\n{question}\n- S/V/O/C/M 개요 → 단계적 분석"
+        # ── LLM 호출(스트리밍)
+        try:
+            from src.llm import providers as _prov
+            call = getattr(_prov, "call_with_fallback", None)
+        except Exception:
+            call = None
+
+        acc = ""
+        def _emit(piece: str):
+            nonlocal acc
+            import html, re
+            acc += str(piece)
+            def esc(t: str) -> str:
+                t = html.escape(t or "").replace("\n","<br/>")
+                return re.sub(r"  ","&nbsp;&nbsp;", t)
+            ph.markdown(
+                '<div style="display:flex;justify-content:flex-start;margin:8px 0;">'
+                '  <div style="max-width:88%;padding:10px 12px;border-radius:16px;border-top-left-radius:8px;'
+                '              line-height:1.6;font-size:15px;box-shadow:0 1px 1px rgba(0,0,0,.05);white-space:pre-wrap;'
+                '              position:relative;border:1px solid #BEE3FF;background:#EAF6FF;color:#0a2540;">'
+                '    <span style="display:inline-block;margin:-2px 0 6px 0;padding:1px 8px;border-radius:999px;'
+                '                 font-size:11px;font-weight:700;background:#DFF1FF;color:#0f5b86;'
+                '                 border:1px solid #BEE3FF;">답변</span><br/>' +
+                esc(acc) +
+                '  </div>'
+                '</div>', unsafe_allow_html=True
+            )
+
+        text_final = ""
+        try:
+            import inspect
+            if callable(call):
+                sig = inspect.signature(call); params = sig.parameters.keys(); kwargs = {}
+                if "messages" in params:
+                    kwargs["messages"] = [{"role":"system","content":system_prompt or ""},
+                                          {"role":"user","content":user_prompt}]
                 else:
-                    system_prompt = "모든 출력은 한국어."
-                    user_prompt = f"[지문]\n{question}\n- 한 줄 요지 → 구조 요약"
+                    if "prompt" in params: kwargs["prompt"] = user_prompt
+                    elif "user_prompt" in params: kwargs["user_prompt"] = user_prompt
+                    if "system_prompt" in params: kwargs["system_prompt"] = (system_prompt or "")
+                    elif "system" in params:      kwargs["system"] = (system_prompt or "")
+                if "mode_token" in params: kwargs["mode_token"] = MODE_TOKEN
+                elif "mode" in params:     kwargs["mode"] = MODE_TOKEN
+                if "temperature" in params: kwargs["temperature"] = 0.2
+                elif "temp" in params:      kwargs["temp"] = 0.2
+                if "timeout_s" in params:   kwargs["timeout_s"] = 90
+                elif "timeout" in params:   kwargs["timeout"] = 90
+                if "extra" in params:       kwargs["extra"] = {"question": question, "mode_key": cur_label}
 
-            # ── LLM 제공자 호출(스트리밍)
-            try:
-                from src.llm import providers as _prov
-                call = getattr(_prov, "call_with_fallback", None)
-            except Exception:
-                call = None
-
-            acc = ""
-            def _emit(piece: str):
-                nonlocal acc
-                import html, re
-                acc += str(piece)
-                def esc(t: str) -> str:
-                    t = html.escape(t or "").replace("\n","<br/>")
-                    return re.sub(r"  ","&nbsp;&nbsp;", t)
-                ph.markdown(
-                    '<div style="display:flex;justify-content:flex-start;margin:8px 0;">'
-                    '  <div style="max-width:88%;padding:10px 12px;border-radius:16px;border-top-left-radius:8px;'
-                    '              line-height:1.6;font-size:15px;box-shadow:0 1px 1px rgba(0,0,0,.05);white-space:pre-wrap;'
-                    '              position:relative;border:1px solid #BEE3FF;background:#EAF6FF;color:#0a2540;">'
-                    '    <span style="display:inline-block;margin:-2px 0 6px 0;padding:1px 8px;border-radius:999px;'
-                    '                 font-size:11px;font-weight:700;background:#DFF1FF;color:#0f5b86;'
-                    '                 border:1px solid #BEE3FF;">답변</span><br/>' +
-                    esc(acc) +
-                    '  </div>'
-                    '</div>', unsafe_allow_html=True
-                )
-
-            try:
-                import inspect
-                text_final = ""
-                if callable(call):
-                    sig = inspect.signature(call); params = sig.parameters.keys(); kwargs = {}
-                    if "messages" in params:
-                        kwargs["messages"] = [{"role":"system","content":system_prompt or ""},
-                                              {"role":"user","content":user_prompt}]
-                    else:
-                        if "prompt" in params: kwargs["prompt"] = user_prompt
-                        elif "user_prompt" in params: kwargs["user_prompt"] = user_prompt
-                        if "system_prompt" in params: kwargs["system_prompt"] = (system_prompt or "")
-                        elif "system" in params:      kwargs["system"] = (system_prompt or "")
-                    if "mode_token" in params: kwargs["mode_token"] = MODE_TOKEN
-                    elif "mode" in params:     kwargs["mode"] = MODE_TOKEN
-                    if "temperature" in params: kwargs["temperature"] = 0.2
-                    elif "temp" in params:      kwargs["temp"] = 0.2
-                    if "timeout_s" in params:   kwargs["timeout_s"] = 90
-                    elif "timeout" in params:   kwargs["timeout"] = 90
-                    if "extra" in params:       kwargs["extra"] = {"question": question, "mode_key": cur_label}
-
-                    supports_stream = ("stream" in params) or ("on_token" in params) or ("on_delta" in params) or ("yield_text" in params)
-                    if supports_stream:
-                        if "stream" in params:   kwargs["stream"] = True
-                        if "on_token" in params: kwargs["on_token"] = _emit
-                        if "on_delta" in params: kwargs["on_delta"] = _emit
-                        if "yield_text" in params: kwargs["yield_text"] = _emit
-                        res = call(**kwargs)
-                        text_final = (res.get("text") if isinstance(res, dict) else acc) or acc
-                    else:
-                        res = call(**kwargs)
-                        text_final = res.get("text") if isinstance(res, dict) else str(res)
-                        if not text_final:
-                            text_final = "(응답이 비어있어요)"
-                        _emit(text_final)
+                supports_stream = ("stream" in params) or ("on_token" in params) or ("on_delta" in params) or ("yield_text" in params)
+                if supports_stream:
+                    if "stream" in params:   kwargs["stream"] = True
+                    if "on_token" in params: kwargs["on_token"] = _emit
+                    if "on_delta" in params: kwargs["on_delta"] = _emit
+                    if "yield_text" in params: kwargs["yield_text"] = _emit
+                    res = call(**kwargs)
+                    text_final = (res.get("text") if isinstance(res, dict) else acc) or acc
                 else:
-                    text_final = "(오류) LLM 어댑터를 사용할 수 없습니다."
+                    res = call(**kwargs)
+                    text_final = res.get("text") if isinstance(res, dict) else str(res)
+                    if not text_final: text_final = "(응답이 비어있어요)"
                     _emit(text_final)
-            except Exception as e:
-                text_final = f"(오류) {type(e).__name__}: {e}"
+            else:
+                text_final = "(오류) LLM 어댑터를 사용할 수 없습니다."
                 _emit(text_final)
+        except Exception as e:
+            text_final = f"(오류) {type(e).__name__}: {e}"
+            _emit(text_final)
 
-            # 기록/가드 해제 후 리렌더
-            ss["chat"].append({"id": f"a{int(time.time()*1000)}", "role": "assistant", "text": text_final})
-            ss["_sending"] = False
-            st.rerun()
-
-    # ChatPane CLOSE
-    st.markdown('</div>', unsafe_allow_html=True)
+        ss["chat"].append({"id": f"a{int(time.time()*1000)}", "role": "assistant", "text": text_final})
+        ss["_sending"] = False
+        st.rerun()
 
 
 # ============================ [14] 본문 렌더 — START ============================
