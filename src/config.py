@@ -1,5 +1,6 @@
 # ===== [01] IMPORTS & Settings 구현 선택(무의존 폴백 포함) =====================
 from __future__ import annotations
+
 import os
 from pathlib import Path
 from typing import Optional
@@ -9,23 +10,28 @@ from typing import Optional
 # 2) pydantic(BaseSettings, v1)   → 차선
 # 3) SIMPLE(무의존 폴백)          → 둘 다 없거나 v2만 설치된 경우
 _IMPL = "SIMPLE"
-BaseSettings = object  # type: ignore
-SettingsConfigDict = dict  # type: ignore
+BaseSettings = object  # type: ignore[assignment]
+SettingsConfigDict = dict  # type: ignore[assignment]
 
 try:
     # v2 (권장) — 별도 패키지
-    from pydantic_settings import BaseSettings, SettingsConfigDict  # type: ignore
-    _impl = "P2"
+    from pydantic_settings import BaseSettings as _P2Base, SettingsConfigDict as _P2Cfg  # type: ignore
+
+    BaseSettings = _P2Base  # type: ignore[assignment]
+    SettingsConfigDict = _P2Cfg  # type: ignore[assignment]
     _IMPL = "P2"
 except Exception:
     try:
         # v1 — pydantic 내 BaseSettings (v2에선 ImportError 유발)
-        from pydantic import BaseSettings  # type: ignore
-        class SettingsConfigDict(dict): ...
-        _impl = "P1"
+        from pydantic import BaseSettings as _P1Base  # type: ignore
+
+        class _P1Cfg(dict):
+            ...
+
+        BaseSettings = _P1Base  # type: ignore[assignment]
+        SettingsConfigDict = _P1Cfg  # type: ignore[assignment]
         _IMPL = "P1"
     except Exception:
-        _impl = "SIMPLE"
         _IMPL = "SIMPLE"
 # ===== [01] END ===============================================================
 
@@ -35,8 +41,13 @@ def _default_app_data_dir(app_name: str = "my_ai_teacher") -> Path:
     if os.name == "nt":
         base = os.environ.get("LOCALAPPDATA") or os.path.expanduser(r"~\AppData\Local")
     else:
-        base = os.environ.get("XDG_DATA_HOME") or os.path.join(os.path.expanduser("~"), ".local", "share")
+        base = os.environ.get("XDG_DATA_HOME") or os.path.join(
+            os.path.expanduser("~"),
+            ".local",
+            "share",
+        )
     return Path(base) / app_name
+
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 APP_DATA_DIR = Path(os.environ.get("APP_DATA_DIR") or _default_app_data_dir()).resolve()
@@ -51,8 +62,10 @@ PERSIST_DIR.mkdir(parents=True, exist_ok=True)
 
 # ===== [03] Settings 모델(세 가지 구현을 하나의 인터페이스로) =================
 def _coerce_bool(x: str | None, default: bool = False) -> bool:
-    if x is None: return default
-    return str(x).strip().lower() in ("1","true","yes","y","on")
+    if x is None:
+        return default
+    return str(x).strip().lower() in ("1", "true", "yes", "y", "on")
+
 
 def _read_dotenv(path: Path) -> dict[str, str]:
     """간단한 .env 파서(선택). 키=값 형태만, 따옴표/주석 일부 지원."""
@@ -60,15 +73,18 @@ def _read_dotenv(path: Path) -> dict[str, str]:
     try:
         if path.exists():
             for line in path.read_text(encoding="utf-8").splitlines():
-                line = line.strip()
-                if not line or line.startswith("#"): continue
-                if "=" not in line: continue
-                k, v = line.split("=", 1)
-                v = v.strip().strip("'").strip('"')
-                env[k.strip()] = v
+                s = line.strip()
+                if not s or s.startswith("#"):
+                    continue
+                if "=" not in s:
+                    continue
+                k, v = s.split("=", 1)
+                env[k.strip()] = v.strip().strip("'").strip('"')
     except Exception:
+        # .env 파싱 실패는 침묵
         pass
     return env
+
 
 # --- 공통 필드 정의(타입힌트 목적) --------------------------------------------
 class _BaseFields:
@@ -91,27 +107,31 @@ class _BaseFields:
     PRE_SUMMARIZE_DOCS: bool = False
 
     # Drive/백업
-    GDRIVE_FOLDER_ID: str = "prepared"         # 지식 폴더(읽기)
-    BACKUP_FOLDER_ID: Optional[str] = None     # 백업 폴더(쓰기)
-    GDRIVE_SERVICE_ACCOUNT_JSON: str = ""      # 서비스계정(선택)
-    GDRIVE_OAUTH: Optional[str] = None         # OAuth JSON 문자열(선택)
+    GDRIVE_FOLDER_ID: str = "prepared"  # 지식 폴더(읽기)
+    BACKUP_FOLDER_ID: Optional[str] = None  # 백업 폴더(쓰기)
+    GDRIVE_SERVICE_ACCOUNT_JSON: str = ""  # 서비스계정(선택)
+    GDRIVE_OAUTH: Optional[str] = None  # OAuth JSON 문자열(선택)
 
     # 프롬프트 동기화
     PROMPTS_DRIVE_FOLDER_ID: Optional[str] = None
     PROMPTS_FILE_NAME: str = "prompts.yaml"
 
+
 # --- 구현 A: pydantic v2(pydantic-settings) -----------------------------------
 if _IMPL == "P2":
+
     class Settings(_BaseFields, BaseSettings):  # type: ignore[misc]
-        model_config = SettingsConfigDict(      # type: ignore[assignment]
+        model_config = SettingsConfigDict(  # type: ignore[assignment]
             env_prefix="APP_",
             env_file=".env",
             case_sensitive=False,
             extra="ignore",
         )
 
+
 # --- 구현 B: pydantic v1 ------------------------------------------------------
 elif _IMPL == "P1":
+
     class Settings(_BaseFields, BaseSettings):  # type: ignore[misc]
         class Config:
             env_prefix = "APP_"
@@ -119,8 +139,10 @@ elif _IMPL == "P1":
             case_sensitive = False
             extra = "ignore"
 
+
 # --- 구현 C: SIMPLE(무의존) ---------------------------------------------------
 else:
+
     class Settings(_BaseFields):  # type: ignore[misc]
         """
         pydantic 없이 동작하는 가벼운 설정.
@@ -128,20 +150,25 @@ else:
         - 접두어: APP_
         - 간단 캐스팅 지원(bool/int)
         """
+
         def __init__(self) -> None:
             # 1) .env 읽기(있으면)
             dotenv = _read_dotenv(Path(".env"))
-            def _get(name: str, default, kind="str"):
+
+            def _get(name: str, default, kind: str = "str"):
                 env_key = f"APP_{name}"
                 raw = os.environ.get(env_key, dotenv.get(env_key))
                 if raw is None:
                     return default
+                s = str(raw).strip()
                 if kind == "bool":
-                    return _coerce_bool(raw, default)
+                    return _coerce_bool(s, default)
                 if kind == "int":
-                    try: return int(str(raw).strip())
-                    except Exception: return default
-                return str(raw)
+                    try:
+                        return int(s)
+                    except Exception:
+                        return default
+                return s
 
             # 2) 각 필드 주입
             self.ADMIN_PASSWORD = _get("ADMIN_PASSWORD", None)
@@ -162,11 +189,15 @@ else:
 
             self.GDRIVE_FOLDER_ID = _get("GDRIVE_FOLDER_ID", "prepared")
             self.BACKUP_FOLDER_ID = _get("BACKUP_FOLDER_ID", None)
-            self.GDRIVE_SERVICE_ACCOUNT_JSON = _get("GDRIVE_SERVICE_ACCOUNT_JSON", "")
+            self.GDRIVE_SERVICE_ACCOUNT_JSON = _get(
+                "GDRIVE_SERVICE_ACCOUNT_JSON",
+                "",
+            )
             self.GDRIVE_OAUTH = _get("GDRIVE_OAUTH", None)
 
             self.PROMPTS_DRIVE_FOLDER_ID = _get("PROMPTS_DRIVE_FOLDER_ID", None)
             self.PROMPTS_FILE_NAME = _get("PROMPTS_FILE_NAME", "prompts.yaml")
+
 
 # 인스턴스(앱 전역에서 import 하여 사용)
 settings = Settings()
