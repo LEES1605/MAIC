@@ -1,8 +1,6 @@
 # ============================== features/ui_header.py — START ====================
 from __future__ import annotations
 
-from typing import Optional
-
 import streamlit as st
 
 
