@@ -1,12 +1,18 @@
 # ======================== [00] orchestrator helpers — START ========================
 from __future__ import annotations
+
+import importlib
+import importlib.util
 import traceback
 from pathlib import Path
+from typing import Any, Dict, Optional
 
-def _add_error(e) -> None:
+
+def _add_error(e: BaseException) -> None:
     """에러를 세션에 누적(최대 200개)"""
     try:
         import streamlit as st
+
         lst = st.session_state.setdefault("_orchestrator_errors", [])
         lst.append("".join(traceback.format_exception(type(e), e, e.__traceback__)))
         if len(lst) > 200:
@@ -14,14 +20,17 @@ def _add_error(e) -> None:
     except Exception:
         pass
 
+
 def _errors_text() -> str:
     """누적 에러를 텍스트로 반환(비어 있으면 대시)"""
     try:
         import streamlit as st
+
         lst = st.session_state.get("_orchestrator_errors") or []
         return "\n\n".join(lst) if lst else "—"
     except Exception:
         return "—"
+
 
 def _ready_mark(persist_dir: Path) -> None:
     """인덱싱/복원 완료 표시 파일(.ready) 생성"""
@@ -30,11 +39,13 @@ def _ready_mark(persist_dir: Path) -> None:
         (persist_dir / ".ready").write_text("ready", encoding="utf-8")
     except Exception as e:
         _add_error(e)
+
+
 # ========================= [00] orchestrator helpers — END =========================
 
 
 # ========================== [01] lazy imports — START =============================
-def _lazy_imports() -> dict:
+def _lazy_imports() -> Dict[str, Any]:
     """
     의존 모듈을 '가능한 이름들'로 느슨하게 임포트해 dict로 반환.
     PERSIST_DIR 우선순위:
@@ -43,20 +54,20 @@ def _lazy_imports() -> dict:
       (2) src.config.PERSIST_DIR
       (3) ~/.maic/persist
     """
-    import importlib
     from pathlib import Path as _P
 
-    def _imp(name):
+    def _imp(name: str):
         try:
             return importlib.import_module(name)
         except Exception:
             return None
 
-    deps = {}
+    deps: Dict[str, Any] = {}
 
     # 0) 세션에 공유된 경로 우선
     try:
         import streamlit as st
+
         _ss_p = st.session_state.get("_PERSIST_DIR")
         if _ss_p:
             deps["PERSIST_DIR"] = _P(str(_ss_p))
@@ -64,18 +75,23 @@ def _lazy_imports() -> dict:
         pass
 
     # 1) index_build
-    if "PERSIST_DIR" not in deps:
-        mod_idx = _imp("src.rag.index_build")
-        if mod_idx and hasattr(mod_idx, "PERSIST_DIR"):
-            deps["PERSIST_DIR"] = getattr(mod_idx, "PERSIST_DIR")
-    else:
-        mod_idx = _imp("src.rag.index_build")
+    mod_idx = _imp("src.rag.index_build")
+    if "PERSIST_DIR" not in deps and mod_idx is not None:
+        try:
+            if hasattr(mod_idx, "PERSIST_DIR"):
+                deps["PERSIST_DIR"] = mod_idx.PERSIST_DIR  # noqa: B009 (hasattr 체크 후 직접 접근)
+        except Exception:
+            pass
 
     # 2) config
     if "PERSIST_DIR" not in deps:
         mod_cfg = _imp("src.config")
-        if mod_cfg and hasattr(mod_cfg, "PERSIST_DIR"):
-            deps["PERSIST_DIR"] = _P(getattr(mod_cfg, "PERSIST_DIR"))
+        if mod_cfg is not None:
+            try:
+                if hasattr(mod_cfg, "PERSIST_DIR"):
+                    deps["PERSIST_DIR"] = _P(getattr(mod_cfg, "PERSIST_DIR"))
+            except Exception:
+                pass
 
     # 3) 최종 폴백
     if "PERSIST_DIR" not in deps or not deps["PERSIST_DIR"]:
@@ -83,20 +99,46 @@ def _lazy_imports() -> dict:
 
     # --- GitHub release / manifest ---
     mod_rel = _imp("src.backup.github_release")
-    if mod_rel:
-        deps["get_latest_release"] = getattr(mod_rel, "get_latest_release", None)
-        deps["fetch_manifest_from_release"] = getattr(mod_rel, "fetch_manifest_from_release", None)
-        deps["restore_latest"] = getattr(mod_rel, "restore_latest", None)
+    if mod_rel is not None:
+        try:
+            deps["get_latest_release"] = mod_rel.get_latest_release  # type: ignore[attr-defined]
+        except Exception:
+            deps["get_latest_release"] = None
+        try:
+            deps["fetch_manifest_from_release"] = mod_rel.fetch_manifest_from_release  # type: ignore[attr-defined]
+        except Exception:
+            deps["fetch_manifest_from_release"] = None
+        try:
+            deps["restore_latest"] = mod_rel.restore_latest  # type: ignore[attr-defined]
+        except Exception:
+            deps["restore_latest"] = None
 
     # --- Google Drive / Index 유틸 ---
-    if mod_idx:
-        deps.setdefault("_drive_client", getattr(mod_idx, "_drive_client", None))
-        deps.setdefault("_find_folder_id", getattr(mod_idx, "_find_folder_id", None))
-        deps.setdefault("scan_drive_listing", getattr(mod_idx, "scan_drive_listing", None))
-        deps.setdefault("diff_with_manifest", getattr(mod_idx, "diff_with_manifest", None))
-        deps.setdefault("build_index_with_checkpoint", getattr(mod_idx, "build_index_with_checkpoint", None))
+    if mod_idx is not None:
+        try:
+            deps.setdefault("_drive_client", getattr(mod_idx, "_drive_client", None))
+        except Exception:
+            pass
+        try:
+            deps.setdefault("_find_folder_id", getattr(mod_idx, "_find_folder_id", None))
+        except Exception:
+            pass
+        try:
+            deps.setdefault("scan_drive_listing", getattr(mod_idx, "scan_drive_listing", None))
+        except Exception:
+            pass
+        try:
+            deps.setdefault("diff_with_manifest", getattr(mod_idx, "diff_with_manifest", None))
+        except Exception:
+            pass
+        try:
+            deps.setdefault("build_index_with_checkpoint", getattr(mod_idx, "build_index_with_checkpoint", None))
+        except Exception:
+            pass
 
     return deps
+
+
 # =========================== [01] lazy imports — END ==============================
 
 
@@ -104,7 +146,8 @@ def _lazy_imports() -> dict:
 def _has_local_index(persist_dir: Path) -> bool:
     return (persist_dir / "chunks.jsonl").exists() and (persist_dir / ".ready").exists()
 
-def autoflow_boot_check(*, interactive: bool) -> None:
+
+def autoflow_boot_check(*, interactive: bool) -> None:  # noqa: ARG001 (인터페이스 유지)
     """
     앱 부팅 시 단 한 번 실행되는 오토 플로우(FAST BOOT):
       - 로컬 인덱스가 있으면 **즉시 READY 로 전환** (네트워크 호출 없음)
@@ -112,12 +155,13 @@ def autoflow_boot_check(*, interactive: bool) -> None:
       - 변경 감지/재인덱싱/동기화는 **관리자 버튼(업데이트 점검)** 으로 수동 실행
     """
     import streamlit as st
+
     ss = st.session_state
     if ss.get("_boot_checked") is True:
         return
 
     # 진행 단계 기록(SSOT)
-    def PH(code: str, msg: str = ""):
+    def PH(code: str, msg: str = "") -> None:
         try:
             ss["_boot_phase"] = code
             if msg:
@@ -154,7 +198,6 @@ def autoflow_boot_check(*, interactive: bool) -> None:
             _ready_mark(p)
             ss["_boot_checked"] = True
             PH("READY", "준비완료")
-            # 알림(버전 호환 폴백)
             if hasattr(st, "toast"):
                 st.toast("✅ 백업에서 로컬 인덱스를 복원했습니다.", icon="✅")
             else:
@@ -164,11 +207,13 @@ def autoflow_boot_check(*, interactive: bool) -> None:
             ss["_boot_checked"] = True
             PH("ERROR", "복원 실패")
     else:
-        # 복원 함수가 없으면 에러만 기록하고 종료(관리자 수동 처리)
         _add_error(RuntimeError("restore_latest 가 없습니다."))
         ss["_boot_checked"] = True
         PH("ERROR", "복원 함수를 찾을 수 없습니다.")
+
+
 # ========================= [02] autoflow_boot_check — END ==========================
+
 
 # ================== [03] render_index_orchestrator_panel — START ==================
 def render_index_orchestrator_panel() -> None:
@@ -178,6 +223,7 @@ def render_index_orchestrator_panel() -> None:
     - 버튼 실행 중에는 spinner를 표시하고, 에러는 하단 로그에 누적
     """
     import time
+
     import streamlit as st
 
     # 패널 타이틀(직관형)
@@ -202,7 +248,7 @@ def render_index_orchestrator_panel() -> None:
     # 2) 상태 요약
     with st.container(border=True):
         st.markdown("### 📋 상태 요약")
-        c1, c2, c3 = st.columns([0.38,0.34,0.28])
+        c1, c2, c3 = st.columns([0.38, 0.34, 0.28])
         with c1:
             run_diag = st.button("🔎 빠른 점검", type="primary", use_container_width=True)
         with c2:
@@ -212,14 +258,15 @@ def render_index_orchestrator_panel() -> None:
 
         if clear_diag:
             ss["_orch_diag"] = {}
-            ss["_orchestrator_errors"] = []   # ← 오류도 함께 초기화
+            ss["_orchestrator_errors"] = []
             st.success("진단 결과와 오류 로그를 초기화했습니다.")
 
         if run_diag:
             t0 = time.perf_counter()
             with st.spinner("빠른 점검 실행 중…"):
                 # Drive
-                drive_ok = False; drive_email = None
+                drive_ok = False
+                drive_email: Optional[str] = None
                 if callable(_drive_client):
                     try:
                         svc = _drive_client()
@@ -228,8 +275,10 @@ def render_index_orchestrator_panel() -> None:
                         drive_ok = True
                     except Exception as e:
                         _add_error(e)
+
                 # GitHub
-                gh_ok = False; gh_tag = None
+                gh_ok = False
+                gh_tag: Optional[str] = None
                 if callable(get_latest_release):
                     try:
                         gh_latest = get_latest_release()
@@ -237,41 +286,63 @@ def render_index_orchestrator_panel() -> None:
                         gh_tag = gh_latest.get("tag_name") if gh_latest else None
                     except Exception as e:
                         _add_error(e)
-                ss["_orch_diag"] = {"drive_ok": drive_ok, "drive_email": drive_email,
-                                    "gh_ok": gh_ok, "gh_tag": gh_tag}
-            st.success(f"빠른 점검 완료 ({(time.perf_counter()-t0)*1000:.0f} ms)")
+
+                ss["_orch_diag"] = {
+                    "drive_ok": drive_ok,
+                    "drive_email": drive_email,
+                    "gh_ok": gh_ok,
+                    "gh_tag": gh_tag,
+                }
+            elapsed_ms = (time.perf_counter() - t0) * 1000.0
+            st.success(f"빠른 점검 완료 ({elapsed_ms:.0f} ms)")
 
         # 결과 표시
         d = ss.get("_orch_diag") or {}
-        def _badge(ok: bool|None, label: str) -> str:
-            if ok is True:  return f"✅ {label}"
-            if ok is False: return f"❌ {label}"
+
+        def _badge(ok: Optional[bool], label: str) -> str:
+            if ok is True:
+                return f"✅ {label}"
+            if ok is False:
+                return f"❌ {label}"
             return f"— {label}"
+
         local_ok = (p / "chunks.jsonl").exists() and (p / ".ready").exists()
-        st.write("- Drive:", _badge(d.get('drive_ok'), f"연결" + (f"(`{d.get('drive_email')}`)" if d.get('drive_email') else "")))
-        st.write("- GitHub:", _badge(d.get('gh_ok'), f"최신 릴리스: {d.get('gh_tag') or '없음'}"))
+
+        drive_label = "연결"
+        if d.get("drive_email"):
+            drive_label = f"연결(`{d.get('drive_email')}`)"
+        st.write("- Drive:", _badge(d.get("drive_ok"), drive_label))
+
+        gh_label = f"최신 릴리스: {d.get('gh_tag') or '없음'}"
+        st.write("- GitHub:", _badge(d.get("gh_ok"), gh_label))
+
         st.write("- 로컬:", _badge(local_ok, "인덱스/ready 파일 상태"))
 
     # 3) 변경사항
     with st.container(border=True):
         st.markdown("### 🔔 변경사항")
-        added = changed = removed = 0
+        added = 0
+        changed = 0
+        removed = 0
         details = {"added": [], "changed": [], "removed": []}
         if callable(diff_with_manifest):
             try:
-                d = diff_with_manifest(folder_id=None) or {}
-                stats = d.get("stats") or {}
-                added = int(stats.get("added",0)); changed = int(stats.get("changed",0)); removed = int(stats.get("removed",0))
-                details["added"]   = d.get("added") or []
-                details["changed"] = d.get("changed") or []
-                details["removed"] = d.get("removed") or []
+                dct = diff_with_manifest(folder_id=None) or {}
+                stats = dct.get("stats") or {}
+                added = int(stats.get("added", 0))
+                changed = int(stats.get("changed", 0))
+                removed = int(stats.get("removed", 0))
+                details["added"] = dct.get("added") or []
+                details["changed"] = dct.get("changed") or []
+                details["removed"] = dct.get("removed") or []
             except Exception as e:
                 _add_error(e)
         st.write(f"새 항목: **{added}** · 변경: **{changed}** · 삭제: **{removed}**")
         for label, arr in (("신규", details["added"]), ("변경", details["changed"]), ("삭제", details["removed"])):
             if arr:
                 with st.expander(f"{label} {len(arr)}개 보기"):
-                    for x in arr: st.write("•", x)
+                    for x in arr:
+                        st.write("•", x)
 
         has_new = (added + changed + removed) > 0
         if has_new:
@@ -283,8 +354,9 @@ def render_index_orchestrator_panel() -> None:
                         try:
                             with st.spinner("재인덱싱 중…"):
                                 res = build_index_with_checkpoint(
-                                    force=False, prefer_release_restore=False,
-                                    folder_id=_find_folder_id(None) if callable(_find_folder_id) else None
+                                    force=False,
+                                    prefer_release_restore=False,
+                                    folder_id=_find_folder_id(None) if callable(_find_folder_id) else None,
                                 )
                             if isinstance(res, dict) and res.get("ok"):
                                 _ready_mark(p)
@@ -292,7 +364,8 @@ def render_index_orchestrator_panel() -> None:
                             else:
                                 st.error("업데이트가 완료되지 않았습니다.")
                         except Exception as e:
-                            _add_error(e); st.error("업데이트 중 오류가 발생했습니다.")
+                            _add_error(e)
+                            st.error("업데이트 중 오류가 발생했습니다.")
                     else:
                         st.error("build_index_with_checkpoint 사용 불가(임포트 실패)")
             with c2:
@@ -307,7 +380,8 @@ def render_index_orchestrator_panel() -> None:
                             else:
                                 st.error("복원에 실패했습니다.")
                         except Exception as e:
-                            _add_error(e); st.error("복원 중 오류가 발생했습니다.")
+                            _add_error(e)
+                            st.error("복원 중 오류가 발생했습니다.")
                     else:
                         st.error("restore_latest 사용 불가(임포트 실패)")
         else:
@@ -321,8 +395,9 @@ def render_index_orchestrator_panel() -> None:
                 try:
                     with st.spinner("로컬 인덱싱 중…"):
                         res = build_index_with_checkpoint(
-                            force=True, prefer_release_restore=False,
-                            folder_id=_find_folder_id(None) if callable(_find_folder_id) else None
+                            force=True,
+                            prefer_release_restore=False,
+                            folder_id=_find_folder_id(None) if callable(_find_folder_id) else None,
                         )
                     if isinstance(res, dict) and res.get("ok"):
                         _ready_mark(p)
@@ -330,7 +405,8 @@ def render_index_orchestrator_panel() -> None:
                     else:
                         st.error("인덱싱이 완료되지 않았습니다.")
                 except Exception as e:
-                    _add_error(e); st.error("인덱싱 중 오류가 발생했습니다.")
+                    _add_error(e)
+                    st.error("인덱싱 중 오류가 발생했습니다.")
             else:
                 st.error("build_index_with_checkpoint 사용 불가(임포트 실패)")
 
@@ -339,5 +415,9 @@ def render_index_orchestrator_panel() -> None:
         st.markdown("### 🧯 오류 로그")
         txt = _errors_text()
         st.text_area("최근 오류", value=txt, height=160)
-        st.download_button("오류 로그 다운로드", data=txt.encode("utf-8"), file_name="orchestrator_errors.txt")
+        st.download_button(
+            "오류 로그 다운로드", data=txt.encode("utf-8"), file_name="orchestrator_errors.txt"
+        )
+
+
 # =================== [03] render_index_orchestrator_panel — END ===================
