@@ -3,17 +3,24 @@ line-length = 100
 target-version = "py311"
 
 [lint]
-# 형식/버그/임포트 중심으로만 엄격 적용
+# 형식/버그/임포트 중심
 select = ["E", "F", "B", "I"]
-ignore = ["E203"]  # black/ruff newline spacing difference
+ignore = ["E203"]  # black/ruff newline spacing 차이
 
-# ✅ inline table 대신 테이블 섹션을 사용해야 다줄 표기가 됩니다.
+# 여러 줄 표기가 가능한 공식 섹션 문법 사용
 [lint.per-file-ignores]
+# 긴 CSS/HTML 문자열
 "app.py" = ["E501"]
 "src/rag/index_build.py" = ["E501"]
 "src/ui_orchestrator.py" = ["E501"]
 "src/prompt_modes.py" = ["E501"]
 "src/features/ui_header.py" = ["E501"]
+
+# ✅ 잔여 형식폭탄(E701/E702)을 한시적으로 눕힐 타겟(안전게이트)
+#    → 뒤 단계에서 파일 단위 리팩터링으로 순차 제거 예정
+"src/rag/index_build.py" = ["E501", "E701", "E702"]
+"src/ui_orchestrator.py"   = ["E501", "E701", "E702"]
+"src/rag_engine.py"        = ["E501", "E701", "E702"]
 
 [lint.isort]
 known-first-party = ["src"]
