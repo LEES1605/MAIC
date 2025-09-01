@@ -79,7 +79,7 @@ def _lazy_imports() -> Dict[str, Any]:
     if "PERSIST_DIR" not in deps and mod_idx is not None:
         try:
             if hasattr(mod_idx, "PERSIST_DIR"):
-                deps["PERSIST_DIR"] = mod_idx.PERSIST_DIR  # noqa: B009 (hasattr 체크 후 직접 접근)
+                deps["PERSIST_DIR"] = mod_idx.PERSIST_DIR  # hasattr 체크 후 직접 접근
         except Exception:
             pass
 
@@ -89,7 +89,7 @@ def _lazy_imports() -> Dict[str, Any]:
         if mod_cfg is not None:
             try:
                 if hasattr(mod_cfg, "PERSIST_DIR"):
-                    deps["PERSIST_DIR"] = _P(getattr(mod_cfg, "PERSIST_DIR"))
+                    deps["PERSIST_DIR"] = _P(mod_cfg.PERSIST_DIR)  # ← B009 해결: getattr → 직접 접근
             except Exception:
                 pass
 
