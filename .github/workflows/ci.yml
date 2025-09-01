@@ -18,8 +18,8 @@ concurrency:
 
 # ===== [01] JOB MATRIX & GLOBALS ============================================  # [01] START
 jobs:
-  lint-test:
-    name: Lint & Typecheck & Tests (py${{ matrix.python-version }})
+  lint-type-test:
+    name: Lint • Typecheck • Tests (py${{ matrix.python-version }})
     runs-on: ubuntu-latest
 
     strategy:
@@ -40,7 +40,7 @@ jobs:
       - name: Setup Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
-            python-version: ${{ matrix.python-version }}
+          python-version: ${{ matrix.python-version }}
 # [02] END
 
 # ===== [03] CACHE & INSTALL DEPENDENCIES ==================================== # [03] START
@@ -61,7 +61,7 @@ jobs:
         run: |
           pip install -r requirements.txt
 
-      - name: Install dev tools (ruff/mypy/pytest)
+      - name: Install dev tools (ruff / mypy / pytest)
         run: |
           pip install -U ruff mypy pytest pytest-cov
 # [03] END
@@ -70,26 +70,23 @@ jobs:
       - name: Ruff — Lint (auto-fix)
         run: |
           ruff --version
-          # 자동 수정으로 CI 중단 방지 (기능 무영향)
           ruff check . --fix
 
       - name: Ruff — Format (auto-format)
         run: |
-          # 포맷 차이로 실패하는 걸 방지 (—check 대신 실제 포맷)
           ruff format .
 # [04] END
 
-# ===== [05] TYPE CHECK (CONDITIONAL) ======================================== # [05] START
-      - name: mypy (if config exists)
-        if: |
-          hashFiles('mypy.ini') != '' || hashFiles('pyproject.toml') != ''
+# ===== [05] TYPE CHECK — STRICT (MANDATORY) ================================= # [05] START
+      - name: mypy — strict gate (must pass)
         run: |
           mypy --version
-          # 설정에 따라 프로젝트 패키지 경로를 조정하세요 (예: src/)
+          # mypy.ini에 따라 전역은 완화, src/*는 점진 엄격.
+          # 실패 시 CI가 실패합니다.
           mypy .
 # [05] END
 
-# ===== [06] TESTS (CONDITIONAL) ============================================= # [06] START
+# ===== [06] TESTS (ONLY IF TESTS EXIST) ===================================== # [06] START
       - name: pytest (if tests exist)
         if: hashFiles('tests/**/*.py') != ''
         run: |
