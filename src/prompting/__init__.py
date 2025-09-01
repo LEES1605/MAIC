@@ -3,9 +3,9 @@ from __future__ import annotations
 
 from typing import Dict, Optional, Tuple
 
+from .drive_source import fetch_prompts_from_drive
 from .fallback_source import DEFAULT_PROMPTS
 from .github_source import fetch_prompts_from_github
-from .drive_source import fetch_prompts_from_drive
 
 
 def _merge(base: Dict, extra: Optional[Dict]) -> Dict:
