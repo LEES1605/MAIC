@@ -682,50 +682,75 @@ def _render_admin_panels() -> None:
 
 # [12] 채팅 UI(스타일/모드/상단 상태 라벨=SSOT) ===============================
 def _inject_chat_styles_once():
-    """전역 CSS: 말풍선/라디오 pill + ChatPane(단일 틀) + '모드=카드 하단' 시각 접합."""
-    if st is None: return
+    """전역 CSS: ChatPane(대화 틀) + 라디오 pill + 인-카드 입력창(파스텔 노란색)"""
+    if st is None:
+        return
     if st.session_state.get("_chat_styles_injected"):
         return
     st.session_state["_chat_styles_injected"] = True
 
     st.markdown("""
     <style>
-      /* ───────── ChatPane: 단일 틀(항상 표시) ───────── */
-      .chatpane{ background:#f5f7fb;border:1px solid #e6ecf5;border-radius:18px;
-                 padding:8px;margin-top:10px; }
-      .chatpane .messages{ max-height:60vh;overflow-y:auto;padding:6px; }
-
-      /* '질문모드'를 ChatPane 하단처럼 보이도록: marker 다음의 stRadio를 카드-풋터로 스타일 */
-      .pane-foot-marker + div[data-testid="stRadio"]{
-        border-left:1px solid #e6ecf5; border-right:1px solid #e6ecf5; border-bottom:1px solid #e6ecf5;
-        border-bottom-left-radius:18px; border-bottom-right-radius:18px;
-        background:#f5f7fb; padding:10px 12px; margin-top:0; margin-bottom:6px;
+      /* ───────── ChatPane: 대화 틀(항상 표시) ───────── */
+      .chatpane{
+        background:#EDF4FF;                 /* 하늘색 */
+        border:1px solid #D5E6FF;
+        border-radius:18px;
+        padding:10px;
+        margin-top:12px;
       }
-      /* 라디오 pill 배치/스타일(유지) */
-      div[data-testid="stRadio"] > div[role="radiogroup"]{display:flex;gap:10px;flex-wrap:wrap}
-      div[data-testid="stRadio"] [role="radio"]{
-        border:2px solid #bcdcff;border-radius:12px;padding:6px 12px;background:#fff;color:#0a2540;
-        font-weight:700;font-size:14px;line-height:1;
+      .chatpane .messages{
+        max-height:60vh;
+        overflow-y:auto;
+        padding:8px;
       }
-      div[data-testid="stRadio"] [role="radio"][aria-checked="true"]{background:#eaf6ff;border-color:#9fd1ff;color:#0a2540;}
-      div[data-testid="stRadio"] svg{display:none!important}
 
-      /* 턴 구분선(유지) */
+      /* ChatPane 내부의 라디오(질문모드) */
+      .chatpane div[data-testid="stRadio"]{
+        background:#EDF4FF;
+        padding:8px 10px 2px 10px;
+        margin:0;
+      }
+      .chatpane div[data-testid="stRadio"] > div[role="radiogroup"]{
+        display:flex; gap:10px; flex-wrap:wrap;
+      }
+      .chatpane div[data-testid="stRadio"] [role="radio"]{
+        border:2px solid #bcdcff; border-radius:12px; padding:6px 12px;
+        background:#fff; color:#0a2540; font-weight:700; font-size:14px; line-height:1;
+      }
+      .chatpane div[data-testid="stRadio"] [role="radio"][aria-checked="true"]{
+        background:#eaf6ff; border-color:#9fd1ff; color:#0a2540;
+      }
+      .chatpane div[data-testid="stRadio"] svg{ display:none!important }
+
+      /* 인-카드 입력 폼 (파스텔 노란색 입력창) */
+      .chatpane form[data-testid="stForm"]{
+        background:#EDF4FF;
+        padding:4px 10px 10px 10px;
+        margin:0;
+      }
+      .chatpane textarea, .chatpane input[type="text"]{
+        background:#FFF8CC !important;      /* 파스텔 노란 */
+        border:1px solid #F2E4A2 !important;
+        border-radius:12px !important;
+        color:#333 !important;
+      }
+      .chatpane ::placeholder{ color:#8A7F4A !important; }
+      .chatpane button[kind="secondary"]{
+        border-radius:999px; font-weight:700;
+      }
+
+      /* 턴 구분선 */
       .turn-sep{height:0;border-top:1px dashed #E5EAF2;margin:14px 2px;position:relative;}
       .turn-sep::after{content:'';position:absolute;top:-4px;left:50%;transform:translateX(-50%);
                        width:8px;height:8px;border-radius:50%;background:#E5EAF2;}
-
-      /* 상태 라벨(유지) */
-      .status-btn{display:inline-block;border-radius:10px;padding:4px 10px;font-weight:700;font-size:13px}
-      .status-btn.green{background:#E4FFF3;color:#0f6d53;border:1px solid #bff0df}
-      .status-btn.yellow{background:#FFF8E1;color:#8a6d00;border:1px solid #ffe099}
-      .status-btn.red{background:#FFE8E6;color:#a1302a;border:1px solid #ffc7c2}
     </style>
     """, unsafe_allow_html=True)
 
+
 # [13] 채팅 패널 ==============================================================
 def _render_chat_panel():
-    import time, base64, json, urllib.request
+    import os, time, base64, json, urllib.request
     try:
         import yaml
     except Exception:
@@ -737,7 +762,7 @@ def _render_chat_panel():
 
     _inject_chat_styles_once()
 
-    # ── (수정) 로컬 헬퍼: 말풍선 렌더러
+    # ── 말풍선 렌더러(로컬 헬퍼)
     def _render_bubble(role: str, text: str):
         import html, re
         def esc(t: str) -> str:
@@ -748,7 +773,7 @@ def _render_chat_panel():
         align = "flex-end" if is_user else "flex-start"
         bg = "#FFFFFF" if is_user else "#EAF6FF"
         fg = "#0a2540"
-        border = "#D7E9FF" if not is_user else "#E5E7EB"
+        border = "#E5E7EB" if is_user else "#BEE3FF"
         radius_fix = "border-top-right-radius:8px;" if is_user else "border-top-left-radius:8px;"
         label = "나" if is_user else "답변"
         label_bg = "#F4F7FB" if is_user else "#DFF1FF"
@@ -766,125 +791,10 @@ def _render_chat_panel():
         ) % (align, radius_fix, border, bg, fg, label_bg, label_bd, label, esc(text))
         st.markdown(html_box, unsafe_allow_html=True)
 
-    # ── 현재 모드(세션 값) 읽기
-    cur_label = ss.get("qa_mode_radio") or "문법"
-    MODE_TOKEN = {"문법": "문법설명", "문장": "문장구조분석", "지문": "지문분석"}[cur_label]
-
-    # ── 입력창(하단 고정 위젯)
-    user_q = st.chat_input("예) 분사구문이 뭐예요?  예) 이 문장 구조 분석해줘")
-    qtxt = user_q.strip() if user_q and user_q.strip() else None
-    do_stream = qtxt is not None
-    if do_stream:
-        ss["chat"].append({"id": f"u{int(time.time()*1000)}", "role": "user", "text": qtxt})
-
-    ev_notes = ss.get("__evidence_class_notes", "")
-    ev_books = ss.get("__evidence_grammar_books", "")
-
-    # ── GitHub / Drive / Fallback 프롬프트 로더
-    def _github_fetch_prompts_text():
-        token = _from_secrets("GH_TOKEN") or os.getenv("GH_TOKEN")
-        repo  = _from_secrets("GH_REPO")  or os.getenv("GH_REPO")
-        branch = _from_secrets("GH_BRANCH", "main") or os.getenv("GH_BRANCH", "main")
-        path  = _from_secrets("GH_PROMPTS_PATH", "prompts.yaml") or os.getenv("GH_PROMPTS_PATH", "prompts.yaml")
-        if not (token and repo and yaml):
-            return None
-        url = f"https://api.github.com/repos/{repo}/contents/{path}?ref={branch}"
-        req = urllib.request.Request(url, headers={"Authorization": f"token {token}", "User-Agent": "maic-app"})
-        try:
-            with urllib.request.urlopen(req) as r:
-                meta = json.loads(r.read().decode("utf-8"))
-                text = base64.b64decode((meta.get("content") or "").encode()).decode("utf-8")
-                ss["__gh_prompts_cache"] = {"sha": meta.get("sha"), "text": text}
-                return text
-        except Exception:
-            return None
-
-    def _build_prompt_from_github(mode_token: str, q: str, ev1: str, ev2: str):
-        txt = _github_fetch_prompts_text()
-        if not (txt and yaml):
-            return None
-        try:
-            data = yaml.safe_load(txt) or {}
-            node = (data.get("modes") or {}).get(mode_token)
-            if not node:
-                return None
-            sys_p = node.get("system") if isinstance(node, dict) else None
-            usr_p = node.get("user") if isinstance(node, dict) else (node if isinstance(node, str) else None)
-            if usr_p is None:
-                return None
-            usr_p = (usr_p.replace("{QUESTION}", q)
-                        .replace("{EVIDENCE_CLASS_NOTES}", ev1 or "")
-                        .replace("{EVIDENCE_GRAMMAR_BOOKS}", ev2 or ""))
-            return {"system": sys_p, "user": usr_p}
-        except Exception:
-            return None
-
-    def _build_prompt_from_drive(mode_token: str, q: str, ev1: str, ev2: str):
-        _prompt_mod = _try_import("src.prompt_modes", ["build_prompt"]) or {}
-        fn = _prompt_mod.get("build_prompt")
-        if not callable(fn):
-            return None
-        try:
-            parts = fn(mode_token, q) or {}
-            sys_p = parts.get("system")
-            usr_p = parts.get("user")
-            if usr_p:
-                usr_p = (usr_p.replace("{QUESTION}", q)
-                            .replace("{EVIDENCE_CLASS_NOTES}", ev1 or "")
-                            .replace("{EVIDENCE_GRAMMAR_BOOKS}", ev2 or ""))
-            return {"system": sys_p, "user": usr_p}
-        except Exception:
-            return None
-
-    def _fallback_prompts(mode_token: str, q: str, ev1: str, ev2: str, cur_label: str):
-        NOTICE = "안내: 현재 자료 연결이 원활하지 않아 간단 모드로 답변합니다. 핵심만 짧게 안내할게요."
-        BASE = "너는 한국의 영어학원 원장처럼 따뜻하고 명확하게 설명한다. 모든 출력은 한국어로 간결하게."
-        if mode_token == "문법설명":
-            sys_p = BASE + " 주제에서 벗어난 장황한 배경설명은 금지한다."
-            lines = []
-            if not ev1 and not ev2:
-                lines.append(NOTICE)
-            lines += [
-                "1) 한 줄 핵심", "2) 이미지/비유 (짧게)", "3) 핵심 규칙 3–5개 (• bullet)",
-                "4) 예문 1개(+한국어 해석)", "5) 한 문장 리마인드",
-                "6) 출처 1개: [출처: GPT지식/GEMINI지식/자료명]"
-            ]
-            usr_p = f"[질문]\n{q}\n\n[작성 지침]\n- 형식을 지켜라.\n" + "\n".join(f"- {x}" for x in lines)
-        elif mode_token == "문장구조분석":
-            sys_p = BASE + " 불확실한 판단은 '약 ~% 불확실'로 명시한다."
-            usr_p = ("[출력 형식]\n0) 모호성 점검\n1) 괄호 규칙 요약\n2) S–V–O–C–M 한 줄 개요\n"
-                     "3) 성분 식별: 표/리스트\n4) 구조·구문 단계적 설명\n5) 핵심 포인트 2–3개\n6) 출처 유형만 표기\n\n"
-                     f"[문장]\n{q}")
-        else:
-            sys_p = BASE + " 불확실한 판단은 '약 ~% 불확실'로 명시한다."
-            usr_p = ("[출력 형식]\n1) 한 줄 요지\n2) 구조 요약(단락별 핵심)\n3) 핵심어 3–6개+이유\n4) 풀이 힌트\n\n"
-                     f"[지문/질문]\n{q}")
-        st.session_state["__prompt_source"] = "Fallback"
-        return sys_p, usr_p
-
-    def _resolve_prompts(mode_token: str, q: str, ev1: str, ev2: str, cur_label: str):
-        gh = _build_prompt_from_github(mode_token, q, ev1, ev2)
-        if gh and (gh.get("system") or gh.get("user")):
-            st.session_state["__prompt_source"] = "GitHub"
-            sys_p = gh.get("system") or ""
-            usr_p = gh.get("user") or f"[모드:{mode_token}]\n{q}"
-            if mode_token == "문법설명" and not ev1 and not ev2:
-                usr_p += "\n\n[지시]\n- 첫 줄: '안내: 현재 자료 연결이 원활하지 않아 간단 모드로 답변합니다. 핵심만 짧게 안내할게요.'"
-            return sys_p, usr_p
-        dv = _build_prompt_from_drive(mode_token, q, ev1, ev2)
-        if dv and (dv.get("system") or dv.get("user")):
-            st.session_state["__prompt_source"] = "Drive"
-            sys_p = dv.get("system") or ""
-            usr_p = dv.get("user") or f"[모드:{mode_token}]\n{q}"
-            if mode_token == "문법설명" and not ev1 and not ev2:
-                usr_p += "\n\n[지시]\n- 첫 줄: '안내: 현재 자료 연결이 원활하지 않아 간단 모드로 답변합니다. 핵심만 짧게 안내할게요.'"
-            return sys_p, usr_p
-        return _fallback_prompts(mode_token, q, ev1, ev2, cur_label)
-
-    # ── 항상 보이는 ChatPane(단일 틀) + 메시지 스크롤 영역
+    # ── ChatPane OPEN + 메시지 영역 OPEN
     st.markdown('<div class="chatpane"><div class="messages">', unsafe_allow_html=True)
 
-    # 기록 렌더
+    # ── 대화 기록 렌더
     prev_role = None
     for m in ss["chat"]:
         role = m.get("role", "assistant")
@@ -893,100 +803,227 @@ def _render_chat_panel():
         _render_bubble(role, m.get("text", ""))
         prev_role = role
 
-    # ── 스트리밍 출력(메시지 영역 안)
+    # ── 스트리밍용 플레이스홀더(메시지 영역 안)
+    ph = st.empty()
+
+    # ── 메시지 영역 CLOSE (ChatPane은 유지)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # ── (ChatPane 내부) 질문모드 + 인-카드 입력 폼
+    #     - 폼 제출 시 라디오/텍스트 모두 함께 반영
+    with st.form("inpane_chat_form", clear_on_submit=True):
+        cur_label = ss.get("qa_mode_radio", "문법")
+        mode = st.radio(
+            "질문 모드", ["문법", "문장", "지문"],
+            index=["문법", "문장", "지문"].index(cur_label),
+            horizontal=True, key="qa_mode_radio", label_visibility="collapsed"
+        )
+        qtxt = st.text_area(
+            "질문 입력", value="", height=72, max_chars=3000,
+            placeholder="예) 분사구문이 뭐예요?  예) 이 문장 구조 분석해줘",
+            label_visibility="collapsed", key="inpane_q"
+        )
+        col1, col2 = st.columns([6,1])
+        with col2:
+            send = st.form_submit_button("보내기", use_container_width=True)
+
+    # ── 폼 제출 처리
     text_final = ""
-    if do_stream:
-        if prev_role is not None and prev_role == "user":
-            st.markdown('<div class="turn-sep"></div>', unsafe_allow_html=True)
-        ph = st.empty()
+    if send:
+        question = (qtxt or "").strip()
+        if question:
+            # 기록에 사용자 턴 추가
+            ss["chat"].append({"id": f"u{int(time.time()*1000)}", "role": "user", "text": question})
 
-        def _render_ai(text_html: str):
-            ph.markdown(
-                '<div style="display:flex;justify-content:flex-start;margin:8px 0;">'
-                '  <div style="max-width:88%;padding:10px 12px;border-radius:16px;border-top-left-radius:8px;'
-                '              line-height:1.6;font-size:15px;box-shadow:0 1px 1px rgba(0,0,0,.05);white-space:pre-wrap;'
-                '              position:relative;border:1px solid #BEE3FF;background:#EAF6FF;color:#0a2540;">'
-                '    <span style="display:inline-block;margin:-2px 0 6px 0;padding:1px 8px;border-radius:999px;'
-                '                 font-size:11px;font-weight:700;background:#DFF1FF;color:#0f5b86;'
-                '                 border:1px solid #BEE3FF;">답변</span><br/>'
-                f'    {text_html}'
-                '  </div>'
-                '</div>', unsafe_allow_html=True
-            )
+            # 스트리밍 준비
+            def _render_ai(text_html: str):
+                ph.markdown(
+                    '<div style="display:flex;justify-content:flex-start;margin:8px 0;">'
+                    '  <div style="max-width:88%;padding:10px 12px;border-radius:16px;border-top-left-radius:8px;'
+                    '              line-height:1.6;font-size:15px;box-shadow:0 1px 1px rgba(0,0,0,.05);white-space:pre-wrap;'
+                    '              position:relative;border:1px solid #BEE3FF;background:#EAF6FF;color:#0a2540;">'
+                    '    <span style="display:inline-block;margin:-2px 0 6px 0;padding:1px 8px;border-radius:999px;'
+                    '                 font-size:11px;font-weight:700;background:#DFF1FF;color:#0f5b86;'
+                    '                 border:1px solid #BEE3FF;">답변</span><br/>' +
+                    text_html +
+                    '  </div>'
+                    '</div>', unsafe_allow_html=True
+                )
 
-        _render_ai("답변 준비중…")
-        system_prompt, user_prompt = _resolve_prompts(MODE_TOKEN, qtxt or "", ev_notes, ev_books, cur_label)
+            # 모드 토큰/증거
+            cur_label = ss.get("qa_mode_radio") or "문법"
+            MODE_TOKEN = {"문법":"문법설명", "문장":"문장구조분석", "지문":"지문분석"}[cur_label]
+            ev_notes = ss.get("__evidence_class_notes", "")
+            ev_books = ss.get("__evidence_grammar_books", "")
 
-        prov = _try_import("src.llm.providers", ["call_with_fallback"])
-        call = prov.get("call_with_fallback")
-        if not callable(call):
-            text_final = "(오류) LLM 어댑터를 사용할 수 없습니다."
-            _render_ai(text_final)
-        else:
-            import html, re, inspect
-            def esc(t: str) -> str:
-                t = html.escape(t or "").replace("\n", "<br/>")
-                return re.sub(r"  ", "&nbsp;&nbsp;", t)
+            # ── 프롬프트 해석기
+            def _github_fetch_prompts_text():
+                token  = _from_secrets("GH_TOKEN") or os.getenv("GH_TOKEN")
+                repo   = _from_secrets("GH_REPO")  or os.getenv("GH_REPO")
+                branch = _from_secrets("GH_BRANCH","main") or os.getenv("GH_BRANCH","main")
+                path   = _from_secrets("GH_PROMPTS_PATH","prompts.yaml") or os.getenv("GH_PROMPTS_PATH","prompts.yaml")
+                if not (token and repo and yaml): return None
+                url = f"https://api.github.com/repos/{repo}/contents/{path}?ref={branch}"
+                req = urllib.request.Request(url, headers={"Authorization": f"token {token}","User-Agent":"maic-app"})
+                try:
+                    with urllib.request.urlopen(req) as r:
+                        meta = json.loads(r.read().decode("utf-8"))
+                        text = base64.b64decode((meta.get("content") or "").encode()).decode("utf-8")
+                        ss["__gh_prompts_cache"] = {"sha": meta.get("sha"), "text": text}
+                        return text
+                except Exception:
+                    return None
 
-            sig = inspect.signature(call)
-            params = sig.parameters.keys()
-            kwargs = {}
-            if "messages" in params:
-                kwargs["messages"] = [{"role": "system", "content": system_prompt or ""},
-                                      {"role": "user", "content": user_prompt}]
-            else:
-                if "prompt" in params: kwargs["prompt"] = user_prompt
-                elif "user_prompt" in params: kwargs["user_prompt"] = user_prompt
-                if "system_prompt" in params: kwargs["system_prompt"] = (system_prompt or "")
-                elif "system" in params:      kwargs["system"] = (system_prompt or "")
-            if "mode_token" in params: kwargs["mode_token"] = MODE_TOKEN
-            elif "mode" in params:     kwargs["mode"] = MODE_TOKEN
-            if "temperature" in params: kwargs["temperature"] = 0.2
-            elif "temp" in params:      kwargs["temp"] = 0.2
-            if "timeout_s" in params:   kwargs["timeout_s"] = 90
-            elif "timeout" in params:   kwargs["timeout"] = 90
-            if "extra" in params:       kwargs["extra"] = {"question": qtxt, "mode_key": cur_label}
+            def _build_prompt_from_github(mode_token: str, q: str, ev1: str, ev2: str):
+                txt = _github_fetch_prompts_text()
+                if not (txt and yaml): return None
+                try:
+                    data = yaml.safe_load(txt) or {}
+                    node = (data.get("modes") or {}).get(mode_token)
+                    if not node: return None
+                    sys_p = node.get("system") if isinstance(node, dict) else None
+                    usr_p = node.get("user")   if isinstance(node, dict) else (node if isinstance(node, str) else None)
+                    if usr_p is None: return None
+                    usr_p = (usr_p.replace("{QUESTION}", q)
+                                .replace("{EVIDENCE_CLASS_NOTES}", ev1 or "")
+                                .replace("{EVIDENCE_GRAMMAR_BOOKS}", ev2 or ""))
+                    return {"system": sys_p, "user": usr_p}
+                except Exception:
+                    return None
+
+            def _build_prompt_from_drive(mode_token: str, q: str, ev1: str, ev2: str):
+                _prompt_mod = _try_import("src.prompt_modes", ["build_prompt"]) or {}
+                fn = _prompt_mod.get("build_prompt")
+                if not callable(fn): return None
+                try:
+                    parts = fn(mode_token, q) or {}
+                    sys_p = parts.get("system"); usr_p = parts.get("user")
+                    if usr_p:
+                        usr_p = (usr_p.replace("{QUESTION}", q)
+                                    .replace("{EVIDENCE_CLASS_NOTES}", ev1 or "")
+                                    .replace("{EVIDENCE_GRAMMAR_BOOKS}", ev2 or ""))
+                    return {"system": sys_p, "user": usr_p}
+                except Exception:
+                    return None
+
+            def _fallback_prompts(mode_token: str, q: str, ev1: str, ev2: str, cur_label: str):
+                NOTICE = "안내: 현재 자료 연결이 원활하지 않아 간단 모드로 답변합니다. 핵심만 짧게 안내할게요."
+                BASE = "너는 한국의 영어학원 원장처럼 따뜻하고 명확하게 설명한다. 모든 출력은 한국어로 간결하게."
+                if mode_token == "문법설명":
+                    sys_p = BASE + " 주제에서 벗어난 장황한 배경설명은 금지한다."
+                    lines = []
+                    if not ev1 and not ev2: lines.append(NOTICE)
+                    lines += [
+                        "1) 한 줄 핵심","2) 이미지/비유 (짧게)","3) 핵심 규칙 3–5개 (• bullet)",
+                        "4) 예문 1개(+한국어 해석)","5) 한 문장 리마인드",
+                        "6) 출처 1개: [출처: GPT지식/GEMINI지식/자료명]"
+                    ]
+                    usr_p = f"[질문]\n{q}\n\n[작성 지침]\n- 형식을 지켜라.\n" + "\n".join(f"- {x}" for x in lines)
+                elif mode_token == "문장구조분석":
+                    sys_p = BASE + " 불확실한 판단은 '약 ~% 불확실'로 명시한다."
+                    usr_p = ("[출력 형식]\n0) 모호성 점검\n1) 괄호 규칙 요약\n2) S–V–O–C–M 한 줄 개요\n"
+                             "3) 성분 식별: 표/리스트\n4) 구조·구문 단계적 설명\n5) 핵심 포인트 2–3개\n6) 출처 유형만 표기\n\n"
+                             f"[문장]\n{q}")
+                else:
+                    sys_p = BASE + " 불확실한 판단은 '약 ~% 불확실'로 명시한다."
+                    usr_p = ("[출력 형식]\n1) 한 줄 요지\n2) 구조 요약(단락별 핵심)\n3) 핵심어 3–6개+이유\n4) 풀이 힌트\n\n"
+                             f"[지문/질문]\n{q}")
+                st.session_state["__prompt_source"] = "Fallback"
+                return sys_p, usr_p
+
+            def _resolve_prompts(mode_token: str, q: str, ev1: str, ev2: str, cur_label: str):
+                gh = _build_prompt_from_github(mode_token, q, ev1, ev2)
+                if gh and (gh.get("system") or gh.get("user")):
+                    st.session_state["__prompt_source"] = "GitHub"
+                    sys_p = gh.get("system") or ""
+                    usr_p = gh.get("user") or f"[모드:{mode_token}]\n{q}"
+                    if mode_token == "문법설명" and not ev1 and not ev2:
+                        usr_p += "\n\n[지시]\n- 첫 줄: '안내: 현재 자료 연결이 원활하지 않아 간단 모드로 답변합니다. 핵심만 짧게 안내할게요.'"
+                    return sys_p, usr_p
+                dv = _build_prompt_from_drive(mode_token, q, ev1, ev2)
+                if dv and (dv.get("system") or dv.get("user")):
+                    st.session_state["__prompt_source"] = "Drive"
+                    sys_p = dv.get("system") or ""
+                    usr_p = dv.get("user") or f"[모드:{mode_token}]\n{q}"
+                    if mode_token == "문법설명" and not ev1 and not ev2:
+                        usr_p += "\n\n[지시]\n- 첫 줄: '안내: 현재 자료 연결이 원활하지 않아 간단 모드로 답변합니다. 핵심만 짧게 안내할게요.'"
+                    return sys_p, usr_p
+                return _fallback_prompts(mode_token, q, ev1, ev2, cur_label)
+
+            # ── 스트리밍 호출
+            system_prompt, user_prompt = _resolve_prompts(MODE_TOKEN, question, ev_notes, ev_books, cur_label)
+            prov = _try_import("src.llm.providers", ["call_with_fallback"])
+            call = prov.get("call_with_fallback")
 
             acc = ""
             def _emit(piece: str):
                 nonlocal acc
                 acc += str(piece)
-                _render_ai(esc(acc))
+                import html, re
+                def esc(t: str) -> str:
+                    t = html.escape(t or "").replace("\n","<br/>")
+                    return re.sub(r"  ","&nbsp;&nbsp;", t)
+                _render_ai_html = esc(acc)
+                _render_ai_html and _render_ai_html  # noop to silence lint
+                ph.markdown(
+                    '<div style="display:flex;justify-content:flex-start;margin:8px 0;">'
+                    '  <div style="max-width:88%;padding:10px 12px;border-radius:16px;border-top-left-radius:8px;'
+                    '              line-height:1.6;font-size:15px;box-shadow:0 1px 1px rgba(0,0,0,.05);white-space:pre-wrap;'
+                    '              position:relative;border:1px solid #BEE3FF;background:#EAF6FF;color:#0a2540;">'
+                    '    <span style="display:inline-block;margin:-2px 0 6px 0;padding:1px 8px;border-radius:999px;'
+                    '                 font-size:11px;font-weight:700;background:#DFF1FF;color:#0f5b86;'
+                    '                 border:1px solid #BEE3FF;">답변</span><br/>' +
+                    esc(acc) +
+                    '  </div>'
+                    '</div>', unsafe_allow_html=True
+                )
 
-            supports_stream = ("stream" in params) or ("on_token" in params) or ("on_delta" in params) or ("yield_text" in params)
-            try:
-                if supports_stream:
-                    if "stream" in params:   kwargs["stream"] = True
-                    if "on_token" in params: kwargs["on_token"] = _emit
-                    if "on_delta" in params: kwargs["on_delta"] = _emit
-                    if "yield_text" in params: kwargs["yield_text"] = _emit
-                    res = call(**kwargs)
-                    text_final = (res.get("text") if isinstance(res, dict) else acc) or acc
+            if not callable(call):
+                text_final = "(오류) LLM 어댑터를 사용할 수 없습니다."
+                _emit(text_final)
+            else:
+                import inspect
+                sig = inspect.signature(call); params = sig.parameters.keys(); kwargs = {}
+                if "messages" in params:
+                    kwargs["messages"] = [{"role":"system","content":system_prompt or ""},
+                                          {"role":"user","content":user_prompt}]
                 else:
-                    res = call(**kwargs)
-                    text_final = res.get("text") if isinstance(res, dict) else str(res)
-                    if not text_final:
-                        text_final = "(응답이 비어있어요)"
-                    _render_ai(esc(text_final))
-            except Exception as e:
-                text_final = f"(오류) {type(e).__name__}: {e}"
-                _render_ai(esc(text_final))
+                    if "prompt" in params: kwargs["prompt"] = user_prompt
+                    elif "user_prompt" in params: kwargs["user_prompt"] = user_prompt
+                    if "system_prompt" in params: kwargs["system_prompt"] = (system_prompt or "")
+                    elif "system" in params:      kwargs["system"] = (system_prompt or "")
+                if "mode_token" in params: kwargs["mode_token"] = MODE_TOKEN
+                elif "mode" in params:     kwargs["mode"] = MODE_TOKEN
+                if "temperature" in params: kwargs["temperature"] = 0.2
+                elif "temp" in params:      kwargs["temp"] = 0.2
+                if "timeout_s" in params:   kwargs["timeout_s"] = 90
+                elif "timeout" in params:   kwargs["timeout"] = 90
+                if "extra" in params:       kwargs["extra"] = {"question": question, "mode_key": cur_label}
 
-    # ── ChatPane 닫기
-    st.markdown('</div></div>', unsafe_allow_html=True)
+                try:
+                    supports_stream = ("stream" in params) or ("on_token" in params) or ("on_delta" in params) or ("yield_text" in params)
+                    if supports_stream:
+                        if "stream" in params:   kwargs["stream"] = True
+                        if "on_token" in params: kwargs["on_token"] = _emit
+                        if "on_delta" in params: kwargs["on_delta"] = _emit
+                        if "yield_text" in params: kwargs["yield_text"] = _emit
+                        res = call(**kwargs)
+                        text_final = (res.get("text") if isinstance(res, dict) else acc) or acc
+                    else:
+                        res = call(**kwargs)
+                        text_final = res.get("text") if isinstance(res, dict) else str(res)
+                        if not text_final: text_final = "(응답이 비어있어요)"
+                        _emit(text_final)
+                except Exception as e:
+                    text_final = f"(오류) {type(e).__name__}: {e}"
+                    _emit(text_final)
 
-    # ── 질문모드: ChatPane 풋터처럼 보이도록 바로 뒤에 인라인 렌더
-    st.markdown('<div class="pane-foot-marker"></div>', unsafe_allow_html=True)
-    st.radio(
-        "질문 모드", ["문법", "문장", "지문"],
-        index=["문법", "문장", "지문"].index(ss.get("qa_mode_radio", "문법")),
-        horizontal=True, key="qa_mode_radio", label_visibility="collapsed"
-    )
+            # 기록에 어시스턴트 턴 추가 후 리렌더
+            ss["chat"].append({"id": f"a{int(time.time()*1000)}", "role": "assistant", "text": text_final})
+            st.rerun()
 
-    # ── 스트림 완료 후 기록 저장/리렌더
-    if do_stream:
-        ss["chat"].append({"id": f"a{int(time.time()*1000)}", "role": "assistant", "text": text_final})
-        st.rerun()
+    # ── ChatPane CLOSE
+    st.markdown('</div>', unsafe_allow_html=True)
 
 
 # ============================ [14] 본문 렌더 — START ============================
