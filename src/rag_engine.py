@@ -374,9 +374,9 @@ class _LocalQueryEngine:
             q_vec[t] = (1.0 + math.log(f)) * idf
         q_norm = math.sqrt(sum(v * v for v in q_vec.values())) or 1e-12
 
-        # 코사인 유사도 계산 (상위 k 유지)
+        # 코사인 유사도 계산 (상위 k 유지)  ← B905: strict=True 추가 (리스트 길이 동기 보장)
         heap: List[Tuple[float, int]] = []  # (score, idx)
-        for i, (vec, norm) in enumerate(zip(self._vectors, self._norms)):
+        for i, (vec, norm) in enumerate(zip(self._vectors, self._norms, strict=True)):
             if not vec or norm == 0.0:
                 continue
             # 점곱 — 작은 사전 기준으로 곱하면 빠름
