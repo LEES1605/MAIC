@@ -4,10 +4,10 @@ from __future__ import annotations
 import io
 import json
 import os
-import zipfile
 from os import PathLike
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
+import zipfile
 
 import streamlit as st
 from src.compat.config_bridge import PERSIST_DIR  # 호환용(로컬 인덱스가 있을 때만 사용)
@@ -374,7 +374,7 @@ class _LocalQueryEngine:
             q_vec[t] = (1.0 + math.log(f)) * idf
         q_norm = math.sqrt(sum(v * v for v in q_vec.values())) or 1e-12
 
-        # 코사인 유사도 계산 (상위 k 유지)  ← B905: strict=True 추가 (리스트 길이 동기 보장)
+        # 코사인 유사도 계산 (상위 k 유지)
         heap: List[Tuple[float, int]] = []  # (score, idx)
         for i, (vec, norm) in enumerate(zip(self._vectors, self._norms, strict=True)):
             if not vec or norm == 0.0:
@@ -470,6 +470,4 @@ def get_or_build_index(
     # 2) 원격(in-memory)
     data = _load_index_in_memory_from_drive()
     return _Index(data)
-
-
 # ===== [10] END ==============================================================
