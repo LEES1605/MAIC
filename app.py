@@ -598,89 +598,69 @@ def _render_admin_panels() -> None:
 # [12] 채팅 UI(스타일/모드/상단 상태 라벨=SSOT) ===============================
 def _inject_chat_styles_once():
     """전역 CSS: ChatPane(대화틀) + 라디오 pill + 노란 입력창 + 인풋 내부 화살표 버튼 + 배지."""
-    if st is None: return
-    if st.session_state.get("_chat_styles_injected"): return
+    if st is None:
+        return
+    if st.session_state.get("_chat_styles_injected"):
+        return
     st.session_state["_chat_styles_injected"] = True
 
-    try:
-        from src.ui_theme import TOKENS as T
-    except Exception:
-        # 토큰 모듈 불가 시 안전 기본값
-        T = {
-            "brand_navy":"#0B1B45","pane_bg":"#EDF4FF","pane_border":"#D5E6FF",
-            "bubble_user_bg":"#FFF8CC","bubble_user_border":"#F2E4A2",
-            "bubble_ai_bg":"#EAF6FF","bubble_ai_border":"#BEE3FF",
-            "chip_user_bg":"#FFF2B8","chip_user_fg":"#6b5200",
-            "chip_ai_bg":"#DFF1FF","chip_ai_fg":"#0f5b86",
-            "radius_lg":"18px","radius_pill":"999px","input_h":"46px","send_btn":"38px"
-        }
-
-    st.markdown(f"""
+    st.markdown("""
     <style>
       /* ChatPane */
-      .chatpane{{ background:{T['pane_bg']}; border:1px solid {T['pane_border']}; border-radius:{T['radius_lg']};
-                  padding:10px; margin-top:12px; }}
-      .chatpane .messages{{ max-height:60vh; overflow-y:auto; padding:8px; }}
+      .chatpane{
+        background:#EDF4FF; border:1px solid #D5E6FF; border-radius:18px;
+        padding:10px; margin-top:12px;
+      }
+      .chatpane .messages{ max-height:60vh; overflow-y:auto; padding:8px; }
 
       /* 라디오 pill */
-      .chatpane div[data-testid="stRadio"]{{ background:{T['pane_bg']}; padding:8px 10px 0 10px; margin:0; }}
-      .chatpane div[data-testid="stRadio"] > div[role="radiogroup"]{{ display:flex; gap:10px; flex-wrap:wrap; }}
-      .chatpane div[data-testid="stRadio"] [role="radio"]{{
+      .chatpane div[data-testid="stRadio"]{ background:#EDF4FF; padding:8px 10px 0 10px; margin:0; }
+      .chatpane div[data-testid="stRadio"] > div[role="radiogroup"]{ display:flex; gap:10px; flex-wrap:wrap; }
+      .chatpane div[data-testid="stRadio"] [role="radio"]{
         border:2px solid #bcdcff; border-radius:12px; padding:6px 12px; background:#fff; color:#0a2540;
         font-weight:700; font-size:14px; line-height:1;
-      }}
-      .chatpane div[data-testid="stRadio"] [role="radio"][aria-checked="true"]{{
-        background:{T['bubble_ai_bg']}; border-color:#9fd1ff; color:#0a2540;
-      }}
-      .chatpane div[data-testid="stRadio"] svg{{ display:none!important }}
+      }
+      .chatpane div[data-testid="stRadio"] [role="radio"][aria-checked="true"]{
+        background:#eaf6ff; border-color:#9fd1ff; color:#0a2540;
+      }
+      .chatpane div[data-testid="stRadio"] svg{ display:none!important }
 
-      /* 인-카드 입력폼 */
-      .chatpane form[data-testid="stForm"]{{ position:relative; background:{T['pane_bg']}; padding:8px 10px 10px 10px; margin:0; }}
-      .chatpane form[data-testid="stForm"] input[type="text"]{{
-        background:{T['bubble_user_bg']} !important; border:1px solid {T['bubble_user_border']} !important;
-        border-radius:{T['radius_pill']} !important; color:#333 !important; height:{T['input_h']};
-        padding-right:calc({T['send_btn']} + 18px);
-      }}
-      .chatpane form[data-testid="stForm"] ::placeholder{{ color:#8A7F4A !important; }}
-      .chatpane form[data-testid="stForm"] button[type="submit"]{{
+      /* 인-카드 입력폼: 인풋 내부에 화살표 버튼(절대배치, 순수 CSS) */
+      .chatpane form[data-testid="stForm"]{ position:relative; background:#EDF4FF; padding:8px 10px 10px 10px; margin:0; }
+      .chatpane form[data-testid="stForm"] input[type="text"]{
+        background:#FFF8CC !important; border:1px solid #F2E4A2 !important; border-radius:999px !important;
+        color:#333 !important; height:46px; padding-right:56px;
+      }
+      .chatpane form[data-testid="stForm"] ::placeholder{ color:#8A7F4A !important; }
+      .chatpane form[data-testid="stForm"] button[type="submit"]{
         position:absolute; right:18px; top:50%; transform:translateY(-50%);
-        width:{T['send_btn']}; height:{T['send_btn']}; border-radius:50%; border:0; background:#0a2540; color:#fff;
+        width:38px; height:38px; border-radius:50%; border:0; background:#0a2540; color:#fff;
         font-size:18px; line-height:1; cursor:pointer; box-shadow:0 2px 6px rgba(0,0,0,.15);
-      }}
+      }
 
       /* 턴 구분선 */
-      .turn-sep{{height:0; border-top:1px dashed #E5EAF2; margin:14px 2px; position:relative;}}
-      .turn-sep::after{{content:''; position:absolute; top:-4px; left:50%; transform:translateX(-50%);
-                       width:8px; height:8px; border-radius:50%; background:#E5EAF2;}}
+      .turn-sep{height:0; border-top:1px dashed #E5EAF2; margin:14px 2px; position:relative;}
+      .turn-sep::after{content:''; position:absolute; top:-4px; left:50%; transform:translateX(-50%);
+                       width:8px; height:8px; border-radius:50%; background:#E5EAF2;}
     </style>
     """, unsafe_allow_html=True)
 
 def _render_bubble(role:str, text:str):
     """질문=파스텔 노랑, 답변=파스텔 하늘. 칩은 인라인."""
     import html, re
-    try:
-        from src.ui_theme import TOKENS as T
-    except Exception:
-        T = {"bubble_user_bg":"#FFF8CC","bubble_user_border":"#F2E4A2",
-             "bubble_ai_bg":"#EAF6FF","bubble_ai_border":"#BEE3FF",
-             "chip_user_bg":"#FFF2B8","chip_user_fg":"#6b5200",
-             "chip_ai_bg":"#DFF1FF","chip_ai_fg":"#0f5b86"}
-
     is_user = (role == "user")
     wrap = "display:flex;justify-content:flex-end;margin:8px 0;" if is_user else \
            "display:flex;justify-content:flex-start;margin:8px 0;"
     base = "max-width:88%;padding:10px 12px;border-radius:16px;line-height:1.6;font-size:15px;" \
            "box-shadow:0 1px 1px rgba(0,0,0,.05);white-space:pre-wrap;position:relative;"
-    bubble = (base + f"border-top-right-radius:8px;border:1px solid {T['bubble_user_border']};"
-                    f"background:{T['bubble_user_bg']};color:#333;"
+    bubble = (base + "border-top-right-radius:8px;border:1px solid #F2E4A2;background:#FFF8CC;color:#333;"
               if is_user else
-              base + f"border-top-left-radius:8px;border:1px solid {T['bubble_ai_border']};"
-                    f"background:{T['bubble_ai_bg']};color:#0a2540;")
+              base + "border-top-left-radius:8px;border:1px solid #BEE3FF;background:#EAF6FF;color:#0a2540;")
     label_chip = ("display:inline-block;margin:-2px 0 6px 0;padding:1px 8px;border-radius:999px;font-size:11px;font-weight:700;"
-                  f"background:{T['chip_user_bg']};color:{T['chip_user_fg']};border:1px solid {T['bubble_user_border']};"
+                  "background:#FFF2B8;color:#6b5200;border:1px solid #F2E4A2;"
                   if is_user else
                   "display:inline-block;margin:-2px 0 6px 0;padding:1px 8px;border-radius:999px;font-size:11px;font-weight:700;"
-                  f"background:{T['chip_ai_bg']};color:{T['chip_ai_fg']};border:1px solid {T['bubble_ai_border']};")
+                  "background:#DFF1FF;color:#0f5b86;border:1px solid #BEE3FF;")
     t = html.escape(text or "").replace("\n","<br/>")
     t = re.sub(r"  ","&nbsp;&nbsp;", t)
     st.markdown(
@@ -689,74 +669,93 @@ def _render_bubble(role:str, text:str):
         unsafe_allow_html=True
     )
 
+def _render_mode_controls_pills() -> str:
+    """질문 모드 pill (ChatPane 상단에 배치). 반환: '문법'|'문장'|'지문'"""
+    _inject_chat_styles_once()
+    ss = st.session_state
+    cur = ss.get("qa_mode_radio") or "문법"
+    labels = ["문법", "문장", "지문"]
+    idx = labels.index(cur) if cur in labels else 0
+    sel = st.radio("질문 모드", options=labels, index=idx, horizontal=True, label_visibility="collapsed")
+    if sel != cur:
+        ss["qa_mode_radio"] = sel
+        st.rerun()
+    return ss.get("qa_mode_radio", sel)
 
 # [13] 채팅 패널 ==============================================================
 def _render_chat_panel():
-    import time
     ss = st.session_state
-    if "chat" not in ss: ss["chat"] = []
+    if "chat" not in ss:
+        ss["chat"] = []
+
     _inject_chat_styles_once()
 
-    # 모드(상단 라디오) — ChatPane와 시각적으로 연결되지만, 함수 호출은 기존 유지
+    # 상단: 질문 모드 pill (카톡형에서 입력창 바로 위)
     cur_label = _render_mode_controls_pills()
     MODE_TOKEN = {"문법":"문법설명","문장":"문장구조분석","지문":"지문분석"}[cur_label]
 
-    # ChatPane — 항상 표시
+    # ChatPane — 메시지 영역 OPEN
     st.markdown('<div class="chatpane"><div class="messages">', unsafe_allow_html=True)
 
-    # 대화 렌더
     prev_role = None
     for m in ss["chat"]:
-        role = m.get("role","assistant")
+        role = m.get("role", "assistant")
         if prev_role is not None and prev_role != role:
             st.markdown('<div class="turn-sep"></div>', unsafe_allow_html=True)
-        _render_bubble(role, m.get("text",""))
+        _render_bubble(role, m.get("text", ""))
         prev_role = role
 
-    # 스트리밍용 자리
+    # 스트리밍 자리
     ph = st.empty()
 
-    # 메시지 영역 닫기(폼은 같은 ChatPane 안)
+    # 메시지 영역 CLOSE(폼은 같은 ChatPane 내부)
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # 인-카드 입력(form) — Enter=전송, 화살표 버튼은 인풋 내부에 절대배치
+    # 인-카드 입력폼 — Enter=전송, 화살표 버튼은 인풋 내부(절대배치, JS 없이)
     with st.form("inpane_chat_form", clear_on_submit=True):
-        qtxt = st.text_input("질문 입력", value="",
-                             placeholder="예) 분사구문이 뭐예요?  예) 이 문장 구조 분석해줘",
-                             label_visibility="collapsed", key="inpane_q")
+        qtxt = st.text_input(
+            "질문 입력", value="",
+            placeholder="예) 분사구문이 뭐예요?  예) 이 문장 구조 분석해줘",
+            label_visibility="collapsed", key="inpane_q"
+        )
         send = st.form_submit_button("➤", type="secondary")
-    st.markdown('</div>', unsafe_allow_html=True)  # ChatPane 끝
 
-    # 제출 처리(중복가드)
+    # ChatPane CLOSE
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # 제출 처리(빈값/중복 가드)
     if send and not ss.get("_sending", False):
         question = (qtxt or "").strip()
         if not question:
             st.warning("질문을 입력해 주세요.")
             return
+
         ss["_sending"] = True
         ss["chat"].append({"id": f"u{int(time.time()*1000)}", "role": "user", "text": question})
 
-        # ── 프롬프트 조립(분리 모듈)
+        # 증거/모드
+        ev_notes = ss.get("__evidence_class_notes", "")
+        ev_books = ss.get("__evidence_grammar_books", "")
+
+        # 프롬프트 해석 (분리 모듈 우선)
         try:
             from src.prompting.resolve import resolve_prompts
-            ev_notes  = ss.get("__evidence_class_notes", "")
-            ev_books  = ss.get("__evidence_grammar_books", "")
             system_prompt, user_prompt, source = resolve_prompts(MODE_TOKEN, question, ev_notes, ev_books, cur_label, ss)
             ss["__prompt_source"] = source
         except Exception:
-            # 안전 폴백
+            # 안전 폴백: '맥락 요청 금지, 간단 답변부터' 원칙 유지
             ss["__prompt_source"] = "Fallback(Local)"
             if MODE_TOKEN == "문법설명":
-                system_prompt = "모든 출력은 한국어. 장황한 배경설명 금지."
-                user_prompt = f"[질문]\n{question}\n- 한 줄 핵심 → 규칙 3~5 → 예문 1"
+                system_prompt = "모든 출력은 한국어. 장황한 배경설명 금지. 맥락요구 금지. 부족하면 추가질문 1~2개 제시."
+                user_prompt = f"[질문]\n{question}\n- 한 줄 핵심 → 규칙 3~5개 → 예문 1개 → 필요한 추가질문"
             elif MODE_TOKEN == "문장구조분석":
-                system_prompt = "모든 출력은 한국어. 불확실성은 %로."
-                user_prompt = f"[문장]\n{question}\n- S/V/O/C/M 개요 → 단계적 분석"
+                system_prompt = "모든 출력은 한국어. 불확실성은 %로. 맥락요구 금지."
+                user_prompt = f"[문장]\n{question}\n- S/V/O/C/M 개요 → 성분 식별 → 단계적 설명 → 핵심 포인트"
             else:
-                system_prompt = "모든 출력은 한국어."
-                user_prompt = f"[지문]\n{question}\n- 한 줄 요지 → 구조 요약"
+                system_prompt = "모든 출력은 한국어. 맥락요구 금지."
+                user_prompt = f"[지문]\n{question}\n- 한 줄 요지 → 구조 요약 → 핵심어 3–6개 + 이유"
 
-        # ── LLM 호출(스트리밍)
+        # LLM 호출(스트리밍 대응)
         try:
             from src.llm import providers as _prov
             call = getattr(_prov, "call_with_fallback", None)
