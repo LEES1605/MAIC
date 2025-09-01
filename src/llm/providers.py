@@ -1,121 +1,153 @@
-# ================================ llm/providers.py — START ======================
+# ============================ providers.py — START ===========================
 from __future__ import annotations
 
+import json
 import os
+import requests
+import traceback
 from typing import Any, Dict, Optional
 
 
-def _from_env_or_secrets(key: str) -> Optional[str]:
-    val = os.getenv(key)
-    if val:
-        return val
+def _secret(name: str, default: Optional[str] = None) -> Optional[str]:
+    # Streamlit secrets 우선 → 환경변수
     try:
-        import streamlit as st
-
-        v = st.secrets.get(key)
-        return str(v) if v else None
+        import streamlit as st  # type: ignore
+        val = st.secrets.get(name)  # type: ignore[attr-defined]
+        if val is None:
+            return os.getenv(name, default)
+        if isinstance(val, str):
+            return val
+        return json.dumps(val, ensure_ascii=False)
     except Exception:
-        return None
+        return os.getenv(name, default)
 
 
-# -------- OpenAI ---------------------------------------------------------------
-def call_openai(
+# -------- OpenAI -------------------------------------------------------------
+def call_openai_raw(
     *,
     system: str,
-    user: str,
+    prompt: str,
     model: Optional[str] = None,
     temperature: float = 0.2,
-    stream: bool = False,
-    **kwargs: Any,
-) -> str:
+) -> Dict[str, Any]:
     """
-    OpenAI Chat Completions(비스트리밍 기본). 라이브러리 미설치/키 없음은 예외.
+    OpenAI Chat Completions (비스트리밍 단순 버전)
+    응답: {"ok": bool, "provider":"openai", "text": str, "error": str|None}
     """
-    key = _from_env_or_secrets("OPENAI_API_KEY")
-    if not key:
-        raise RuntimeError("OPENAI_API_KEY 가 없습니다.")
+    api_key = _secret("OPENAI_API_KEY")
+    mdl = model or _secret("OPENAI_MODEL") or "gpt-4o-mini"
+    if not api_key:
+        return {"ok": False, "provider": "openai", "error": "missing_api_key"}
 
     try:
         from openai import OpenAI  # type: ignore
-    except Exception as e:  # pragma: no cover
-        raise RuntimeError("openai 라이브러리가 설치되어 있지 않습니다.") from e
+    except Exception as e:
+        return {
+            "ok": False,
+            "provider": "openai",
+            "error": f"openai_import_error: {e}",
+        }
 
-    client = OpenAI(api_key=key)  # type: ignore
-
-    mdl = model or _from_env_or_secrets("OPENAI_MODEL") or "gpt-4o-mini"
-    msgs = [{"role": "system", "content": system}, {"role": "user", "content": user}]
-
-    if stream:
-        # Streamlit 쪽에서 토큰 단위로 받도록 상위에서 처리(여기선 단순화).
-        with client.chat.completions.stream.create(model=mdl, messages=msgs) as s:  # type: ignore[attr-defined]
-            out = []
-            for event in s:
-                delta = getattr(event, "delta", None)
-                if not delta:
-                    continue
-                c = getattr(delta, "content", None)
-                if c:
-                    out.append(str(c))
-            return "".join(out)
-
-    res = client.chat.completions.create(  # type: ignore[attr-defined]
-        model=mdl,
-        messages=msgs,
-        temperature=float(temperature),
-    )
-    text = res.choices[0].message.content or ""  # type: ignore[assignment]
-    return str(text)
+    try:
+        client = OpenAI(api_key=api_key)  # type: ignore
+        res = client.chat.completions.create(  # type: ignore[attr-defined]
+            model=mdl,
+            temperature=float(temperature),
+            messages=[
+                {"role": "system", "content": system or ""},
+                {"role": "user", "content": prompt or ""},
+            ],
+        )
+        txt = res.choices[0].message.content or ""  # type: ignore[index,assignment]
+        return {"ok": True, "provider": "openai", "text": str(txt), "error": None}
+    except Exception as e:
+        return {
+            "ok": False,
+            "provider": "openai",
+            "error": f"{type(e).__name__}: {e}\n{traceback.format_exc()}",
+        }
 
 
-# -------- Gemini ---------------------------------------------------------------
-def call_gemini(
+# -------- Gemini -------------------------------------------------------------
+def call_gemini_raw(
     *,
     system: str,
-    user: str,
+    prompt: str,
     model: Optional[str] = None,
     temperature: float = 0.2,
-    **kwargs: Any,
-) -> str:
+) -> Dict[str, Any]:
     """
-    Google Gemini 호출(간단 버전). 키/라이브러리 없으면 예외.
+    Google Generative Language API(REST) 단순 호출
+    응답: {"ok": bool, "provider":"gemini", "text": str, "error": str|None}
     """
-    key = _from_env_or_secrets("GEMINI_API_KEY")
-    if not key:
-        raise RuntimeError("GEMINI_API_KEY 가 없습니다.")
+    api_key = _secret("GEMINI_API_KEY")
+    mdl_env = _secret("LLM_MODEL") or "gemini-1.5-pro"
+    model = model or mdl_env
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+
+    if not api_key:
+        return {"ok": False, "provider": "gemini", "error": "missing_api_key"}
+
+    # Gemini request body (text-only)
+    contents = []
+    if system:
+        contents.append({"role": "user", "parts": [{"text": f"[SYSTEM]\n{system}"}]})
+    contents.append({"role": "user", "parts": [{"text": prompt}]})
+
     try:
-        import google.generativeai as genai  # type: ignore
-    except Exception as e:  # pragma: no cover
-        raise RuntimeError("google-generativeai 라이브러리가 설치되어 있지 않습니다.") from e
+        r = requests.post(
+            url,
+            timeout=45,
+            headers={"Content-Type": "application/json"},
+            json={
+                "contents": contents,
+                "generationConfig": {"temperature": float(temperature)},
+            },
+        )
+        if r.status_code != 200:
+            return {
+                "ok": False,
+                "provider": "gemini",
+                "error": f"http_{r.status_code}: {r.text[:400]}",
+            }
+        data = r.json()
+        text = ""
+        if isinstance(data, dict):
+            cands = data.get("candidates") or []
+            if cands and isinstance(cands, list):
+                parts = (cands[0].get("content") or {}).get("parts") or []
+                if parts and isinstance(parts, list):
+                    text = str(parts[0].get("text") or "")
+        return {"ok": True, "provider": "gemini", "text": text, "error": None}
+    except Exception as e:
+        return {
+            "ok": False,
+            "provider": "gemini",
+            "error": f"{type(e).__name__}: {e}\n{traceback.format_exc()}",
+        }
 
-    genai.configure(api_key=key)  # type: ignore
-    mdl = model or _from_env_or_secrets("LLM_MODEL") or "models/gemini-1.5-pro"
-    prompt = f"[SYSTEM]\n{system}\n\n[USER]\n{user}"
-    m = genai.GenerativeModel(mdl)  # type: ignore
-    out = m.generate_content(prompt, generation_config={"temperature": float(temperature)})  # type: ignore
-    return str(getattr(out, "text", "") or "")
 
-
-# -------- Fallback -------------------------------------------------------------
+# -------- Fallback orchestrator ----------------------------------------------
 def call_with_fallback(
     *,
     system: str,
-    user: str,
-    prefer: str = "gemini",  # "openai" | "gemini"
-    **kwargs: Any,
-) -> str:
+    prompt: str,
+    prefer: str = "gemini",  # "gemini" | "openai"
+    temperature: float = 0.2,
+) -> Dict[str, Any]:
     """
-    우선 호출 실패 시 다른 프로바이더로 자동 폴백.
+    우선순위 제공자 실패 시 다른 쪽으로 폴백. 텍스트만 반환.
     """
     order = ["gemini", "openai"] if prefer == "gemini" else ["openai", "gemini"]
-    last_err: Optional[str] = None
+    last = None
     for name in order:
-        try:
-            if name == "openai":
-                return call_openai(system=system, user=user, **kwargs)
-            if name == "gemini":
-                return call_gemini(system=system, user=user, **kwargs)
-        except Exception as e:  # pragma: no cover
-            last_err = f"{name}: {e}"
-            continue
-    raise RuntimeError(f"모든 LLM 호출이 실패했습니다. last={last_err}")
-# ================================= llm/providers.py — END =======================
+        if name == "gemini":
+            res = call_gemini_raw(system=system, prompt=prompt, temperature=temperature)
+        else:
+            res = call_openai_raw(system=system, prompt=prompt, temperature=temperature)
+        if res.get("ok"):
+            return res
+        last = res
+    return last or {"ok": False, "provider": "unknown", "error": "all_failed", "text": ""}
+# ============================= providers.py — END ============================
