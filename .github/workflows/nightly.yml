@@ -1,0 +1,27 @@
+name: Nightly
+
+on:
+  schedule:
+    - cron: "0 18 * * *"   # UTC 18:00 = KST 03:00
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  nightly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: |
+          pip install -r requirements.txt
+          pip install -U pytest
+      - name: Smoke tests
+        env: { PYTHONPATH: . }
+        run: |
+          pytest -q -k "tokens or retry or fallback" --maxfail=1 --disable-warnings
