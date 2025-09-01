@@ -15,15 +15,15 @@ from src.compat.config_bridge import PERSIST_DIR  # 호환용(로컬 인덱스�
 
 # ===== [02] ERRORS ===========================================================
 class RAGEngineError(Exception):
-    ...
+    """기본 RAG 엔진 예외"""
 
 
 class QueryEngineNotReady(RAGEngineError):
-    ...
+    """쿼리 엔진 준비 안 됨"""
 
 
 class LocalIndexMissing(RAGEngineError):
-    ...
+    """로컬 인덱스 없음"""
 
 
 # ===== [03] LOCAL PATH HELPERS (fallback 전용) ===============================
@@ -43,6 +43,7 @@ def _index_exists(persist_dir: str | PathLike[str]) -> bool:
 # ===== [04] SECRETS/ID HELPERS ==============================================
 def _flatten_secrets(obj: Any = None, prefix: str = "") -> List[Tuple[str, Any]]:
     from collections.abc import Mapping as _Map
+
     if obj is None:
         obj = st.secrets
     out: List[Tuple[str, Any]] = []
@@ -62,6 +63,7 @@ def _parse_drive_id(s: str) -> Optional[str]:
     """URL/ID 혼합 입력에서 폴더/파일 ID만 추출."""
     s = (s or "").strip()
     import re
+
     for patt in (
         r"/folders/([A-Za-z0-9_-]{20,})",
         r"/file/d/([A-Za-z0-9_-]{20,})",
@@ -83,13 +85,13 @@ def _find_folder_id(kind: str) -> Optional[str]:
             "GDRIVE_BACKUP_FOLDER_ID",
             "BACKUP_FOLDER_ID",
             "BACKUP_FOLDER_URL",
-            "APP_BACKUP_FOLDER_ID",  # 별칭 호환
+            "APP_BACKUP_FOLDER_ID",
         ),
         "PREPARED": (
             "GDRIVE_PREPARED_FOLDER_ID",
             "PREPARED_FOLDER_ID",
             "PREPARED_FOLDER_URL",
-            "APP_GDRIVE_FOLDER_ID",  # 별칭 호환(프로젝트에선 prepared로 사용)
+            "APP_GDRIVE_FOLDER_ID",
         ),
         "DEFAULT": ("GDRIVE_FOLDER_ID", "GDRIVE_FOLDER_URL"),
     }
@@ -119,7 +121,12 @@ def _find_folder_id(kind: str) -> Optional[str]:
     # 환경변수도 확인
     ENV = {
         "BACKUP": ("GDRIVE_BACKUP_FOLDER_ID", "BACKUP_FOLDER_ID", "BACKUP_FOLDER_URL"),
-        "PREPARED": ("GDRIVE_PREPARED_FOLDER_ID", "PREPARED_FOLDER_ID", "PREPARED_FOLDER_URL", "APP_GDRIVE_FOLDER_ID"),
+        "PREPARED": (
+            "GDRIVE_PREPARED_FOLDER_ID",
+            "PREPARED_FOLDER_ID",
+            "PREPARED_FOLDER_URL",
+            "APP_GDRIVE_FOLDER_ID",
+        ),
         "DEFAULT": ("GDRIVE_FOLDER_ID", "GDRIVE_FOLDER_URL"),
     }[kind]
     for e in ENV:
@@ -151,7 +158,7 @@ def _get_drive_credentials():
             "oauth",
         )
 
-    # 2) 서비스계정(SA) — 개인 드라이브에서 '새로 업로드'는 불가(공유드라이브/이미 존재 파일 갱신/읽기 위주)
+    # 2) 서비스계정(SA)
     sa_raw = None
     for k in (
         "GDRIVE_SERVICE_ACCOUNT_JSON",
@@ -166,6 +173,7 @@ def _get_drive_credentials():
         for _, v in _flatten_secrets():
             try:
                 from collections.abc import Mapping as _Map
+
                 if isinstance(v, _Map) and v.get("type") == "service_account" and "private_key" in v:
                     sa_raw = v
                     break
@@ -200,13 +208,17 @@ def _download_latest_backup_zip_bytes() -> Tuple[bytes, Dict[str, Any]]:
 
     svc = _drive_client()
     q = f"'{backup_folder}' in parents and trashed=false and mimeType='application/zip'"
-    resp = svc.files().list(
-        q=q,
-        orderBy="modifiedTime desc",
-        fields="files(id,name,modifiedTime,size)",
-        pageSize=1,
-        supportsAllDrives=True,
-    ).execute()
+    resp = (
+        svc.files()
+        .list(
+            q=q,
+            orderBy="modifiedTime desc",
+            fields="files(id,name,modifiedTime,size)",
+            pageSize=1,
+            supportsAllDrives=True,
+        )
+        .execute()
+    )
     files = resp.get("files", [])
     if not files:
         raise LocalIndexMissing("드라이브 백업 ZIP이 없습니다.")
@@ -293,11 +305,13 @@ class _LocalQueryEngine:
     def _tokenize(s: str) -> List[str]:
         # 영문/숫자/한글 연속 문자열을 토큰으로 사용 (간단한 토크나이저)
         import re
+
         return re.findall(r"[A-Za-z0-9가-힣]+", (s or "").lower())
 
     def _build_vectors(self) -> None:
         """두 패스: DF 수집 → IDF 계산 → 각 청크 TF-IDF 벡터 & 노름 계산"""
         import math
+
         chunks = self.idx.get("chunks", [])
         self._texts: List[str] = []
         self._metas: List[Dict[str, Any]] = []
@@ -340,7 +354,9 @@ class _LocalQueryEngine:
     # ------------------------ 공개 API --------------------------------------
     def query(self, q: str, top_k: Optional[int] = None) -> Any:
         """쿼리 상위 top_k 결과 반환. 결과 객체는 .response 와 .hits(list)를 가짐."""
-        import math, heapq
+        import heapq
+        import math
+
         k = int(top_k or self.top_k_default)
         q_toks = self._tokenize(q or "")
         if not q_toks:
@@ -363,9 +379,8 @@ class _LocalQueryEngine:
         for i, (vec, norm) in enumerate(zip(self._vectors, self._norms)):
             if not vec or norm == 0.0:
                 continue
-            # 점곱
+            # 점곱 — 작은 사전 기준으로 곱하면 빠름
             dot = 0.0
-            # 작은 사전 기준으로 곱하면 빠름
             (a, b) = (q_vec, vec) if len(q_vec) <= len(vec) else (vec, q_vec)
             for t, w in a.items():
                 vw = b.get(t)
@@ -391,12 +406,14 @@ class _LocalQueryEngine:
             txt = self._texts[i]
             # 짧은 스니펫
             snippet = (txt[:160] + "…") if len(txt) > 160 else txt
-            hits.append({
-                "score": round(float(score), 4),
-                "text": txt,
-                "snippet": snippet,
-                "meta": meta,
-            })
+            hits.append(
+                {
+                    "score": round(float(score), 4),
+                    "text": txt,
+                    "snippet": snippet,
+                    "meta": meta,
+                }
+            )
 
         # 사람이 읽기 쉬운 응답 문자열
         lines = []
@@ -404,7 +421,7 @@ class _LocalQueryEngine:
             name = h["meta"].get("file_name") or h["meta"].get("doc_name") or "(unknown)"
             page = h["meta"].get("page_approx")
             hint = h["meta"].get("section_hint")
-            url  = h["meta"].get("source_drive_url")
+            url = h["meta"].get("source_drive_url")
             tag = f"{name}"
             if page:
                 tag += f" · p.{page}"
@@ -431,13 +448,13 @@ class _Index:
 
 # ===== [09] PUBLIC API =======================================================
 def get_or_build_index(
-    update_pct: Optional[Callable[[int], None]] = None,
-    update_msg: Optional[Callable[[str], None]] = None,
-    gdrive_folder_id: Optional[str] = None,
-    raw_sa: Optional[str] = None,
+    update_pct: Optional[Callable[[int], None]] = None,  # noqa: ARG001 (향후용)
+    update_msg: Optional[Callable[[str], None]] = None,  # noqa: ARG001 (향후용)
+    gdrive_folder_id: Optional[str] = None,  # noqa: ARG001 (향후용)
+    raw_sa: Optional[str] = None,  # noqa: ARG001 (향후용)
     persist_dir: str | PathLike[str] = str(PERSIST_DIR),
-    manifest_path: Optional[str] = None,
-    should_stop: Optional[Callable[[], bool]] = None,
+    manifest_path: Optional[str] = None,  # noqa: ARG001 (향후용)
+    should_stop: Optional[Callable[[], bool]] = None,  # noqa: ARG001 (향후용)
 ) -> Any:
     """
     1) 로컬에 인덱스가 있으면 그대로 사용
@@ -453,7 +470,6 @@ def get_or_build_index(
     # 2) 원격(in-memory)
     data = _load_index_in_memory_from_drive()
     return _Index(data)
-
 
 
 # ===== [10] END ==============================================================
