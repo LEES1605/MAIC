@@ -3,7 +3,12 @@ line-length = 100
 target-version = "py311"
 
 [lint]
+# 기존 선택 규칙 유지 (E/F/B/I)
 select = ["E", "F", "B", "I"]
 ignore = ["E203"]  # black/ruff newline spacing difference
+
+# 👉 app.py 에서만 E501(줄 길이) 무시 — CSS/HTML이 많아 줄바꿈 비용이 큰 파일
+per-file-ignores = { "app.py" = ["E501"] }
+
 [lint.isort]
 known-first-party = ["src"]
