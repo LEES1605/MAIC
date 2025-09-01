@@ -7,14 +7,13 @@ target-version = "py311"
 select = ["E", "F", "B", "I"]
 ignore = ["E203"]  # black/ruff newline spacing difference
 
-# 긴 CSS/HTML 문자열이 많은 파일만 E501(줄 길이) 예외
-per-file-ignores = {
-  "app.py" = ["E501"],
-  "src/rag/index_build.py" = ["E501"],
-  "src/ui_orchestrator.py" = ["E501"],
-  "src/prompt_modes.py" = ["E501"],
-  "src/features/ui_header.py" = ["E501"],
-}
+# ✅ inline table 대신 테이블 섹션을 사용해야 다줄 표기가 됩니다.
+[lint.per-file-ignores]
+"app.py" = ["E501"]
+"src/rag/index_build.py" = ["E501"]
+"src/ui_orchestrator.py" = ["E501"]
+"src/prompt_modes.py" = ["E501"]
+"src/features/ui_header.py" = ["E501"]
 
 [lint.isort]
 known-first-party = ["src"]
