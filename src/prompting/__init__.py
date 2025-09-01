@@ -1,3 +1,2 @@
-# package marker
-from .types import PromptParts
-from .resolve import resolve_prompts
+# Package marker for 'src.prompting'
+from .types import PromptParts  # optional convenience import
