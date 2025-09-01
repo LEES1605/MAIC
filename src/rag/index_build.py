@@ -1,5 +1,5 @@
-# src/rag/index_build.py
-# 인덱스 빌드/복원/변경감지 + GitHub Releases 스냅샷 업/다운 유틸
+# src/rag/index_build.py — FULL REPLACEMENT
+# [01] 기본 설정 & 상수  # [01] START
 from __future__ import annotations
 
 import hashlib
@@ -7,23 +7,23 @@ import io
 import json
 import os
 import time
-import urllib.parse
-import urllib.request
 import zipfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-# ===== [01] 설정/상수 =========================================================
+import urllib.parse
+import urllib.request
+
 # 퍼시스트 디렉토리(인덱스/매니페스트 저장)
-PERSIST_DIR = (Path.home() / ".maic" / "persist").resolve()
+PERSIST_DIR = Path.home() / ".maic" / "persist"
 PERSIST_DIR.mkdir(parents=True, exist_ok=True)
 
 # 인덱싱 대상 확장자(감지/인덱싱 동일 규칙)
 ALLOWED_EXTS = (".md", ".txt", ".pdf", ".csv", ".zip")
 
 # manifest 경로
-MANIFEST_PATH = (PERSIST_DIR / "manifest.json").resolve()
+MANIFEST_PATH = PERSIST_DIR / "manifest.json"
 
 # prepared 폴더 식별 (이름 또는 ID 직접 지정)
 PREPARED_FOLDER_NAME = os.getenv("MAIC_PREPARED_FOLDER_NAME", "prepared")
@@ -32,62 +32,69 @@ PREPARED_FOLDER_ID = os.getenv("MAIC_PREPARED_FOLDER_ID")  # 있으면 이 ID �
 # Google 인증
 GOOGLE_APPLICATION_CREDENTIALS = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "")
 
-# GitHub Releases 사용 여부
-USE_GITHUB_RELEASES = True
-
-# 하위폴더 재귀 수집 사용 여부
-DRIVE_RECURSIVE = True
-
 # 최대 파일 크기(안전)
 MAX_BYTES = 64 * 1024 * 1024  # 64MB
 
+# GitHub Releases 사용 여부
+USE_GITHUB_RELEASES = True
 
-# ===== [02] 공통 로깅/HTTP ====================================================
+# 하위폴더 재귀 수집
+DRIVE_RECURSIVE = True
+
+
 def _log(msg: str) -> None:
     ts = time.strftime("%Y-%m-%d %H:%M:%S")
     print(f"[index_build][{ts}] {msg}", flush=True)
 
 
+# 공통 HTTP 유틸(타임아웃 포함)
 def _gh_request(
     url: str,
     method: str = "GET",
     token: str = "",
     data: bytes | None = None,
     headers: dict | None = None,
-    timeout: int = 10,
-) -> tuple[int, bytes]:
-    """GitHub API 요청(간단 래퍼). timeout 기본 10s."""
+) -> Tuple[int, bytes]:
     hdrs = {"User-Agent": "maic-indexer"}
     if token:
         hdrs["Authorization"] = f"token {token}"
     if headers:
         hdrs.update(headers)
     req = urllib.request.Request(url, data=data, method=method, headers=hdrs)
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    with urllib.request.urlopen(req, timeout=10) as r:
         code = getattr(r, "status", 200)
-        blob = r.read()
-    return int(code), bytes(blob)
+        res = r.read()
+    return code, res
 
 
-def _get_gh_conf() -> Optional[Dict[str, str]]:
-    """GitHub Releases 사용을 위한 repo/token 구성을 읽는다."""
-    repo = os.getenv("GH_REPO")
-    token = os.getenv("GH_TOKEN")
-    if not repo or not token:
-        return None
-    return {"repo": repo, "token": token}
+def _get_gh_conf() -> Optional[dict]:
+    """
+    GH_TOKEN / GH_REPO 환경변수에서 GitHub 업로드/다운로드 설정을 읽는다.
+    - GH_REPO 예: "OWNER/REPO"
+    """
+    repo = os.getenv("GH_REPO") or os.getenv("GITHUB_REPOSITORY")
+    token = os.getenv("GH_TOKEN") or os.getenv("GITHUB_TOKEN")
+    if repo and token:
+        return {"repo": repo, "token": token}
+    return None
 
 
-# ===== [03] Google Drive 클라이언트/헬퍼 ======================================
+# [01] END
+
+
+# [03] Google Drive 클라이언트 & 헬퍼  # [03] START
 def _drive_client():
-    """Google Drive API v3 클라이언트 생성(서비스계정 우선, ADC 폴백)."""
+    """Google Drive API v3 클라이언트 생성(서비스계정/ADC)."""
     from google.oauth2.service_account import Credentials
     from googleapiclient.discovery import build
 
     scopes = ["https://www.googleapis.com/auth/drive.readonly"]
 
     if GOOGLE_APPLICATION_CREDENTIALS and Path(GOOGLE_APPLICATION_CREDENTIALS).exists():
-        creds = Credentials.from_service_account_file(GOOGLE_APPLICATION_CREDENTIALS, scopes=scopes)
+        creds = Credentials.from_service_account_file(
+            GOOGLE_APPLICATION_CREDENTIALS,
+            scopes=scopes,
+        )
         return build("drive", "v3", credentials=creds, cache_discovery=False)
 
     # ADC (Cloud Run/GCE 등)
@@ -97,18 +104,33 @@ def _drive_client():
         creds, _ = google.auth.default(scopes=scopes)
         return build("drive", "v3", credentials=creds, cache_discovery=False)
     except Exception as e:
-        # B904: 예외 체인을 보존
-        raise RuntimeError("Drive 인증 실패") from e
+        # B904: 예외 체이닝
+        raise RuntimeError(f"Drive 인증 실패: {e}") from e
 
 
-def _find_folder_id(svc, prefer_id: Optional[str] = None, name: Optional[str] = None) -> Optional[str]:
-    """폴더 ID를 환경변수 또는 이름으로 탐색."""
+def _find_folder_id(
+    svc=None,
+    prefer_id: Optional[str] = None,
+    name: Optional[str] = None,
+) -> Optional[str]:
+    """
+    폴더 ID를 환경변수 또는 이름으로 탐색.
+    - svc가 None이면 내부에서 드라이브 클라이언트를 생성해 사용
+    - orchestrator가 _find_folder_id(None)로 호출해도 안전하도록 폴백 지원
+    """
     if prefer_id:
         return prefer_id
-    look_name = name or PREPARED_FOLDER_NAME
+
+    if svc is None:
+        try:
+            svc = _drive_client()
+        except Exception:
+            return None
+
+    target_name = name or PREPARED_FOLDER_NAME
     q = (
-        f"name = '{look_name}' and mimeType = 'application/vnd.google-apps.folder' "
-        "and trashed = false"
+        f"name = '{target_name}' and "
+        "mimeType = 'application/vnd.google-apps.folder' and trashed = false"
     )
     res = svc.files().list(q=q, fields="files(id, name)", pageSize=50).execute()
     files = res.get("files", [])
@@ -116,7 +138,7 @@ def _find_folder_id(svc, prefer_id: Optional[str] = None, name: Optional[str] = 
         q2 = "mimeType = 'application/vnd.google-apps.folder' and trashed = false"
         res2 = svc.files().list(q=q2, fields="files(id, name)", pageSize=1000).execute()
         for f in res2.get("files", []):
-            if str(f.get("name", "")).lower() == str(look_name).lower():
+            if f.get("name", "").lower() == target_name.lower():
                 return f.get("id")
         return None
     return files[0].get("id")
@@ -125,8 +147,8 @@ def _find_folder_id(svc, prefer_id: Optional[str] = None, name: Optional[str] = 
 def _list_files_in_folder(svc, folder_id: str) -> List[Dict[str, Any]]:
     """prepared 폴더의 직속 파일 목록(페이지네이션 지원)."""
     q = (
-        f"'{folder_id}' in parents and trashed=false "
-        "and mimeType != 'application/vnd.google-apps.folder'"
+        f"'{folder_id}' in parents and trashed=false and "
+        "mimeType != 'application/vnd.google-apps.folder'"
     )
     fields = "nextPageToken, files(id, name, mimeType, modifiedTime, size, md5Checksum)"
     out: List[Dict[str, Any]] = []
@@ -146,7 +168,9 @@ def _list_files_in_folder(svc, folder_id: str) -> List[Dict[str, Any]]:
 
 def _list_files_recursive(svc, root_folder_id: str) -> List[Dict[str, Any]]:
     """root 폴더 이하 전체 파일을 재귀적으로 수집(폴더 제외)."""
-    fields = "nextPageToken, files(id, name, mimeType, modifiedTime, size, md5Checksum, parents)"
+    fields = (
+        "nextPageToken, files(id, name, mimeType, modifiedTime, size, md5Checksum, parents)"
+    )
 
     def _iter_children(folder_id: str) -> List[Dict[str, Any]]:
         out: List[Dict[str, Any]] = []
@@ -173,7 +197,7 @@ def _list_files_recursive(svc, root_folder_id: str) -> List[Dict[str, Any]]:
     return files
 
 
-def _download_file_bytes(svc, file_id: str, mime_type: Optional[str] = None) -> bytes:
+def _download_file_bytes(svc, file_id: str, mime_type: Optional[str] = None) -> bytes:  # noqa: ARG001
     """Drive 파일 바이트 다운로드 (Docs류는 export)."""
     from googleapiclient.errors import HttpError
     from googleapiclient.http import MediaIoBaseDownload
@@ -191,6 +215,7 @@ def _download_file_bytes(svc, file_id: str, mime_type: Optional[str] = None) -> 
             if "presentation" in m:
                 export_mime = "application/pdf"
             request = svc.files().export_media(fileId=file_id, mimeType=export_mime)
+
         fh = io.BytesIO()
         downloader = MediaIoBaseDownload(fd=fh, request=request, chunksize=1024 * 1024)
         done = False
@@ -209,21 +234,21 @@ def scan_drive_listing(svc, prepared_folder_id: str) -> List[Dict[str, Any]]:
         return _list_files_in_folder(svc, prepared_folder_id)
     except Exception:
         return []
+# [03] END
 
 
-# ===== [04] 텍스트 추출 ======================================================
+# [04] 텍스트 추출기  # [04] START
 def _extract_text_from_bytes(name: str, data: bytes) -> str:
     """텍스트/마크다운/CSV는 UTF-8, PDF는 PyPDF2로 추출."""
     if not data:
         return ""
-    if len(data) > MAX_BYTES:
-        data = data[:MAX_BYTES]
+    buf = data[:MAX_BYTES] if len(data) > MAX_BYTES else data
     lower = (name or "").lower()
     if lower.endswith(".pdf"):
         try:
             from PyPDF2 import PdfReader  # type: ignore
 
-            reader = PdfReader(io.BytesIO(data))
+            reader = PdfReader(io.BytesIO(buf))
             texts: List[str] = []
             for p in reader.pages:
                 try:
@@ -234,20 +259,19 @@ def _extract_text_from_bytes(name: str, data: bytes) -> str:
         except Exception:
             return ""
     try:
-        return data.decode("utf-8", errors="ignore")
+        return buf.decode("utf-8", errors="ignore")
     except Exception:
         return ""
 
 
-def _extract_texts_from_zip(data: bytes, zip_name: str) -> List[Dict[str, str]]:
+def _extract_texts_from_zip(data: bytes, zip_name: str) -> List[Dict[str, str]]:  # noqa: ARG001
     """ZIP 내부에서 텍스트류만 꺼내 텍스트 추출."""
     out: List[Dict[str, str]] = []
     if not data:
         return out
-    if len(data) > MAX_BYTES:
-        data = data[:MAX_BYTES]
+    buf = data[:MAX_BYTES] if len(data) > MAX_BYTES else data
     try:
-        with zipfile.ZipFile(io.BytesIO(data)) as zf:
+        with zipfile.ZipFile(io.BytesIO(buf)) as zf:
             for info in zf.infolist():
                 if info.is_dir():
                     continue
@@ -264,9 +288,10 @@ def _extract_texts_from_zip(data: bytes, zip_name: str) -> List[Dict[str, str]]:
     except Exception:
         pass
     return out
+# [04] END
 
 
-# ===== [05] 청크 분할 =========================================================
+# [05] 청크 분할  # [05] START
 def _to_chunks(
     name: str,
     text: str,
@@ -282,7 +307,7 @@ def _to_chunks(
     start = 0
     while start < n:
         end = min(n, start + chunk_size)
-        seg = t[start : end]
+        seg = t[start:end]
         chunks.append(
             {
                 "file_name": name,
@@ -296,11 +321,13 @@ def _to_chunks(
             break
         start = max(0, end - chunk_overlap)
     return chunks
+# [05] END
 
 
-# ===== [06] 인덱스 빌드(Drive prepared) ======================================
+# [06] 인덱스 빌드(Drive prepared)  # [06] START
 def _build_from_prepared(
-    svc, prepared_folder_id: str
+    svc,
+    prepared_folder_id: str,
 ) -> Tuple[int, int, Dict[str, Any], Dict[str, Any], List[Dict[str, Any]]]:
     """prepared 폴더(직속 또는 재귀)의 인덱싱."""
     files = (
@@ -349,7 +376,12 @@ def _build_from_prepared(
         # 단일 파일
         text = _extract_text_from_bytes(name, data)
         if text.strip():
-            meta = {"file_id": fid, "file_name": name, "mimeType": mime, "page_approx": None}
+            meta = {
+                "file_id": fid,
+                "file_name": name,
+                "mimeType": mime,
+                "page_approx": None,
+            }
             chunks.extend(_to_chunks(name, text, meta))
 
         docs_summary.append(
@@ -368,9 +400,10 @@ def _build_from_prepared(
     }
     extra = {"processed_files": len(docs_summary), "generated_chunks": len(chunks)}
     return len(docs_summary), len(chunks), manifest, extra, chunks
+# [06] END
 
 
-# ===== [07] 저장 ==============================================================
+# [07] 저장  # [07] START
 def _write_manifest(manifest: Dict[str, Any]) -> None:
     MANIFEST_PATH.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     _log(f"manifest 저장: {MANIFEST_PATH}")
@@ -382,9 +415,10 @@ def _write_chunks_jsonl(chunks: List[Dict[str, Any]]) -> None:
         for row in chunks:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
     _log(f"chunks 저장: {out} (rows={len(chunks)})")
+# [07] END
 
 
-# ===== [08] 변경 감지(diff) ==================================================
+# [08] 변경 감지(diff)  # [08] START
 def _ingestible(name: str) -> bool:
     n = (name or "").lower()
     return any(n.endswith(ext) for ext in ALLOWED_EXTS)
@@ -397,7 +431,7 @@ def diff_with_manifest(folder_id: str | None = None, limit: int = 5000) -> dict:
     - 최초(no_manifest) 시 현재 대상 전부 added로 간주
     - DRIVE_RECURSIVE 설정 반영
     """
-    out: Dict[str, Any] = {
+    out = {
         "ok": False,
         "reason": "",
         "stats": {"added": 0, "changed": 0, "removed": 0},
@@ -419,18 +453,19 @@ def diff_with_manifest(folder_id: str | None = None, limit: int = 5000) -> dict:
         cdocs = {f.get("id"): f for f in cur if f.get("id")}
 
         if not MANIFEST_PATH.exists():
-            out["ok"] = True
-            out["reason"] = "no_manifest"
-            out["added"] = [f.get("name") for f in cur]
-            out["stats"] = {"added": len(cur), "changed": 0, "removed": 0}
+            out.update(
+                ok=True,
+                reason="no_manifest",
+                added=[f.get("name") for f in cur],
+                stats={"added": len(cur), "changed": 0, "removed": 0},
+            )
             return out
 
         man = json.loads(MANIFEST_PATH.read_text(encoding="utf-8") or "{}")
         mdocs_src = {d.get("id"): d for d in (man.get("docs") or []) if d.get("id")}
         mdocs = {i: d for i, d in mdocs_src.items() if _ingestible(d.get("name", ""))}
 
-        ids_m = set(mdocs.keys())
-        ids_c = set(cdocs.keys())
+        ids_m, ids_c = set(mdocs.keys()), set(cdocs.keys())
         added_ids = list(ids_c - ids_m)
         removed_ids = list(ids_m - ids_c)
         common_ids = ids_m & ids_c
@@ -439,10 +474,8 @@ def diff_with_manifest(folder_id: str | None = None, limit: int = 5000) -> dict:
         for i in common_ids:
             m = mdocs[i]
             c = cdocs[i]
-            md5_m = m.get("md5")
-            md5_c = c.get("md5Checksum")
-            sz_m = str(m.get("size"))
-            sz_c = str(c.get("size"))
+            md5_m, md5_c = m.get("md5"), c.get("md5Checksum")
+            sz_m, sz_c = str(m.get("size")), str(c.get("size"))
             if (md5_m and md5_c and md5_m != md5_c) or (sz_m and sz_c and sz_m != sz_c):
                 changed_ids.append(i)
 
@@ -456,9 +489,11 @@ def diff_with_manifest(folder_id: str | None = None, limit: int = 5000) -> dict:
             return out_names
 
         out["ok"] = True
-        out["added"] = _names(added_ids)
-        out["changed"] = _names(changed_ids)
-        out["removed"] = _names(removed_ids)
+        out["added"], out["changed"], out["removed"] = (
+            _names(added_ids),
+            _names(changed_ids),
+            _names(removed_ids),
+        )
         out["stats"] = {
             "added": len(out["added"]),
             "changed": len(out["changed"]),
@@ -468,9 +503,10 @@ def diff_with_manifest(folder_id: str | None = None, limit: int = 5000) -> dict:
     except Exception as e:
         out["reason"] = f"{type(e).__name__}: {e}"
         return out
+# [08] END
 
 
-# ===== [09U] GitHub 업로드 유틸 ==============================================
+# [09U] GitHub 업로드 유틸  # [09U] START
 def _zip_index_artifacts(zip_path: Path) -> Path:
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as z:
         if MANIFEST_PATH.exists():
@@ -482,9 +518,8 @@ def _zip_index_artifacts(zip_path: Path) -> Path:
 
 
 def _github_create_or_get_release(conf: dict, tag: str, name: str, body: str = "") -> Optional[int]:
-    repo = conf["repo"]
-    token = conf["token"]
-    url = f"https://api.github.com/repos/{repo}/releases"
+    repo, token = conf["repo"], conf["token"]
+    url = "https://api.github.com/repos/{repo}/releases".format(repo=repo)
     payload = json.dumps(
         {"tag_name": tag, "name": name, "body": body, "draft": False, "prerelease": False}
     ).encode("utf-8")
@@ -492,35 +527,41 @@ def _github_create_or_get_release(conf: dict, tag: str, name: str, body: str = "
     if 200 <= code < 300:
         return json.loads(res.decode("utf-8")).get("id")
 
-    # 이미 존재하는 태그면 조회
+    # 이미 존재하면 GET으로 회수
     try:
-        code2, res2 = _gh_request(
-            f"https://api.github.com/repos/{repo}/releases/tags/{tag}", "GET", token
+        code, res = _gh_request(
+            "https://api.github.com/repos/{repo}/releases/tags/{tag}".format(repo=repo, tag=tag),
+            "GET",
+            token,
         )
-        if 200 <= code2 < 300:
-            return json.loads(res2.decode("utf-8")).get("id")
+        if 200 <= code < 300:
+            return json.loads(res.decode("utf-8")).get("id")
     except Exception:
-        return None
+        pass
     return None
 
 
 def _github_delete_asset_if_exists(conf: dict, release_id: int, asset_name: str) -> None:
-    repo = conf["repo"]
-    token = conf["token"]
+    repo, token = conf["repo"], conf["token"]
     code, res = _gh_request(
-        f"https://api.github.com/repos/{repo}/releases/{release_id}/assets", "GET", token
+        "https://api.github.com/repos/{repo}/releases/{rid}/assets".format(repo=repo, rid=release_id),
+        "GET",
+        token,
     )
     if not (200 <= code < 300):
         return
-    try:
-        assets = json.loads(res.decode("utf-8"))
-    except Exception:
-        return
+    assets = json.loads(res.decode("utf-8"))
     for a in assets:
         if a.get("name") == asset_name:
             aid = a.get("id")
             try:
-                _gh_request(f"https://api.github.com/repos/{repo}/releases/assets/{aid}", "DELETE", token)
+                _gh_request(
+                    "https://api.github.com/repos/{repo}/releases/assets/{aid}".format(
+                        repo=repo, aid=aid
+                    ),
+                    "DELETE",
+                    token,
+                )
             except Exception:
                 pass
 
@@ -548,15 +589,15 @@ def upload_index_to_github_releases(note: str = "") -> Optional[str]:
     latest_name = "index_latest.zip"
     snap_zip = _zip_index_artifacts(out_dir / snapshot_name)
     latest_zip = _zip_index_artifacts(out_dir / latest_name)
+    del snap_zip, latest_zip  # 파일만 생성하면 충분
 
-    repo = conf["repo"]
-    token = conf["token"]
-    up_base = f"https://uploads.github.com/repos/{repo}/releases/{rid}/assets?name="
-
-    # 최신본은 기존 것 삭제 후 업로드
-    _github_delete_asset_if_exists(conf, rid, latest_name)
-
-    for fname in (snapshot_name, latest_name):
+    repo, token = conf["repo"], conf["token"]
+    up_base = "https://uploads.github.com/repos/{repo}/releases/{rid}/assets?name=".format(
+        repo=repo, rid=rid
+    )
+    for fname in [snapshot_name, latest_name]:
+        if fname == latest_name:
+            _github_delete_asset_if_exists(conf, rid, latest_name)
         data = (out_dir / fname).read_bytes()
         _log(f"GitHub 업로드: {fname} ({len(data)} bytes)")
         _gh_request(
@@ -567,18 +608,17 @@ def upload_index_to_github_releases(note: str = "") -> Optional[str]:
             {"Content-Type": "application/zip"},
         )
     return snapshot_name
+# [09U] END
 
 
-# ===== [09D] GitHub 최신 ZIP 복원 ============================================
+# [09D] GitHub 최신 ZIP 복원  # [09D] START
 def _parse_built_ts_from_manifest(path: Path) -> int:
     try:
         mj = json.loads(path.read_text(encoding="utf-8"))
         s = (mj.get("built_at") or "").strip()
         if not s:
             return 0
-        import datetime as _dt
-
-        dt = _dt.datetime.strptime(s, "%Y-%m-%d %H:%M:%S")
+        dt = datetime.strptime(s, "%Y-%m-%d %H:%M:%S")
         return int(dt.timestamp())
     except Exception:
         return 0
@@ -588,10 +628,13 @@ def _download_latest_release_zip() -> Optional[bytes]:
     conf = _get_gh_conf()
     if not (USE_GITHUB_RELEASES and conf):
         return None
-    repo = conf["repo"]
-    token = conf["token"]
+    repo, token = conf["repo"], conf["token"]
     try:
-        code, res = _gh_request(f"https://api.github.com/repos/{repo}/releases/latest", "GET", token)
+        code, res = _gh_request(
+            "https://api.github.com/repos/{repo}/releases/latest".format(repo=repo),
+            "GET",
+            token,
+        )
         if not (200 <= code < 300):
             return None
         data = json.loads(res.decode("utf-8"))
@@ -614,8 +657,8 @@ def _download_latest_release_zip() -> Optional[bytes]:
         if not url:
             return None
         _log(f"GitHub 다운로드: {target.get('name')} …")
-        code2, blob = _gh_request(url, "GET", token)
-        if 200 <= code2 < 300:
+        code, blob = _gh_request(url, "GET", token)
+        if 200 <= code < 300:
             return blob
     except Exception:
         return None
@@ -630,8 +673,9 @@ def restore_from_github_release_if_needed() -> bool:
 
     man_exists = MANIFEST_PATH.exists() and MANIFEST_PATH.stat().st_size > 0
     chk_path = PERSIST_DIR / "chunks.jsonl"
-    chk_exists = chk_path.exists() and chk_path.stat().st_size > 0  # noqa: F841 (정보성)
+    chk_exists = chk_path.exists() and chk_path.stat().st_size > 0
     local_ts = _parse_built_ts_from_manifest(MANIFEST_PATH) if man_exists else 0
+    del chk_exists  # 현재 로직에서는 사용 안 함(미래 확장 보류)
 
     blob = _download_latest_release_zip()
     if not blob:
@@ -653,29 +697,33 @@ def restore_from_github_release_if_needed() -> bool:
     if new_ts and new_ts >= local_ts:
         _log(f"복원 완료: manifest/chunks 갱신 (built_at: {new_ts})")
         return True
+
     _log("복원했으나 더 오래된 스냅샷 → 유지")
     return False
+# [09D] END
 
 
-# ===== [10] 전체 파이프라인/CLI ==============================================
+# [09] 전체 파이프라인 실행(빌드)  # [09] START
 def run_index_pipeline(folder_id: str | None = None) -> Dict[str, Any]:
     """prepared에서 문서를 인덱싱하여 저장(+선택적으로 Releases 업로드)."""
     svc = _drive_client()
     fid = folder_id or _find_folder_id(svc, prefer_id=PREPARED_FOLDER_ID, name=PREPARED_FOLDER_NAME)
     if not fid:
         raise RuntimeError("prepared 폴더 ID를 찾을 수 없습니다.")
+
     n_files, n_chunks, manifest, extra, chunks = _build_from_prepared(svc, fid)
     _write_manifest(manifest)
     _write_chunks_jsonl(chunks)
     _log(f"인덱싱 완료: files={n_files}, chunks={n_chunks}")
-    conf = _get_gh_conf() if USE_GITHUB_RELEASES else None
-    if conf:
+
+    if USE_GITHUB_RELEASES and _get_gh_conf():
         try:
             snap = upload_index_to_github_releases(note=f"files={n_files}, chunks={n_chunks}")
             if snap:
                 _log(f"Releases 업로드 완료: {snap}")
         except Exception as e:
             _log(f"Releases 업로드 실패: {e}")
+
     return {
         "files": n_files,
         "chunks": n_chunks,
@@ -683,8 +731,10 @@ def run_index_pipeline(folder_id: str | None = None) -> Dict[str, Any]:
         "chunks_path": str(PERSIST_DIR / "chunks.jsonl"),
         "extra": extra,
     }
+# [09] END
 
 
+# [10] CLI  # [10] START
 def _cli() -> None:
     import argparse
 
@@ -708,32 +758,37 @@ def _cli() -> None:
     if not d.get("ok"):
         _log(f"변경 감지 실패: {d.get('reason')}")
         return
+
     stt = d.get("stats", {})
-    has_added = int(stt.get("added", 0) or 0) > 0
-    has_changed = int(stt.get("changed", 0) or 0) > 0
-    if has_added or has_changed:
+    if stt.get("added", 0) or stt.get("changed", 0):
         _log(
-            f"변경 감지됨: added={stt.get('added')} changed={stt.get('changed')} → 인덱싱 수행"
+            "변경 감지됨: added={a} changed={c} → 인덱싱 수행".format(
+                a=stt.get("added"),
+                c=stt.get("changed"),
+            )
         )
         run_index_pipeline(folder_id=args.folder_id)
-        return
-
-    _log("변경 없음: Releases 최신 ZIP 자동 복원 시도")
-    try:
-        restored = restore_from_github_release_if_needed()
-        if not restored:
-            _log("복원 생략/실패: 로컬 인덱스 그대로 사용")
-    except Exception as e:
-        _log(f"Releases 복원 실패: {e}")
+    else:
+        _log("변경 없음: Releases 최신 ZIP 자동 복원 시도")
+        try:
+            restored = restore_from_github_release_if_needed()
+            if not restored:
+                _log("복원 생략/실패: 로컬 인덱스 그대로 사용")
+        except Exception as e:
+            _log(f"Releases 복원 실패: {e}")
 
 
 if __name__ == "__main__":
     _cli()
+# [10] END
 
 
-# ===== [11] UI 호환 어댑터(API) ==============================================
+# [11] UI 호환 어댑터(API)  # [11] START
 def _result(
-    action: str, ok: bool, detail: str = "", extra: Optional[Dict[str, Any]] = None
+    action: str,
+    ok: bool,
+    detail: str = "",
+    extra: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     out = {"ok": ok, "action": action, "detail": detail}
     if extra:
@@ -788,7 +843,6 @@ def build_index_with_checkpoint(
             return _result("restore", False, f"restore failed: {e}")
         if restored:
             return _result("restore", True, "restored from latest release", {"restored": True})
-
     return _result("skip", True, "no changes", {"restored": False})
 
 
@@ -798,18 +852,23 @@ def build_index(*, folder_id: Optional[str] = None) -> Dict[str, Any]:
 
 
 def ensure_index_ready(
-    *, prefer_release_restore: bool = True, folder_id: Optional[str] = None
+    *,
+    prefer_release_restore: bool = True,
+    folder_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     return build_index_with_checkpoint(
-        force=False, prefer_release_restore=prefer_release_restore, folder_id=folder_id
+        force=False,
+        prefer_release_restore=prefer_release_restore,
+        folder_id=folder_id,
     )
 
 
 def diff_status(*, folder_id: Optional[str] = None) -> Dict[str, Any]:
     return diff_with_manifest(folder_id=folder_id)
+# [11] END
 
 
-# ===== [12] 빠른 사전 점검(quick_precheck) ===================================
+# [12] 빠른 사전 점검(quick_precheck)  # [12] START
 def quick_precheck() -> dict:
     """
     UI에서 초기 상태 뱃지/버튼 표시 전에 호출하는 빠른 점검.
@@ -824,7 +883,7 @@ def quick_precheck() -> dict:
         "detail": str                  # 간단 사유/메시지
       }
     """
-    info: Dict[str, Any] = {
+    info = {
         "ok": False,
         "drive_ok": False,
         "prepared_id": None,
@@ -837,8 +896,8 @@ def quick_precheck() -> dict:
     # 1) 로컬 인덱스 존재 여부
     try:
         man_ok = MANIFEST_PATH.exists() and MANIFEST_PATH.stat().st_size > 0
-        chk_path = PERSIST_DIR / "chunks.jsonl"
-        chk_ok = chk_path.exists() and chk_path.stat().st_size > 0
+        chunks_path = PERSIST_DIR / "chunks.jsonl"
+        chk_ok = chunks_path.exists() and chunks_path.stat().st_size > 0
         info["local_index_ok"] = bool(man_ok and chk_ok)
     except Exception:
         info["local_index_ok"] = False
@@ -870,3 +929,4 @@ def quick_precheck() -> dict:
         else:
             info["detail"] = "인덱스 없음 및 GitHub 복원 설정 없음"
     return info
+# [12] END
