@@ -431,7 +431,7 @@ def _quick_local_attach_only():
     """빠른 부팅: 네트워크 호출 없이 로컬 신호만 확인."""
     if st is None:
         return False
-    ss = st.session_state
+    
     man = PERSIST_DIR / "manifest.json"
     chunks = PERSIST_DIR / "chunks.jsonl"
     ready = PERSIST_DIR / ".ready"
