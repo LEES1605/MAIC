@@ -1,42 +1,48 @@
-# ===== [01] IMPORTS & Settings 구현 선택(무의존 폴백 포함) =====================
+# ===== [01] IMPORTS & Settings 구현 선택(무의존 폴백 포함) =====================  # [01] START
 from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 # 구현 선택:
 # 1) pydantic-settings(v2)        → 최우선
 # 2) pydantic(BaseSettings, v1)   → 차선
 # 3) SIMPLE(무의존 폴백)          → 둘 다 없거나 v2만 설치된 경우
-_IMPL = "SIMPLE"
-BaseSettings = object  # type: ignore[assignment]
-SettingsConfigDict = dict  # type: ignore[assignment]
+_IMPL: str = "SIMPLE"
+
+# 폴백용: 외부 패키지 유무와 무관하게 안전하게 재할당 가능하도록 Any로 선언
+BaseSettings: Any
+SettingsConfigDict: Any
 
 try:
     # v2 (권장) — 별도 패키지
-    from pydantic_settings import BaseSettings as _P2Base, SettingsConfigDict as _P2Cfg  # type: ignore
+    from pydantic_settings import (  # noqa: F401
+        BaseSettings as _P2Base,
+        SettingsConfigDict as _P2Cfg,
+    )
 
-    BaseSettings = _P2Base  # type: ignore[assignment]
-    SettingsConfigDict = _P2Cfg  # type: ignore[assignment]
+    BaseSettings = _P2Base
+    SettingsConfigDict = _P2Cfg
     _IMPL = "P2"
 except Exception:
     try:
         # v1 — pydantic 내 BaseSettings (v2에선 ImportError 유발)
-        from pydantic import BaseSettings as _P1Base  # type: ignore
+        from pydantic import BaseSettings as _P1Base  # noqa: F401
 
         class _P1Cfg(dict):
-            ...
+            pass
 
-        BaseSettings = _P1Base  # type: ignore[assignment]
-        SettingsConfigDict = _P1Cfg  # type: ignore[assignment]
+        BaseSettings = _P1Base
+        SettingsConfigDict = _P1Cfg
         _IMPL = "P1"
     except Exception:
+        # v1/v2 모두 사용 불가 → SIMPLE 폴백으로 진행
         _IMPL = "SIMPLE"
 # ===== [01] END ===============================================================
 
 
-# ===== [02] 경로 상수(앱/스토리지/매니페스트) ==================================
+# ===== [02] 경로 상수(앱/스토리지/매니페스트) ==================================  # [02] START
 def _default_app_data_dir(app_name: str = "my_ai_teacher") -> Path:
     if os.name == "nt":
         base = os.environ.get("LOCALAPPDATA") or os.path.expanduser(r"~\AppData\Local")
@@ -60,7 +66,7 @@ PERSIST_DIR.mkdir(parents=True, exist_ok=True)
 # ===== [02] END ===============================================================
 
 
-# ===== [03] Settings 모델(세 가지 구현을 하나의 인터페이스로) =================
+# ===== [03] Settings 모델(세 가지 구현을 하나의 인터페이스로) =================  # [03] START
 def _coerce_bool(x: str | None, default: bool = False) -> bool:
     if x is None:
         return default
@@ -120,8 +126,8 @@ class _BaseFields:
 # --- 구현 A: pydantic v2(pydantic-settings) -----------------------------------
 if _IMPL == "P2":
 
-    class Settings(_BaseFields, BaseSettings):  # type: ignore[misc]
-        model_config = SettingsConfigDict(  # type: ignore[assignment]
+    class Settings(_BaseFields, BaseSettings):
+        model_config = SettingsConfigDict(
             env_prefix="APP_",
             env_file=".env",
             case_sensitive=False,
@@ -132,7 +138,7 @@ if _IMPL == "P2":
 # --- 구현 B: pydantic v1 ------------------------------------------------------
 elif _IMPL == "P1":
 
-    class Settings(_BaseFields, BaseSettings):  # type: ignore[misc]
+    class Settings(_BaseFields, BaseSettings):
         class Config:
             env_prefix = "APP_"
             env_file = ".env"
@@ -143,7 +149,7 @@ elif _IMPL == "P1":
 # --- 구현 C: SIMPLE(무의존) ---------------------------------------------------
 else:
 
-    class Settings(_BaseFields):  # type: ignore[misc]
+    class Settings(_BaseFields):
         """
         pydantic 없이 동작하는 가벼운 설정.
         - 우선순위: os.environ → .env → 기본값
@@ -155,7 +161,7 @@ else:
             # 1) .env 읽기(있으면)
             dotenv = _read_dotenv(Path(".env"))
 
-            def _get(name: str, default, kind: str = "str"):
+            def _get(name: str, default: Any, kind: str = "str") -> Any:
                 env_key = f"APP_{name}"
                 raw = os.environ.get(env_key, dotenv.get(env_key))
                 if raw is None:
