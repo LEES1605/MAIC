@@ -43,7 +43,6 @@ def _ready_mark(persist_dir: Path) -> None:
 
 # ========================= [00] orchestrator helpers — END =========================
 
-
 # ========================== [01] lazy imports — START =============================
 def _lazy_imports() -> Dict[str, Any]:
     """
@@ -101,15 +100,15 @@ def _lazy_imports() -> Dict[str, Any]:
     mod_rel = _imp("src.backup.github_release")
     if mod_rel is not None:
         try:
-            deps["get_latest_release"] = mod_rel.get_latest_release  # type: ignore[attr-defined]
+            deps["get_latest_release"] = getattr(mod_rel, "get_latest_release", None)
         except Exception:
             deps["get_latest_release"] = None
         try:
-            deps["fetch_manifest_from_release"] = mod_rel.fetch_manifest_from_release  # type: ignore[attr-defined]
+            deps["fetch_manifest_from_release"] = getattr(mod_rel, "fetch_manifest_from_release", None)
         except Exception:
             deps["fetch_manifest_from_release"] = None
         try:
-            deps["restore_latest"] = mod_rel.restore_latest  # type: ignore[attr-defined]
+            deps["restore_latest"] = getattr(mod_rel, "restore_latest", None)
         except Exception:
             deps["restore_latest"] = None
 
@@ -137,8 +136,6 @@ def _lazy_imports() -> Dict[str, Any]:
             pass
 
     return deps
-
-
 # =========================== [01] lazy imports — END ==============================
 
 
@@ -288,15 +285,14 @@ def render_index_orchestrator_panel() -> None:
                         _add_error(e)
 
                 ss["_orch_diag"] = {
+                    "t": round(time.perf_counter() - t0, 2),
                     "drive_ok": drive_ok,
                     "drive_email": drive_email,
                     "gh_ok": gh_ok,
                     "gh_tag": gh_tag,
                 }
-            elapsed_ms = (time.perf_counter() - t0) * 1000.0
-            st.success(f"빠른 점검 완료 ({elapsed_ms:.0f} ms)")
 
-        # 결과 표시
+        # 요약 표시
         d = ss.get("_orch_diag") or {}
 
         def _badge(ok: Optional[bool], label: str) -> str:
@@ -324,7 +320,7 @@ def render_index_orchestrator_panel() -> None:
         added = 0
         changed = 0
         removed = 0
-        details = {"added": [], "changed": [], "removed": []}
+        details: dict[str, list[Any]] = {"added": [], "changed": [], "removed": []}
         if callable(diff_with_manifest):
             try:
                 dct = diff_with_manifest(folder_id=None) or {}
@@ -362,53 +358,32 @@ def render_index_orchestrator_panel() -> None:
                                 _ready_mark(p)
                                 st.success("✅ 업데이트 완료(재인덱싱)")
                             else:
-                                st.error("업데이트가 완료되지 않았습니다.")
+                                st.error("재인덱싱이 완료되지 않았습니다.")
                         except Exception as e:
                             _add_error(e)
-                            st.error("업데이트 중 오류가 발생했습니다.")
+                            st.error("재인덱싱 중 오류가 발생했습니다.")
                     else:
                         st.error("build_index_with_checkpoint 사용 불가(임포트 실패)")
             with c2:
-                if st.button("📦 백업에서 복원", use_container_width=True):
-                    if callable(restore_latest):
+                if st.button("🧱 전체 인덱싱(강제)", use_container_width=True):
+                    if callable(build_index_with_checkpoint):
                         try:
-                            with st.spinner("백업에서 복원 중…"):
-                                ok = bool(restore_latest(dest_dir=p))
-                            if ok:
+                            with st.spinner("전체 인덱싱 중…"):
+                                res = build_index_with_checkpoint(
+                                    force=True,
+                                    prefer_release_restore=False,
+                                    folder_id=_find_folder_id(None) if callable(_find_folder_id) else None,
+                                )
+                            if isinstance(res, dict) and res.get("ok"):
                                 _ready_mark(p)
-                                st.success("✅ 백업 복원 완료")
+                                st.success("✅ 인덱싱 완료")
                             else:
-                                st.error("복원에 실패했습니다.")
+                                st.error("인덱싱이 완료되지 않았습니다.")
                         except Exception as e:
                             _add_error(e)
-                            st.error("복원 중 오류가 발생했습니다.")
+                            st.error("인덱싱 중 오류가 발생했습니다.")
                     else:
-                        st.error("restore_latest 사용 불가(임포트 실패)")
-        else:
-            st.success("변경 사항이 없습니다. (최신 상태)")
-
-    # 4) 강제 재인덱싱
-    with st.container(border=True):
-        st.markdown("### ⛏ 강제 재인덱싱")
-        if st.button("⛏ 강제 재인덱싱", use_container_width=True):
-            if callable(build_index_with_checkpoint):
-                try:
-                    with st.spinner("로컬 인덱싱 중…"):
-                        res = build_index_with_checkpoint(
-                            force=True,
-                            prefer_release_restore=False,
-                            folder_id=_find_folder_id(None) if callable(_find_folder_id) else None,
-                        )
-                    if isinstance(res, dict) and res.get("ok"):
-                        _ready_mark(p)
-                        st.success("✅ 인덱싱 완료")
-                    else:
-                        st.error("인덱싱이 완료되지 않았습니다.")
-                except Exception as e:
-                    _add_error(e)
-                    st.error("인덱싱 중 오류가 발생했습니다.")
-            else:
-                st.error("build_index_with_checkpoint 사용 불가(임포트 실패)")
+                        st.error("build_index_with_checkpoint 사용 불가(임포트 실패)")
 
     # 5) 오류 로그
     with st.container(border=True):
@@ -418,6 +393,5 @@ def render_index_orchestrator_panel() -> None:
         st.download_button(
             "오류 로그 다운로드", data=txt.encode("utf-8"), file_name="orchestrator_errors.txt"
         )
-
-
 # =================== [03] render_index_orchestrator_panel — END ===================
+
