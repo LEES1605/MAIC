@@ -561,70 +561,88 @@ def _render_admin_panels() -> None:
 def _inject_chat_styles_once():
     """전역 CSS: ChatPane(대화틀) + 라디오 pill + 노란 입력창 + 인풋 내부 화살표 버튼 + 배지."""
     if st is None: return
-    if st.session_state.get("_chat_styles_injected"):
-        return
+    if st.session_state.get("_chat_styles_injected"): return
     st.session_state["_chat_styles_injected"] = True
 
-    st.markdown("""
+    try:
+        from src.ui_theme import TOKENS as T
+    except Exception:
+        # 토큰 모듈 불가 시 안전 기본값
+        T = {
+            "brand_navy":"#0B1B45","pane_bg":"#EDF4FF","pane_border":"#D5E6FF",
+            "bubble_user_bg":"#FFF8CC","bubble_user_border":"#F2E4A2",
+            "bubble_ai_bg":"#EAF6FF","bubble_ai_border":"#BEE3FF",
+            "chip_user_bg":"#FFF2B8","chip_user_fg":"#6b5200",
+            "chip_ai_bg":"#DFF1FF","chip_ai_fg":"#0f5b86",
+            "radius_lg":"18px","radius_pill":"999px","input_h":"46px","send_btn":"38px"
+        }
+
+    st.markdown(f"""
     <style>
       /* ChatPane */
-      .chatpane{ background:#EDF4FF; border:1px solid #D5E6FF; border-radius:18px; padding:10px; margin-top:12px; }
-      .chatpane .messages{ max-height:60vh; overflow-y:auto; padding:8px; }
+      .chatpane{{ background:{T['pane_bg']}; border:1px solid {T['pane_border']}; border-radius:{T['radius_lg']};
+                  padding:10px; margin-top:12px; }}
+      .chatpane .messages{{ max-height:60vh; overflow-y:auto; padding:8px; }}
 
       /* 라디오 pill */
-      .chatpane div[data-testid="stRadio"]{ background:#EDF4FF; padding:8px 10px 0 10px; margin:0; }
-      .chatpane div[data-testid="stRadio"] > div[role="radiogroup"]{ display:flex; gap:10px; flex-wrap:wrap; }
-      .chatpane div[data-testid="stRadio"] [role="radio"]{
+      .chatpane div[data-testid="stRadio"]{{ background:{T['pane_bg']}; padding:8px 10px 0 10px; margin:0; }}
+      .chatpane div[data-testid="stRadio"] > div[role="radiogroup"]{{ display:flex; gap:10px; flex-wrap:wrap; }}
+      .chatpane div[data-testid="stRadio"] [role="radio"]{{
         border:2px solid #bcdcff; border-radius:12px; padding:6px 12px; background:#fff; color:#0a2540;
         font-weight:700; font-size:14px; line-height:1;
-      }
-      .chatpane div[data-testid="stRadio"] [role="radio"][aria-checked="true"]{
-        background:#eaf6ff; border-color:#9fd1ff; color:#0a2540;
-      }
-      .chatpane div[data-testid="stRadio"] svg{ display:none!important }
+      }}
+      .chatpane div[data-testid="stRadio"] [role="radio"][aria-checked="true"]{{
+        background:{T['bubble_ai_bg']}; border-color:#9fd1ff; color:#0a2540;
+      }}
+      .chatpane div[data-testid="stRadio"] svg{{ display:none!important }}
 
-      /* 인-카드 입력폼: 인풋 내부에 화살표 버튼(절대배치) */
-      .chatpane form[data-testid="stForm"]{ position:relative; background:#EDF4FF; padding:8px 10px 10px 10px; margin:0; }
-      .chatpane form[data-testid="stForm"] input[type="text"]{
-        background:#FFF8CC !important; border:1px solid #F2E4A2 !important; border-radius:999px !important;
-        color:#333 !important; height:46px; padding-right:56px;
-      }
-      .chatpane form[data-testid="stForm"] ::placeholder{ color:#8A7F4A !important; }
-      .chatpane form[data-testid="stForm"] button[type="submit"]{
+      /* 인-카드 입력폼 */
+      .chatpane form[data-testid="stForm"]{{ position:relative; background:{T['pane_bg']}; padding:8px 10px 10px 10px; margin:0; }}
+      .chatpane form[data-testid="stForm"] input[type="text"]{{
+        background:{T['bubble_user_bg']} !important; border:1px solid {T['bubble_user_border']} !important;
+        border-radius:{T['radius_pill']} !important; color:#333 !important; height:{T['input_h']};
+        padding-right:calc({T['send_btn']} + 18px);
+      }}
+      .chatpane form[data-testid="stForm"] ::placeholder{{ color:#8A7F4A !important; }}
+      .chatpane form[data-testid="stForm"] button[type="submit"]{{
         position:absolute; right:18px; top:50%; transform:translateY(-50%);
-        width:38px; height:38px; border-radius:50%; border:0; background:#0a2540; color:#fff;
+        width:{T['send_btn']}; height:{T['send_btn']}; border-radius:50%; border:0; background:#0a2540; color:#fff;
         font-size:18px; line-height:1; cursor:pointer; box-shadow:0 2px 6px rgba(0,0,0,.15);
-      }
+      }}
 
       /* 턴 구분선 */
-      .turn-sep{height:0; border-top:1px dashed #E5EAF2; margin:14px 2px; position:relative;}
-      .turn-sep::after{content:''; position:absolute; top:-4px; left:50%; transform:translateX(-50%);
-                       width:8px; height:8px; border-radius:50%; background:#E5EAF2;}
-
-      /* 상태 배지(헤더 재사용) */
-      .status-btn{display:inline-block;border-radius:10px;padding:4px 10px;font-weight:700; font-size:13px}
-      .status-btn.green{background:#E4FFF3;color:#0f6d53;border:1px solid #bff0df}
-      .status-btn.yellow{background:#FFF8E1;color:#8a6d00;border:1px solid #ffe099}
-      .status-btn.red{background:#FFE8E6;color:#a1302a;border:1px solid #ffc7c2}
+      .turn-sep{{height:0; border-top:1px dashed #E5EAF2; margin:14px 2px; position:relative;}}
+      .turn-sep::after{{content:''; position:absolute; top:-4px; left:50%; transform:translateX(-50%);
+                       width:8px; height:8px; border-radius:50%; background:#E5EAF2;}}
     </style>
     """, unsafe_allow_html=True)
 
 def _render_bubble(role:str, text:str):
     """질문=파스텔 노랑, 답변=파스텔 하늘. 칩은 인라인."""
     import html, re
+    try:
+        from src.ui_theme import TOKENS as T
+    except Exception:
+        T = {"bubble_user_bg":"#FFF8CC","bubble_user_border":"#F2E4A2",
+             "bubble_ai_bg":"#EAF6FF","bubble_ai_border":"#BEE3FF",
+             "chip_user_bg":"#FFF2B8","chip_user_fg":"#6b5200",
+             "chip_ai_bg":"#DFF1FF","chip_ai_fg":"#0f5b86"}
+
     is_user = (role == "user")
     wrap = "display:flex;justify-content:flex-end;margin:8px 0;" if is_user else \
            "display:flex;justify-content:flex-start;margin:8px 0;"
     base = "max-width:88%;padding:10px 12px;border-radius:16px;line-height:1.6;font-size:15px;" \
            "box-shadow:0 1px 1px rgba(0,0,0,.05);white-space:pre-wrap;position:relative;"
-    bubble = (base + "border-top-right-radius:8px;border:1px solid #F2E4A2;background:#FFF8CC;color:#333;"
+    bubble = (base + f"border-top-right-radius:8px;border:1px solid {T['bubble_user_border']};"
+                    f"background:{T['bubble_user_bg']};color:#333;"
               if is_user else
-              base + "border-top-left-radius:8px;border:1px solid #BEE3FF;background:#EAF6FF;color:#0a2540;")
+              base + f"border-top-left-radius:8px;border:1px solid {T['bubble_ai_border']};"
+                    f"background:{T['bubble_ai_bg']};color:#0a2540;")
     label_chip = ("display:inline-block;margin:-2px 0 6px 0;padding:1px 8px;border-radius:999px;font-size:11px;font-weight:700;"
-                  "background:#FFF2B8;color:#6b5200;border:1px solid #F2E4A2;"
+                  f"background:{T['chip_user_bg']};color:{T['chip_user_fg']};border:1px solid {T['bubble_user_border']};"
                   if is_user else
                   "display:inline-block;margin:-2px 0 6px 0;padding:1px 8px;border-radius:999px;font-size:11px;font-weight:700;"
-                  "background:#DFF1FF;color:#0f5b86;border:1px solid #BEE3FF;")
+                  f"background:{T['chip_ai_bg']};color:{T['chip_ai_fg']};border:1px solid {T['bubble_ai_border']};")
     t = html.escape(text or "").replace("\n","<br/>")
     t = re.sub(r"  ","&nbsp;&nbsp;", t)
     st.markdown(
@@ -633,30 +651,6 @@ def _render_bubble(role:str, text:str):
         unsafe_allow_html=True
     )
 
-def _render_mode_controls_pills() -> str:
-    _inject_chat_styles_once()
-    ss = st.session_state
-    cur = ss.get("qa_mode_radio") or "문법"
-    labels = ["어법", "문장", "지문"]
-    map_to = {"어법":"문법", "문장":"문장", "지문":"지문"}
-    idx = labels.index({"문법":"어법","문장":"문장","지문":"지문"}[cur])
-    sel = st.radio("질문 모드 선택", options=labels, index=idx, horizontal=True, label_visibility="collapsed")
-    new_key = map_to[sel]
-    if new_key != cur:
-        ss["qa_mode_radio"] = new_key; st.rerun()
-    return ss.get("qa_mode_radio", new_key)
-
-def _render_llm_status_minimal():
-    s = _get_brain_status()
-    code = s["code"]
-    if code == "READY":
-        st.markdown('<span class="status-btn green">🟢 준비완료</span>', unsafe_allow_html=True)
-    elif code in ("SCANNING", "RESTORING"):
-        st.markdown('<span class="status-btn yellow">🟡 준비중</span>', unsafe_allow_html=True)
-    elif code == "WARN":
-        st.markdown('<span class="status-btn yellow">🟡 주의</span>', unsafe_allow_html=True)
-    else:
-        st.markdown('<span class="status-btn red">🔴 준비안됨</span>', unsafe_allow_html=True)
 
 # [13] 채팅 패널 ==============================================================
 def _render_chat_panel():
