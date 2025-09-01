@@ -1,5 +1,7 @@
-# ===== [UI-01] TOP OF FILE — UI Components (header, titles, list rows) ======
+# ===== [UI-01] TOP OF FILE — UI Components (header, titles, list rows) ======  # [UI-01] START
 from __future__ import annotations
+from typing import Any, Callable
+
 import streamlit as st
 
 # ── 디자인 토큰(간격/폰트/색) — 향후 theme 분리 가능 ─────────────────────────────
@@ -90,10 +92,12 @@ def render_section_title(text: str):
     _inject_base_css()
     st.markdown(f"<div class='ui-section-title'>{text}</div>", unsafe_allow_html=True)
 # ===== [UI-05] END ===========================================================
-
-
-# ===== [UI-06] LIST ROW (TEXT + OPTIONAL RIGHT BUTTON) =======================
-def render_item_row(text: str, right_btn: callable | None = None, key: str | None = None):
+# ===== [UI-06] LIST ROW (TEXT + OPTIONAL RIGHT BUTTON) =======================  # [UI-06] START
+def render_item_row(
+    text: str,
+    right_btn: Callable[..., Any] | None = None,
+    key: str | None = None,
+) -> None:
     """
     리스트 한 줄: 왼쪽 텍스트, 오른쪽에 작은 버튼(옵션)
     - right_btn: 호출 시 버튼을 그리는 콜백(예: lambda: st.button('👁️', key='...'))
