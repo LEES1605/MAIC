@@ -4,7 +4,6 @@ from __future__ import annotations
 # [02] imports & bootstrap ====================================================
 import importlib
 import importlib.util
-import io
 import json
 import os
 import sys
@@ -33,12 +32,23 @@ def _from_secrets(name: str, default: Optional[str] = None) -> Optional[str]:
     except Exception:
         return os.getenv(name, default)
 
+
 def _bootstrap_env() -> None:
     keys = [
-        "OPENAI_API_KEY","OPENAI_MODEL","GEMINI_API_KEY","GEMINI_MODEL",
-        "GH_TOKEN","GH_REPO","GH_BRANCH","GH_PROMPTS_PATH",
-        "GDRIVE_PREPARED_FOLDER_ID","GDRIVE_BACKUP_FOLDER_ID",
-        "APP_MODE","AUTO_START_MODE","LOCK_MODE_FOR_STUDENTS","APP_ADMIN_PASSWORD",
+        "OPENAI_API_KEY",
+        "OPENAI_MODEL",
+        "GEMINI_API_KEY",
+        "GEMINI_MODEL",
+        "GH_TOKEN",
+        "GH_REPO",
+        "GH_BRANCH",
+        "GH_PROMPTS_PATH",
+        "GDRIVE_PREPARED_FOLDER_ID",
+        "GDRIVE_BACKUP_FOLDER_ID",
+        "APP_MODE",
+        "AUTO_START_MODE",
+        "LOCK_MODE_FOR_STUDENTS",
+        "APP_ADMIN_PASSWORD",
         "DISABLE_BG",
     ]
     for k in keys:
@@ -52,45 +62,12 @@ def _bootstrap_env() -> None:
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
     os.environ.setdefault("STREAMLIT_SERVER_ENABLE_WEBSOCKET_COMPRESSION", "false")
 
+
 _bootstrap_env()
 
 if st:
     st.set_page_config(page_title="LEES AI Teacher", layout="wide")
 
-
-def _is_brain_ready() -> bool:
-    p = PERSIST_DIR
-    if not p.exists():
-        return False
-    # 존재/용량 신호 중 하나라도 있으면 준비로 간주(빠른 판정)
-    for s in ["chunks.jsonl","manifest.json",".ready","faiss.index","index.faiss","chroma.sqlite","docstore.json"]:
-        fp = p / s
-        try:
-            if fp.exists() and fp.stat().st_size > 0:
-                return True
-        except Exception:
-            pass
-    return False
-
-# ✅ [NEW] 헤더 배지에서 사용하는 일관 상태 조회(세션 우선 → 로컬 폴백)
-def _get_brain_status() -> dict:
-    """
-    반환 예: {"code": "READY"|"SCANNING"|"RESTORING"|"WARN"|"ERROR"|"MISSING", "msg": "..."}
-    - 세션에 관리자가 세팅한 상태가 있으면 그것을 사용
-    - 없으면 로컬 인덱스 유무로 READY/MISSING 빠른 판정
-    """
-    if st is None:
-        return {"code": "MISSING", "msg": "Streamlit unavailable"}
-
-    ss = st.session_state
-    code = ss.get("brain_status_code")
-    msg = ss.get("brain_status_msg")
-    if code and msg:
-        return {"code": str(code), "msg": str(msg)}
-
-    if _is_brain_ready():
-        return {"code": "READY", "msg": "로컬 인덱스 연결됨(빠른 판정)"}
-    return {"code": "MISSING", "msg": "인덱스 없음(관리자에서 '업데이트 점검' 필요)"}
 
 # [04] 경로/상태 & 에러로그 =====================================================
 def _persist_dir() -> Path:
@@ -109,8 +86,10 @@ def _persist_dir() -> Path:
     # 3) 최종 폴백
     return Path.home() / ".maic" / "persist"
 
+
 PERSIST_DIR = _persist_dir()
 PERSIST_DIR.mkdir(parents=True, exist_ok=True)
+
 
 def _share_persist_dir_into_session(p: Path) -> None:
     try:
@@ -119,9 +98,36 @@ def _share_persist_dir_into_session(p: Path) -> None:
     except Exception:
         pass
 
+
 _share_persist_dir_into_session(PERSIST_DIR)
 
+
+def _errlog(msg: str, where: str = "", exc: Exception | None = None) -> None:
+    """표준 에러 로깅(콘솔 + Streamlit 가능 시 캡션)."""
+    try:
+        prefix = f"{where} " if where else ""
+        print(f"[ERR] {prefix}{msg}")
+        if exc:
+            traceback.print_exception(type(exc), exc, exc.__traceback__)
+        if st:
+            try:
+                st.caption(f"⚠️ {prefix}{msg}")
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+def _mark_ready() -> None:
+    """준비 신호 파일(.ready) 생성."""
+    try:
+        (PERSIST_DIR / ".ready").write_text("ok", encoding="utf-8")
+    except Exception:
+        pass
+
+
 def _is_brain_ready() -> bool:
+    """인덱스 준비 여부(로컬 신호 기반) 빠른 판정."""
     # 세션에 공유된 경로가 있으면 우선 사용, 없으면 즉시 계산
     p = None
     try:
@@ -135,7 +141,15 @@ def _is_brain_ready() -> bool:
         return False
 
     # 존재/용량 신호 중 하나라도 있으면 준비로 간주(빠른 판정)
-    for s in ["chunks.jsonl", "manifest.json", ".ready", "faiss.index", "index.faiss", "chroma.sqlite", "docstore.json"]:
+    for s in [
+        "chunks.jsonl",
+        "manifest.json",
+        ".ready",
+        "faiss.index",
+        "index.faiss",
+        "chroma.sqlite",
+        "docstore.json",
+    ]:
         fp = p / s
         try:
             if fp.exists() and fp.stat().st_size > 0:
@@ -143,6 +157,7 @@ def _is_brain_ready() -> bool:
         except Exception:
             continue
     return False
+
 
 def _get_brain_status() -> dict:
     """
@@ -162,18 +177,29 @@ def _get_brain_status() -> dict:
         return {"code": "READY", "msg": "로컬 인덱스 연결됨(빠른 판정)"}
     return {"code": "MISSING", "msg": "인덱스 없음(관리자에서 '업데이트 점검' 필요)"}
 
+
 # [05] 모드/LLM/임포트 헬퍼 =====================================================
 def _is_admin_view() -> bool:
     env = (os.getenv("APP_MODE") or _from_secrets("APP_MODE", "student") or "student").lower()
     return bool(env == "admin" or (st and (st.session_state.get("is_admin") or st.session_state.get("admin_mode"))))
 
+
 def _llm_health_badge() -> tuple[str, str]:
-    # 시작 속도를 위해 '키 존재'만으로 최소 상태 표시
-    has_g  = bool(os.getenv("GEMINI_API_KEY") or _from_secrets("GEMINI_API_KEY"))
-    has_o  = bool(os.getenv("OPENAI_API_KEY") or _from_secrets("OPENAI_API_KEY"))
-    if not (has_g or has_o): return ("키없음", "⚠️")
-    if has_g and has_o: return ("Gemini/OpenAI", "✅")
-    return ("Gemini", "✅") if has_g else ("OpenAI", "✅")
+    """시작 속도를 위해 '키 존재'만으로 최소 상태 표시."""
+    has_g = bool(os.getenv("GEMINI_API_KEY") or _from_secrets("GEMINI_API_KEY"))
+    has_o = bool(os.getenv("OPENAI_API_KEY") or _from_secrets("OPENAI_API_KEY"))
+
+    if not (has_g or has_o):
+        return ("키없음", "⚠️")
+
+    if has_g and has_o:
+        return ("Gemini/OpenAI", "✅")
+
+    if has_g:
+        return ("Gemini", "✅")
+
+    return ("OpenAI", "✅")
+
 
 def _try_import(mod: str, attrs: List[str]) -> Dict[str, Any]:
     out: Dict[str, Any] = {}
@@ -190,10 +216,7 @@ def _try_import(mod: str, attrs: List[str]) -> Dict[str, Any]:
 
 
 def _render_boot_progress_line():
-    """지하철 노선 스타일 진행 표시
-       - 완료여도 항상 보임(완료 상태는 파란 실선)
-       - flex-wrap으로 가로 래핑(세로 길게 늘어지지 않음)
-    """
+    """지하철 노선 스타일 진행 표시 — 완료여도 항상 보임, 가로 래핑."""
     if st is None:
         return
     ss = st.session_state
@@ -207,10 +230,11 @@ def _render_boot_progress_line():
         ("READY", "완료"),
     ]
     phase = ss.get("_boot_phase") or ("READY" if _is_brain_ready() else "LOCAL_CHECK")
-    has_error = (phase == "ERROR")
-    idx = next((i for i,(k,_) in enumerate(steps) if k == phase), len(steps)-1)
+    has_error = phase == "ERROR"
+    idx = next((i for i, (k, _) in enumerate(steps) if k == phase), len(steps) - 1)
 
-    st.markdown("""
+    st.markdown(
+        """
     <style>
       .metro-flex{ display:flex; flex-wrap:wrap; align-items:center; gap:12px 22px; margin:10px 0 6px 0; }
       .metro-node{ display:flex; flex-direction:column; align-items:center; min-width:80px; }
@@ -223,18 +247,23 @@ def _render_boot_progress_line():
       .metro-lbl{ margin-top:4px; font-size:12px; color:#334155; font-weight:700; white-space:nowrap; }
       @media (max-width:480px){ .metro-seg{ width:72px; } }
     </style>
-    """, unsafe_allow_html=True)
+    """,
+        unsafe_allow_html=True,
+    )
 
     html = ['<div class="metro-flex">']
-    for i,(_,label) in enumerate(steps):
+    for i, (_, label) in enumerate(steps):
         if has_error:
             klass = "error" if i == idx else "todo"
         else:
             klass = "done" if i < idx else ("doing" if i == idx else "todo")
         dot = '<div class="metro-dot"></div>' if klass == "doing" else ""
-        html.append(f'<div class="metro-node"><div class="metro-seg {klass}">{dot}</div><div class="metro-lbl">{label}</div></div>')
+        html.append(
+            f'<div class="metro-node"><div class="metro-seg {klass}">{dot}</div><div class="metro-lbl">{label}</div></div>'
+        )
     html.append("</div>")
     st.markdown("".join(html), unsafe_allow_html=True)
+
 
 # [07] 헤더(배지·타이틀·⚙️ 한 줄, 타이틀 바로 뒤에 아이콘) ==========================
 def _header():
@@ -254,15 +283,16 @@ def _header():
     status = _get_brain_status()
     code = status["code"]
     badge_txt, badge_class = {
-        "READY":("🟢 준비완료","green"),
-        "SCANNING":("🟡 준비중","yellow"),
-        "RESTORING":("🟡 복원중","yellow"),
-        "WARN":("🟡 주의","yellow"),
-        "ERROR":("🔴 오류","red"),
-        "MISSING":("🔴 미준비","red"),
-    }.get(code, ("🔴 미준비","red"))
+        "READY": ("🟢 준비완료", "green"),
+        "SCANNING": ("🟡 준비중", "yellow"),
+        "RESTORING": ("🟡 복원중", "yellow"),
+        "WARN": ("🟡 주의", "yellow"),
+        "ERROR": ("🔴 오류", "red"),
+        "MISSING": ("🔴 미준비", "red"),
+    }.get(code, ("🔴 미준비", "red"))
 
-    st.markdown("""
+    st.markdown(
+        """
     <style>
       #brand-inline{ display:flex; align-items:center; gap:.5rem; flex-wrap:nowrap; }
       .status-btn{ display:inline-block; border-radius:10px; padding:4px 10px; font-weight:700; font-size:13px;
@@ -283,14 +313,18 @@ def _header():
       .gear-btn{ width:28px; padding:0; }
       .gear-btn:hover, .logout-chip:hover{ filter:brightness(.96); }
     </style>
-    """, unsafe_allow_html=True)
+    """,
+        unsafe_allow_html=True,
+    )
 
     # 한 줄 렌더
     c1, c2, c3 = st.columns([0.0001, 0.0001, 0.0001], gap="small")
     with st.container():
         st.markdown('<div id="brand-inline">', unsafe_allow_html=True)
-        with c1: st.markdown(f'<span class="status-btn {badge_class}">{badge_txt}</span>', unsafe_allow_html=True)
-        with c2: st.markdown('<span class="brand-title">LEES AI Teacher</span>', unsafe_allow_html=True)
+        with c1:
+            st.markdown(f'<span class="status-btn {badge_class}">{badge_txt}</span>', unsafe_allow_html=True)
+        with c2:
+            st.markdown('<span class="brand-title">LEES AI Teacher</span>', unsafe_allow_html=True)
         with c3:
             if ss.get("admin_mode"):
                 if st.button("🚪 로그아웃", key="logout_now", help="관리자 로그아웃", use_container_width=False):
@@ -302,22 +336,25 @@ def _header():
             else:
                 if st.button("⚙️", key="open_admin_login", help="관리자 로그인", use_container_width=False):
                     ss["_show_admin_login"] = not ss.get("_show_admin_login", False)
-        st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)
 
     # 로그인 폼(제자리 토글)
     if not ss.get("admin_mode") and ss.get("_show_admin_login"):
         with st.container(border=True):
-            pwd_set = (_from_secrets("ADMIN_PASSWORD", "")
-                       or _from_secrets("APP_ADMIN_PASSWORD", "")
-                       or "")
+            pwd_set = (
+                _from_secrets("ADMIN_PASSWORD", "")
+                or _from_secrets("APP_ADMIN_PASSWORD", "")
+                or ""
+            )
             pw = st.text_input("관리자 비밀번호", type="password")
-            cols = st.columns([1,1,4])
+            cols = st.columns([1, 1, 4])
             with cols[0]:
                 if st.button("로그인"):
                     if pw and pwd_set and pw == str(pwd_set):
                         ss["admin_mode"] = True
                         ss["_show_admin_login"] = False
-                        st.success("로그인 성공"); st.rerun()
+                        st.success("로그인 성공")
+                        st.rerun()
                     else:
                         st.error("비밀번호가 올바르지 않습니다.")
             with cols[1]:
@@ -325,7 +362,7 @@ def _header():
                     ss["_show_admin_login"] = False
                     st.rerun()
 
-    # 진행선(완료여도 항상 표시) — [06]에서 구현
+    # 진행선(완료여도 항상 표시)
     _render_boot_progress_line()
 
 
@@ -339,10 +376,19 @@ def _inject_modern_bg_lib():
     except Exception:
         pass
 
+
 def _mount_background(
-    *, theme: str = "light", accent: str = "#5B8CFF", density: int = 3,
-    interactive: bool = True, animate: bool = True, gradient: str = "radial",
-    grid: bool = True, grain: bool = False, blur: int = 0, seed: int = 1234,
+    *,
+    theme: str = "light",
+    accent: str = "#5B8CFF",
+    density: int = 3,
+    interactive: bool = True,
+    animate: bool = True,
+    gradient: str = "radial",
+    grid: bool = True,
+    grain: bool = False,
+    blur: int = 0,
+    seed: int = 1234,
     readability_veil: bool = True,
 ) -> None:
     """배경 렌더 OFF(호출 시 즉시 return)."""
@@ -356,7 +402,8 @@ def _boot_autoflow_hook():
         mod = None
         for name in ("src.ui_orchestrator", "ui_orchestrator"):
             try:
-                mod = importlib.import_module(name); break
+                mod = importlib.import_module(name)
+                break
             except Exception:
                 mod = None
         if mod and hasattr(mod, "autoflow_boot_check"):
@@ -372,36 +419,40 @@ def _set_brain_status(code: str, msg: str, source: str = "", attached: bool = Fa
         return
     ss = st.session_state
     ss["brain_status_code"] = code
-    ss["brain_status_msg"]  = msg
-    ss["brain_source"]      = source
-    ss["brain_attached"]    = bool(attached)
-    ss["restore_recommend"] = (code in ("MISSING","ERROR"))
+    ss["brain_status_msg"] = msg
+    ss["brain_source"] = source
+    ss["brain_attached"] = bool(attached)
+    ss["restore_recommend"] = code in ("MISSING", "ERROR")
     ss.setdefault("index_decision_needed", False)
     ss.setdefault("index_change_stats", {})
 
+
 def _quick_local_attach_only():
     """빠른 부팅: 네트워크 호출 없이 로컬 신호만 확인."""
-    if st is None: return False
+    if st is None:
+        return False
     ss = st.session_state
-    man    = (PERSIST_DIR / "manifest.json")
-    chunks = (PERSIST_DIR / "chunks.jsonl")
-    ready  = (PERSIST_DIR / ".ready")
+    man = PERSIST_DIR / "manifest.json"
+    chunks = PERSIST_DIR / "chunks.jsonl"
+    ready = PERSIST_DIR / ".ready"
 
     if (chunks.exists() and chunks.stat().st_size > 0) or (man.exists() and man.stat().st_size > 0) or ready.exists():
         _set_brain_status("READY", "로컬 인덱스 연결됨(빠른 부팅)", "local", attached=True)
         return True
-    else:
-        _set_brain_status("MISSING", "인덱스 없음(관리자에서 '업데이트 점검' 필요)", "", attached=False)
-        return False
+
+    _set_brain_status("MISSING", "인덱스 없음(관리자에서 '업데이트 점검' 필요)", "", attached=False)
+    return False
+
 
 def _run_deep_check_and_attach():
     """관리자 버튼 클릭 시 실행되는 네트워크 검사+복구."""
-    if st is None: return
+    if st is None:
+        return
     ss = st.session_state
     idx = _try_import("src.rag.index_build", ["quick_precheck", "diff_with_manifest"])
     rel = _try_import("src.backup.github_release", ["restore_latest"])
-    quick  = idx.get("quick_precheck")
-    diff   = idx.get("diff_with_manifest")
+    quick = idx.get("quick_precheck")
+    diff = idx.get("diff_with_manifest")
     restore_latest = rel.get("restore_latest")
 
     # 0) 로컬 먼저
@@ -412,7 +463,7 @@ def _run_deep_check_and_attach():
             try:
                 d = diff() or {}
                 stats = d.get("stats") or {}
-                total = int(stats.get("added",0))+int(stats.get("changed",0))+int(stats.get("removed",0))
+                total = int(stats.get("added", 0)) + int(stats.get("changed", 0)) + int(stats.get("removed", 0))
                 changed = total > 0
             except Exception as e:
                 _errlog(f"diff 실패: {e}", where="[deep_check]")
@@ -424,8 +475,10 @@ def _run_deep_check_and_attach():
 
     # 1) Drive precheck (선택적)
     if callable(quick):
-        try: _ = quick() or {}
-        except Exception as e: _errlog(f"precheck 예외: {e}", where="[deep_check]")
+        try:
+            _ = quick() or {}
+        except Exception as e:
+            _errlog(f"precheck 예외: {e}", where="[deep_check]")
 
     # 2) GitHub Releases 복구
     restored = False
@@ -443,7 +496,7 @@ def _run_deep_check_and_attach():
             try:
                 d = diff() or {}
                 stats = d.get("stats") or {}
-                total = int(stats.get("added",0))+int(stats.get("changed",0))+int(stats.get("removed",0))
+                total = int(stats.get("added", 0)) + int(stats.get("changed", 0)) + int(stats.get("removed", 0))
                 changed = total > 0
             except Exception as e:
                 _errlog(f"diff 실패(복구후): {e}", where="[deep_check]")
@@ -458,6 +511,7 @@ def _run_deep_check_and_attach():
     ss["index_decision_needed"] = False
     ss["index_change_stats"] = {}
 
+
 def _auto_start_once():
     """AUTO_START_MODE에 따른 1회성 자동 복원."""
     if st is None or st.session_state.get("_auto_started"):
@@ -468,21 +522,26 @@ def _auto_start_once():
         return
 
     mode = (os.getenv("AUTO_START_MODE") or _from_secrets("AUTO_START_MODE", "off") or "off").lower()
-    if mode in ("restore","on"):
+    if mode in ("restore", "on"):
         rel = _try_import("src.backup.github_release", ["restore_latest"])
         fn = rel.get("restore_latest")
-        if not callable(fn): return
+        if not callable(fn):
+            return
         try:
             if fn(dest_dir=PERSIST_DIR):
                 _mark_ready()
-                if hasattr(st, "toast"): st.toast("자동 복원 완료", icon="✅")
-                else: st.success("자동 복원 완료")
+                if hasattr(st, "toast"):
+                    st.toast("자동 복원 완료", icon="✅")
+                else:
+                    st.success("자동 복원 완료")
                 _set_brain_status("READY", "자동 복원 완료", "release", attached=True)
                 if not st.session_state.get("_auto_rerun_done"):
                     st.session_state["_auto_rerun_done"] = True
                     st.rerun()
         except Exception as e:
             _errlog(f"auto restore failed: {e}", where="[auto_start]", exc=e)
+
+
 # ======================== [10] 부팅/인덱스 준비 — END =========================
 
 # =========== [11] 관리자 패널(지연 임포트 + 파일경로 폴백) — START ===========
@@ -492,9 +551,10 @@ def _render_admin_panels() -> None:
     - 토글(또는 체크박스)을 켠 '이후'에만 모듈을 import 및 렌더합니다.
     - import 실패 시 파일 경로에서 직접 로드하는 폴백을 수행합니다.
     """
-    if st is None: return
-    import time
-    import traceback
+    if st is None:
+        return
+    import time as _time
+    import traceback as _tb
 
     st.subheader("관리자 패널")
 
@@ -504,17 +564,9 @@ def _render_admin_panels() -> None:
         st.session_state[toggle_key] = False
 
     try:
-        open_panel = st.toggle(
-            "🛠 진단 도구",
-            value=st.session_state[toggle_key],
-            help="필요할 때만 로드합니다."
-        )
+        open_panel = st.toggle("🛠 진단 도구", value=st.session_state[toggle_key], help="필요할 때만 로드합니다.")
     except Exception:
-        open_panel = st.checkbox(
-            "🛠 진단 도구",
-            value=st.session_state[toggle_key],
-            help="필요할 때만 로드합니다."
-        )
+        open_panel = st.checkbox("🛠 진단 도구", value=st.session_state[toggle_key], help="필요할 때만 로드합니다.")
 
     st.session_state[toggle_key] = bool(open_panel)
 
@@ -535,12 +587,12 @@ def _render_admin_panels() -> None:
         # 2) 파일 경로에서 직접 로드 폴백
         roots = [
             Path(__file__).resolve().parent,  # app.py 있는 디렉터리
-            Path.cwd(),                        # 현재 작업 디렉터리
+            Path.cwd(),  # 현재 작업 디렉터리
         ]
         rels = ("src/ui_orchestrator.py", "ui_orchestrator.py")
         for root in roots:
             for rel in rels:
-                candidate = (root / rel)
+                candidate = root / rel
                 if candidate.exists():
                     try:
                         spec = importlib.util.spec_from_file_location("ui_orchestrator", candidate)
@@ -554,7 +606,7 @@ def _render_admin_panels() -> None:
 
         raise ImportError("ui_orchestrator not found", tried_msgs)
 
-    load_start = time.perf_counter()
+    load_start = _time.perf_counter()
     with st.spinner("진단 도구 모듈을 불러오는 중…"):
         try:
             mod, how = _import_orchestrator_with_fallback()
@@ -566,7 +618,7 @@ def _render_admin_panels() -> None:
                     st.write("시도 내역:")
                     for line in attempts:
                         st.write("• ", line)
-                st.code("".join(traceback.format_exception(type(e), e, e.__traceback__)))
+                st.code("".join(_tb.format_exception(type(e), e, e.__traceback__)))
             return
 
     # --- (C) 렌더 함수 탐색 및 실행 ---
@@ -587,12 +639,14 @@ def _render_admin_panels() -> None:
     except Exception as e:
         st.error("진단 도구 렌더링 중 오류가 발생했습니다.")
         with st.expander("오류 자세히 보기"):
-            st.code("".join(traceback.format_exception(type(e), e, e.__traceback__)))
+            st.code("".join(_tb.format_exception(type(e), e, e.__traceback__)))
         return
     finally:
-        elapsed_ms = (time.perf_counter() - load_start) * 1000.0
+        elapsed_ms = (_time.perf_counter() - load_start) * 1000.0
 
     st.caption(f"✓ 로드/렌더 완료 — {elapsed_ms:.0f} ms")
+
+
 # ============ [11] 관리자 패널(지연 임포트 + 파일경로 폴백) — END ============
 
 # [12] 채팅 UI(스타일/모드/상단 상태 라벨=SSOT) ===============================
@@ -604,7 +658,8 @@ def _inject_chat_styles_once():
         return
     st.session_state["_chat_styles_injected"] = True
 
-    st.markdown("""
+    st.markdown(
+        """
     <style>
       /* ChatPane */
       .chatpane{
@@ -643,31 +698,46 @@ def _inject_chat_styles_once():
       .turn-sep::after{content:''; position:absolute; top:-4px; left:50%; transform:translateX(-50%);
                        width:8px; height:8px; border-radius:50%; background:#E5EAF2;}
     </style>
-    """, unsafe_allow_html=True)
+    """,
+        unsafe_allow_html=True,
+    )
 
-def _render_bubble(role:str, text:str):
+
+def _render_bubble(role: str, text: str):
     """질문=파스텔 노랑, 답변=파스텔 하늘. 칩은 인라인."""
-    import html, re
-    is_user = (role == "user")
-    wrap = "display:flex;justify-content:flex-end;margin:8px 0;" if is_user else \
-           "display:flex;justify-content:flex-start;margin:8px 0;"
-    base = "max-width:88%;padding:10px 12px;border-radius:16px;line-height:1.6;font-size:15px;" \
-           "box-shadow:0 1px 1px rgba(0,0,0,.05);white-space:pre-wrap;position:relative;"
-    bubble = (base + "border-top-right-radius:8px;border:1px solid #F2E4A2;background:#FFF8CC;color:#333;"
-              if is_user else
-              base + "border-top-left-radius:8px;border:1px solid #BEE3FF;background:#EAF6FF;color:#0a2540;")
-    label_chip = ("display:inline-block;margin:-2px 0 6px 0;padding:1px 8px;border-radius:999px;font-size:11px;font-weight:700;"
-                  "background:#FFF2B8;color:#6b5200;border:1px solid #F2E4A2;"
-                  if is_user else
-                  "display:inline-block;margin:-2px 0 6px 0;padding:1px 8px;border-radius:999px;font-size:11px;font-weight:700;"
-                  "background:#DFF1FF;color:#0f5b86;border:1px solid #BEE3FF;")
-    t = html.escape(text or "").replace("\n","<br/>")
-    t = re.sub(r"  ","&nbsp;&nbsp;", t)
+    import html
+    import re
+
+    is_user = role == "user"
+    wrap = (
+        "display:flex;justify-content:flex-end;margin:8px 0;"
+        if is_user
+        else "display:flex;justify-content:flex-start;margin:8px 0;"
+    )
+    base = (
+        "max-width:88%;padding:10px 12px;border-radius:16px;line-height:1.6;font-size:15px;"
+        "box-shadow:0 1px 1px rgba(0,0,0,.05);white-space:pre-wrap;position:relative;"
+    )
+    bubble = (
+        base + "border-top-right-radius:8px;border:1px solid #F2E4A2;background:#FFF8CC;color:#333;"
+        if is_user
+        else base + "border-top-left-radius:8px;border:1px solid #BEE3FF;background:#EAF6FF;color:#0a2540;"
+    )
+    label_chip = (
+        "display:inline-block;margin:-2px 0 6px 0;padding:1px 8px;border-radius:999px;font-size:11px;font-weight:700;"
+        "background:#FFF2B8;color:#6b5200;border:1px solid #F2E4A2;"
+        if is_user
+        else "display:inline-block;margin:-2px 0 6px 0;padding:1px 8px;border-radius:999px;font-size:11px;font-weight:700;"
+        "background:#DFF1FF;color:#0f5b86;border:1px solid #BEE3FF;"
+    )
+    t = html.escape(text or "").replace("\n", "<br/>")
+    t = re.sub(r"  ", "&nbsp;&nbsp;", t)
     st.markdown(
         f'<div style="{wrap}"><div style="{bubble}"><span style="{label_chip}">'
         f'{"질문" if is_user else "답변"}</span><br/>{t}</div></div>',
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
+
 
 def _render_mode_controls_pills() -> str:
     """질문 모드 pill (ChatPane 상단에 배치). 반환: '문법'|'문장'|'지문'"""
@@ -682,6 +752,7 @@ def _render_mode_controls_pills() -> str:
         st.rerun()
     return ss.get("qa_mode_radio", sel)
 
+
 # [13] 채팅 패널 ==============================================================
 def _render_chat_panel():
     ss = st.session_state
@@ -692,7 +763,7 @@ def _render_chat_panel():
 
     # 상단: 질문 모드 pill (카톡형에서 입력창 바로 위)
     cur_label = _render_mode_controls_pills()
-    MODE_TOKEN = {"문법":"문법설명","문장":"문장구조분석","지문":"지문분석"}[cur_label]
+    MODE_TOKEN = {"문법": "문법설명", "문장": "문장구조분석", "지문": "지문분석"}[cur_label]
 
     # ChatPane — 메시지 영역 OPEN
     st.markdown('<div class="chatpane"><div class="messages">', unsafe_allow_html=True)
@@ -709,19 +780,21 @@ def _render_chat_panel():
     ph = st.empty()
 
     # 메시지 영역 CLOSE(폼은 같은 ChatPane 내부)
-    st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
 
     # 인-카드 입력폼 — Enter=전송, 화살표 버튼은 인풋 내부(절대배치, JS 없이)
     with st.form("inpane_chat_form", clear_on_submit=True):
         qtxt = st.text_input(
-            "질문 입력", value="",
+            "질문 입력",
+            value="",
             placeholder="예) 분사구문이 뭐예요?  예) 이 문장 구조 분석해줘",
-            label_visibility="collapsed", key="inpane_q"
+            label_visibility="collapsed",
+            key="inpane_q",
         )
         send = st.form_submit_button("➤", type="secondary")
 
     # ChatPane CLOSE
-    st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
 
     # 제출 처리(빈값/중복 가드)
     if send and not ss.get("_sending", False):
@@ -731,7 +804,7 @@ def _render_chat_panel():
             return
 
         ss["_sending"] = True
-        ss["chat"].append({"id": f"u{int(time.time()*1000)}", "role": "user", "text": question})
+        ss["chat"].append({"id": f"u{int(time.time() * 1000)}", "role": "user", "text": question})
 
         # 증거/모드
         ev_notes = ss.get("__evidence_class_notes", "")
@@ -740,7 +813,10 @@ def _render_chat_panel():
         # 프롬프트 해석 (분리 모듈 우선)
         try:
             from src.prompting.resolve import resolve_prompts
-            system_prompt, user_prompt, source = resolve_prompts(MODE_TOKEN, question, ev_notes, ev_books, cur_label, ss)
+
+            system_prompt, user_prompt, source = resolve_prompts(
+                MODE_TOKEN, question, ev_notes, ev_books, cur_label, ss
+            )
             ss["__prompt_source"] = source
         except Exception:
             # 안전 폴백: '맥락 요청 금지, 간단 답변부터' 원칙 유지
@@ -758,18 +834,24 @@ def _render_chat_panel():
         # LLM 호출(스트리밍 대응)
         try:
             from src.llm import providers as _prov
+
             call = getattr(_prov, "call_with_fallback", None)
         except Exception:
             call = None
 
         acc = ""
+
         def _emit(piece: str):
             nonlocal acc
-            import html, re
+            import html
+            import re
+
             acc += str(piece)
+
             def esc(t: str) -> str:
-                t = html.escape(t or "").replace("\n","<br/>")
-                return re.sub(r"  ","&nbsp;&nbsp;", t)
+                t = html.escape(t or "").replace("\n", "<br/>")
+                return re.sub(r"  ", "&nbsp;&nbsp;", t)
+
             ph.markdown(
                 '<div style="display:flex;justify-content:flex-start;margin:8px 0;">'
                 '  <div style="max-width:88%;padding:10px 12px;border-radius:16px;border-top-left-radius:8px;'
@@ -777,45 +859,73 @@ def _render_chat_panel():
                 '              position:relative;border:1px solid #BEE3FF;background:#EAF6FF;color:#0a2540;">'
                 '    <span style="display:inline-block;margin:-2px 0 6px 0;padding:1px 8px;border-radius:999px;'
                 '                 font-size:11px;font-weight:700;background:#DFF1FF;color:#0f5b86;'
-                '                 border:1px solid #BEE3FF;">답변</span><br/>' +
-                esc(acc) +
-                '  </div>'
-                '</div>', unsafe_allow_html=True
+                '                 border:1px solid #BEE3FF;">답변</span><br/>'
+                + esc(acc)
+                + "  </div>"
+                "</div>",
+                unsafe_allow_html=True,
             )
 
         text_final = ""
         try:
             import inspect
-            if callable(call):
-                sig = inspect.signature(call); params = sig.parameters.keys(); kwargs = {}
-                if "messages" in params:
-                    kwargs["messages"] = [{"role":"system","content":system_prompt or ""},
-                                          {"role":"user","content":user_prompt}]
-                else:
-                    if "prompt" in params: kwargs["prompt"] = user_prompt
-                    elif "user_prompt" in params: kwargs["user_prompt"] = user_prompt
-                    if "system_prompt" in params: kwargs["system_prompt"] = (system_prompt or "")
-                    elif "system" in params:      kwargs["system"] = (system_prompt or "")
-                if "mode_token" in params: kwargs["mode_token"] = MODE_TOKEN
-                elif "mode" in params:     kwargs["mode"] = MODE_TOKEN
-                if "temperature" in params: kwargs["temperature"] = 0.2
-                elif "temp" in params:      kwargs["temp"] = 0.2
-                if "timeout_s" in params:   kwargs["timeout_s"] = 90
-                elif "timeout" in params:   kwargs["timeout"] = 90
-                if "extra" in params:       kwargs["extra"] = {"question": question, "mode_key": cur_label}
 
-                supports_stream = ("stream" in params) or ("on_token" in params) or ("on_delta" in params) or ("yield_text" in params)
+            if callable(call):
+                sig = inspect.signature(call)
+                params = sig.parameters.keys()
+                kwargs: Dict[str, Any] = {}
+
+                if "messages" in params:
+                    kwargs["messages"] = [
+                        {"role": "system", "content": system_prompt or ""},
+                        {"role": "user", "content": user_prompt},
+                    ]
+                else:
+                    if "prompt" in params:
+                        kwargs["prompt"] = user_prompt
+                    elif "user_prompt" in params:
+                        kwargs["user_prompt"] = user_prompt
+                    if "system_prompt" in params:
+                        kwargs["system_prompt"] = system_prompt or ""
+                    elif "system" in params:
+                        kwargs["system"] = system_prompt or ""
+                if "mode_token" in params:
+                    kwargs["mode_token"] = MODE_TOKEN
+                elif "mode" in params:
+                    kwargs["mode"] = MODE_TOKEN
+                if "temperature" in params:
+                    kwargs["temperature"] = 0.2
+                elif "temp" in params:
+                    kwargs["temp"] = 0.2
+                if "timeout_s" in params:
+                    kwargs["timeout_s"] = 90
+                elif "timeout" in params:
+                    kwargs["timeout"] = 90
+                if "extra" in params:
+                    kwargs["extra"] = {"question": question, "mode_key": cur_label}
+
+                supports_stream = (
+                    ("stream" in params)
+                    or ("on_token" in params)
+                    or ("on_delta" in params)
+                    or ("yield_text" in params)
+                )
                 if supports_stream:
-                    if "stream" in params:   kwargs["stream"] = True
-                    if "on_token" in params: kwargs["on_token"] = _emit
-                    if "on_delta" in params: kwargs["on_delta"] = _emit
-                    if "yield_text" in params: kwargs["yield_text"] = _emit
+                    if "stream" in params:
+                        kwargs["stream"] = True
+                    if "on_token" in params:
+                        kwargs["on_token"] = _emit
+                    if "on_delta" in params:
+                        kwargs["on_delta"] = _emit
+                    if "yield_text" in params:
+                        kwargs["yield_text"] = _emit
                     res = call(**kwargs)
                     text_final = (res.get("text") if isinstance(res, dict) else acc) or acc
                 else:
                     res = call(**kwargs)
                     text_final = res.get("text") if isinstance(res, dict) else str(res)
-                    if not text_final: text_final = "(응답이 비어있어요)"
+                    if not text_final:
+                        text_final = "(응답이 비어있어요)"
                     _emit(text_final)
             else:
                 text_final = "(오류) LLM 어댑터를 사용할 수 없습니다."
@@ -824,7 +934,7 @@ def _render_chat_panel():
             text_final = f"(오류) {type(e).__name__}: {e}"
             _emit(text_final)
 
-        ss["chat"].append({"id": f"a{int(time.time()*1000)}", "role": "assistant", "text": text_final})
+        ss["chat"].append({"id": f"a{int(time.time() * 1000)}", "role": "assistant", "text": text_final})
         ss["_sending"] = False
         st.rerun()
 
@@ -840,11 +950,23 @@ def _render_body() -> None:
             _boot_autoflow_hook()
         except Exception as e:
             _errlog(f"boot check failed: {e}", where="[render_body.boot]", exc=e)
+        finally:
+            st.session_state["_boot_checked"] = True
 
     # 2) 배경(비활성)
-    _mount_background(theme="light", accent="#5B8CFF", density=3,
-                      interactive=True, animate=True, gradient="radial",
-                      grid=True, grain=False, blur=0, seed=1234, readability_veil=True)
+    _mount_background(
+        theme="light",
+        accent="#5B8CFF",
+        density=3,
+        interactive=True,
+        animate=True,
+        gradient="radial",
+        grid=True,
+        grain=False,
+        blur=0,
+        seed=1234,
+        readability_veil=True,
+    )
 
     # 3) 헤더
     _header()
@@ -859,7 +981,11 @@ def _render_body() -> None:
     if _is_admin_view():
         _render_admin_panels()
         with st.container():
-            if st.button("🧭 업데이트 점검", help="클라우드와 로컬을 비교해 변경 사항을 확인합니다. 필요 시 재인덱싱을 권장합니다.", use_container_width=True):
+            if st.button(
+                "🧭 업데이트 점검",
+                help="클라우드와 로컬을 비교해 변경 사항을 확인합니다. 필요 시 재인덱싱을 권장합니다.",
+                use_container_width=True,
+            ):
                 with st.spinner("업데이트 점검 중…"):
                     _run_deep_check_and_attach()
                     st.success(st.session_state.get("brain_status_msg", "완료"))
@@ -870,10 +996,9 @@ def _render_body() -> None:
 
     # 7) 본문: 챗
     _render_chat_panel()
+
+
 # ============================= [14] 본문 렌더 — END =============================
-
-
-
 
 # [15] main ===================================================================
 def main():
@@ -881,6 +1006,7 @@ def main():
         print("Streamlit 환경이 아닙니다.")
         return
     _render_body()
+
 
 if __name__ == "__main__":
     main()
