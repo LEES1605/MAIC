@@ -3,12 +3,18 @@ line-length = 100
 target-version = "py311"
 
 [lint]
-# 기존 선택 규칙 유지 (E/F/B/I)
+# 형식/버그/임포트 중심으로만 엄격 적용
 select = ["E", "F", "B", "I"]
 ignore = ["E203"]  # black/ruff newline spacing difference
 
-# 👉 app.py 에서만 E501(줄 길이) 무시 — CSS/HTML이 많아 줄바꿈 비용이 큰 파일
-per-file-ignores = { "app.py" = ["E501"] }
+# 긴 CSS/HTML 문자열이 많은 파일만 E501(줄 길이) 예외
+per-file-ignores = {
+  "app.py" = ["E501"],
+  "src/rag/index_build.py" = ["E501"],
+  "src/ui_orchestrator.py" = ["E501"],
+  "src/prompt_modes.py" = ["E501"],
+  "src/features/ui_header.py" = ["E501"],
+}
 
 [lint.isort]
 known-first-party = ["src"]
