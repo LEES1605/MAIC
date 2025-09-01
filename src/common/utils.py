@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 
 def from_env_or_secrets(key: str, default: Optional[str] = None) -> Optional[str]:
