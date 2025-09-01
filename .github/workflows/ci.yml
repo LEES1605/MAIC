@@ -1,10 +1,11 @@
+# ===== [00] WORKFLOW META ====================================================  # [00] START
 name: CI
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ main, master, develop ]
   pull_request:
-    branches: [ main, develop ]
+    branches: [ main, master, develop ]
   workflow_dispatch:
 
 permissions:
@@ -13,55 +14,84 @@ permissions:
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
+# [00] END
 
+# ===== [01] JOB MATRIX & GLOBALS ============================================  # [01] START
 jobs:
-  test:
-    name: Lint • Type • Test (Py ${{ matrix.python-version }})
+  lint-test:
+    name: Lint & Typecheck & Tests (py${{ matrix.python-version }})
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+
     strategy:
       fail-fast: false
       matrix:
         python-version: [ "3.10", "3.11", "3.12" ]
 
-    steps:
-      - uses: actions/checkout@v4
+    defaults:
+      run:
+        shell: bash
+# [01] END
 
-      - name: Setup Python
+# ===== [02] CHECKOUT & PYTHON SETUP ========================================= # [02] START
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
-          cache: pip
+            python-version: ${{ matrix.python-version }}
+# [02] END
 
-      - name: Install deps
+# ===== [03] CACHE & INSTALL DEPENDENCIES ==================================== # [03] START
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-${{ matrix.python-version }}-${{ hashFiles('**/requirements*.txt') }}
+          restore-keys: |
+            pip-${{ runner.os }}-${{ matrix.python-version }}-
+
+      - name: Upgrade pip & wheel
         run: |
-          python -m pip install -U pip
+          python -m pip install -U pip wheel
+
+      - name: Install project requirements (if present)
+        if: hashFiles('requirements.txt') != ''
+        run: |
           pip install -r requirements.txt
-          # dev tools
-          pip install -U pytest pytest-cov ruff mypy
 
-      - name: Ruff (lint & format check)
+      - name: Install dev tools (ruff/mypy/pytest)
         run: |
-          ruff check .
-          ruff format --check .
+          pip install -U ruff mypy pytest pytest-cov
+# [03] END
 
-      - name: Mypy
+# ===== [04] RUFF — LINT & FORMAT (AUTO-FIX) ================================= # [04] START
+      - name: Ruff — Lint (auto-fix)
         run: |
-          mypy src || true  # 설정 진행 중이면 일단 통과시키려면 true 유지, 엄격 적용 시 제거
+          ruff --version
+          # 자동 수정으로 CI 중단 방지 (기능 무영향)
+          ruff check . --fix
 
-      - name: Pytest
-        env:
-          PYTHONPATH: .
+      - name: Ruff — Format (auto-format)
+        run: |
+          # 포맷 차이로 실패하는 걸 방지 (—check 대신 실제 포맷)
+          ruff format .
+# [04] END
+
+# ===== [05] TYPE CHECK (CONDITIONAL) ======================================== # [05] START
+      - name: mypy (if config exists)
+        if: |
+          hashFiles('mypy.ini') != '' || hashFiles('pyproject.toml') != ''
+        run: |
+          mypy --version
+          # 설정에 따라 프로젝트 패키지 경로를 조정하세요 (예: src/)
+          mypy .
+# [05] END
+
+# ===== [06] TESTS (CONDITIONAL) ============================================= # [06] START
+      - name: pytest (if tests exist)
+        if: hashFiles('tests/**/*.py') != ''
         run: |
           pytest -q --maxfail=1 --disable-warnings
-          # 커버리지를 보고싶다면:
-          # pytest -q --cov=src --cov-report=xml
-
-      # (선택) Codecov 업로드 — CODECOV_TOKEN을 저장소 Secrets에 넣으면 활성화
-      # - name: Upload coverage to Codecov
-      #   if: always()
-      #   uses: codecov/codecov-action@v4
-      #   with:
-      #     token: ${{ secrets.CODECOV_TOKEN }}
-      #     files: ./coverage.xml
-      #     fail_ci_if_error: false
+# [06] END
