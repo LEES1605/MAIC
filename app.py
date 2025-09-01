@@ -755,19 +755,14 @@ def _inject_chat_styles_once():
 
 # [13] 채팅 패널 ==============================================================
 def _render_chat_panel():
-    import os, time, base64, json, urllib.request
-    try:
-        import yaml
-    except Exception:
-        yaml = None
-
+    import time
     ss = st.session_state
     if "chat" not in ss:
         ss["chat"] = []
 
     _inject_chat_styles_once()
 
-    # ── 말풍선 렌더러(로컬 헬퍼) — 사용자 말풍선은 파스텔 노랑
+    # ── 말풍선 렌더러(사용자=노란색)
     def _render_bubble(role: str, text: str):
         import html, re
         def esc(t: str) -> str:
@@ -776,8 +771,8 @@ def _render_chat_panel():
 
         is_user = (role == "user")
         align   = "flex-end" if is_user else "flex-start"
-        bg      = "#FFF8CC" if is_user else "#EAF6FF"   # ← 사용자=노랑
-        border  = "#F2E4A2" if is_user else "#BEE3FF"   # ← 사용자=노랑 계열
+        bg      = "#FFF8CC" if is_user else "#EAF6FF"
+        border  = "#F2E4A2" if is_user else "#BEE3FF"
         fg      = "#333333"
         radius_fix = "border-top-right-radius:8px;" if is_user else "border-top-left-radius:8px;"
         label   = "나" if is_user else "답변"
@@ -800,7 +795,7 @@ def _render_chat_panel():
     # ── ChatPane OPEN + 메시지 영역 OPEN
     st.markdown('<div class="chatpane"><div class="messages">', unsafe_allow_html=True)
 
-    # 대화 기록 렌더
+    # 기록 렌더
     prev_role = None
     for m in ss["chat"]:
         role = m.get("role", "assistant")
@@ -815,7 +810,7 @@ def _render_chat_panel():
     # 메시지 영역 CLOSE (ChatPane은 유지)
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # ── (ChatPane 내부) 질문모드 + 인-카드 입력 폼
+    # ── (ChatPane 내부) 질문모드 + 인-카드 입력 폼 (Enter=전송, 화살표 버튼)
     with st.form("inpane_chat_form", clear_on_submit=True):
         cur_label = ss.get("qa_mode_radio", "문법")
         st.radio(
@@ -823,34 +818,73 @@ def _render_chat_panel():
             index=["문법", "문장", "지문"].index(cur_label),
             horizontal=True, key="qa_mode_radio", label_visibility="collapsed"
         )
-        # text_input: Enter=Submit 동작 (멀티라인 필요 시 추후 Shift+Enter 지원 버전 별도)
         qtxt = st.text_input(
             "질문 입력", value="",
             placeholder="예) 분사구문이 뭐예요?  예) 이 문장 구조 분석해줘",
             label_visibility="collapsed", key="inpane_q"
         )
-        # 화살표 전송 버튼(시각적으로 입력창 안에 겹치게)
         send = st.form_submit_button("➤", use_container_width=False, type="secondary")
-        # 위 버튼은 CSS로 .send-arrow 클래스를 적용
         st.markdown("""
             <script>
-            // 버튼에 클래스 부여 (Streamlit은 클래스 지정 API가 없어 JS로 후처리)
-            const btns = window.parent.document.querySelectorAll('form[data-testid="stForm"] button');
-            btns.forEach(b=>{ if(!b.classList.contains('send-arrow')) b.classList.add('send-arrow'); });
+            // 입력폼의 제출 버튼에 .send-arrow 부여(입력창 내부 우측 원형)
+            const form = window.parent.document.querySelector('form[data-testid="stForm"]');
+            if (form) {
+              const btn = form.querySelector('button[type="submit"]');
+              if (btn && !btn.classList.contains('send-arrow')) btn.classList.add('send-arrow');
+            }
             </script>
         """, unsafe_allow_html=True)
 
-    # ── 폼 제출 처리 (중복 전송 방지 가드 포함)
+    # ── 제출 처리(중복 가드)
     if send and not ss.get("_sending", False):
         question = (qtxt or "").strip()
         if question:
-            ss["_sending"] = True  # 가드 ON
+            ss["_sending"] = True  # 중복 제출 방지
 
-            # 사용자 턴 추가
+            # 사용자 턴 기록
             ss["chat"].append({"id": f"u{int(time.time()*1000)}", "role": "user", "text": question})
 
-            # 스트리밍 준비
-            def _emit_stream(text_html: str):
+            # 모드/증거
+            cur_label = ss.get("qa_mode_radio") or "문법"
+            MODE_TOKEN = {"문법":"문법설명", "문장":"문장구조분석", "지문":"지문분석"}[cur_label]
+            ev_notes  = ss.get("__evidence_class_notes", "")
+            ev_books  = ss.get("__evidence_grammar_books", "")
+
+            # ── 프롬프트 해석: 분리 모듈 호출
+            try:
+                from src.prompting.resolve import resolve_prompts
+                system_prompt, user_prompt, source = resolve_prompts(
+                    MODE_TOKEN, question, ev_notes, ev_books, cur_label, ss
+                )
+                ss["__prompt_source"] = source
+            except Exception:
+                # 최후 안전망(모듈 장애 시): 간이 폴백
+                ss["__prompt_source"] = "Fallback(Local)"
+                if MODE_TOKEN == "문법설명":
+                    system_prompt = "너는 한국의 영어학원 원장처럼 따뜻하고 명확하게 설명한다. 모든 출력은 한국어."
+                    user_prompt = f"[질문]\n{question}\n- 한 줄 핵심 → bullet 3~5 → 예문 1개"
+                elif MODE_TOKEN == "문장구조분석":
+                    system_prompt = "모든 출력은 한국어. 불확실하면 퍼센트로 표시."
+                    user_prompt = f"[문장]\n{question}\n- S/V/O/C/M 개요 → 단계적 분석"
+                else:
+                    system_prompt = "모든 출력은 한국어."
+                    user_prompt = f"[지문]\n{question}\n- 한 줄 요지 → 구조 요약"
+
+            # ── LLM 제공자 호출(스트리밍)
+            try:
+                from src.llm import providers as _prov
+                call = getattr(_prov, "call_with_fallback", None)
+            except Exception:
+                call = None
+
+            acc = ""
+            def _emit(piece: str):
+                nonlocal acc
+                import html, re
+                acc += str(piece)
+                def esc(t: str) -> str:
+                    t = html.escape(t or "").replace("\n","<br/>")
+                    return re.sub(r"  ","&nbsp;&nbsp;", t)
                 ph.markdown(
                     '<div style="display:flex;justify-content:flex-start;margin:8px 0;">'
                     '  <div style="max-width:88%;padding:10px 12px;border-radius:16px;border-top-left-radius:8px;'
@@ -859,151 +893,33 @@ def _render_chat_panel():
                     '    <span style="display:inline-block;margin:-2px 0 6px 0;padding:1px 8px;border-radius:999px;'
                     '                 font-size:11px;font-weight:700;background:#DFF1FF;color:#0f5b86;'
                     '                 border:1px solid #BEE3FF;">답변</span><br/>' +
-                    text_html +
+                    esc(acc) +
                     '  </div>'
                     '</div>', unsafe_allow_html=True
                 )
 
-            # 모드/증거
-            cur_label = ss.get("qa_mode_radio") or "문법"
-            MODE_TOKEN = {"문법":"문법설명","문장":"문장구조분석","지문":"지문분석"}[cur_label]
-            ev_notes = ss.get("__evidence_class_notes", "")
-            ev_books = ss.get("__evidence_grammar_books", "")
-
-            # 프롬프트 로더들 ---------------------------------------------------
-            def _github_fetch_prompts_text():
-                token  = _from_secrets("GH_TOKEN") or os.getenv("GH_TOKEN")
-                repo   = _from_secrets("GH_REPO")  or os.getenv("GH_REPO")
-                branch = _from_secrets("GH_BRANCH","main") or os.getenv("GH_BRANCH","main")
-                path   = _from_secrets("GH_PROMPTS_PATH","prompts.yaml") or os.getenv("GH_PROMPTS_PATH","prompts.yaml")
-                if not (token and repo and yaml): return None
-                url = f"https://api.github.com/repos/{repo}/contents/{path}?ref={branch}"
-                req = urllib.request.Request(url, headers={"Authorization": f"token {token}","User-Agent":"maic-app"})
-                try:
-                    with urllib.request.urlopen(req) as r:
-                        meta = json.loads(r.read().decode("utf-8"))
-                        text = base64.b64decode((meta.get("content") or "").encode()).decode("utf-8")
-                        ss["__gh_prompts_cache"] = {"sha": meta.get("sha"), "text": text}
-                        return text
-                except Exception:
-                    return None
-
-            def _build_prompt_from_github(mode_token: str, q: str, ev1: str, ev2: str):
-                txt = _github_fetch_prompts_text()
-                if not (txt and yaml): return None
-                try:
-                    data = yaml.safe_load(txt) or {}
-                    node = (data.get("modes") or {}).get(mode_token)
-                    if not node: return None
-                    sys_p = node.get("system") if isinstance(node, dict) else None
-                    usr_p = node.get("user")   if isinstance(node, dict) else (node if isinstance(node, str) else None)
-                    if usr_p is None: return None
-                    usr_p = (usr_p.replace("{QUESTION}", q)
-                                .replace("{EVIDENCE_CLASS_NOTES}", ev1 or "")
-                                .replace("{EVIDENCE_GRAMMAR_BOOKS}", ev2 or ""))
-                    return {"system": sys_p, "user": usr_p}
-                except Exception:
-                    return None
-
-            def _build_prompt_from_drive(mode_token: str, q: str, ev1: str, ev2: str):
-                _prompt_mod = _try_import("src.prompt_modes", ["build_prompt"]) or {}
-                fn = _prompt_mod.get("build_prompt")
-                if not callable(fn): return None
-                try:
-                    parts = fn(mode_token, q) or {}
-                    sys_p = parts.get("system"); usr_p = parts.get("user")
-                    if usr_p:
-                        usr_p = (usr_p.replace("{QUESTION}", q)
-                                    .replace("{EVIDENCE_CLASS_NOTES}", ev1 or "")
-                                    .replace("{EVIDENCE_GRAMMAR_BOOKS}", ev2 or ""))
-                    return {"system": sys_p, "user": usr_p}
-                except Exception:
-                    return None
-
-            def _fallback_prompts(mode_token: str, q: str, ev1: str, ev2: str, cur_label: str):
-                NOTICE = "안내: 현재 자료 연결이 원활하지 않아 간단 모드로 답변합니다. 핵심만 짧게 안내할게요."
-                BASE = "너는 한국의 영어학원 원장처럼 따뜻하고 명확하게 설명한다. 모든 출력은 한국어로 간결하게."
-                if mode_token == "문법설명":
-                    sys_p = BASE + " 주제에서 벗어난 장황한 배경설명은 금지한다."
-                    lines = []
-                    if not ev1 and not ev2: lines.append(NOTICE)
-                    lines += [
-                        "1) 한 줄 핵심","2) 이미지/비유 (짧게)","3) 핵심 규칙 3–5개 (• bullet)",
-                        "4) 예문 1개(+한국어 해석)","5) 한 문장 리마인드",
-                        "6) 출처 1개: [출처: GPT지식/GEMINI지식/자료명]"
-                    ]
-                    usr_p = f"[질문]\n{q}\n\n[작성 지침]\n- 형식을 지켜라.\n" + "\n".join(f"- {x}" for x in lines)
-                elif mode_token == "문장구조분석":
-                    sys_p = BASE + " 불확실한 판단은 '약 ~% 불확실'로 명시한다."
-                    usr_p = ("[출력 형식]\n0) 모호성 점검\n1) 괄호 규칙 요약\n2) S–V–O–C–M 한 줄 개요\n"
-                             "3) 성분 식별: 표/리스트\n4) 구조·구문 단계적 설명\n5) 핵심 포인트 2–3개\n6) 출처 유형만 표기\n\n"
-                             f"[문장]\n{q}")
-                else:
-                    sys_p = BASE + " 불확실한 판단은 '약 ~% 불확실'로 명시한다."
-                    usr_p = ("[출력 형식]\n1) 한 줄 요지\n2) 구조 요약(단락별 핵심)\n3) 핵심어 3–6개+이유\n4) 풀이 힌트\n\n"
-                             f"[지문/질문]\n{q}")
-                st.session_state["__prompt_source"] = "Fallback"
-                return sys_p, usr_p
-
-            def _resolve_prompts(mode_token: str, q: str, ev1: str, ev2: str, cur_label: str):
-                gh = _build_prompt_from_github(mode_token, q, ev1, ev2)
-                if gh and (gh.get("system") or gh.get("user")):
-                    st.session_state["__prompt_source"] = "GitHub"
-                    sys_p = gh.get("system") or ""
-                    usr_p = gh.get("user") or f"[모드:{mode_token}]\n{q}"
-                    if mode_token == "문법설명" and not ev1 and not ev2:
-                        usr_p += "\n\n[지시]\n- 첫 줄: '안내: 현재 자료 연결이 원활하지 않아 간단 모드로 답변합니다. 핵심만 짧게 안내할게요.'"
-                    return sys_p, usr_p
-                dv = _build_prompt_from_drive(mode_token, q, ev1, ev2)
-                if dv and (dv.get("system") or dv.get("user")):
-                    st.session_state["__prompt_source"] = "Drive"
-                    sys_p = dv.get("system") or ""
-                    usr_p = dv.get("user") or f"[모드:{mode_token}]\n{q}"
-                    if mode_token == "문법설명" and not ev1 and not ev2:
-                        usr_p += "\n\n[지시]\n- 첫 줄: '안내: 현재 자료 연결이 원활하지 않아 간단 모드로 답변합니다. 핵심만 짧게 안내할게요.'"
-                    return sys_p, usr_p
-                return _fallback_prompts(mode_token, q, ev1, ev2, cur_label)
-            # -------------------------------------------------------------------
-
-            # LLM 호출 + 스트리밍
-            system_prompt, user_prompt = _resolve_prompts(MODE_TOKEN, question, ev_notes, ev_books, cur_label)
-            prov = _try_import("src.llm.providers", ["call_with_fallback"])
-            call = prov.get("call_with_fallback")
-
-            acc = ""
-            def _emit(piece: str):
-                nonlocal acc
-                acc += str(piece)
-                import html, re
-                def esc(t: str) -> str:
-                    t = html.escape(t or "").replace("\n","<br/>")
-                    return re.sub(r"  ","&nbsp;&nbsp;", t)
-                _emit_html = esc(acc)
-                _emit_html and _emit_html  # noop
-                _emit_stream(esc(acc))
-
             try:
                 import inspect
-                kwargs = {}
-                sig = inspect.signature(call); params = sig.parameters.keys()
-                if "messages" in params:
-                    kwargs["messages"] = [{"role":"system","content":system_prompt or ""},
-                                          {"role":"user","content":user_prompt}]
-                else:
-                    if "prompt" in params: kwargs["prompt"] = user_prompt
-                    elif "user_prompt" in params: kwargs["user_prompt"] = user_prompt
-                    if "system_prompt" in params: kwargs["system_prompt"] = (system_prompt or "")
-                    elif "system" in params:      kwargs["system"] = (system_prompt or "")
-                if "mode_token" in params: kwargs["mode_token"] = MODE_TOKEN
-                elif "mode" in params:     kwargs["mode"] = MODE_TOKEN
-                if "temperature" in params: kwargs["temperature"] = 0.2
-                elif "temp" in params:      kwargs["temp"] = 0.2
-                if "timeout_s" in params:   kwargs["timeout_s"] = 90
-                elif "timeout" in params:   kwargs["timeout"] = 90
-                if "extra" in params:       kwargs["extra"] = {"question": question, "mode_key": cur_label}
-
-                supports_stream = ("stream" in params) or ("on_token" in params) or ("on_delta" in params) or ("yield_text" in params)
+                text_final = ""
                 if callable(call):
+                    sig = inspect.signature(call); params = sig.parameters.keys(); kwargs = {}
+                    if "messages" in params:
+                        kwargs["messages"] = [{"role":"system","content":system_prompt or ""},
+                                              {"role":"user","content":user_prompt}]
+                    else:
+                        if "prompt" in params: kwargs["prompt"] = user_prompt
+                        elif "user_prompt" in params: kwargs["user_prompt"] = user_prompt
+                        if "system_prompt" in params: kwargs["system_prompt"] = (system_prompt or "")
+                        elif "system" in params:      kwargs["system"] = (system_prompt or "")
+                    if "mode_token" in params: kwargs["mode_token"] = MODE_TOKEN
+                    elif "mode" in params:     kwargs["mode"] = MODE_TOKEN
+                    if "temperature" in params: kwargs["temperature"] = 0.2
+                    elif "temp" in params:      kwargs["temp"] = 0.2
+                    if "timeout_s" in params:   kwargs["timeout_s"] = 90
+                    elif "timeout" in params:   kwargs["timeout"] = 90
+                    if "extra" in params:       kwargs["extra"] = {"question": question, "mode_key": cur_label}
+
+                    supports_stream = ("stream" in params) or ("on_token" in params) or ("on_delta" in params) or ("yield_text" in params)
                     if supports_stream:
                         if "stream" in params:   kwargs["stream"] = True
                         if "on_token" in params: kwargs["on_token"] = _emit
@@ -1014,7 +930,8 @@ def _render_chat_panel():
                     else:
                         res = call(**kwargs)
                         text_final = res.get("text") if isinstance(res, dict) else str(res)
-                        if not text_final: text_final = "(응답이 비어있어요)"
+                        if not text_final:
+                            text_final = "(응답이 비어있어요)"
                         _emit(text_final)
                 else:
                     text_final = "(오류) LLM 어댑터를 사용할 수 없습니다."
@@ -1023,7 +940,7 @@ def _render_chat_panel():
                 text_final = f"(오류) {type(e).__name__}: {e}"
                 _emit(text_final)
 
-            # 어시스턴트 턴 저장 후 가드 해제 → 리렌더
+            # 기록/가드 해제 후 리렌더
             ss["chat"].append({"id": f"a{int(time.time()*1000)}", "role": "assistant", "text": text_final})
             ss["_sending"] = False
             st.rerun()
