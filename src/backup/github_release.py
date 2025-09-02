@@ -11,12 +11,26 @@ from typing import Dict, Optional
 
 import requests
 
+# streamlit은 있을 수도/없을 수도 있다.
 try:
-    import streamlit as st  # type: ignore
+    import streamlit as st
 except Exception:
     st = None  # pragma: no cover
 
-from src.common.utils import get_secret, logger
+# 공용 유틸(없을 수도 있음) — 안전 폴백 제공
+try:
+    from src.common.utils import get_secret, logger  # type: ignore[assignment]
+except Exception:
+    def get_secret(name: str, default: str = "") -> str:
+        return os.getenv(name, default)
+
+    class _Logger:
+        def info(self, *a, **k): pass
+        def warning(self, *a, **k): pass
+        def error(self, *a, **k): pass
+
+    def logger() -> _Logger:
+        return _Logger()
 
 API = "https://api.github.com"
 
@@ -36,10 +50,13 @@ def _headers(binary: bool = False) -> Dict[str, str]:
 
 
 def _log(msg: str) -> None:
-    logger().info(msg)
+    try:
+        logger().info(msg)
+    except Exception:
+        pass
     if st:
         try:
-            st.write(msg)  # type: ignore
+            st.write(msg)
         except Exception:
             pass
 
