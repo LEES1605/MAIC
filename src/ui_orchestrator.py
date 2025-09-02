@@ -300,12 +300,12 @@ def render_index_orchestrator_panel() -> None:
 
     # segmented_control가 없는 환경에서는 radio로 폴백
     try:
-        sel = st.segmented_control(
+        st.segmented_control(
             "단계", steps, key="_orchestrator_step",
             help="단계 위 또는 ‘ⓘ 단계 설명’을 눌러 각 단계의 의미를 확인하세요."
         )
     except Exception:
-        sel = st.radio(
+        st.radio(
             "단계", steps, key="_orchestrator_step", horizontal=True,
             help="‘ⓘ 단계 설명’을 눌러 각 단계의 의미를 확인하세요."
         )
