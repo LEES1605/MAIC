@@ -315,7 +315,7 @@ def get_latest_release(repo: str | None = None) -> Optional[dict]:
         _log("get_latest_release: GITHUB_REPO 미설정")
         return None
     try:
-        return _latest_release(r)  # 내부에서 raise_for_status, 예외 처리/로그 후 None 반환
+        return _latest_release(r)  # 내부에서 raise_for_status/예외 처리
     except Exception as e:
         _log(f"get_latest_release 오류: {type(e).__name__}: {e}")
         return None
