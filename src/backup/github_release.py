@@ -9,6 +9,7 @@ import zipfile
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+import importlib
 import requests
 
 # streamlit은 있을 수도/없을 수도 있다.
@@ -17,9 +18,9 @@ try:
 except Exception:
     st = None  # pragma: no cover
 
-# 공용 유틸: "속성 임포트" 금지 → 모듈 임포트 후 존재 확인 + 폴백 제공
+# 공용 유틸: "속성 임포트" 금지 → 모듈 동적 임포트 후 존재 확인 + 폴백 제공
 try:
-    import src.common.utils as _utils  # type: ignore[import-not-found]
+    _utils = importlib.import_module("src.common.utils")
 except Exception:
     _utils = None  # 모듈 자체가 없을 수 있음
 
@@ -27,17 +28,19 @@ except Exception:
 def get_secret(name: str, default: str = "") -> str:
     """Streamlit secrets → env → default 순으로 조회."""
     # 1) src.common.utils.get_secret 우선
-    if _utils is not None and hasattr(_utils, "get_secret"):
-        try:
-            val = _utils.get_secret(name, default)  # type: ignore[no-any-return]
-            return val if isinstance(val, str) else str(val)
-        except Exception:
-            pass
+    if _utils is not None:
+        func = getattr(_utils, "get_secret", None)
+        if callable(func):
+            try:
+                val = func(name, default)
+                return val if isinstance(val, str) else str(val)
+            except Exception:
+                pass
 
     # 2) streamlit.secrets
     try:
         if st is not None and hasattr(st, "secrets"):
-            v = st.secrets.get(name)  # 불필요 ignore 제거(가드 후 접근)
+            v = st.secrets.get(name)
             if v is not None:
                 return v if isinstance(v, str) else str(v)
     except Exception:
@@ -49,24 +52,22 @@ def get_secret(name: str, default: str = "") -> str:
 
 def logger():
     """src.common.utils.logger()가 있으면 사용, 없으면 no-op 로거."""
-    if _utils is not None and hasattr(_utils, "logger"):
-        try:
-            return _utils.logger()
-        except Exception:
-            pass
+    if _utils is not None:
+        func = getattr(_utils, "logger", None)
+        if callable(func):
+            try:
+                return func()
+            except Exception:
+                pass
 
     class _Logger:
-        def info(self, *a: Any, **k: Any) -> None:
-            pass
-
-        def warning(self, *a: Any, **k: Any) -> None:
-            pass
-
-        def error(self, *a: Any, **k: Any) -> None:
-            pass
+        def info(self, *a: Any, **k: Any) -> None: ...
+        def warning(self, *a: Any, **k: Any) -> None: ...
+        def error(self, *a: Any, **k: Any) -> None: ...
 
     return _Logger()
 # [01] END =====================================================================
+
 
 
 # ===== [02] CONSTANTS & PUBLIC EXPORTS =======================================  # [02] START
