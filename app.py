@@ -419,7 +419,7 @@ def _mount_background(
 # ===== [PATCH / app.py / [09] 부팅 훅(오케스트레이터 오토플로우 호출) / L0397–L0643] — START =====
 # [09] 부팅 훅(오케스트레이터 오토플로우 호출) ================================
 def _boot_autoflow_hook():
-    """앱 부팅 시 1회 오토 플로우 실행(관리자=대화형, 학생=자동)."""
+    """앱 부팅 시 1회 오토 플로우 실행(관리자=대화형, 학생=자동)"""
     try:
         mod = None
         for name in ("src.ui_orchestrator", "ui_orchestrator"):
@@ -434,8 +434,9 @@ def _boot_autoflow_hook():
         _errlog(f"boot_autoflow_hook: {e}", where="[boot_hook]", exc=e)
 
 
+# ======================= [10] 부팅/인덱스 준비 — START ========================
 def _set_brain_status(code: str, msg: str, source: str = "", attached: bool = False):
-    """상태 배지/진행선/진단 패널이 공통으로 참조하는 세션 값을 세팅한다."""
+    """세션 상태를 일관된 방식으로 세팅한다."""
     if st is None:
         return
     ss = st.session_state
@@ -443,7 +444,6 @@ def _set_brain_status(code: str, msg: str, source: str = "", attached: bool = Fa
     ss["brain_status_msg"] = msg
     ss["brain_source"] = source
     ss["brain_attached"] = bool(attached)
-    # 편의 플래그(복구/재빌드 권장 노출 등에 사용)
     ss["restore_recommend"] = code in ("MISSING", "ERROR")
     ss.setdefault("index_decision_needed", False)
     ss.setdefault("index_change_stats", {})
@@ -466,92 +466,6 @@ def _quick_local_attach_only():
             return True
     except Exception as e:
         _errlog("빠른 로컬 척도 확인 실패", where="[09]_quick_local_attach_only", exc=e)
-
-    _set_brain_status("MISSING", "인덱스 없음(관리자에서 '업데이트 점검' 필요)", "", attached=False)
-    return False
-
-
-def _run_deep_check_and_attach():
-    """관리자 버튼으로 실행되는 딥체크(Drive 프리체크/변경 감지, GitHub 복구)."""
-    if st is None:
-        return
-    ss = st.session_state
-    # 동적 임포트(런타임 의존을 완화)
-    idx = _try_import("src.rag.index_build", ["quick_precheck", "diff_with_manifest"])
-    rel = _try_import("src.backup.github_release", ["restore_latest"])
-    quick = idx.get("quick_precheck")
-    diff = idx.get("diff_with_manifest")
-    restore_latest = rel.get("restore_latest")
-
-    # 0) 로컬이 이미 준비라면 그대로 연결(변경 감지만 수행)
-    if _is_brain_ready():
-        stats = {}
-        changed = False
-        if callable(diff):
-            try:
-                d = diff() or {}
-                stats = d.get("stats") or {}
-                total = int(stats.get("added", 0)) + int(stats.get("changed", 0)) + int(stats.get("removed", 0))
-                changed = total > 0
-            except Exception as e:
-                _errlog("diff 실패", where="[09]_run_deep_check_and_attach", exc=e)
-        msg = "로컬 인덱스 연결됨" + ("(신규/변경 감지)" if changed else "(변경 없음/판단 불가)")
-        _set_brain_status("READY", msg, "local", attached=True)
-        ss["index_change_stats"] = stats
-        return
-
-    # 1) Drive 빠른 프리체크(폴더/확장자/크기 등)
-    if callable(quick):
-        try:
-            ok, info = quick()
-            if ok:
-                ss["index_decision_needed"] = True
-                _set_brain_status("ATTACH", "Drive 자료 감지됨(관리자 승인 필요)", "drive", attached=False)
-                return
-        except Exception as e:
-            _errlog("quick_precheck 실패", where="[09]_run_deep_check_and_attach", exc=e)
-
-    # 2) (옵션) GitHub 최신 백업 복구
-    if callable(restore_latest):
-        try:
-            ok, note = restore_latest()
-            if ok and _is_brain_ready():
-                _set_brain_status("READY", "GitHub 최신 백업 복구됨", "github", attached=True)
-                return
-        except Exception as e:
-            _errlog("restore_latest 실패", where="[09]_run_deep_check_and_attach", exc=e)
-
-    # 3) 최종 미준비
-    _set_brain_status("MISSING", "인덱스 없음(관리자에서 '업데이트 점검' 필요)", "", attached=False)
-# ===== [PATCH / app.py / [09] 부팅 훅(오케스트레이터 오토플로우 호출) / L0397–L0643] — END =====
-
-# ======================= [10] 부팅/인덱스 준비 — START ========================
-def _set_brain_status(code: str, msg: str, source: str = "", attached: bool = False):
-    """세션 상태를 일관된 방식으로 세팅한다."""
-    if st is None:
-        return
-    ss = st.session_state
-    ss["brain_status_code"] = code
-    ss["brain_status_msg"] = msg
-    ss["brain_source"] = source
-    ss["brain_attached"] = bool(attached)
-    ss["restore_recommend"] = code in ("MISSING", "ERROR")
-    ss.setdefault("index_decision_needed", False)
-    ss.setdefault("index_change_stats", {})
-
-
-def _quick_local_attach_only():
-    """빠른 부팅: 네트워크 호출 없이 로컬 신호만 확인."""
-    if st is None:
-        return False
-    
-    man = PERSIST_DIR / "manifest.json"
-    chunks = PERSIST_DIR / "chunks.jsonl"
-    ready = PERSIST_DIR / ".ready"
-
-    if (chunks.exists() and chunks.stat().st_size > 0) or (man.exists() and man.stat().st_size > 0) or ready.exists():
-        _set_brain_status("READY", "로컬 인덱스 연결됨(빠른 부팅)", "local", attached=True)
-        return True
 
     _set_brain_status("MISSING", "인덱스 없음(관리자에서 '업데이트 점검' 필요)", "", attached=False)
     return False
@@ -593,7 +507,7 @@ def _run_deep_check_and_attach():
         except Exception as e:
             _errlog(f"precheck 예외: {e}", where="[deep_check]")
 
-    # 2) GitHub Releases 복구
+    # 2) (옵션) GitHub 최신 백업 복구
     restored = False
     if callable(restore_latest):
         try:
@@ -627,11 +541,13 @@ def _run_deep_check_and_attach():
 
 def _auto_start_once():
     """AUTO_START_MODE에 따른 1회성 자동 복원."""
-    if st is None or st.session_state.get("_auto_started"):
-        return
-    st.session_state["_auto_started"] = True
-
-    if _is_brain_ready():
+    try:
+        if st is None or not hasattr(st, "session_state"):
+            return
+        if st.session_state.get("_auto_start_done"):
+            return
+        st.session_state["_auto_start_done"] = True
+    except Exception:
         return
 
     mode = (os.getenv("AUTO_START_MODE") or _from_secrets("AUTO_START_MODE", "off") or "off").lower()
@@ -666,16 +582,12 @@ def _render_admin_panels() -> None:
     """
     if st is None:
         return
-    import time as _time
-    import traceback as _tb
 
-    st.subheader("관리자 패널")
+    # --- (A) 토글 상태 보존/표시 ---
+    toggle_key = "_admin_diag_open"
+    st.session_state.setdefault(toggle_key, False)
 
-    # --- (A) 토글 UI: st.toggle 미지원 환경 대비 체크박스 폴백 ---
-    toggle_key = "admin_orchestrator_open"
-    if toggle_key not in st.session_state:
-        st.session_state[toggle_key] = False
-
+    # 모바일에선 토글, 데스크톱에선 토글/체크박스 중 사용
     try:
         open_panel = st.toggle("🛠 진단 도구", value=st.session_state[toggle_key], help="필요할 때만 로드합니다.")
     except Exception:
@@ -693,54 +605,31 @@ def _render_admin_panels() -> None:
         # 1) 일반 모듈 임포트 시도
         for module_name in ("src.ui_orchestrator", "ui_orchestrator"):
             try:
-                return importlib.import_module(module_name), f"import:{module_name}"
+                return importlib.import_module(module_name)
             except Exception as e:
-                tried_msgs.append(f"import:{module_name} → {e!r}")
+                tried_msgs.append(f"{module_name} 실패: {e}")
+        # 2) 파일 경로에서 직접 로드(폴백)
+        for candidate in ("src/ui_orchestrator.py", "ui_orchestrator.py"):
+            try:
+                spec = importlib.util.spec_from_file_location("ui_orchestrator", candidate)
+                if spec and spec.loader:
+                    mod = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(mod)  # type: ignore[attr-defined]
+                    return mod
+            except Exception as e:
+                tried_msgs.append(f"{candidate} 로드 실패: {e}")
+        raise ImportError(" or ".join(tried_msgs))
 
-        # 2) 파일 경로 폴백: 프로젝트 루트/앱 디렉터리 후보를 돌며 직접 로드
-        roots = [Path("."), Path(__file__).resolve().parent]
-        rels = [Path("src") / "ui_orchestrator.py", Path("ui_orchestrator.py")]
-        for root in roots:
-            for rel in rels:
-                candidate = root / rel
-                if candidate.exists():
-                    try:
-                        spec = importlib.util.spec_from_file_location("ui_orchestrator", candidate)
-                        if spec is None or spec.loader is None:
-                            raise ImportError(f"invalid spec/loader for {candidate}")
-                        mod = importlib.util.module_from_spec(spec)
-                        sys.modules["ui_orchestrator"] = mod
-                        spec.loader.exec_module(mod)
-                        return mod, f"file:{candidate.as_posix()}"
-                    except Exception as e:
-                        tried_msgs.append(f"file:{candidate} → {e!r}")
-
-        raise ImportError("ui_orchestrator not found", tried_msgs)
-
+    # --- (C) 렌더 호출 & 예외 처리 ---
+    import time as _time
+    import traceback as _tb
     load_start = _time.perf_counter()
-    with st.spinner("진단 도구 모듈을 불러오는 중…"):
-        try:
-            mod, how = _import_orchestrator_with_fallback()
-        except Exception as e:
-            st.error("진단 도구 모듈을 불러오지 못했습니다.")
-            with st.expander("오류 자세히 보기"):
-                st.code("".join(_tb.format_exception(type(e), e, e.__traceback__)))
-            return
-
-    st.caption(f"· 모듈 로드 경로: `{how}`")
-
-    # 3) 렌더링 (구현 유무 체크)
-    render_fn = getattr(mod, "render_index_orchestrator_panel", None)
-    if not callable(render_fn):
-        st.error("ui_orchestrator.render_index_orchestrator_panel()를 찾을 수 없습니다.")
-        try:
-            names = sorted([n for n in dir(mod) if not n.startswith("_")])
-            st.code("\n".join(names))
-        except Exception:
-            pass
-        return
-
     try:
+        mod = _import_orchestrator_with_fallback()
+        render_fn = getattr(mod, "render_diagnostics_panel", None)
+        if not callable(render_fn):
+            st.warning("진단 도구 렌더러(render_diagnostics_panel)를 찾지 못했습니다.")
+            return
         render_fn()
     except Exception as e:
         st.error("진단 도구 렌더링 중 오류가 발생했습니다.")
@@ -754,6 +643,8 @@ def _render_admin_panels() -> None:
 
 
 # ============ [11] 관리자 패널(지연 임포트 + 파일경로 폴백) — END ============
+# ===== [PATCH / app.py / [09] 부팅 훅(오케스트레이터 오토플로우 호출) / L0397–L0643] — END =====
+
 
 # [12] 채팅 UI(스타일/모드/상단 상태 라벨=SSOT) ===============================
 def _inject_chat_styles_once():
