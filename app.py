@@ -23,7 +23,7 @@ def _from_secrets(name: str, default: Optional[str] = None) -> Optional[str]:
     try:
         if st is None or not hasattr(st, "secrets"):
             return os.getenv(name, default)
-        val = st.secrets.get(name, None)  # type: ignore[attr-defined]
+        val = st.secrets.get(name, None)
         if val is None:
             return os.getenv(name, default)
         if isinstance(val, str):
@@ -31,7 +31,6 @@ def _from_secrets(name: str, default: Optional[str] = None) -> Optional[str]:
         return json.dumps(val, ensure_ascii=False)
     except Exception:
         return os.getenv(name, default)
-
 
 def _bootstrap_env() -> None:
     keys = [
@@ -574,15 +573,22 @@ def _render_admin_panels() -> None:
         st.caption("▶ 위 토글을 켜면 진단 도구 모듈을 불러옵니다.")
         return
 
-    # --- (B) 오케스트레이터 모듈 임포트(경로 폴백 포함) ---
-    def _import_orchestrator_with_fallback():
-        tried_msgs = []
-        # 1) 일반 모듈 임포트 시도
-        for module_name in ("src.ui_orchestrator", "ui_orchestrator"):
-            try:
-                return importlib.import_module(module_name), f"import {module_name}"
-            except Exception as e:
-                tried_msgs.append(f"import {module_name} → {e!r}")
+# --- (B) 오케스트레이터 모듈 임포트(경로 폴백 포함) ---
+        for root in roots:
+            for rel in rels:
+                candidate = root / rel
+                if candidate.exists():
+                    try:
+                        spec = importlib.util.spec_from_file_location("ui_orchestrator", candidate)
+                        if spec is None or spec.loader is None:
+                            raise ImportError(f"invalid spec/loader for {candidate}")
+                        mod = importlib.util.module_from_spec(spec)
+                        sys.modules["ui_orchestrator"] = mod
+                        spec.loader.exec_module(mod)
+                        return mod, f"file:{candidate.as_posix()}"
+                    except Exception as e:
+                        tried_msgs.append(f"file:{candidate} → {e!r}")
+
 
         # 2) 파일 경로에서 직접 로드 폴백
         roots = [
