@@ -9,19 +9,19 @@ import tempfile
 import zipfile
 from pathlib import Path
 from types import ModuleType
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Protocol, Mapping, cast
 
 import requests
 
 # streamlit은 있을 수도/없을 수도 있다.
-# - mypy 충돌 방지: st 변수를 먼저 Any로 선언하고, 런타임에 모듈/None을 대입
+# - mypy 충돌 방지: st 변수를 먼저 Any|None로 선언 후, 런타임에 모듈/None을 대입
 from typing import Any as _AnyForSt
-st: _AnyForSt
+st: _AnyForSt | None
 try:
     import streamlit as _st_mod
-    st = _st_mod
+    st = cast(_AnyForSt, _st_mod)
 except Exception:
-    st = None  # Optional[Any] 취급 → mypy OK
+    st = None  # mypy OK: Optional[Any]
 
 # 공용 유틸: 모듈 동적 임포트 후 존재 확인 + 폴백 제공
 _utils: ModuleType | None
@@ -29,6 +29,13 @@ try:
     _utils = importlib.import_module("src.common.utils")
 except Exception:
     _utils = None  # 모듈 자체가 없을 수 있음
+
+
+# --- 정적 인터페이스(Protocol) ------------------------------------------------
+class _LoggerProto(Protocol):
+    def info(self, *a: Any, **k: Any) -> None: ...
+    def warning(self, *a: Any, **k: Any) -> None: ...
+    def error(self, *a: Any, **k: Any) -> None: ...
 
 
 def get_secret(name: str, default: str = "") -> str:
@@ -40,14 +47,17 @@ def get_secret(name: str, default: str = "") -> str:
             try:
                 val = func(name, default)
                 # 외부 util이 Optional/비문자열을 줄 수 있으므로 안전 변환
-                return default if val is None else (val if isinstance(val, str) else str(val))
+                if val is None:
+                    return default
+                return val if isinstance(val, str) else str(val)
             except Exception:
                 pass
 
-    # 2) streamlit.secrets
+    # 2) streamlit.secrets (정적 타입 가드 + 매핑 캐스팅)
     try:
         if st is not None and hasattr(st, "secrets"):
-            v = st.secrets.get(name)  # 가드 후 접근 → ignore 불필요
+            sec = cast(Mapping[str, Any], st.secrets)  # runtime은 Mapping 유사체
+            v = sec.get(name, None)
             if v is not None:
                 return v if isinstance(v, str) else str(v)
     except Exception:
@@ -58,13 +68,15 @@ def get_secret(name: str, default: str = "") -> str:
     return env_v if env_v is not None else default
 
 
-def logger() -> Any:
-    """src.common.utils.logger()가 있으면 사용, 없으면 no-op 로거."""
+def logger() -> _LoggerProto:
+    """src.common.utils.logger()가 있으면 사용, 없으면 _Logger(Protocol 준수) 반환."""
     if _utils is not None:
         func = getattr(_utils, "logger", None)
         if callable(func):
             try:
-                return func()
+                lg = func()
+                # 외부 구현이 무엇이든, 최소한 Protocol 충족 보장(duck typing)
+                return cast(_LoggerProto, lg)
             except Exception:
                 pass
 
@@ -75,6 +87,7 @@ def logger() -> Any:
 
     return _Logger()
 # [01] END =====================================================================
+
 
 # ===== [02] CONSTANTS & PUBLIC EXPORTS =======================================  # [02] START
 API = "https://api.github.com"
