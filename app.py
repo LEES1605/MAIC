@@ -573,6 +573,7 @@ def _auto_start_once():
 
 # ======================== [10] 부팅/인덱스 준비 — END =========================
 
+# ===== [PATCH / app.py / [11] 관리자 패널(지연 임포트 + 파일경로 폴백) / L0643–L0738] — START =====
 # =========== [11] 관리자 패널(지연 임포트 + 파일경로 폴백) — START ===========
 def _render_admin_panels() -> None:
     """
@@ -614,7 +615,8 @@ def _render_admin_panels() -> None:
                 spec = importlib.util.spec_from_file_location("ui_orchestrator", candidate)
                 if spec and spec.loader:
                     mod = importlib.util.module_from_spec(spec)
-                    spec.loader.exec_module(mod)  # type: ignore[attr-defined]
+                    # 🔧 불필요한 "type: ignore" 주석 제거 (mypy: unused-ignore 해소)
+                    spec.loader.exec_module(mod)
                     return mod
             except Exception as e:
                 tried_msgs.append(f"{candidate} 로드 실패: {e}")
@@ -643,6 +645,8 @@ def _render_admin_panels() -> None:
 
 
 # ============ [11] 관리자 패널(지연 임포트 + 파일경로 폴백) — END ============
+# ===== [PATCH / app.py / [11] 관리자 패널(지연 임포트 + 파일경로 폴백) / L0643–L0738] — END =====
+
 # ===== [PATCH / app.py / [09] 부팅 훅(오케스트레이터 오토플로우 호출) / L0397–L0643] — END =====
 
 
