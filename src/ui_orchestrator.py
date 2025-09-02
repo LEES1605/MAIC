@@ -216,12 +216,14 @@ def render_index_orchestrator_panel() -> None:
     - 재인덱싱 버튼을 '항상' 노출(필요 시 안내)
     - READY(.ready + chunks.jsonl>0B) 이전에는 '완료' 스텝 잠금(🔒)
     - 단계별 설명 팝오버/툴팁 제공
-    - 재인덱싱 우선순위: services.index.reindex() → 기존 후보군 폴백
+    - 실패 시 세부 원인(READY 신호/파일 존재/크기/세션 메시지) 즉시 로그 남김
+    - 추가: 릴리스 복구 라벨 명확화, 강제 초기화, 파일 스냅샷 보기
     """
     import time
     from pathlib import Path
     import importlib
     from typing import Any
+    import shutil
 
     import streamlit as st  # 런타임 임포트(웹앱 환경)
 
@@ -248,6 +250,22 @@ def render_index_orchestrator_panel() -> None:
         except Exception:
             return False
 
+    def _status_snapshot(p: Path) -> dict[str, Any]:
+        """현 상태 스냅샷을 로그용 dict로 제공."""
+        cj = p / "chunks.jsonl"
+        rd = p / ".ready"
+        try:
+            size = cj.stat().st_size if cj.exists() else 0
+        except Exception:
+            size = -1  # 접근 실패
+        return {
+            "persist_dir": str(p),
+            "ready_flag": rd.exists(),
+            "chunks_exists": cj.exists(),
+            "chunks_size": size,
+            "local_ok": _local_ready(p),
+        }
+
     def _try_import(modname: str, names: list[str]) -> dict[str, Any]:
         out: dict[str, Any] = {}
         try:
@@ -258,6 +276,24 @@ def render_index_orchestrator_panel() -> None:
             for n in names:
                 out[n] = None
         return out
+
+    def _list_files(p: Path, limit: int = 50) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        try:
+            for idx, q in enumerate(sorted(p.glob("*"))):
+                if idx >= limit:
+                    break
+                try:
+                    rows.append({
+                        "name": q.name,
+                        "type": "dir" if q.is_dir() else "file",
+                        "size": (q.stat().st_size if q.is_file() else -1),
+                    })
+                except Exception:
+                    rows.append({"name": q.name, "type": "?", "size": -1})
+        except Exception:
+            pass
+        return rows
 
     # ---------- state ----------
     PERSIST = _persist_dir()
@@ -270,7 +306,7 @@ def render_index_orchestrator_panel() -> None:
         "백업훑": "GitHub/Drive 백업 존재 여부·최신성 조회(네트워크는 버튼 때만)",
         "변경검지": "원천(Drive) 대비 증감·변경 파일 탐지(diff)",
         "다운로드": "릴리스 자산(.zip/.tar.gz/.gz) 다운로드",
-        "복구/해체": "압축 해제 후 로컬에 복구/부착",
+        "복구/해체": "압축 해제 후 로컬에 복구/부착(평탄화/병합 포함)",
         "연결성": "인덱스 attach, 모델/키 확인",
         "완료": "학생 질의 가능(READY) 최종 확인",
     }
@@ -338,16 +374,21 @@ def render_index_orchestrator_panel() -> None:
 
     # ---------- actions ----------
     st.markdown("#### 작업")
-    b1, b2, b3, b4 = st.columns([1, 1, 1, 1])
+    b1, b2, b3, b4, b5 = st.columns([1, 1, 1, 1, 1])
     with b1:
-        do_quick = st.button("빠른 점검", help="버튼 클릭 시에만 네트워크를 확인합니다.")
+        do_quick = st.button("빠른 점검", key="btn_quick", help="버튼 클릭 시에만 네트워크를 확인합니다.")
     with b2:
-        do_reset = st.button("결과 초기화", help="진단 결과/오류 로그 뷰를 초기화합니다.")
+        do_reset = st.button("결과 초기화", key="btn_reset", help="진단 결과/오류 로그 뷰를 초기화합니다.")
     with b3:
-        do_update = st.button("업데이트 점검", help="GitHub 최신 릴리스에서 복구를 시도합니다.")
+        # ⬅ 라벨 명확화: '업데이트 점검' → '릴리스 복구(업데이트)'
+        do_update = st.button("릴리스 복구(업데이트)", key="btn_restore",
+                              help="GitHub 최신 릴리스에서 복구를 시도합니다.")
     with b4:
         # ✅ 재인덱싱은 '항상' 노출
-        do_reindex = st.button("재인덱싱", help="로컬 인덱스를 새로 구축합니다(항상 표시).")
+        do_reindex = st.button("재인덱싱", key="btn_reindex", help="로컬 인덱스를 새로 구축합니다(항상 표시).")
+    with b5:
+        do_clean = st.button("강제 초기화", key="btn_clean",
+                             help="persist 폴더의 .ready / chunks* / chunks/ 를 삭제하고 깨끗이 시작합니다.")
 
     # ---------- log area ----------
     log_key = "_orchestrator_log"
@@ -358,9 +399,18 @@ def render_index_orchestrator_panel() -> None:
     def _log(msg: str) -> None:
         st.session_state[log_key].append(f"{time.strftime('%H:%M:%S')}  {msg}")
 
+    # ---------- file snapshot ----------
+    with st.expander("📁 현재 PERSIST_DIR 파일 스냅샷(상위 50개)", expanded=False):
+        rows = _list_files(PERSIST, 50)
+        if not rows:
+            st.write("표시할 항목이 없습니다.")
+        else:
+            st.dataframe(rows, use_container_width=True, hide_index=True)
+
     # ---------- quick check ----------
     if do_quick:
-        _log(f"local: {'READY' if ready else 'MISSING'}")
+        snap = _status_snapshot(PERSIST)
+        _log(f"local: {'READY' if snap['local_ok'] else 'MISSING'} — {snap}")
         gh = _try_import("src.backup.github_release", ["get_latest_release"])
         get_latest = gh.get("get_latest_release")
         try:
@@ -376,6 +426,25 @@ def render_index_orchestrator_panel() -> None:
             _log(f"github 조회 실패: {e}")
             st.warning("GitHub 조회 실패(토큰/권한/네트워크)")
 
+    # ---------- clean reset ----------
+    if do_clean:
+        try:
+            removed = []
+            for name in (".ready", "chunks.jsonl", "chunks.jsonl.gz"):
+                p = PERSIST / name
+                if p.exists():
+                    p.unlink()
+                    removed.append(name)
+            d = PERSIST / "chunks"
+            if d.exists() and d.is_dir():
+                shutil.rmtree(d)
+                removed.append("chunks/ (dir)")
+            _log(f"강제 초기화: 제거 = {removed or '없음'}")
+            st.success("강제 초기화 완료. 이제 릴리스 복구 또는 재인덱싱을 실행해 주세요.")
+        except Exception as e:
+            _log(f"강제 초기화 실패: {e}")
+            st.error("강제 초기화 실패. 권한/경로를 확인해 주세요.")
+
     # ---------- update from release ----------
     if do_update:
         gh2 = _try_import("src.backup.github_release", ["restore_latest"])
@@ -384,49 +453,63 @@ def render_index_orchestrator_panel() -> None:
             with st.spinner("GitHub 릴리스에서 복구 중…"):
                 ok = False
                 try:
-                    # .zip/.tar.gz/.gz 자동 처리(이전 패치 반영)
                     ok = bool(restore_latest(PERSIST))
                 except Exception as e:
                     _log(f"restore_latest 예외: {e}")
-                if ok:
-                    r2 = _local_ready(PERSIST)
-                    _log(f"restore 결과: {'READY' if r2 else 'MISSING'}")
-                    st.success("복구 완료." if r2 else "복구는 성공했지만 READY 조건(.ready+chunks)이 충족되지 않았습니다.")
+                snap = _status_snapshot(PERSIST)
+                if ok and snap["local_ok"]:
+                    _log(f"restore 결과: READY — {snap}")
+                    st.success("복구 완료.")
+                elif ok and not snap["local_ok"]:
+                    _log(f"restore 결과: MISSING — {snap}")
+                    st.warning("복구는 성공했지만 READY 조건(.ready+chunks)이 충족되지 않았습니다.")
                 else:
+                    _log(f"restore 실패 — {snap}")
                     st.error("복구 실패. 오류 로그를 확인해 주세요.")
         else:
             st.info("restore_latest 함수를 찾지 못했습니다. 모듈 버전을 확인해 주세요.")
 
     # ---------- reindex (always visible) ----------
     if do_reindex:
-        # 1) 우선 services.index.reindex() 시도
         svc = _try_import("src.services.index", ["reindex"])
         fn = svc.get("reindex")
-
-        # 2) 없으면 기존 후보군 폴백
         if not callable(fn):
             idx = _try_import("src.rag.index_build", [
-                "rebuild_index", "build_index", "rebuild", "index_all", "build_all", "build_index_with_checkpoint"
+                "rebuild_index", "build_index", "rebuild", "index_all",
+                "build_all", "build_index_with_checkpoint"
             ])
-            fn = next((idx[n] for n in ("rebuild_index","build_index","rebuild","index_all","build_all","build_index_with_checkpoint")
-                       if callable(idx.get(n))), None)
+            fn = next((idx[n] for n in (
+                "rebuild_index","build_index","rebuild",
+                "index_all","build_all","build_index_with_checkpoint"
+            ) if callable(idx.get(n))), None)
 
         if callable(fn):
             with st.spinner("재인덱싱(전체) 실행 중…"):
-                ok = False
+                success = False
                 try:
-                    # 인자 시그니처 차이를 흡수(있으면 경로 전달, 아니면 무인자 호출)
                     try:
-                        ok = bool(fn(PERSIST))
+                        success = bool(fn(PERSIST))
                     except TypeError:
-                        ok = bool(fn())
+                        success = bool(fn())
                 except Exception as e:
                     _log(f"reindex 예외: {e}")
-                if ok:
-                    r2 = _local_ready(PERSIST)
-                    _log(f"reindex 결과: {'READY' if r2 else 'MISSING'}")
-                    st.success("재인덱싱 완료." if r2 else "재인덱싱 후 READY 조건(.ready+chunks)이 충족되지 않았습니다.")
+
+                snap = _status_snapshot(PERSIST)
+                bs_msg = str(st.session_state.get("brain_status_msg", ""))
+                if success and snap["local_ok"]:
+                    _log(f"reindex 결과: READY — {snap}")
+                    if bs_msg:
+                        _log(f"status_msg: {bs_msg}")
+                    st.success("재인덱싱 완료.")
+                elif success and not snap["local_ok"]:
+                    _log(f"reindex 결과: MISSING — {snap}")
+                    if bs_msg:
+                        _log(f"status_msg: {bs_msg}")
+                    st.warning("재인덱싱 후 READY 조건(.ready+chunks)이 충족되지 않았습니다.")
                 else:
+                    _log(f"reindex 실패 — {snap}")
+                    if bs_msg:
+                        _log(f"status_msg: {bs_msg}")
                     st.error("재인덱싱 실패. 오류 로그를 확인해 주세요.")
         else:
             st.info("현재 버전에서 재인덱싱 함수가 정의되지 않았습니다. "
@@ -434,5 +517,5 @@ def render_index_orchestrator_panel() -> None:
 
     # ---------- log view ----------
     st.markdown("#### 오류 로그")
-    st.text_area("최근 로그", value="\n".join(st.session_state[log_key][-200:]), height=160)
+    st.text_area("최근 로그", value="\n".join(st.session_state[log_key][-200:]), height=220)
 # =================== [03] render_index_orchestrator_panel — END ===================
