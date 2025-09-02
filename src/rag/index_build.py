@@ -83,151 +83,135 @@ def _unpack_snapshot(blob: bytes) -> Dict[str, Any]:
 
 
 # ======================= [04] PUBLIC API: rebuild_index — START =======================
-from __future__ import annotations
-
-import json
-import os
-from pathlib import Path
-from typing import Any, Iterable
-
-# 이 파일 상단 [01]에서 이미 PERSIST_DIR, ALLOWED_EXTS 등이 정의되어 있다고 가정합니다.
-
-
-def _iter_source_roots() -> Iterable[Path]:
-    """
-    인덱싱 소스 루트 후보를 반환합니다(존재하는 경로만).
-    우선순위:
-      1) 환경변수 MAIC_KNOWLEDGE_DIR
-      2) 레포 상대 'knowledge/'
-      3) 사용자 홈 '~/.maic/knowledge'
-    """
-    env = os.getenv("MAIC_KNOWLEDGE_DIR", "").strip()
-    if env:
-        p = Path(env).expanduser()
-        if p.exists():
-            yield p
-    repo_k = Path.cwd() / "knowledge"
-    if repo_k.exists():
-        yield repo_k
-    home_k = Path.home() / ".maic" / "knowledge"
-    if home_k.exists():
-        yield home_k
-
-
-def _yield_files(root: Path) -> Iterable[Path]:
-    """허용 확장자만 재귀 순회하며 파일 경로를 반환."""
-    exts = {e.lower() for e in ALLOWED_EXTS}
-    for p in root.rglob("*"):
-        if p.is_file() and p.suffix.lower() in exts:
-            yield p
-
-
-def _safe_read_text(p: Path, max_bytes: int = 1_000_000) -> str:
-    """
-    텍스트 파일을 최대 max_bytes까지 읽어 유니코드로 반환.
-    바이너리/인코딩 오류는 무시하며, 줄바꿈은 유지합니다.
-    """
-    try:
-        data = p.read_bytes()[:max_bytes]
-        return data.decode("utf-8", errors="ignore")
-    except Exception:
-        return ""
-
-
-def _write_jsonl_atomic(lines: Iterable[dict[str, Any]], out_file: Path) -> int:
-    """
-    JSONL을 원자적으로 기록합니다.
-    - out_file.tmp에 먼저 쓰고, 완료 시 replace로 교체
-    - 반환: 기록한 라인 수
-    """
-    tmp = out_file.with_suffix(".jsonl.tmp")
-    if tmp.exists():
-        try:
-            tmp.unlink()
-        except Exception:
-            pass
-
-    count = 0
-    try:
-        out_file.parent.mkdir(parents=True, exist_ok=True)
-        with tmp.open("w", encoding="utf-8") as w:
-            for obj in lines:
-                try:
-                    w.write(json.dumps(obj, ensure_ascii=False))
-                    w.write("\n")
-                    count += 1
-                except Exception:
-                    continue
-        if count > 0:
-            if out_file.exists():
-                out_file.unlink()
-            tmp.replace(out_file)
-        else:
-            tmp.unlink(missing_ok=True)
-    except Exception:
-        # 실패 시 임시 파일 정리
-        try:
-            tmp.unlink(missing_ok=True)
-        except Exception:
-            pass
-    return count
-
-
-def rebuild_index(output_dir: str | Path | None = None) -> dict[str, Any]:
+def rebuild_index(output_dir=None):
     """
     로컬 인덱스를 재구축합니다.
     - knowledge/ 하위(또는 MAIC_KNOWLEDGE_DIR 등)에서 허용 확장자 파일을 수집
     - 각 파일을 '파일 단위 1청크'로 JSONL 라인 생성 (간단 부트스트랩 인덱싱)
     - 소스가 전혀 없으면 'bootstrap' 1라인을 생성해 READY를 보장
 
+    매개변수:
+        output_dir: str | pathlib.Path | None
     반환(dict):
-        {
-          "persist_dir": "<경로>",
-          "chunks": <작성 라인 수>,
-          "sources": <사용된 소스 루트 수>
-        }
+        { "persist_dir": "<경로>", "chunks": <작성 라인 수>, "sources": <소스 루트 수> }
     """
-    dest = Path(output_dir).expanduser() if output_dir else PERSIST_DIR
+    # ---- 내부 헬퍼 및 설정 ------------------------------------------------------
+    from pathlib import Path
+    import os
+    import json
+
+    def _persist_dir() -> Path:
+        # 우선순위: 인자 → globals().PERSIST_DIR → src.config.PERSIST_DIR → ~/.maic/persist
+        if output_dir:
+            return Path(output_dir).expanduser()
+        try:
+            cfg = globals().get("PERSIST_DIR")
+            if cfg:
+                return Path(cfg).expanduser()
+        except Exception:
+            pass
+        try:
+            from src.config import PERSIST_DIR as CFG  # noqa: E402
+            return Path(str(CFG)).expanduser()
+        except Exception:
+            pass
+        return Path.home() / ".maic" / "persist"
+
+    def _allowed_exts() -> set:
+        try:
+            exts = globals().get("ALLOWED_EXTS")
+            if exts:
+                return {str(e).lower() for e in exts}
+        except Exception:
+            pass
+        return {".md", ".txt", ".pdf", ".json", ".csv"}
+
+    def _iter_source_roots():
+        env = os.getenv("MAIC_KNOWLEDGE_DIR", "").strip()
+        if env:
+            p = Path(env).expanduser()
+            if p.exists():
+                yield p
+        repo_k = Path.cwd() / "knowledge"
+        if repo_k.exists():
+            yield repo_k
+        home_k = Path.home() / ".maic" / "knowledge"
+        if home_k.exists():
+            yield home_k
+
+    def _yield_files(root: Path):
+        exts = _allowed_exts()
+        for p in root.rglob("*"):
+            try:
+                if p.is_file() and p.suffix.lower() in exts:
+                    yield p
+            except Exception:
+                continue
+
+    def _safe_read_text(p: Path, max_bytes: int = 1_000_000) -> str:
+        try:
+            data = p.read_bytes()[:max_bytes]
+            return data.decode("utf-8", errors="ignore")
+        except Exception:
+            return ""
+
+    def _write_jsonl_atomic(lines, out_file: Path) -> int:
+        tmp = out_file.with_suffix(".jsonl.tmp")
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except Exception:
+            pass
+        count = 0
+        try:
+            out_file.parent.mkdir(parents=True, exist_ok=True)
+            with tmp.open("w", encoding="utf-8") as w:
+                for obj in lines:
+                    try:
+                        w.write(json.dumps(obj, ensure_ascii=False))
+                        w.write("\n")
+                        count += 1
+                    except Exception:
+                        continue
+            if count > 0:
+                if out_file.exists():
+                    out_file.unlink()
+                tmp.replace(out_file)
+            else:
+                tmp.unlink(missing_ok=True)
+        except Exception:
+            try:
+                tmp.unlink(missing_ok=True)
+            except Exception:
+                pass
+        return count
+
+    # ---- 빌드 ---------------------------------------------------------------
+    dest = _persist_dir()
     dest.mkdir(parents=True, exist_ok=True)
     out_jsonl = dest / "chunks.jsonl"
 
     roots = [p for p in _iter_source_roots()]
-    lines: list[dict[str, Any]] = []
+    lines = []
 
-    # 1) 실제 소스 → 파일당 1라인 청크로 기록(간단 부트스트랩)
     for root in roots:
         for f in _yield_files(root):
             text = _safe_read_text(f)
             if not text.strip():
                 continue
-            # 필요한 최소 필드: id, text, source
-            lines.append(
-                {
-                    "id": f"file::{f.name}",
-                    "text": text,
-                    "source": str(f),
-                }
-            )
-            # 과도한 인덱싱 방지: 초기가동은 최대 200개만
+            lines.append({"id": f"file::{f.name}", "text": text, "source": str(f)})
             if len(lines) >= 200:
                 break
         if len(lines) >= 200:
             break
 
-    # 2) 소스가 전무하면 bootstrap 1라인 생성(READY 보장용)
     if not lines:
         lines = [
-            {
-                "id": "bootstrap::hello",
-                "text": "MAIC index bootstrap line",
-                "source": "bootstrap",
-            }
+            {"id": "bootstrap::hello", "text": "MAIC index bootstrap line", "source": "bootstrap"}
         ]
 
-    # 3) 원자적 쓰기
     wrote = _write_jsonl_atomic(lines, out_jsonl)
 
-    # 4) READY 플래그 보정
     try:
         ready = dest / ".ready"
         if wrote > 0 and not ready.exists():
@@ -235,10 +219,5 @@ def rebuild_index(output_dir: str | Path | None = None) -> dict[str, Any]:
     except Exception:
         pass
 
-    return {
-        "persist_dir": str(dest),
-        "chunks": int(wrote),
-        "sources": int(len(roots)),
-    }
+    return {"persist_dir": str(dest), "chunks": int(wrote), "sources": int(len(roots))}
 # ======================== [04] PUBLIC API: rebuild_index — END ========================
-
