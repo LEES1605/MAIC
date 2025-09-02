@@ -284,7 +284,12 @@ def restore_latest(dest_dir: str | Path) -> bool:
 
         # 2) '최상위 단일 폴더' 감지 → 평탄화 대상 루트 결정
         #    (예: tmp/maic-2025-08-29/chunks.jsonl  →  dest/chunks.jsonl)
-        children = [p for p in tmp.iterdir() if p.name not in (".DS_Store",) and not p.name.startswith("__MACOSX")]
+        children = [
+            p
+            for p in tmp.iterdir()
+            if p.name not in (".DS_Store",)
+            and not p.name.startswith("__MACOSX")
+        ]
         src_root = tmp
         if len(children) == 1 and children[0].is_dir():
             src_root = children[0]
