@@ -203,14 +203,20 @@ def reindex(dest_dir: Optional[str | Path] = None) -> bool:
 
         # 1) 정확히 chunks.jsonl
         for c in candidates:
-            p = c / "chunks.jsonl" if c.is_dir() else (c if c.name == "chunks.jsonl" else None)
+            if c.is_dir():
+                p = c / "chunks.jsonl"
+            else:
+                p = c if c.name == "chunks.jsonl" else None
             if p and p.exists() and p.is_file() and p.stat().st_size > 0:
                 shutil.copy2(p, target)
                 return True
 
         # 2) chunks.jsonl.gz
         for c in candidates:
-            gz = c / "chunks.jsonl.gz" if c.is_dir() else (c if c.name == "chunks.jsonl.gz" else None)
+            if c.is_dir():
+                gz = c / "chunks.jsonl.gz"
+            else:
+                gz = c if c.name == "chunks.jsonl.gz" else None
             if gz and gz.exists() and gz.is_file():
                 return _decompress_gz(gz, target)
 
@@ -221,10 +227,12 @@ def reindex(dest_dir: Optional[str | Path] = None) -> bool:
                 if _merge_chunk_dir(chunk_dir, target):
                     return True
 
-        # 4) 광역 탐색(최대 깊이 2): **/chunks.jsonl / **/chunks.jsonl.gz / **/chunks/*.jsonl
+        # 4) 광역 탐색: **/chunks.jsonl / **/chunks.jsonl.gz / **/chunks/*.jsonl
         try:
-            # a) chunks.jsonl
-            found = next((p for p in c for c in candidates for p in c.rglob("chunks.jsonl")), None)
+            found = next(
+                (p for cand in candidates for p in cand.rglob("chunks.jsonl")),
+                None,
+            )
         except Exception:
             found = None
         if found and found.is_file() and found.stat().st_size > 0:
@@ -232,16 +240,20 @@ def reindex(dest_dir: Optional[str | Path] = None) -> bool:
             return True
 
         try:
-            # b) chunks.jsonl.gz
-            found_gz = next((p for c in candidates for p in c.rglob("chunks.jsonl.gz")), None)
+            found_gz = next(
+                (p for cand in candidates for p in cand.rglob("chunks.jsonl.gz")),
+                None,
+            )
         except Exception:
             found_gz = None
         if found_gz and found_gz.is_file():
             return _decompress_gz(found_gz, target)
 
         try:
-            # c) **/chunks/*.jsonl 병합
-            found_dir = next((d for c in candidates for d in c.rglob("chunks") if d.is_dir()), None)
+            found_dir = next(
+                (d for cand in candidates for d in cand.rglob("chunks") if d.is_dir()),
+                None,
+            )
         except Exception:
             found_dir = None
         if found_dir and _merge_chunk_dir(found_dir, target):
