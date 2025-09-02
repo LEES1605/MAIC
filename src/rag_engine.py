@@ -41,9 +41,9 @@ def _index_exists(persist_dir: str | PathLike[str]) -> bool:
     except Exception:
         return False
 
-
-# ===== [04] SECRETS/ID HELPERS ==============================================
+# ===== [04] SECRETS/ID HELPERS ==============================================  # [04] START
 def _flatten_secrets(obj: Any = None, prefix: str = "") -> List[Tuple[str, Any]]:
+    """Streamlit secrets를 (경로, 값) 리스트로 평탄화."""
     from collections.abc import Mapping as _Map
 
     if obj is None:
@@ -82,13 +82,9 @@ def _find_folder_id(kind: str) -> Optional[str]:
     kind: 'BACKUP' | 'PREPARED' | 'DEFAULT'
     표준 키 + 프로젝트 별칭(APP_*)까지 폭넓게 인식.
     """
-    KEY_PREFS = {
-        "BACKUP": (
-            "GDRIVE_BACKUP_FOLDER_ID",
-            "BACKUP_FOLDER_ID",
-            "BACKUP_FOLDER_URL",
-            "APP_BACKUP_FOLDER_ID",
-        ),
+    # 1) 표준 키 우선
+    KEY_PREFS: Dict[str, Tuple[str, ...]] = {
+        "BACKUP": ("GDRIVE_BACKUP_FOLDER_ID", "BACKUP_FOLDER_ID", "BACKUP_FOLDER_URL", "APP_BACKUP_FOLDER_ID"),
         "PREPARED": (
             "GDRIVE_PREPARED_FOLDER_ID",
             "PREPARED_FOLDER_ID",
@@ -98,30 +94,34 @@ def _find_folder_id(kind: str) -> Optional[str]:
         "DEFAULT": ("GDRIVE_FOLDER_ID", "GDRIVE_FOLDER_URL"),
     }
     for k in KEY_PREFS.get(kind, ()):
-        if k in st.secrets and str(st.secrets[k]).strip():
-            v = str(st.secrets[k]).strip()
-            return _parse_drive_id(v) or v
+        try:
+            if k in st.secrets and str(st.secrets[k]).strip():
+                vs = str(st.secrets[k]).strip()
+                return _parse_drive_id(vs) or vs
+        except Exception:
+            continue
 
-    # 중첩 탐색 (키 경로에 토큰이 포함되면 후보로 인정)
-    TOK = {
+    # 2) 중첩 탐색(경로 텍스트에 토큰이 포함되면 후보로 인정)
+    TOK: Dict[str, Tuple[str, ...]] = {
         "BACKUP": ("BACKUP",),
         "PREPARED": ("PREPARED", "APP_GDRIVE_FOLDER_ID", "SOURCE", "DATA"),
         "DEFAULT": ("GDRIVE_FOLDER_ID",),
-    }[kind]
+    }
+    tokens = TOK[kind]
     for path, val in _flatten_secrets():
         try:
             if isinstance(val, (str, int)) and str(val).strip():
                 up = path.upper()
-                if any(t in up for t in TOK) and (
+                if any(t in up for t in tokens) and (
                     "FOLDER_ID" in up or "URL" in up or up.endswith(".ID") or up.endswith("_ID")
                 ):
-                    v = str(val).strip()
-                    return _parse_drive_id(v) or v
+                    vs = str(val).strip()
+                    return _parse_drive_id(vs) or vs
         except Exception:
             continue
 
-    # 환경변수도 확인
-    ENV = {
+    # 3) 환경변수 확인
+    ENV: Dict[str, Tuple[str, ...]] = {
         "BACKUP": ("GDRIVE_BACKUP_FOLDER_ID", "BACKUP_FOLDER_ID", "BACKUP_FOLDER_URL"),
         "PREPARED": (
             "GDRIVE_PREPARED_FOLDER_ID",
@@ -130,12 +130,14 @@ def _find_folder_id(kind: str) -> Optional[str]:
             "APP_GDRIVE_FOLDER_ID",
         ),
         "DEFAULT": ("GDRIVE_FOLDER_ID", "GDRIVE_FOLDER_URL"),
-    }[kind]
-    for e in ENV:
-        v = os.getenv(e)
-        if v:
-            return _parse_drive_id(v) or v
+    }
+    for e in ENV[kind]:
+        env_v = os.getenv(e)  # ← 다른 지역변수명으로 분리해 mypy 타입 충돌 제거
+        if env_v:
+            return _parse_drive_id(env_v) or env_v
+
     return None
+# [04] END
 
 
 # ===== [05] GOOGLE DRIVE AUTH (OAuth 우선, SA 폴백) ==========================  # [05] START
@@ -329,11 +331,11 @@ class _LocalQueryEngine:
         self._norms = []
         df: Dict[str, int] = {}
 
-        # 1) DF 수집
+        # 1) DF 수집 (집합으로 중복 제거)
         for rec in chunks:
             txt = rec.get("text", "") or ""
-            toks = set(self._tokenize(txt))
-            for t in toks:
+            seen = set(self._tokenize(txt))  # ← set[str]
+            for t in seen:
                 df[t] = df.get(t, 0) + 1
         N = max(1, len(chunks))
 
@@ -343,9 +345,8 @@ class _LocalQueryEngine:
         # 3) 각 청크 벡터
         for rec in chunks:
             txt = rec.get("text", "") or ""
-            # ✨ 타입 확정: meta는 dict[str, Any]
             meta: Dict[str, Any] = rec.get("meta", {}) or {}
-            toks = self._tokenize(txt)
+            toks = self._tokenize(txt)  # ← list[str] (위의 seen과 변수명 분리로 재할당 충돌 제거)
 
             # TF
             tf: Dict[str, int] = {}
@@ -453,8 +454,6 @@ class _LocalQueryEngine:
         resp = "Top matches:\n" + "\n".join(lines)
         return type("R", (), {"response": resp, "hits": hits})
 # [08] END
-
-
 
 # ===== [09] PUBLIC API =======================================================  # [09] START
 def get_or_build_index(
