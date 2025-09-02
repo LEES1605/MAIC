@@ -124,86 +124,85 @@ class _BaseFields:
 
 
 # --- 구현 A: pydantic v2(pydantic-settings) -----------------------------------
-if _IMPL == "P2":
-
-    class Settings(_BaseFields, BaseSettings):
-        model_config = SettingsConfigDict(
-            env_prefix="APP_",
-            env_file=".env",
-            case_sensitive=False,
-            extra="ignore",
-        )
+class _SettingsP2(_BaseFields, BaseSettings):
+    model_config = SettingsConfigDict(
+        env_prefix="APP_",
+        env_file=".env",
+        case_sensitive=False,
+        extra="ignore",
+    )
 
 
 # --- 구현 B: pydantic v1 ------------------------------------------------------
-elif _IMPL == "P1":
-
-    class Settings(_BaseFields, BaseSettings):
-        class Config:
-            env_prefix = "APP_"
-            env_file = ".env"
-            case_sensitive = False
-            extra = "ignore"
+class _SettingsP1(_BaseFields, BaseSettings):
+    class Config:
+        env_prefix = "APP_"
+        env_file = ".env"
+        case_sensitive = False
+        extra = "ignore"
 
 
 # --- 구현 C: SIMPLE(무의존) ---------------------------------------------------
-else:
+class _SettingsSimple(_BaseFields):
+    """
+    pydantic 없이 동작하는 가벼운 설정.
+    - 우선순위: os.environ → .env → 기본값
+    - 접두어: APP_
+    - 간단 캐스팅 지원(bool/int)
+    """
 
-    class Settings(_BaseFields):
-        """
-        pydantic 없이 동작하는 가벼운 설정.
-        - 우선순위: os.environ → .env → 기본값
-        - 접두어: APP_
-        - 간단 캐스팅 지원(bool/int)
-        """
+    def __init__(self) -> None:
+        # 1) .env 읽기(있으면)
+        dotenv = _read_dotenv(Path(".env"))
 
-        def __init__(self) -> None:
-            # 1) .env 읽기(있으면)
-            dotenv = _read_dotenv(Path(".env"))
-
-            def _get(name: str, default: Any, kind: str = "str") -> Any:
-                env_key = f"APP_{name}"
-                raw = os.environ.get(env_key, dotenv.get(env_key))
-                if raw is None:
+        def _get(name: str, default: Any, kind: str = "str") -> Any:
+            env_key = f"APP_{name}"
+            raw = os.environ.get(env_key, dotenv.get(env_key))
+            if raw is None:
+                return default
+            s = str(raw).strip()
+            if kind == "bool":
+                return _coerce_bool(s, default)
+            if kind == "int":
+                try:
+                    return int(s)
+                except Exception:
                     return default
-                s = str(raw).strip()
-                if kind == "bool":
-                    return _coerce_bool(s, default)
-                if kind == "int":
-                    try:
-                        return int(s)
-                    except Exception:
-                        return default
-                return s
+            return s
 
-            # 2) 각 필드 주입
-            self.ADMIN_PASSWORD = _get("ADMIN_PASSWORD", None)
-            self.GEMINI_API_KEY = _get("GEMINI_API_KEY", "")
-            self.OPENAI_API_KEY = _get("OPENAI_API_KEY", None)
-            self.LLM_MODEL = _get("LLM_MODEL", "models/gemini-1.5-pro")
-            self.OPENAI_MODEL = _get("OPENAI_MODEL", None)
-            self.EMBED_MODEL = _get("EMBED_MODEL", "models/text-embedding-004")
+        # 2) 각 필드 주입
+        self.ADMIN_PASSWORD = _get("ADMIN_PASSWORD", None)
+        self.GEMINI_API_KEY = _get("GEMINI_API_KEY", "")
+        self.OPENAI_API_KEY = _get("OPENAI_API_KEY", None)
+        self.LLM_MODEL = _get("LLM_MODEL", "models/gemini-1.5-pro")
+        self.OPENAI_MODEL = _get("OPENAI_MODEL", None)
+        self.EMBED_MODEL = _get("EMBED_MODEL", "models/text-embedding-004")
 
-            self.RESPONSE_MODE = _get("RESPONSE_MODE", "compact")
-            self.SIMILARITY_TOP_K = _get("SIMILARITY_TOP_K", 5, "int")
-            self.CHUNK_SIZE = _get("CHUNK_SIZE", 1024, "int")
-            self.CHUNK_OVERLAP = _get("CHUNK_OVERLAP", 80, "int")
-            self.MIN_CHARS_PER_DOC = _get("MIN_CHARS_PER_DOC", 80, "int")
-            self.DEDUP_BY_TEXT_HASH = _get("DEDUP_BY_TEXT_HASH", True, "bool")
-            self.SKIP_LOW_TEXT_DOCS = _get("SKIP_LOW_TEXT_DOCS", True, "bool")
-            self.PRE_SUMMARIZE_DOCS = _get("PRE_SUMMARIZE_DOCS", False, "bool")
+        self.RESPONSE_MODE = _get("RESPONSE_MODE", "compact")
+        self.SIMILARITY_TOP_K = _get("SIMILARITY_TOP_K", 5, "int")
+        self.CHUNK_SIZE = _get("CHUNK_SIZE", 1024, "int")
+        self.CHUNK_OVERLAP = _get("CHUNK_OVERLAP", 80, "int")
+        self.MIN_CHARS_PER_DOC = _get("MIN_CHARS_PER_DOC", 80, "int")
+        self.DEDUP_BY_TEXT_HASH = _get("DEDUP_BY_TEXT_HASH", True, "bool")
+        self.SKIP_LOW_TEXT_DOCS = _get("SKIP_LOW_TEXT_DOCS", True, "bool")
+        self.PRE_SUMMARIZE_DOCS = _get("PRE_SUMMARIZE_DOCS", False, "bool")
 
-            self.GDRIVE_FOLDER_ID = _get("GDRIVE_FOLDER_ID", "prepared")
-            self.BACKUP_FOLDER_ID = _get("BACKUP_FOLDER_ID", None)
-            self.GDRIVE_SERVICE_ACCOUNT_JSON = _get(
-                "GDRIVE_SERVICE_ACCOUNT_JSON",
-                "",
-            )
-            self.GDRIVE_OAUTH = _get("GDRIVE_OAUTH", None)
+        self.GDRIVE_FOLDER_ID = _get("GDRIVE_FOLDER_ID", "prepared")
+        self.BACKUP_FOLDER_ID = _get("BACKUP_FOLDER_ID", None)
+        self.GDRIVE_SERVICE_ACCOUNT_JSON = _get("GDRIVE_SERVICE_ACCOUNT_JSON", "")
+        self.GDRIVE_OAUTH = _get("GDRIVE_OAUTH", None)
 
-            self.PROMPTS_DRIVE_FOLDER_ID = _get("PROMPTS_DRIVE_FOLDER_ID", None)
-            self.PROMPTS_FILE_NAME = _get("PROMPTS_FILE_NAME", "prompts.yaml")
+        self.PROMPTS_DRIVE_FOLDER_ID = _get("PROMPTS_DRIVE_FOLDER_ID", None)
+        self.PROMPTS_FILE_NAME = _get("PROMPTS_FILE_NAME", "prompts.yaml")
 
+
+# --- 최종 바인딩: Settings 심볼은 "한 번만" 정의 --------------------------------
+if _IMPL == "P2":
+    Settings = _SettingsP2  # type: ignore[assignment]
+elif _IMPL == "P1":
+    Settings = _SettingsP1  # type: ignore[assignment]
+else:
+    Settings = _SettingsSimple  # type: ignore[assignment]
 
 # 인스턴스(앱 전역에서 import 하여 사용)
 settings = Settings()
