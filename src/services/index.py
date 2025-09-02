@@ -185,7 +185,7 @@ def reindex(dest_dir: Optional[str | Path] = None) -> bool:
     def _merge_chunk_dir(chunk_dir: Path, out_file: Path) -> bool:
         """chunks/*.jsonl 여러 파일을 라인단위로 out_file에 병합."""
         try:
-            out_file.unlink(missing_ok=True)  # 기존 파일 있으면 교체
+            out_file.unlink(missing_ok=True)
             with out_file.open("wb") as w:
                 for p in sorted(chunk_dir.glob("*.jsonl")):
                     try:
@@ -205,26 +205,34 @@ def reindex(dest_dir: Optional[str | Path] = None) -> bool:
         for c in candidates:
             if c.is_dir():
                 p = c / "chunks.jsonl"
+                if p.exists() and p.is_file() and p.stat().st_size > 0:
+                    shutil.copy2(p, target)
+                    return True
             else:
-                p = c if c.name == "chunks.jsonl" else None
-            if p and p.exists() and p.is_file() and p.stat().st_size > 0:
-                shutil.copy2(p, target)
-                return True
+                if (
+                    c.name == "chunks.jsonl"
+                    and c.exists()
+                    and c.is_file()
+                    and c.stat().st_size > 0
+                ):
+                    shutil.copy2(c, target)
+                    return True
 
         # 2) chunks.jsonl.gz
         for c in candidates:
             if c.is_dir():
                 gz = c / "chunks.jsonl.gz"
+                if gz.exists() and gz.is_file():
+                    return _decompress_gz(gz, target)
             else:
-                gz = c if c.name == "chunks.jsonl.gz" else None
-            if gz and gz.exists() and gz.is_file():
-                return _decompress_gz(gz, target)
+                if c.name == "chunks.jsonl.gz" and c.exists() and c.is_file():
+                    return _decompress_gz(c, target)
 
         # 3) chunks/ 디렉터리 내 *.jsonl 병합
         for c in candidates:
-            chunk_dir = (c / "chunks") if c.is_dir() else None
-            if chunk_dir and chunk_dir.is_dir():
-                if _merge_chunk_dir(chunk_dir, target):
+            if c.is_dir():
+                chunk_dir = c / "chunks"
+                if chunk_dir.is_dir() and _merge_chunk_dir(chunk_dir, target):
                     return True
 
         # 4) 광역 탐색: **/chunks.jsonl / **/chunks.jsonl.gz / **/chunks/*.jsonl
@@ -307,7 +315,6 @@ def reindex(dest_dir: Optional[str | Path] = None) -> bool:
         return False
 
     # ---- 산출물 이관/복원 ------------------------------------------------------
-    # 중복 제거 및 존재하는 경로만
     uniq: list[Path] = []
     seen = set()
     for c in candidates:
@@ -320,7 +327,6 @@ def reindex(dest_dir: Optional[str | Path] = None) -> bool:
             seen.add(str(cp))
 
     if not _bring_chunks_to_root(uniq):
-        # 산출물을 찾지 못했거나, 0B → 실패 처리(SSOT 미충족)
         _set_brain_status(
             "MISSING",
             "재인덱싱 완료했지만 산출물(chunks.jsonl)을 찾지 못했습니다.",
@@ -344,7 +350,6 @@ def reindex(dest_dir: Optional[str | Path] = None) -> bool:
     )
     return False
 # [07] END =====================================================================
-
 
 # [08] Public API: restore_or_attach() ==========================================
 def restore_or_attach(dest_dir: Optional[str | Path] = None) -> bool:
