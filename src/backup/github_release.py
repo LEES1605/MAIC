@@ -91,7 +91,7 @@ def logger() -> _LoggerProto:
 
 # ===== [02] CONSTANTS & PUBLIC EXPORTS =======================================  # [02] START
 API = "https://api.github.com"
-__all__ = ["restore_latest"]
+__all__ = ["restore_latest", "get_latest_release"]
 # [02] END =====================================================================
 
 
@@ -246,3 +246,20 @@ def restore_latest(dest_dir: str | Path) -> bool:
     _log("복원이 완료되었습니다.")
     return True
 # [06] END =====================================================================
+# ===== [07] PUBLIC API: get_latest_release ===================================  # [07] START
+def get_latest_release(repo: str | None = None) -> Optional[dict]:
+    """가장 최신 GitHub Release의 원본 JSON(dict)을 반환.
+    - 성공: GitHub 'latest' 릴리스 JSON(dict) 반환(예: {'tag_name': 'v1.2.3', ...})
+    - 실패/없음: None 반환 (예외는 올리지 않음; 로그만 남김)
+    """
+    r = (repo or _repo() or "").strip()
+    if not r:
+        _log("get_latest_release: GITHUB_REPO 미설정")
+        return None
+    try:
+        return _latest_release(r)  # 내부에서 raise_for_status, 예외 처리/로그 후 None 반환
+    except Exception as e:
+        _log(f"get_latest_release 오류: {type(e).__name__}: {e}")
+        return None
+# [07] END =====================================================================
+
