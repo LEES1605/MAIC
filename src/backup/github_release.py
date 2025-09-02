@@ -1,6 +1,7 @@
 # ===== [01] IMPORTS & UTILS FALLBACK ========================================  # [01] START
 from __future__ import annotations
 
+import importlib
 import io
 import os
 import shutil
@@ -8,8 +9,8 @@ import tempfile
 import zipfile
 from pathlib import Path
 from typing import Any, Dict, Optional
+from types import ModuleType
 
-import importlib
 import requests
 
 # streamlit은 있을 수도/없을 수도 있다.
@@ -18,9 +19,9 @@ try:
 except Exception:
     st = None  # pragma: no cover
 
-# 공용 유틸: "속성 임포트" 금지 → 모듈 동적 임포트 후 존재 확인 + 폴백 제공
+# 공용 유틸: 모듈 동적 임포트 후 존재 확인 + 폴백 제공
 try:
-    _utils = importlib.import_module("src.common.utils")
+    _utils: ModuleType | None = importlib.import_module("src.common.utils")
 except Exception:
     _utils = None  # 모듈 자체가 없을 수 있음
 
@@ -40,7 +41,7 @@ def get_secret(name: str, default: str = "") -> str:
     # 2) streamlit.secrets
     try:
         if st is not None and hasattr(st, "secrets"):
-            v = st.secrets.get(name)
+            v = st.secrets.get(name)  # 가드 후 접근 → ignore 불필요
             if v is not None:
                 return v if isinstance(v, str) else str(v)
     except Exception:
@@ -67,7 +68,6 @@ def logger():
 
     return _Logger()
 # [01] END =====================================================================
-
 
 
 # ===== [02] CONSTANTS & PUBLIC EXPORTS =======================================  # [02] START
