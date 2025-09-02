@@ -190,6 +190,7 @@ def reindex(dest_dir: Optional[str | Path] = None) -> bool:
             return False
 
     def _merge_chunk_dir(chunk_dir: Path, out_file: Path) -> bool:
+        """chunks/*.jsonl 여러 파일을 라인단위로 out_file에 병합."""
         try:
             bytes_written = 0
             tmp_out = out_file.with_suffix(".jsonl.tmp")
@@ -198,7 +199,12 @@ def reindex(dest_dir: Optional[str | Path] = None) -> bool:
                 for p in sorted(chunk_dir.glob("*.jsonl")):
                     try:
                         with p.open("rb") as r:
-                            bytes_written += shutil.copyfileobj(r, w) or 0
+                            while True:
+                                buf = r.read(1024 * 1024)
+                                if not buf:
+                                    break
+                                w.write(buf)
+                                bytes_written += len(buf)
                     except Exception:
                         continue
             if bytes_written > 0:
