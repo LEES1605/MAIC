@@ -1,7 +1,6 @@
-# ============================ providers.py — START ===========================
+# =============== [LLM-01] IMPORTS & SECRET HELPER — START =================
 from __future__ import annotations
 
-import importlib
 import json
 import os
 import traceback
@@ -10,26 +9,30 @@ from typing import Any, Dict, Optional
 import requests
 
 # streamlit은 있을 수도/없을 수도 있다.
+# - mypy 충돌 방지: st를 먼저 Any로 선언한 뒤, 런타임에 모듈 또는 None을 대입
+from typing import Any as _AnyForSt
+st: _AnyForSt | None
 try:
-    import streamlit as st  # mypy: stubs 없어도 통과(ini에서 허용)
+    import streamlit as _st_mod
+    st = _st_mod
 except Exception:
-    st = None  # type: ignore[assignment]
+    st = None  # Optional[Any] 취급 → mypy OK
 
 
 def _secret(name: str, default: Optional[str] = None) -> Optional[str]:
     """Streamlit secrets 우선 → 환경변수. 불가하면 default."""
     try:
+        val: Optional[str] = None
         if st is not None and hasattr(st, "secrets"):
-            val = st.secrets.get(name, None)  # type: ignore[call-arg]
-        else:
-            val = None
+            v = st.secrets.get(name)  # 가드 후 접근 → ignore 불필요
+            if v is not None:
+                val = v if isinstance(v, str) else str(v)
         if val is None:
-            return os.getenv(name, default)
-        if isinstance(val, str):
-            return val
-        return json.dumps(val, ensure_ascii=False)
+            val = os.getenv(name, default)
+        return val
     except Exception:
         return os.getenv(name, default)
+# ================ [LLM-01] IMPORTS & SECRET HELPER — END ==================
 
 
 # =============== [LLM-02] OpenAI raw call — START =================
