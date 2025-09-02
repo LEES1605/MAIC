@@ -85,10 +85,12 @@ def _unpack_snapshot(blob: bytes) -> Dict[str, Any]:
 # ======================= [04] PUBLIC API: rebuild_index — START =======================
 def rebuild_index(output_dir=None):
     """
-    로컬 인덱스를 재구축합니다.
-    - knowledge/ 하위(또는 MAIC_KNOWLEDGE_DIR 등)에서 허용 확장자 파일을 수집
-    - 각 파일을 '파일 단위 1청크'로 JSONL 라인 생성 (간단 부트스트랩 인덱싱)
-    - 소스가 전혀 없으면 'bootstrap' 1라인을 생성해 READY를 보장
+    로컬 인덱스를 재구축합니다. (고퀄 버전)
+    - 의미 단위 청킹(문단/문장) + 오버랩 적용
+    - 마크다운/HTML 정리, 코드블록 제거
+    - 메타데이터(id, doc_id, chunk_id, title, source, ext, offsets, lang)
+    - 중복 청크 제거(정규화 텍스트 해시)
+    - 원자적 쓰기 후 검증 통과 시 .ready 생성
 
     매개변수:
         output_dir: str | pathlib.Path | None
@@ -98,10 +100,16 @@ def rebuild_index(output_dir=None):
     # ---- 내부 헬퍼 및 설정 ------------------------------------------------------
     from pathlib import Path
     import os
+    import re
     import json
+    import hashlib
+    import datetime
+
+    TARGET_CHARS = 1200       # 청크 목표 길이(문자)
+    OVERLAP_CHARS = 200       # 청크 간 오버랩
+    MAX_CHUNKS = 800          # 과도한 인덱싱 방지(초기가동 상한)
 
     def _persist_dir() -> Path:
-        # 우선순위: 인자 → globals().PERSIST_DIR → src.config.PERSIST_DIR → ~/.maic/persist
         if output_dir:
             return Path(output_dir).expanduser()
         try:
@@ -124,7 +132,8 @@ def rebuild_index(output_dir=None):
                 return {str(e).lower() for e in exts}
         except Exception:
             pass
-        return {".md", ".txt", ".pdf", ".json", ".csv"}
+        # PDF는 외부 라이브러리 없이 안정 추출이 어려워 일단 제외(빈 텍스트 방지)
+        return {".md", ".txt", ".json", ".csv"}
 
     def _iter_source_roots():
         env = os.getenv("MAIC_KNOWLEDGE_DIR", "").strip()
@@ -148,13 +157,85 @@ def rebuild_index(output_dir=None):
             except Exception:
                 continue
 
-    def _safe_read_text(p: Path, max_bytes: int = 1_000_000) -> str:
-        try:
-            data = p.read_bytes()[:max_bytes]
-            return data.decode("utf-8", errors="ignore")
-        except Exception:
-            return ""
+    # ---------- 정규화/클린업 ----------
+    _re_codeblock = re.compile(r"```.*?```", re.S)
+    _re_html = re.compile(r"<[^>]+>")
+    _re_ws = re.compile(r"[ \t]+")
+    _re_md_head = re.compile(r"^\s*#{1,6}\s+(.*)$", re.M)
 
+    def _strip_noise(s: str) -> str:
+        s = _re_codeblock.sub("", s)
+        s = _re_html.sub(" ", s)
+        s = _re_ws.sub(" ", s)
+        return s.strip()
+
+    def _title_from_markdown(s: str) -> str:
+        m = _re_md_head.search(s)
+        return m.group(1).strip() if m else ""
+
+    def _detect_lang(s: str) -> str:
+        # 간단 추정: 한글 비율
+        hangul = sum(0xAC00 <= ord(ch) <= 0xD7A3 for ch in s)
+        return "ko" if hangul >= max(10, len(s) * 0.1) else "en"
+
+    # ---------- 청킹 ----------
+    _re_paras = re.compile(r"\n{2,}")
+    _re_sents = re.compile(r"(?<=[.!?。！？])\s+")
+
+    def _split_paragraphs(s: str) -> list[str]:
+        parts = [p.strip() for p in _re_paras.split(s) if p.strip()]
+        return parts or [s.strip()]
+
+    def _split_sentences(p: str) -> list[str]:
+        # 문장 단위 분할(영문/국문 기본 구두점)
+        parts = [x.strip() for x in _re_sents.split(p) if x.strip()]
+        return parts or [p.strip()]
+
+    def _chunk_text(text: str, target: int, overlap: int) -> list[tuple[str, int, int]]:
+        """
+        텍스트를 (chunk, start, end) 리스트로 반환.
+        - 문단→문장 단위로 모아 target 크기까지 누적
+        - 청크 경계 사이에 overlap 문자만큼 앞부분을 유지
+        """
+        chunks = []
+        start = 0
+        acc = ""
+        acc_start = 0
+        pos = 0
+        for para in _split_paragraphs(text):
+            for sent in _split_sentences(para):
+                if not acc:
+                    acc_start = pos
+                if len(acc) + len(sent) + 1 <= target or not acc:
+                    acc = (acc + " " + sent).strip()
+                else:
+                    chunks.append((acc, acc_start, acc_start + len(acc)))
+                    # 오버랩을 위해 acc의 뒤 overlap 부분을 남김
+                    if overlap > 0 and len(acc) > overlap:
+                        tail = acc[-overlap:]
+                        acc = tail
+                        acc_start = (acc_start + len(acc)) - len(tail)
+                    else:
+                        acc = ""
+                        acc_start = pos
+                    # 현재 문장 추가 시작
+                    if acc:
+                        if len(acc) + len(sent) + 1 <= target:
+                            acc = (acc + " " + sent).strip()
+                        else:
+                            chunks.append((sent, pos, pos + len(sent)))
+                            acc = ""
+                            acc_start = pos + len(sent)
+                    else:
+                        acc = sent
+                        acc_start = pos
+                pos += len(sent) + 1
+            pos += 1  # 단락 경계 보정
+        if acc:
+            chunks.append((acc, acc_start, acc_start + len(acc)))
+        return chunks
+
+    # ---------- JSONL 쓰기 ----------
     def _write_jsonl_atomic(lines, out_file: Path) -> int:
         tmp = out_file.with_suffix(".jsonl.tmp")
         try:
@@ -186,6 +267,10 @@ def rebuild_index(output_dir=None):
                 pass
         return count
 
+    def _hash_norm(s: str) -> str:
+        s2 = s.lower().strip()
+        return hashlib.sha1(s2.encode("utf-8", errors="ignore")).hexdigest()
+
     # ---- 빌드 ---------------------------------------------------------------
     dest = _persist_dir()
     dest.mkdir(parents=True, exist_ok=True)
@@ -193,21 +278,75 @@ def rebuild_index(output_dir=None):
 
     roots = [p for p in _iter_source_roots()]
     lines = []
+    seen = set()
 
     for root in roots:
         for f in _yield_files(root):
-            text = _safe_read_text(f)
-            if not text.strip():
+            try:
+                raw = f.read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                try:
+                    raw = f.read_bytes().decode("utf-8", errors="ignore")
+                except Exception:
+                    raw = ""
+            text = _strip_noise(raw)
+            if not text:
                 continue
-            lines.append({"id": f"file::{f.name}", "text": text, "source": str(f)})
-            if len(lines) >= 200:
+
+            title = _title_from_markdown(raw) or f.stem
+            lang = _detect_lang(text)
+            doc_id = f"doc::{f.name}"
+            meta_time = ""
+            try:
+                ts = datetime.datetime.fromtimestamp(f.stat().st_mtime)
+                meta_time = ts.isoformat()
+            except Exception:
+                pass
+
+            chunks = _chunk_text(text, TARGET_CHARS, OVERLAP_CHARS)
+            for i, (chunk, s0, s1) in enumerate(chunks):
+                h = _hash_norm(chunk)
+                if h in seen:
+                    continue
+                seen.add(h)
+                lines.append(
+                    {
+                        "id": f"{doc_id}::chunk::{i}",
+                        "doc_id": doc_id,
+                        "chunk_id": i,
+                        "title": title,
+                        "text": chunk,
+                        "source": str(f),
+                        "ext": f.suffix.lower(),
+                        "lang": lang,
+                        "start_char": s0,
+                        "end_char": s1,
+                        "modified_at": meta_time,
+                    }
+                )
+                if len(lines) >= MAX_CHUNKS:
+                    break
+            if len(lines) >= MAX_CHUNKS:
                 break
-        if len(lines) >= 200:
+        if len(lines) >= MAX_CHUNKS:
             break
 
+    # 소스가 전무하면 부트스트랩 1라인 생성(READY 보장)
     if not lines:
         lines = [
-            {"id": "bootstrap::hello", "text": "MAIC index bootstrap line", "source": "bootstrap"}
+            {
+                "id": "bootstrap::hello",
+                "doc_id": "bootstrap",
+                "chunk_id": 0,
+                "title": "bootstrap",
+                "text": "MAIC index bootstrap line",
+                "source": "bootstrap",
+                "ext": ".txt",
+                "lang": "en",
+                "start_char": 0,
+                "end_char": 29,
+                "modified_at": "",
+            }
         ]
 
     wrote = _write_jsonl_atomic(lines, out_jsonl)
