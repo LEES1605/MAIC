@@ -272,7 +272,7 @@ def reindex(dest_dir: Optional[str | Path] = None) -> bool:
     try:
         # 모듈이 노출하는 기본 출력 경로도 후보에 추가
         try:
-            from src.rag.index_build import PERSIST_DIR as IDX_DIR  # type: ignore
+            from src.rag.index_build import PERSIST_DIR as IDX_DIR
             candidates.append(Path(str(IDX_DIR)).expanduser())
         except Exception:
             pass
@@ -280,16 +280,23 @@ def reindex(dest_dir: Optional[str | Path] = None) -> bool:
         # 인자 유무에 맞춰 호출하고 반환값을 검사
         ret: Any
         try:
-            ret = fn(base)  # type: ignore[misc]
+            ret = fn(base)
         except TypeError:
-            ret = fn()      # type: ignore[misc]
+            ret = fn()
 
         # 반환값이 경로/딕셔너리면 후보에 추가
         try:
             if isinstance(ret, (str, Path)):
                 candidates.append(Path(ret).expanduser())
             elif isinstance(ret, dict):
-                for k in ("output_dir", "out_dir", "persist_dir", "dir", "path", "chunks_dir"):
+                for k in (
+                    "output_dir",
+                    "out_dir",
+                    "persist_dir",
+                    "dir",
+                    "path",
+                    "chunks_dir",
+                ):
                     v = ret.get(k)
                     if isinstance(v, (str, Path)):
                         candidates.append(Path(v).expanduser())
