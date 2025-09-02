@@ -265,7 +265,8 @@ def restore_latest(dest_dir: str | Path) -> bool:
         _log("릴리스에 다운로드 가능한 자산이 없습니다.")
         return False
 
-    _log(f"자산 다운로드: {asset.get('name')}")
+    asset_name = str(asset.get("name") or "")
+    _log(f"자산 다운로드: {asset_name}")
     data = _download_asset(asset)
     if not data:
         return False
@@ -273,7 +274,7 @@ def restore_latest(dest_dir: str | Path) -> bool:
     # 임시 디렉터리를 사용해 원자적 교체에 가깝게 복원
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td)
-        ok = _extract_zip(data, tmp)
+        ok = _extract_auto(asset_name, data, tmp)
         if not ok:
             return False
 
@@ -290,9 +291,19 @@ def restore_latest(dest_dir: str | Path) -> bool:
             else:
                 shutil.copy2(p, target)
 
+    # SSOT 보정: chunks.jsonl만 존재하고 .ready가 없으면 생성
+    try:
+        chunks = dest / "chunks.jsonl"
+        ready = dest / ".ready"
+        if chunks.exists() and chunks.stat().st_size > 0 and not ready.exists():
+            ready.write_text("ok", encoding="utf-8")
+    except Exception:
+        pass
+
     _log("복원이 완료되었습니다.")
     return True
 # [06] END =====================================================================
+
 # ===== [07] PUBLIC API: get_latest_release ===================================  # [07] START
 def get_latest_release(repo: str | None = None) -> Optional[dict]:
     """가장 최신 GitHub Release의 원본 JSON(dict)을 반환.
