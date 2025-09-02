@@ -67,17 +67,21 @@ _bootstrap_env()
 if st:
     st.set_page_config(page_title="LEES AI Teacher", layout="wide")
 
-# ===== [PATCH 01 / app.py / [04] 경로/상태 & 에러로그 / L071–L179] — START =====
-# ===== [PATCH / app.py / [04] 경로/상태 & 에러로그 / L0071–L0179] — START =====
+# ===== [PATCH / app.py / [04] 경로/상태 & 에러로그 / L0071–L0208] — START =====
 # [04] 경로/상태 & 에러로그 =====================================================
 def _persist_dir() -> Path:
-    # 1) 인덱서 정의 경로
+    """인덱스 퍼시스트 경로를 결정한다.
+    1) src.rag.index_build.PERSIST_DIR
+    2) src.config.PERSIST_DIR
+    3) ~/.maic/persist (폴백)
+    """
+    # 1) 인덱서가 노출하는 경로 우선
     try:
         from src.rag.index_build import PERSIST_DIR as IDX
         return Path(IDX).expanduser()
     except Exception:
         pass
-    # 2) config 경로
+    # 2) 전역 설정 경로
     try:
         from src.config import PERSIST_DIR as CFG
         return Path(CFG).expanduser()
@@ -88,10 +92,15 @@ def _persist_dir() -> Path:
 
 
 PERSIST_DIR = _persist_dir()
-PERSIST_DIR.mkdir(parents=True, exist_ok=True)
+# 안전: 경로가 없다면 생성
+try:
+    PERSIST_DIR.mkdir(parents=True, exist_ok=True)
+except Exception:
+    pass
 
 
 def _share_persist_dir_into_session(p: Path) -> None:
+    """세션 상태에 persist 경로를 공유한다(다른 모듈과 일관성 유지)."""
     try:
         if st is not None:
             st.session_state["_PERSIST_DIR"] = p
@@ -103,7 +112,7 @@ _share_persist_dir_into_session(PERSIST_DIR)
 
 
 def _mark_ready() -> None:
-    """준비 신호 파일(.ready) 생성."""
+    """준비 신호 파일(.ready)을 만든다."""
     try:
         (PERSIST_DIR / ".ready").write_text("ok", encoding="utf-8")
     except Exception:
@@ -111,11 +120,11 @@ def _mark_ready() -> None:
 
 
 def _is_brain_ready() -> bool:
-    """인덱스 준비 여부(로컬 신호 기반) — 엄격 판정(SSOT).
-    규칙: .ready 파일과 chunks.jsonl 파일이 모두 존재해야 준비(True).
-    진단/헤더/진행선이 동일한 기준을 보도록 단일 진실(SSOT)로 통일합니다.
+    """인덱스 준비 여부(로컬 신호 기반) — SSOT(단일 진실) 엄격 판정.
+    규칙: .ready 파일과 chunks.jsonl(>0B)이 둘 다 있어야 True.
+    이렇게 해야 헤더 배지/진행선/진단 패널이 같은 결론을 낸다.
     """
-    # 세션에 공유된 경로가 있으면 우선 사용, 없으면 즉시 계산
+    # 세션에 공유된 경로가 있으면 우선 사용
     p = None
     try:
         p = st.session_state.get("_PERSIST_DIR") if st is not None else None
@@ -128,33 +137,68 @@ def _is_brain_ready() -> bool:
         return False
 
     try:
-        ready = (p / ".ready").exists()
-        chunks = (p / "chunks.jsonl")
-        chunks_ok = chunks.exists() and chunks.stat().st_size > 0
-        return bool(ready and chunks_ok)
+        ready_ok = (p / ".ready").exists()
+        chunks_path = (p / "chunks.jsonl")
+        chunks_ok = chunks_path.exists() and chunks_path.stat().st_size > 0
+        return bool(ready_ok and chunks_ok)
     except Exception:
         # 어떤 예외든 안전하게 미준비로 처리
         return False
 
 
 def _get_brain_status() -> dict:
+    """앱 전역에서 참조하는 상위 상태(SSOT)를 반환한다.
+    반환 예: {"code": "READY"|"MISSING"|..., "msg": "..."}
+    - 세션에 명시 상태가 있으면 그것을 우선 사용
+    - 없으면 로컬 인덱스 유무로 READY/MISSING 판정
     """
-    반환 예: {"code": "READY"|"SCANNING"|"RESTORING"|"WARN"|"ERROR"|"MISSING", "msg": "..."}
-    세션 상태가 있으면 우선, 없으면 로컬 인덱스 유무로 READY/MISSING 판정.
+    try:
+        if st is None:
+            return {"code": "MISSING", "msg": "Streamlit unavailable"}
+
+        ss = st.session_state
+        code = ss.get("brain_status_code")
+        msg = ss.get("brain_status_msg")
+        if code and msg:
+            return {"code": str(code), "msg": str(msg)}
+
+        if _is_brain_ready():
+            return {"code": "READY", "msg": "로컬 인덱스 연결됨(SSOT)"}
+        return {"code": "MISSING", "msg": "인덱스 없음(관리자에서 '업데이트 점검' 필요)"}
+    except Exception as e:
+        _errlog("상태 계산 실패", where="[04]_get_brain_status", exc=e)
+        return {"code": "MISSING", "msg": "상태 계산 실패"}
+
+
+def _errlog(msg: str, where: str = "", exc: Exception | None = None) -> None:
+    """표준 에러 로깅(콘솔 + Streamlit 노출). 보안/안정성 고려:
+    - 메시지에 민감정보를 포함하지 않는다.
+    - 실패해도 앱이 죽지 않도록 try/except로 감싼다.
     """
-    if st is None:
-        return {"code": "MISSING", "msg": "Streamlit unavailable"}
-
-    ss = st.session_state
-    code = ss.get("brain_status_code")
-    msg = ss.get("brain_status_msg")
-    if code and msg:
-        return {"code": str(code), "msg": str(msg)}
-
-    if _is_brain_ready():
-        return {"code": "READY", "msg": "로컬 인덱스 연결됨(SSOT)"}
-    return {"code": "MISSING", "msg": "인덱스 없음(관리자에서 '업데이트 점검' 필요)"}
-# ===== [PATCH / app.py / [04] 경로/상태 & 에러로그 / L0071–L0179] — END =====
+    try:
+        prefix = f"{where} " if where else ""
+        # 콘솔
+        print(f"[ERR] {prefix}{msg}")
+        if exc:
+            traceback.print_exception(exc)
+        # UI 노출(가능할 때만)
+        if st is not None:
+            try:
+                with st.expander("자세한 오류 로그", expanded=False):
+                    detail = ""
+                    if exc:
+                        try:
+                            detail = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+                        except Exception:
+                            detail = "traceback 사용 불가"
+                    st.code(f"{prefix}{msg}\n{detail}")
+            except Exception:
+                # Streamlit 렌더 실패는 무시
+                pass
+    except Exception:
+        # 로깅 자체 실패도 조용히 무시
+        pass
+# ===== [PATCH / app.py / [04] 경로/상태 & 에러로그 / L0071–L0208] — END =====
 
 # [05] 모드/LLM/임포트 헬퍼 =====================================================
 def _is_admin_view() -> bool:
