@@ -233,19 +233,18 @@ def _extract_auto(asset_name: str, data: bytes, dest_dir: Path) -> bool:
     return _extract_zip(data, dest_dir)
 # [05] END =====================================================================
 
-
 # ===== [06] PUBLIC API: restore_latest =======================================  # [06] START
 def restore_latest(dest_dir: str | Path) -> bool:
     """최신 GitHub Release에서 아티팩트를 내려받아 dest_dir에 복원.
 
     반환:
-        성공 시 True, 실패 시 False (예외를 올리지 않음)
+        성공 시 True, 실패 시 False (예외는 올리지 않음)
 
     비고:
         - .zip/.tar.gz/.tgz/.gz 모두 처리
         - 압축 해제 결과가 '최상위 단일 폴더'일 경우, 그 폴더를 한 겹 평탄화하여
           폴더 내부의 파일/디렉터리를 dest_dir 바로 아래로 복사한다.
-        - 복원 후 chunks.jsonl이 있고 .ready가 없으면 자동 생성(SSOT 보정)
+        - 이후 dest 내 산출물을 정리하여 chunks.jsonl을 루트로 모으고 .ready를 보정한다.
     """
     dest = Path(dest_dir).expanduser()
     dest.mkdir(parents=True, exist_ok=True)
@@ -283,17 +282,14 @@ def restore_latest(dest_dir: str | Path) -> bool:
             return False
 
         # 2) '최상위 단일 폴더' 감지 → 평탄화 대상 루트 결정
-        #    (예: tmp/maic-2025-08-29/chunks.jsonl  →  dest/chunks.jsonl)
         children = [
             p
             for p in tmp.iterdir()
-            if p.name not in (".DS_Store",)
-            and not p.name.startswith("__MACOSX")
+            if p.name not in (".DS_Store",) and not p.name.startswith("__MACOSX")
         ]
         src_root = tmp
         if len(children) == 1 and children[0].is_dir():
             src_root = children[0]
-            # 길었던 로그를 두 줄로 분리해 E501 회피
             _log("평탄화 적용: 최상위 폴더 내부를 루트로 승격")
             _log(f"승격 대상 폴더: '{src_root.name}'")
 
@@ -311,12 +307,77 @@ def restore_latest(dest_dir: str | Path) -> bool:
                 else:
                     shutil.copy2(p, target)
             except Exception as e:
-                # 길었던 로그를 두 줄로 분리해 E501 회피
                 _log("파일 복사 실패(일부 항목). 다음 라인에 상세 표시.")
                 _log(f"원본: {p.name} → 대상: {target.name} — {type(e).__name__}: {e}")
                 return False
 
-    # 4) SSOT 보정: chunks.jsonl만 존재하고 .ready가 없으면 생성
+    # 4) 산출물 정리: dest 안에서 chunks.jsonl을 루트로 모으기
+    def _decompress_gz(src: Path, dst: Path) -> bool:
+        try:
+            import gzip
+            with gzip.open(src, "rb") as gf:
+                dst.write_bytes(gf.read())
+            return True
+        except Exception as e:
+            _log(f"gz 해제 실패: {type(e).__name__}: {e}")
+            return False
+
+    def _merge_chunk_dir(chunk_dir: Path, out_file: Path) -> bool:
+        try:
+            out_file.unlink(missing_ok=True)
+            with out_file.open("wb") as w:
+                for p in sorted(chunk_dir.glob("*.jsonl")):
+                    try:
+                        with p.open("rb") as r:
+                            shutil.copyfileobj(r, w)
+                    except Exception:
+                        continue
+            return out_file.exists() and out_file.stat().st_size > 0
+        except Exception as e:
+            _log(f"chunks/ 병합 실패: {type(e).__name__}: {e}")
+            return False
+
+    target = dest / "chunks.jsonl"
+    if not (target.exists() and target.stat().st_size > 0):
+        # a) 루트에 .gz가 있으면 해제
+        gz_root = dest / "chunks.jsonl.gz"
+        if gz_root.exists() and gz_root.is_file():
+            if _decompress_gz(gz_root, target):
+                _log("루트의 chunks.jsonl.gz를 해제하여 chunks.jsonl 생성")
+        # b) 루트에 chunks/ 디렉터리가 있으면 병합
+        if not (target.exists() and target.stat().st_size > 0):
+            chunk_dir = dest / "chunks"
+            if chunk_dir.is_dir():
+                if _merge_chunk_dir(chunk_dir, target):
+                    _log("루트의 chunks/ 디렉터리를 병합하여 chunks.jsonl 생성")
+        # c) 서브폴더를 rglob하여 검색(우선순위: chunks.jsonl → .gz → chunks/ 디렉터리)
+        if not (target.exists() and target.stat().st_size > 0):
+            try:
+                found = next(dest.rglob("chunks.jsonl"), None)
+            except Exception:
+                found = None
+            if found and found.is_file() and found.stat().st_size > 0:
+                shutil.copy2(found, target)
+                _log(f"서브폴더에서 chunks.jsonl 발견: {found.name} → 루트로 이동")
+
+        if not (target.exists() and target.stat().st_size > 0):
+            try:
+                found_gz = next(dest.rglob("chunks.jsonl.gz"), None)
+            except Exception:
+                found_gz = None
+            if found_gz and found_gz.is_file():
+                if _decompress_gz(found_gz, target):
+                    _log(f"서브폴더의 chunks.jsonl.gz 해제: {found_gz.parent.name}/ → 루트 생성")
+
+        if not (target.exists() and target.stat().st_size > 0):
+            try:
+                found_dir = next((d for d in dest.rglob("chunks") if d.is_dir()), None)
+            except Exception:
+                found_dir = None
+            if found_dir and _merge_chunk_dir(found_dir, target):
+                _log(f"서브폴더의 chunks/ 병합: {found_dir} → 루트 chunks.jsonl 생성")
+
+    # 5) SSOT 보정: chunks.jsonl만 존재하고 .ready가 없으면 생성
     try:
         chunks = dest / "chunks.jsonl"
         ready = dest / ".ready"
