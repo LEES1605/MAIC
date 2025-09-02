@@ -332,6 +332,7 @@ def restore_latest(dest_dir: str | Path) -> bool:
             return False
 
     def _merge_dir_jsonl(chunk_dir: Path, out_file: Path) -> bool:
+        """chunk_dir 안의 *.jsonl을 라인 보존으로 병합한다."""
         try:
             bytes_written = 0
             tmp_out = out_file.with_suffix(".jsonl.tmp")
@@ -341,7 +342,12 @@ def restore_latest(dest_dir: str | Path) -> bool:
                 for p in sorted(chunk_dir.glob("*.jsonl")):
                     try:
                         with p.open("rb") as r:
-                            bytes_written += shutil.copyfileobj(r, w) or 0
+                            while True:
+                                buf = r.read(1024 * 1024)
+                                if not buf:
+                                    break
+                                w.write(buf)
+                                bytes_written += len(buf)
                     except Exception:
                         continue
             if bytes_written > 0:
@@ -437,7 +443,6 @@ def restore_latest(dest_dir: str | Path) -> bool:
     _log("복원이 완료되었습니다.")
     return True
 # ===== [06] PUBLIC API: restore_latest =======================================  # [06] END
-
 
 # ===== [07] PUBLIC API: get_latest_release ===================================  # [07] START
 def get_latest_release(repo: str | None = None) -> Optional[dict]:
