@@ -1,6 +1,7 @@
 # =============== [LLM-01] IMPORTS & SECRET HELPER — START =================
 from __future__ import annotations
 
+import importlib  # ← 누락으로 F821 발생 → 추가
 import json
 import os
 import traceback
@@ -33,6 +34,7 @@ def _secret(name: str, default: Optional[str] = None) -> Optional[str]:
     except Exception:
         return os.getenv(name, default)
 # ================ [LLM-01] IMPORTS & SECRET HELPER — END ==================
+
 
 
 # =============== [LLM-02] OpenAI raw call — START =================
