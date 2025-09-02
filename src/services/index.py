@@ -160,10 +160,8 @@ def reindex(dest_dir: Optional[str | Path] = None) -> bool:
     로컬 인덱스를 재구축(또는 초기 구축)합니다.
     - 가능한 인덱서 함수를 동적으로 탐색하여 호출합니다.
     - 인자 시그니처 차이를 흡수(있으면 경로 전달, 아니면 무인자 호출).
-    - 빌더가 다른 경로에 산출물을 만들더라도, chunks.jsonl(.gz) / chunks/*.jsonl을
-      찾아서 dest 루트로 이관/병합 후 SSOT(.ready + chunks.jsonl) 보정합니다.
-
-    반환값: 성공 True / 실패 False
+    - 빌더가 다른 경로에 산출물을 만들더라도, 다양한 패턴의 *.jsonl(.gz)와
+      chunks/ 디렉터리를 찾아 dest 루트로 이관/해제/병합 후 SSOT(.ready+chunks) 보정.
     """
     base = Path(dest_dir).expanduser() if dest_dir else _persist_dir()
     try:
@@ -172,105 +170,106 @@ def reindex(dest_dir: Optional[str | Path] = None) -> bool:
         _set_brain_status("ERROR", "인덱스 경로 생성 실패", "local", attached=False)
         return False
 
-    # ---- 내부 헬퍼: 산출물 탐지/이관/병합 -------------------------------------
+    # ---- 내부 헬퍼 --------------------------------------------------------------
+    def _size(p: Path) -> int:
+        try:
+            return p.stat().st_size
+        except Exception:
+            return 0
+
     def _decompress_gz(src: Path, dst: Path) -> bool:
         try:
             import gzip
             with gzip.open(src, "rb") as gf:
-                dst.write_bytes(gf.read())
+                data = gf.read()
+            if not data:
+                return False
+            dst.write_bytes(data)
             return True
         except Exception:
             return False
 
     def _merge_chunk_dir(chunk_dir: Path, out_file: Path) -> bool:
-        """chunks/*.jsonl 여러 파일을 라인단위로 out_file에 병합."""
         try:
-            out_file.unlink(missing_ok=True)
-            with out_file.open("wb") as w:
+            bytes_written = 0
+            tmp_out = out_file.with_suffix(".jsonl.tmp")
+            tmp_out.unlink(missing_ok=True)
+            with tmp_out.open("wb") as w:
                 for p in sorted(chunk_dir.glob("*.jsonl")):
                     try:
                         with p.open("rb") as r:
-                            shutil.copyfileobj(r, w)
+                            bytes_written += shutil.copyfileobj(r, w) or 0
                     except Exception:
                         continue
-            return out_file.exists() and out_file.stat().st_size > 0
+            if bytes_written > 0:
+                out_file.unlink(missing_ok=True)
+                tmp_out.replace(out_file)
+                return True
+            tmp_out.unlink(missing_ok=True)
+            return False
         except Exception:
             return False
 
-    def _bring_chunks_to_root(candidates: list[Path]) -> bool:
-        """후보 경로들에서 chunks 산출물을 찾아 base/chunks.jsonl로 만든다."""
+    def _bring_chunks_to_root(cands: list[Path]) -> bool:
+        """후보 경로들에서 산출물을 찾아 base/chunks.jsonl로 만든다."""
         target = base / "chunks.jsonl"
 
-        # 1) 정확히 chunks.jsonl
-        for c in candidates:
-            if c.is_dir():
-                p = c / "chunks.jsonl"
-                if p.exists() and p.is_file() and p.stat().st_size > 0:
-                    shutil.copy2(p, target)
-                    return True
-            else:
-                if (
-                    c.name == "chunks.jsonl"
-                    and c.exists()
-                    and c.is_file()
-                    and c.stat().st_size > 0
-                ):
-                    shutil.copy2(c, target)
-                    return True
+        # 0바이트 target이 있으면 우선 제거(정상 산출물로 대체 예정)
+        if target.exists() and _size(target) == 0:
+            target.unlink(missing_ok=True)
 
-        # 2) chunks.jsonl.gz
-        for c in candidates:
-            if c.is_dir():
-                gz = c / "chunks.jsonl.gz"
-                if gz.exists() and gz.is_file():
-                    return _decompress_gz(gz, target)
-            else:
-                if c.name == "chunks.jsonl.gz" and c.exists() and c.is_file():
-                    return _decompress_gz(c, target)
+        # 1) 정확명 우선
+        exact = []
+        exact_gz = []
+        dirs = []
+        any_jsonl = []
+        any_gz = []
+        for c in cands:
+            if not c.exists():
+                continue
+            try:
+                exact += [p for p in c.rglob("chunks.jsonl") if _size(p) > 0]
+            except Exception:
+                pass
+            try:
+                exact_gz += [p for p in c.rglob("chunks.jsonl.gz") if _size(p) > 0]
+            except Exception:
+                pass
+            try:
+                dirs += [d for d in c.rglob("chunks") if d.is_dir()]
+            except Exception:
+                pass
+            try:
+                any_jsonl += [p for p in c.rglob("*.jsonl") if _size(p) > 0]
+            except Exception:
+                pass
+            try:
+                any_gz += [p for p in c.rglob("*.jsonl.gz") if _size(p) > 0]
+            except Exception:
+                pass
 
-        # 3) chunks/ 디렉터리 내 *.jsonl 병합
-        for c in candidates:
-            if c.is_dir():
-                chunk_dir = c / "chunks"
-                if chunk_dir.is_dir() and _merge_chunk_dir(chunk_dir, target):
-                    return True
-
-        # 4) 광역 탐색: **/chunks.jsonl / **/chunks.jsonl.gz / **/chunks/*.jsonl
-        try:
-            found = next(
-                (p for cand in candidates for p in cand.rglob("chunks.jsonl")),
-                None,
-            )
-        except Exception:
-            found = None
-        if found and found.is_file() and found.stat().st_size > 0:
-            shutil.copy2(found, target)
+        if exact:
+            best = max(exact, key=_size)
+            shutil.copy2(best, target)
             return True
-
-        try:
-            found_gz = next(
-                (p for cand in candidates for p in cand.rglob("chunks.jsonl.gz")),
-                None,
-            )
-        except Exception:
-            found_gz = None
-        if found_gz and found_gz.is_file():
-            return _decompress_gz(found_gz, target)
-
-        try:
-            found_dir = next(
-                (d for cand in candidates for d in cand.rglob("chunks") if d.is_dir()),
-                None,
-            )
-        except Exception:
-            found_dir = None
-        if found_dir and _merge_chunk_dir(found_dir, target):
+        if exact_gz:
+            best_gz = max(exact_gz, key=_size)
+            return _decompress_gz(best_gz, target)
+        for d in dirs:
+            if _merge_chunk_dir(d, target):
+                return True
+        if any_jsonl:
+            best_any = max(any_jsonl, key=_size)
+            shutil.copy2(best_any, target)
             return True
+        if any_gz:
+            best_any_gz = max(any_gz, key=_size)
+            return _decompress_gz(best_any_gz, target)
 
         return False
 
     # ---- 인덱서 선택 및 호출 ---------------------------------------------------
-    fn, name = _pick_reindex_fn()
+    fn, _name = _pick_reindex_fn()
     if not callable(fn):
         _set_brain_status("MISSING", "재인덱싱 함수가 없습니다.", "local", attached=False)
         return False
@@ -278,32 +277,26 @@ def reindex(dest_dir: Optional[str | Path] = None) -> bool:
     # 호출 전후로 후보 경로를 넓게 수집
     candidates: list[Path] = [base]
     try:
-        # 모듈이 노출하는 기본 출력 경로도 후보에 추가
         try:
             from src.rag.index_build import PERSIST_DIR as IDX_DIR
             candidates.append(Path(str(IDX_DIR)).expanduser())
         except Exception:
             pass
 
-        # 인자 유무에 맞춰 호출하고 반환값을 검사
-        ret: Any
+        # 인자 유무에 맞춰 호출
         try:
             ret = fn(base)
         except TypeError:
             ret = fn()
 
-        # 반환값이 경로/딕셔너리면 후보에 추가
+        # 반환값 힌트 흡수
         try:
             if isinstance(ret, (str, Path)):
                 candidates.append(Path(ret).expanduser())
             elif isinstance(ret, dict):
                 for k in (
-                    "output_dir",
-                    "out_dir",
-                    "persist_dir",
-                    "dir",
-                    "path",
-                    "chunks_dir",
+                    "output_dir", "out_dir", "persist_dir",
+                    "dir", "path", "chunks_dir",
                 ):
                     v = ret.get(k)
                     if isinstance(v, (str, Path)):
@@ -350,6 +343,7 @@ def reindex(dest_dir: Optional[str | Path] = None) -> bool:
     )
     return False
 # [07] END =====================================================================
+
 
 # [08] Public API: restore_or_attach() ==========================================
 def restore_or_attach(dest_dir: Optional[str | Path] = None) -> bool:
