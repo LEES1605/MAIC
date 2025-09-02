@@ -573,7 +573,19 @@ def _render_admin_panels() -> None:
         st.caption("▶ 위 토글을 켜면 진단 도구 모듈을 불러옵니다.")
         return
 
-# --- (B) 오케스트레이터 모듈 임포트(경로 폴백 포함) ---
+    # --- (B) 오케스트레이터 모듈 임포트(경로 폴백 포함) ---
+    def _import_orchestrator_with_fallback():
+        tried_msgs = []
+        # 1) 일반 모듈 임포트 시도
+        for module_name in ("src.ui_orchestrator", "ui_orchestrator"):
+            try:
+                return importlib.import_module(module_name), f"import:{module_name}"
+            except Exception as e:
+                tried_msgs.append(f"import:{module_name} → {e!r}")
+
+        # 2) 파일 경로 폴백: 프로젝트 루트/앱 디렉터리 후보를 돌며 직접 로드
+        roots = [Path("."), Path(__file__).resolve().parent]
+        rels = [Path("src") / "ui_orchestrator.py", Path("ui_orchestrator.py")]
         for root in roots:
             for rel in rels:
                 candidate = root / rel
@@ -589,27 +601,6 @@ def _render_admin_panels() -> None:
                     except Exception as e:
                         tried_msgs.append(f"file:{candidate} → {e!r}")
 
-
-        # 2) 파일 경로에서 직접 로드 폴백
-        roots = [
-            Path(__file__).resolve().parent,  # app.py 있는 디렉터리
-            Path.cwd(),  # 현재 작업 디렉터리
-        ]
-        rels = ("src/ui_orchestrator.py", "ui_orchestrator.py")
-        for root in roots:
-            for rel in rels:
-                candidate = root / rel
-                if candidate.exists():
-                    try:
-                        spec = importlib.util.spec_from_file_location("ui_orchestrator", candidate)
-                        mod = importlib.util.module_from_spec(spec)
-                        sys.modules["ui_orchestrator"] = mod
-                        assert spec and spec.loader
-                        spec.loader.exec_module(mod)  # type: ignore[union-attr]
-                        return mod, f"file:{candidate.as_posix()}"
-                    except Exception as e:
-                        tried_msgs.append(f"file:{candidate} → {e!r}")
-
         raise ImportError("ui_orchestrator not found", tried_msgs)
 
     load_start = _time.perf_counter()
@@ -617,27 +608,22 @@ def _render_admin_panels() -> None:
         try:
             mod, how = _import_orchestrator_with_fallback()
         except Exception as e:
-            st.error("진단 도구를 불러오지 못했습니다.")
+            st.error("진단 도구 모듈을 불러오지 못했습니다.")
             with st.expander("오류 자세히 보기"):
-                if isinstance(e, ImportError) and len(e.args) > 1:
-                    attempts = e.args[1]
-                    st.write("시도 내역:")
-                    for line in attempts:
-                        st.write("• ", line)
                 st.code("".join(_tb.format_exception(type(e), e, e.__traceback__)))
             return
 
-    # --- (C) 렌더 함수 탐색 및 실행 ---
-    candidate_names = ("render_index_orchestrator_panel", "render_orchestrator_panel", "render")
-    render_fn = None
-    for fn_name in candidate_names:
-        fn = getattr(mod, fn_name, None)
-        if callable(fn):
-            render_fn = fn
-            break
+    st.caption(f"· 모듈 로드 경로: `{how}`")
 
-    if render_fn is None:
-        st.warning(f"렌더 함수를 찾을 수 없습니다: {', '.join(candidate_names)}")
+    # 3) 렌더링 (구현 유무 체크)
+    render_fn = getattr(mod, "render_index_orchestrator_panel", None)
+    if not callable(render_fn):
+        st.error("ui_orchestrator.render_index_orchestrator_panel()를 찾을 수 없습니다.")
+        try:
+            names = sorted([n for n in dir(mod) if not n.startswith("_")])
+            st.code("\n".join(names))
+        except Exception:
+            pass
         return
 
     try:
