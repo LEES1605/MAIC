@@ -184,13 +184,12 @@ def reindex(dest_dir: Optional[str | Path] = None) -> bool:
         _set_brain_status("MISSING", "재인덱싱 함수가 없습니다.", "local", attached=False)
         return False
 
-    ok = False
     try:
-        # 인자 유무를 런타임에 맞춰 호출
+        # 인자 유무를 런타임에 맞춰 호출 (반환값은 사용하지 않음)
         try:
-            ok = bool(fn(base))
+            fn(base)
         except TypeError:
-            ok = bool(fn())
+            fn()
     except Exception as e:
         # 인덱싱 실패 — 로그는 상태 메시지로만 반영(민감정보 제거)
         _set_brain_status("ERROR", f"재인덱싱 실패: {type(e).__name__}", "local", attached=False)
@@ -204,8 +203,14 @@ def reindex(dest_dir: Optional[str | Path] = None) -> bool:
         return True
     else:
         # chunks만 있고 .ready가 없거나, 0B 등 반쪽 상태
-        _set_brain_status("MISSING", "재인덱싱 완료했지만 READY 조건 미충족", "local", attached=False)
+        _set_brain_status(
+            "MISSING",
+            "재인덱싱 완료했지만 READY 조건 미충족",
+            "local",
+            attached=False,
+        )
         return False
+# [07] END =====================================================================
 
 
 # [08] Public API: restore_or_attach() ==========================================
