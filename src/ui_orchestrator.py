@@ -209,34 +209,32 @@ def autoflow_boot_check(*, interactive: bool) -> None:  # noqa: ARG001 (인터�
         PH("ERROR", "복원 함수를 찾을 수 없습니다.")
 
 # ========================= [02] autoflow_boot_check — END ==========================
-# ===== [03] render_index_orchestrator_panel — START =====
+# ================== [03] render_index_orchestrator_panel — START ==================
 def render_index_orchestrator_panel() -> None:
     """
     관리자 진단/지식관리 패널 렌더링.
-    - 재인덱싱 버튼을 '항상' 노출(필요 시 비활성화/안내)
-    - READY(.ready + chunks.jsonl) 이전에는 '완료' 스텝을 잠금(🔒)
-    - GitHub 최신 릴리스 표기(get_latest_release)와 복구(restore_latest) 연계
+    - 재인덱싱 버튼을 '항상' 노출(필요 시 안내)
+    - READY(.ready + chunks.jsonl>0B) 이전에는 '완료' 스텝 잠금(🔒)
+    - GitHub 최신 릴리스 표기(get_latest_release) 및 복구(restore_latest) 연계
+    - mypy: 불필요한 "type: ignore" 주석 제거
     """
-    # --- Lazy imports & local helpers (안전 가드 포함) --------------------------
-    try:
-        import streamlit as st  # type: ignore[import-not-found]
-    except Exception:
-        return
-
+    import time
     from pathlib import Path
     import importlib
-    from typing import Any, Optional
-    import time
+    from typing import Any
 
+    import streamlit as st  # 런타임 임포트(웹앱 환경)
+
+    # ---------- helpers ----------
     def _persist_dir() -> Path:
-        """PERSIST_DIR 탐색: rag.index_build → config → ~/.maic/persist"""
+        """rag.index_build → config → ~/.maic/persist 순으로 탐색."""
         try:
-            from src.rag.index_build import PERSIST_DIR as IDX  # type: ignore[attr-defined]
+            from src.rag.index_build import PERSIST_DIR as IDX
             return Path(str(IDX)).expanduser()
         except Exception:
             pass
         try:
-            from src.config import PERSIST_DIR as CFG  # type: ignore[attr-defined]
+            from src.config import PERSIST_DIR as CFG
             return Path(str(CFG)).expanduser()
         except Exception:
             pass
@@ -261,35 +259,40 @@ def render_index_orchestrator_panel() -> None:
                 out[n] = None
         return out
 
+    # ---------- state ----------
     PERSIST = _persist_dir()
     ready = _local_ready(PERSIST)
 
-    # --- Header / Stepper ------------------------------------------------------
+    # ---------- header & stepper ----------
     st.subheader("🛠 진단 도구")
     steps = ["프리검사", "백업훑", "변경검지", "다운로드", "복구/해체", "연결성", "완료"]
-    # 현재 선택 탭 상태 보존
     st.session_state.setdefault("_orchestrator_step", steps[0])
-    sel = st.segmented_control("단계", steps, key="_orchestrator_step")  # Streamlit >=1.36
+
+    # segmented_control가 없을 수도 있는 환경 고려
+    try:
+        sel = st.segmented_control("단계", steps, key="_orchestrator_step")
+    except Exception:
+        sel = st.radio("단계", steps, key="_orchestrator_step", horizontal=True)
+
     # ✅ READY 전에는 '완료' 스텝 잠금
     if not ready and sel == "완료":
         st.warning("아직 인덱스가 준비되지 않았습니다. 먼저 복구/연결을 완료해 주세요. (🔒 잠금)")
-        # 강제로 첫 단계로 되돌림(사용자 혼선 방지)
         st.session_state["_orchestrator_step"] = steps[0]
         sel = steps[0]
 
-    # --- 상태 요약 카드 ---------------------------------------------------------
+    # ---------- status summary ----------
     with st.container(border=True):
         st.markdown("#### 상태 요약")
-        col1, col2, col3 = st.columns([1, 1, 2])
-        with col1:
+        c1, c2, c3 = st.columns([1, 1, 2])
+        with c1:
             st.caption("로컬")
             st.write("🧠 " + ("**READY** (.ready+chunks)" if ready else "**MISSING**"))
             st.code(str(PERSIST), language="text")
-        with col2:
+        with c2:
             st.caption("GitHub")
-            gh = _try_import("src.backup.github_release", ["get_latest_release", "restore_latest"])
-            get_latest = gh.get("get_latest_release")
+            gh = _try_import("src.backup.github_release", ["get_latest_release"])
             latest_tag = "—"
+            get_latest = gh.get("get_latest_release")
             try:
                 if callable(get_latest):
                     rel = get_latest(None)
@@ -298,11 +301,11 @@ def render_index_orchestrator_panel() -> None:
             except Exception:
                 latest_tag = "표시 실패"
             st.write(f"릴리스: **{latest_tag}**")
-        with col3:
+        with c3:
             st.caption("Drive")
-            st.write("관리자 버튼으로만 네트워크 점검을 수행합니다.")
+            st.write("네트워크 점검은 버튼 클릭 시에만 수행합니다.")
 
-    # --- 액션 버튼 행 -----------------------------------------------------------
+    # ---------- actions ----------
     st.markdown("#### 작업")
     b1, b2, b3, b4 = st.columns([1, 1, 1, 1])
     with b1:
@@ -312,27 +315,25 @@ def render_index_orchestrator_panel() -> None:
     with b3:
         do_update = st.button("업데이트 점검", help="GitHub 최신 릴리스에서 복구를 시도합니다.")
     with b4:
-        # ✅ 재인덱싱 버튼 '항상 표기'
+        # ✅ 재인덱싱은 '항상' 노출
         do_reindex = st.button("재인덱싱", help="로컬 인덱스를 새로 구축합니다(항상 표시).")
 
-    # --- 결과/로그 영역 ---------------------------------------------------------
+    # ---------- log area ----------
     log_key = "_orchestrator_log"
     if do_reset:
         st.session_state[log_key] = []
     st.session_state.setdefault(log_key, [])
+
     def _log(msg: str) -> None:
         st.session_state[log_key].append(f"{time.strftime('%H:%M:%S')}  {msg}")
 
-    # --- 동작: 빠른 점검 --------------------------------------------------------
+    # ---------- quick check ----------
     if do_quick:
-        _log("로컬 상태 확인…")
-        st.toast("로컬 상태 확인", icon="🔎")
         _log(f"local: {'READY' if ready else 'MISSING'}")
-
         gh = _try_import("src.backup.github_release", ["get_latest_release"])
         get_latest = gh.get("get_latest_release")
         try:
-            rel = get_latest() if callable(get_latest) else None  # type: ignore[misc]
+            rel = get_latest() if callable(get_latest) else None
             if isinstance(rel, dict):
                 tag = rel.get("tag_name") or rel.get("name") or "없음"
                 _log(f"github: 최신 릴리스 = {tag}")
@@ -341,66 +342,59 @@ def render_index_orchestrator_panel() -> None:
                 _log("github: 최신 릴리스 없음 또는 조회 실패")
                 st.info("GitHub 최신 릴리스: 없음/조회 실패")
         except Exception as e:
-            _log(f"github: 조회 실패 — {e}")
+            _log(f"github 조회 실패: {e}")
             st.warning("GitHub 조회 실패(토큰/권한/네트워크)")
 
-    # --- 동작: 업데이트 점검(릴리스 복구) ---------------------------------------
+    # ---------- update from release ----------
     if do_update:
-        gh = _try_import("src.backup.github_release", ["restore_latest"])
-        restore_latest = gh.get("restore_latest")
+        gh2 = _try_import("src.backup.github_release", ["restore_latest"])
+        restore_latest = gh2.get("restore_latest")
         if callable(restore_latest):
             with st.spinner("GitHub 릴리스에서 복구 중…"):
                 ok = False
                 try:
-                    ok = bool(restore_latest(PERSIST))  # .zip/.tar.gz/.gz 자동 처리(이전 패치)
+                    # .zip/.tar.gz/.gz 자동 처리(이전 패치 반영)
+                    ok = bool(restore_latest(PERSIST))
                 except Exception as e:
                     _log(f"restore_latest 예외: {e}")
                 if ok:
-                    # 복구 후 SSOT에 따라 READY 여부 재평가
                     r2 = _local_ready(PERSIST)
                     _log(f"restore 결과: {'READY' if r2 else 'MISSING'}")
-                    if r2:
-                        st.success("복구 완료(READY).")
-                    else:
-                        st.warning("복구는 성공했지만 READY 조건(.ready+chunks)이 충족되지 않았습니다.")
+                    st.success("복구 완료." if r2 else "복구는 성공했지만 READY 조건(.ready+chunks)이 충족되지 않았습니다.")
                 else:
                     st.error("복구 실패. 오류 로그를 확인해 주세요.")
         else:
             st.info("restore_latest 함수를 찾지 못했습니다. 모듈 버전을 확인해 주세요.")
 
-    # --- 동작: 재인덱싱(항상 노출) ---------------------------------------------
+    # ---------- reindex (always visible) ----------
     if do_reindex:
         idx = _try_import("src.rag.index_build", [
-            "rebuild_index", "build_index", "rebuild", "index_all", "build_all"
+            "rebuild_index", "build_index", "rebuild", "index_all", "build_all", "build_index_with_checkpoint"
         ])
+        # 가장 가능성 높은 함수부터 시도
         fn = next((idx[n] for n in ("rebuild_index","build_index","rebuild","index_all","build_all") if callable(idx.get(n))), None)
         if callable(fn):
             with st.spinner("재인덱싱(전체) 실행 중…"):
                 ok = False
                 try:
-                    # 인자가 없는 구현과 (dest_dir) 1-인자 구현을 모두 수용
+                    # 인자 시그니처 차이를 흡수(있으면 경로 전달, 아니면 무인자 호출)
                     try:
-                        ok = bool(fn(PERSIST))  # type: ignore[misc]
+                        ok = bool(fn(PERSIST))
                     except TypeError:
-                        ok = bool(fn())        # type: ignore[misc]
+                        ok = bool(fn())
                 except Exception as e:
                     _log(f"reindex 예외: {e}")
                 if ok:
-                    # 인덱싱 완료 후 .ready 보정(SSOT 충족 시)
                     r2 = _local_ready(PERSIST)
                     _log(f"reindex 결과: {'READY' if r2 else 'MISSING'}")
-                    if r2:
-                        st.success("재인덱싱 완료(READY).")
-                    else:
-                        st.warning("재인덱싱 후 READY 조건(.ready+chunks)이 충족되지 않았습니다.")
+                    st.success("재인덱싱 완료." if r2 else "재인덱싱 후 READY 조건(.ready+chunks)이 충족되지 않았습니다.")
                 else:
                     st.error("재인덱싱 실패. 오류 로그를 확인해 주세요.")
         else:
-            # 구현이 없더라도 버튼은 '항상' 보인다 — 사용자 혼선 방지용 메시지
             st.info("현재 버전에서 재인덱싱 함수가 정의되지 않았습니다. "
                     "업데이트 점검(릴리스 복구) 또는 수동 인덱싱 스크립트를 사용해 주세요.")
 
-    # --- 로그 뷰 ---------------------------------------------------------------
+    # ---------- log view ----------
     st.markdown("#### 오류 로그")
     st.text_area("최근 로그", value="\n".join(st.session_state[log_key][-200:]), height=160)
-# ===== [03] render_index_orchestrator_panel — END =====
+# =================== [03] render_index_orchestrator_panel — END ===================
