@@ -1,6 +1,7 @@
 # ============================ providers.py — START ===========================
 from __future__ import annotations
 
+import importlib
 import json
 import os
 import traceback
@@ -8,12 +9,20 @@ from typing import Any, Dict, Optional
 
 import requests
 
+# streamlit은 있을 수도/없을 수도 있다.
+try:
+    import streamlit as st  # mypy: stubs 없어도 통과(ini에서 허용)
+except Exception:
+    st = None  # type: ignore[assignment]
+
 
 def _secret(name: str, default: Optional[str] = None) -> Optional[str]:
-    # Streamlit secrets 우선 → 환경변수
+    """Streamlit secrets 우선 → 환경변수. 불가하면 default."""
     try:
-        import streamlit as st  # type: ignore
-        val = st.secrets.get(name)  # type: ignore[attr-defined]
+        if st is not None and hasattr(st, "secrets"):
+            val = st.secrets.get(name, None)  # type: ignore[call-arg]
+        else:
+            val = None
         if val is None:
             return os.getenv(name, default)
         if isinstance(val, str):
@@ -38,20 +47,20 @@ def call_openai_raw(
     api_key = _secret("OPENAI_API_KEY")
     mdl = model or _secret("OPENAI_MODEL") or "gpt-4o-mini"
     if not api_key:
-        return {"ok": False, "provider": "openai", "error": "missing_api_key"}
+        return {"ok": False, "provider": "openai", "error": "missing_api_key", "text": ""}
 
+    # 정적 임포트 대신 동적 로드(타입 스텁 미비 회피)
     try:
-        from openai import OpenAI  # type: ignore
+        mod = importlib.import_module("openai")
+        OpenAI: Any = getattr(mod, "OpenAI", None)
+        if OpenAI is None:
+            return {"ok": False, "provider": "openai", "error": "openai.OpenAI not found", "text": ""}
     except Exception as e:
-        return {
-            "ok": False,
-            "provider": "openai",
-            "error": f"openai_import_error: {e}",
-        }
+        return {"ok": False, "provider": "openai", "error": f"openai_import_error: {e}", "text": ""}
 
     try:
-        client = OpenAI(api_key=api_key)  # type: ignore
-        res = client.chat.completions.create(  # type: ignore[attr-defined]
+        client: Any = OpenAI(api_key=api_key)
+        res: Any = client.chat.completions.create(
             model=mdl,
             temperature=float(temperature),
             messages=[
@@ -59,13 +68,14 @@ def call_openai_raw(
                 {"role": "user", "content": prompt or ""},
             ],
         )
-        txt = res.choices[0].message.content or ""  # type: ignore[index,assignment]
+        txt = res.choices[0].message.content or ""
         return {"ok": True, "provider": "openai", "text": str(txt), "error": None}
     except Exception as e:
         return {
             "ok": False,
             "provider": "openai",
             "error": f"{type(e).__name__}: {e}\n{traceback.format_exc()}",
+            "text": "",
         }
 
 
@@ -85,10 +95,10 @@ def call_gemini_raw(
     mdl_env = _secret("LLM_MODEL") or "gemini-1.5-pro"
     model = model or mdl_env
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
-
     if not api_key:
-        return {"ok": False, "provider": "gemini", "error": "missing_api_key"}
+        return {"ok": False, "provider": "gemini", "error": "missing_api_key", "text": ""}
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
 
     # Gemini request body (text-only)
     contents = []
@@ -111,6 +121,7 @@ def call_gemini_raw(
                 "ok": False,
                 "provider": "gemini",
                 "error": f"http_{r.status_code}: {r.text[:400]}",
+                "text": "",
             }
         data = r.json()
         text = ""
@@ -126,6 +137,7 @@ def call_gemini_raw(
             "ok": False,
             "provider": "gemini",
             "error": f"{type(e).__name__}: {e}\n{traceback.format_exc()}",
+            "text": "",
         }
 
 
@@ -141,7 +153,7 @@ def call_with_fallback(
     우선순위 제공자 실패 시 다른 쪽으로 폴백. 텍스트만 반환.
     """
     order = ["gemini", "openai"] if prefer == "gemini" else ["openai", "gemini"]
-    last = None
+    last: Dict[str, Any] | None = None
     for name in order:
         if name == "gemini":
             res = call_gemini_raw(system=system, prompt=prompt, temperature=temperature)
