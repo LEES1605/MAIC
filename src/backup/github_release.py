@@ -311,71 +311,119 @@ def restore_latest(dest_dir: str | Path) -> bool:
                 _log(f"원본: {p.name} → 대상: {target.name} — {type(e).__name__}: {e}")
                 return False
 
-    # 4) 산출물 정리: dest 안에서 chunks.jsonl을 루트로 모으기
+    # 4) 산출물 정리(강화): dest 안에서 chunks.jsonl을 루트로 모으기
+    def _size(p: Path) -> int:
+        try:
+            return p.stat().st_size
+        except Exception:
+            return 0
+
     def _decompress_gz(src: Path, dst: Path) -> bool:
         try:
             import gzip
             with gzip.open(src, "rb") as gf:
-                dst.write_bytes(gf.read())
+                data = gf.read()
+            if not data:
+                return False
+            dst.write_bytes(data)
             return True
         except Exception as e:
             _log(f"gz 해제 실패: {type(e).__name__}: {e}")
             return False
 
-    def _merge_chunk_dir(chunk_dir: Path, out_file: Path) -> bool:
+    def _merge_dir_jsonl(chunk_dir: Path, out_file: Path) -> bool:
         try:
-            out_file.unlink(missing_ok=True)
-            with out_file.open("wb") as w:
+            bytes_written = 0
+            tmp_out = out_file.with_suffix(".jsonl.tmp")
+            if tmp_out.exists():
+                tmp_out.unlink()
+            with tmp_out.open("wb") as w:
                 for p in sorted(chunk_dir.glob("*.jsonl")):
                     try:
                         with p.open("rb") as r:
-                            shutil.copyfileobj(r, w)
+                            bytes_written += shutil.copyfileobj(r, w) or 0
                     except Exception:
                         continue
-            return out_file.exists() and out_file.stat().st_size > 0
+            if bytes_written > 0:
+                if out_file.exists():
+                    out_file.unlink()
+                tmp_out.replace(out_file)
+                return True
+            tmp_out.unlink(missing_ok=True)
+            return False
         except Exception as e:
             _log(f"chunks/ 병합 실패: {type(e).__name__}: {e}")
             return False
 
     target = dest / "chunks.jsonl"
-    if not (target.exists() and target.stat().st_size > 0):
-        # a) 루트에 .gz가 있으면 해제
-        gz_root = dest / "chunks.jsonl.gz"
-        if gz_root.exists() and gz_root.is_file():
-            if _decompress_gz(gz_root, target):
-                _log("루트의 chunks.jsonl.gz를 해제하여 chunks.jsonl 생성")
-        # b) 루트에 chunks/ 디렉터리가 있으면 병합
-        if not (target.exists() and target.stat().st_size > 0):
-            chunk_dir = dest / "chunks"
-            if chunk_dir.is_dir():
-                if _merge_chunk_dir(chunk_dir, target):
-                    _log("루트의 chunks/ 디렉터리를 병합하여 chunks.jsonl 생성")
-        # c) 서브폴더를 rglob하여 검색(우선순위: chunks.jsonl → .gz → chunks/ 디렉터리)
-        if not (target.exists() and target.stat().st_size > 0):
-            try:
-                found = next(dest.rglob("chunks.jsonl"), None)
-            except Exception:
-                found = None
-            if found and found.is_file() and found.stat().st_size > 0:
-                shutil.copy2(found, target)
-                _log(f"서브폴더에서 chunks.jsonl 발견: {found.name} → 루트로 이동")
 
-        if not (target.exists() and target.stat().st_size > 0):
-            try:
-                found_gz = next(dest.rglob("chunks.jsonl.gz"), None)
-            except Exception:
-                found_gz = None
-            if found_gz and found_gz.is_file():
-                if _decompress_gz(found_gz, target):
-                    _log(f"서브폴더의 chunks.jsonl.gz 해제: {found_gz.parent.name}/ → 루트 생성")
+    def _consolidate_to_target(root: Path, target_file: Path) -> bool:
+        # 이미 유효하면 끝
+        if target_file.exists() and _size(target_file) > 0:
+            return True
 
-        if not (target.exists() and target.stat().st_size > 0):
-            try:
-                found_dir = next((d for d in dest.rglob("chunks") if d.is_dir()), None)
-            except Exception:
-                found_dir = None
-            if found_dir and _merge_chunk_dir(found_dir, target):
-                _log(f"서브폴더의 chunks/ 병합: {found_dir} → 루트 chunks.jsonl 생성")
+        # a) 정확명 우선: chunks.jsonl / chunks.jsonl.gz (임의 깊이)
+        try:
+            exact = [p for p in root.rglob("chunks.jsonl") if _size(p) > 0]
+        except Exception:
+            exact = []
+        if exact:
+            best = max(exact, key=_size)
+            shutil.copy2(best, target_file)
+            _log(f"exact chunks.jsonl 사용: {best}")
+            return True
+
+        try:
+            exact_gz = [p for p in root.rglob("chunks.jsonl.gz") if _size(p) > 0]
+        except Exception:
+            exact_gz = []
+        if exact_gz:
+            best_gz = max(exact_gz, key=_size)
+            if _decompress_gz(best_gz, target_file):
+                _log(f"exact chunks.jsonl.gz 해제: {best_gz}")
+                return True
+
+        # b) 디렉터리 병합: */chunks/*.jsonl
+        try:
+            chunk_dirs = [d for d in root.rglob("chunks") if d.is_dir()]
+        except Exception:
+            chunk_dirs = []
+        for d in chunk_dirs:
+            if _merge_dir_jsonl(d, target_file):
+                _log(f"디렉터리 병합 사용: {d}")
+                return True
+
+        # c) 범용 파일: 임의의 *.jsonl / *.jsonl.gz 중 가장 큰 것 선택
+        try:
+            any_jsonl = [p for p in root.rglob("*.jsonl") if _size(p) > 0]
+        except Exception:
+            any_jsonl = []
+        if any_jsonl:
+            best_any = max(any_jsonl, key=_size)
+            shutil.copy2(best_any, target_file)
+            _log(f"임의 *.jsonl 사용: {best_any}")
+            return True
+
+        try:
+            any_gz = [p for p in root.rglob("*.jsonl.gz") if _size(p) > 0]
+        except Exception:
+            any_gz = []
+        if any_gz:
+            best_any_gz = max(any_gz, key=_size)
+            if _decompress_gz(best_any_gz, target_file):
+                _log(f"임의 *.jsonl.gz 해제: {best_any_gz}")
+                return True
+
+        # 실패 시 0바이트 target이 있으면 제거
+        if target_file.exists() and _size(target_file) == 0:
+            target_file.unlink(missing_ok=True)
+        return False
+
+    ok_cons = _consolidate_to_target(dest, target)
+    if not ok_cons:
+        _log("산출물 정리 실패: chunks.jsonl을 만들 수 없습니다.")
+        # READY 보정 없이 종료
+        return False
 
     # 5) SSOT 보정: chunks.jsonl만 존재하고 .ready가 없으면 생성
     try:
