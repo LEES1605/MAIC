@@ -615,7 +615,7 @@ def _render_admin_panels() -> None:
                 spec = importlib.util.spec_from_file_location("ui_orchestrator", candidate)
                 if spec and spec.loader:
                     mod = importlib.util.module_from_spec(spec)
-                    # 🔧 불필요한 "type: ignore" 주석 제거 (mypy: unused-ignore 해소)
+                    # (mypy: unused-ignore 방지) 직접 실행
                     spec.loader.exec_module(mod)
                     return mod
             except Exception as e:
@@ -628,10 +628,15 @@ def _render_admin_panels() -> None:
     load_start = _time.perf_counter()
     try:
         mod = _import_orchestrator_with_fallback()
-        render_fn = getattr(mod, "render_diagnostics_panel", None)
+        # ✅ 신·구 함수명 호환: 새 이름 → 없으면 구 이름
+        render_fn = getattr(mod, "render_index_orchestrator_panel", None)
         if not callable(render_fn):
-            st.warning("진단 도구 렌더러(render_diagnostics_panel)를 찾지 못했습니다.")
+            render_fn = getattr(mod, "render_diagnostics_panel", None)
+
+        if not callable(render_fn):
+            st.warning("진단 도구 렌더러를 찾지 못했습니다. (render_index_orchestrator_panel / render_diagnostics_panel)")
             return
+
         render_fn()
     except Exception as e:
         st.error("진단 도구 렌더링 중 오류가 발생했습니다.")
@@ -647,7 +652,6 @@ def _render_admin_panels() -> None:
 # ============ [11] 관리자 패널(지연 임포트 + 파일경로 폴백) — END ============
 # ===== [PATCH / app.py / [11] 관리자 패널(지연 임포트 + 파일경로 폴백) / L0643–L0738] — END =====
 
-# ===== [PATCH / app.py / [09] 부팅 훅(오케스트레이터 오토플로우 호출) / L0397–L0643] — END =====
 
 
 # [12] 채팅 UI(스타일/모드/상단 상태 라벨=SSOT) ===============================
