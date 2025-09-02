@@ -42,7 +42,7 @@ def _ready_path(p: Path) -> Path:
 
 def _local_ready(p: Optional[Path] = None) -> bool:
     """SSOT: .ready & chunks.jsonl(>0B) 동시 존재해야 READY."""
-    base = p or PERSIST_DIR
+    base = p or _persist_dir()
     try:
         cj = _chunks_path(base)
         return _ready_path(base).exists() and cj.exists() and cj.stat().st_size > 0
@@ -52,7 +52,7 @@ def _local_ready(p: Optional[Path] = None) -> bool:
 
 def _ensure_ready_signal(p: Optional[Path] = None) -> None:
     """chunks.jsonl이 있고 .ready가 없으면 .ready를 생성(멱등)."""
-    base = p or PERSIST_DIR
+    base = p or _persist_dir()
     try:
         cj = _chunks_path(base)
         r = _ready_path(base)
@@ -65,7 +65,7 @@ def _ensure_ready_signal(p: Optional[Path] = None) -> None:
 
 def index_status(p: Optional[Path] = None) -> Dict[str, Any]:
     """현 로컬 인덱스 상태 요약(SSOT)."""
-    base = p or PERSIST_DIR
+    base = p or _persist_dir()
     try:
         cj = _chunks_path(base)
         return {
@@ -85,7 +85,7 @@ def index_status(p: Optional[Path] = None) -> Dict[str, Any]:
             "local_ok": False,
             "code": "MISSING",
         }
-
+# [03] END ======================================================================
 
 # ===== [04] Streamlit SSOT sync (optional, no hard dependency) — START =====
 def _set_brain_status(code: str, msg: str = "", source: str = "", attached: bool = False) -> None:
