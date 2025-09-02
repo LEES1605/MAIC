@@ -225,47 +225,9 @@ def render_index_orchestrator_panel() -> None:
     from typing import Any
     import shutil
 
-    import streamlit as st  # 런타임 임포트(웹앱 환경)
+    import streamlit as st  # 런타임 임포트
 
-    # ---------- helpers ----------
-    def _persist_dir() -> Path:
-        """rag.index_build → config → ~/.maic/persist 순으로 탐색."""
-        try:
-            from src.rag.index_build import PERSIST_DIR as IDX
-            return Path(str(IDX)).expanduser()
-        except Exception:
-            pass
-        try:
-            from src.config import PERSIST_DIR as CFG
-            return Path(str(CFG)).expanduser()
-        except Exception:
-            pass
-        return Path.home() / ".maic" / "persist"
-
-    def _local_ready(p: Path) -> bool:
-        """SSOT: .ready & chunks.jsonl(>0B) 동시 존재해야 READY."""
-        try:
-            cj = p / "chunks.jsonl"
-            return (p / ".ready").exists() and cj.exists() and cj.stat().st_size > 0
-        except Exception:
-            return False
-
-    def _status_snapshot(p: Path) -> dict[str, Any]:
-        """현 상태 스냅샷을 로그용 dict로 제공."""
-        cj = p / "chunks.jsonl"
-        rd = p / ".ready"
-        try:
-            size = cj.stat().st_size if cj.exists() else 0
-        except Exception:
-            size = -1  # 접근 실패
-        return {
-            "persist_dir": str(p),
-            "ready_flag": rd.exists(),
-            "chunks_exists": cj.exists(),
-            "chunks_size": size,
-            "local_ok": _local_ready(p),
-        }
-
+    # ---------- helpers (사용 전에 미리 정의) ----------
     def _try_import(modname: str, names: list[str]) -> dict[str, Any]:
         out: dict[str, Any] = {}
         try:
@@ -295,9 +257,55 @@ def render_index_orchestrator_panel() -> None:
             pass
         return rows
 
+    # --- 세션 키 표준화/스냅샷 API 로드 -----------------------------------------
+    try:
+        from src.state.session import (
+            ensure_keys,
+            persist_dir as _persist_dir,
+            snapshot_index,
+            sync_badge_from_fs,
+        )
+    except Exception:
+        # 백업 경로(개발 브랜치에서 모듈 이동 시)
+        def ensure_keys() -> None:
+            pass
+
+        def _persist_dir() -> Path:
+            try:
+                from src.rag.index_build import PERSIST_DIR as IDX
+                return Path(str(IDX)).expanduser()
+            except Exception:
+                pass
+            try:
+                from src.config import PERSIST_DIR as CFG
+                return Path(str(CFG)).expanduser()
+            except Exception:
+                pass
+            return Path.home() / ".maic" / "persist"
+
+        def snapshot_index(p: Path | None = None) -> dict[str, Any]:
+            base = p or _persist_dir()
+            cj = base / "chunks.jsonl"
+            try:
+                size = cj.stat().st_size if cj.exists() else 0
+            except Exception:
+                size = 0
+            return {
+                "persist_dir": str(base),
+                "ready_flag": (base / ".ready").exists(),
+                "chunks_exists": cj.exists(),
+                "chunks_size": size,
+                "local_ok": (base / ".ready").exists() and cj.exists() and size > 0,
+            }
+
+        def sync_badge_from_fs() -> dict[str, Any]:
+            return snapshot_index()
+
     # ---------- state ----------
+    ensure_keys()
     PERSIST = _persist_dir()
-    ready = _local_ready(PERSIST)
+    snap = snapshot_index(PERSIST)
+    ready = bool(snap.get("local_ok"))
 
     # ---------- steps & tips ----------
     steps = ["프리검사", "백업훑", "변경검지", "다운로드", "복구/해체", "연결성", "완료"]
@@ -311,7 +319,7 @@ def render_index_orchestrator_panel() -> None:
         "완료": "학생 질의 가능(READY) 최종 확인",
     }
 
-    # ✅ 위젯 생성 '이전'에 상태 보정(READY 전 '완료' 선택을 원천 차단)
+    # ✅ 위젯 생성 '이전'에 상태 보정(READY 전 '완료' 선택 차단)
     st.session_state.setdefault("_orchestrator_step", steps[0])
     if not ready and st.session_state["_orchestrator_step"] == "완료":
         st.session_state["_orchestrator_step"] = steps[0]
@@ -338,13 +346,18 @@ def render_index_orchestrator_panel() -> None:
     # segmented_control가 없는 환경에서는 radio로 폴백
     try:
         st.segmented_control(
-            "단계", steps, key="_orchestrator_step",
-            help="단계 위 또는 ‘ⓘ 단계 설명’을 눌러 각 단계의 의미를 확인하세요."
+            "단계",
+            steps,
+            key="_orchestrator_step",
+            help="단계 위 또는 ‘ⓘ 단계 설명’을 눌러 각 단계의 의미를 확인하세요.",
         )
     except Exception:
         st.radio(
-            "단계", steps, key="_orchestrator_step", horizontal=True,
-            help="‘ⓘ 단계 설명’을 눌러 각 단계의 의미를 확인하세요."
+            "단계",
+            steps,
+            key="_orchestrator_step",
+            horizontal=True,
+            help="‘ⓘ 단계 설명’을 눌러 각 단계의 의미를 확인하세요.",
         )
 
     # ---------- status summary ----------
@@ -376,19 +389,35 @@ def render_index_orchestrator_panel() -> None:
     st.markdown("#### 작업")
     b1, b2, b3, b4, b5 = st.columns([1, 1, 1, 1, 1])
     with b1:
-        do_quick = st.button("빠른 점검", key="btn_quick", help="버튼 클릭 시에만 네트워크를 확인합니다.")
+        do_quick = st.button(
+            "빠른 점검",
+            key="btn_quick",
+            help="버튼 클릭 시에만 네트워크를 확인합니다.",
+        )
     with b2:
-        do_reset = st.button("결과 초기화", key="btn_reset", help="진단 결과/오류 로그 뷰를 초기화합니다.")
+        do_reset = st.button(
+            "결과 초기화",
+            key="btn_reset",
+            help="진단 결과/오류 로그 뷰를 초기화합니다.",
+        )
     with b3:
-        # ⬅ 라벨 명확화: '업데이트 점검' → '릴리스 복구(업데이트)'
-        do_update = st.button("릴리스 복구(업데이트)", key="btn_restore",
-                              help="GitHub 최신 릴리스에서 복구를 시도합니다.")
+        do_update = st.button(
+            "릴리스 복구(업데이트)",
+            key="btn_restore",
+            help="GitHub 최신 릴리스에서 복구를 시도합니다.",
+        )
     with b4:
-        # ✅ 재인덱싱은 '항상' 노출
-        do_reindex = st.button("재인덱싱", key="btn_reindex", help="로컬 인덱스를 새로 구축합니다(항상 표시).")
+        do_reindex = st.button(
+            "재인덱싱",
+            key="btn_reindex",
+            help="로컬 인덱스를 새로 구축합니다(항상 표시).",
+        )
     with b5:
-        do_clean = st.button("강제 초기화", key="btn_clean",
-                             help="persist 폴더의 .ready / chunks* / chunks/ 를 삭제하고 깨끗이 시작합니다.")
+        do_clean = st.button(
+            "강제 초기화",
+            key="btn_clean",
+            help="persist의 .ready / chunks* / chunks/ 를 삭제하고 깨끗이 시작합니다.",
+        )
 
     # ---------- log area ----------
     log_key = "_orchestrator_log"
@@ -409,10 +438,10 @@ def render_index_orchestrator_panel() -> None:
 
     # ---------- quick check ----------
     if do_quick:
-        snap = _status_snapshot(PERSIST)
+        snap = snapshot_index(PERSIST)
         _log(f"local: {'READY' if snap['local_ok'] else 'MISSING'} — {snap}")
-        gh = _try_import("src.backup.github_release", ["get_latest_release"])
-        get_latest = gh.get("get_latest_release")
+        gh_info = _try_import("src.backup.github_release", ["get_latest_release"])
+        get_latest = gh_info.get("get_latest_release")
         try:
             rel = get_latest() if callable(get_latest) else None
             if isinstance(rel, dict):
@@ -456,7 +485,7 @@ def render_index_orchestrator_panel() -> None:
                     ok = bool(restore_latest(PERSIST))
                 except Exception as e:
                     _log(f"restore_latest 예외: {e}")
-                snap = _status_snapshot(PERSIST)
+                snap = sync_badge_from_fs()  # 배지 동기화
                 if ok and snap["local_ok"]:
                     _log(f"restore 결과: READY — {snap}")
                     st.success("복구 완료.")
@@ -474,14 +503,32 @@ def render_index_orchestrator_panel() -> None:
         svc = _try_import("src.services.index", ["reindex"])
         fn = svc.get("reindex")
         if not callable(fn):
-            idx = _try_import("src.rag.index_build", [
-                "rebuild_index", "build_index", "rebuild", "index_all",
-                "build_all", "build_index_with_checkpoint"
-            ])
-            fn = next((idx[n] for n in (
-                "rebuild_index","build_index","rebuild",
-                "index_all","build_all","build_index_with_checkpoint"
-            ) if callable(idx.get(n))), None)
+            idx = _try_import(
+                "src.rag.index_build",
+                [
+                    "rebuild_index",
+                    "build_index",
+                    "rebuild",
+                    "index_all",
+                    "build_all",
+                    "build_index_with_checkpoint",
+                ],
+            )
+            fn = next(
+                (
+                    idx[n]
+                    for n in (
+                        "rebuild_index",
+                        "build_index",
+                        "rebuild",
+                        "index_all",
+                        "build_all",
+                        "build_index_with_checkpoint",
+                    )
+                    if callable(idx.get(n))
+                ),
+                None,
+            )
 
         if callable(fn):
             with st.spinner("재인덱싱(전체) 실행 중…"):
@@ -494,7 +541,7 @@ def render_index_orchestrator_panel() -> None:
                 except Exception as e:
                     _log(f"reindex 예외: {e}")
 
-                snap = _status_snapshot(PERSIST)
+                snap = sync_badge_from_fs()  # 배지 동기화
                 bs_msg = str(st.session_state.get("brain_status_msg", ""))
                 if success and snap["local_ok"]:
                     _log(f"reindex 결과: READY — {snap}")
@@ -512,10 +559,16 @@ def render_index_orchestrator_panel() -> None:
                         _log(f"status_msg: {bs_msg}")
                     st.error("재인덱싱 실패. 오류 로그를 확인해 주세요.")
         else:
-            st.info("현재 버전에서 재인덱싱 함수가 정의되지 않았습니다. "
-                    "업데이트 점검(릴리스 복구) 또는 수동 인덱싱 스크립트를 사용해 주세요.")
+            st.info(
+                "현재 버전에서 재인덱싱 함수가 정의되지 않았습니다. "
+                "업데이트 점검(릴리스 복구) 또는 수동 인덱싱 스크립트를 사용해 주세요."
+            )
 
     # ---------- log view ----------
     st.markdown("#### 오류 로그")
-    st.text_area("최근 로그", value="\n".join(st.session_state[log_key][-200:]), height=220)
+    st.text_area(
+        "최근 로그",
+        value="\n".join(st.session_state[log_key][-200:]),
+        height=220,
+    )
 # =================== [03] render_index_orchestrator_panel — END ===================
