@@ -1,199 +1,337 @@
-# Re-create PROJECT_STATUS.md and confirm it exists
-from datetime import datetime
-from textwrap import dedent
-import os, json, pathlib
+MAIC Project Master Plan (Report Draft v1)
+Purpose: To summarize the results of the stabilization and quality improvement efforts from the last session, and to formalize the action plan, priorities, and team agreements for the next session. This document is intended to be the final version, ready for direct commit to the repository.
 
-now = datetime.now().strftime("%Y-%m-%d %H:%M")
+0) Current Status at a Glance
+CI Pipeline (Strict Mode)
 
-content = dedent(f"""
-# PROJECT_STATUS.md — LEES AI Teacher
-_Updated: {now} (Asia/Seoul)_
+✅ ruff (lint/format) passing
 
-## 0) 실행 요약 (Executive Summary)
-- **목표:** 학원 학생들이 24/7로 질문할 수 있는 **Streamlit 기반 Q&A 앱** 구축. (OpenAI/Gemini 듀얼, GitHub·Google Drive 연동)
-- **현상태:** 무한 로딩 이슈 해결을 위해 **빠른 부팅(로컬 붙이기)** + **관리자 수동 '깊은 점검'** 구조로 안정화.  
-  채팅 UI는 **말풍선 + 파스텔 하늘색 컨테이너** + **스트리밍**을 적용했고, **모드 버튼(어법/문장/지문)**은 미니멀 스타일로 동작.
-- **프롬프트 단일 출처:** `prompts.yaml`을 **GitHub**에 두고, **GitHub → Fallback** 순으로 사용.
-- **인덱스(지식베이스):** 신규/변경 감지는 Deep Check에서 수행. 변경 없음이면 **GitHub Release에서 자동 복구(로컬 attach)** 로 빠르게 준비.
+✅ mypy (strict, py3.10/3.11/3.12) passing
 
----
+⏭ pytest: Skips if test files are absent (maintaining the gate structure)
 
-## 1) 마스터 플랜 (Master Plan)
-1. **기능 아키텍처**
-   - UI: Streamlit (채팅형 인터페이스, 말풍선, Enter 제출)
-   - LLM: **OpenAI + Gemini** (자동 fallback), 필요 시 이중 설명 지원
-   - 프롬프트: `prompts.yaml` **단일 소스** (레포에 보관)
-   - RAG: Google Drive `prepared` 폴더(읽기 전용) + 로컬 캐시(`~/.maic/persist`)
-   - 백업: **GitHub Release**를 인덱스 백업/복구에 사용 (OAuth 장기 권한 이슈 회피)
-   - 버전관리: GitHub (코드/프롬프트 분리 관리, PR 리뷰)
-   - 학생들 회원가입을 통한 로그인 기능 지원
-   - 회원관리(정보수정, 가입허용, 강제탈퇴) 기능 지원
-2. **UX 원칙**
-   - 학생 UI: **미니멀**·**즉시 반응**·**시각적 구분(질문=하늘색, 답변=흰색)**
-   - 관리자 UI: 우상단 아이콘(⚙️) 최소화, 필요 시 패널 확장
-   - 실패/지연 시: **부드러운 안내문** 및 **Fallback 응답** 제공
-3. **운영/배포**
-   - Streamlit Cloud/서버 배포
-   - Health-check 통과 보장: 초기 프레임은 **네트워크 I/O 없이** 렌더
-   - 비밀정보: `.streamlit/secrets.toml` 사용 (키/토큰/모드)
+Workflows
 
----
+✅ Basic CI (on push/PR)
 
-## 2) 협의 규약 (Working Agreements)
-- **한 번에 한 단계(One step at a time).**
-- **Plan → Agreement → Code.** 변경 의도/근거를 먼저 설명하고 합의 후 코드 요청
-- **업로드 된 코드를 전수점검 후 
-- **“코드 보여줄까요?”** 합의 확인 후 코드 제시.
+✅ nightly.yml (scheduled/manual + optional pre-release after gates pass)
 
-- **전체 블록 교체 규칙.** 파일은 번호 블록 `# [01]START =============… # [01]END============`로 나누고, 변경 시 **해당 블록 전체** 교체.  
-  3개 블록 이상 바뀌면 **파일 전체 재생성**.
+✅ release.yml (on tag/manual + official release after gates pass)
 
-- **Cause → Goal → Code → Test.** 수정 이유→목표→코드→테스트 순서 준수.
-- **학생 톤:** 원장님이 직접 설명하는 **따뜻하고 친절한 한국어**.
-- **프롬프트 단일 소스:** `prompts.yaml`(GitHub) 최우선. Fallback 문구는 **부드러운 안내** 포함.
-- **Drive 쓰기 금지.** (OAuth 영속 이슈) — 인덱스 백업/복구는 **GitHub Release**만 사용.
-- **UI 합의 사항:** 말풍선(오른쪽=학생/하늘색, 왼쪽=AI/흰색), 파스텔 하늘색 채팅 컨테이너, 모드 버튼은 **색상만 변화**(크기 불변·아이콘 제거).
+Code Quality (Key Improvements)
 
----
+Removed remaining unnecessary # type: ignore[...] directives.
 
-## 3) 현재 구현 상태 (As-Is)
-### 3.1 앱 구동/헬스체크
-- **빠른 부팅:** `_quick_local_attach_only()` — 로컬 시그널(`.ready`, `chunks.jsonl`, `manifest.json`)만 확인 → 첫 화면 즉시 렌더.
-- **깊은 점검:** `_run_deep_check_and_attach()` — 관리자 버튼으로 수동 실행.  
-  - Drive 준비상태 점검(가능 시)  
-  - **GitHub Releases 복구** 시도 → 로컬 붙이기  
-  - `diff_with_manifest()`로 변경 통계 확인(added/changed/removed)
-- **자동 시작 옵션:** `_auto_start_once()` — `AUTO_START_MODE in {"restore","on"}`일 때만 Release 복구 시도 (기본 off).
+Applied exception guards, fallbacks, and dynamic imports for dynamic dependencies (e.g., streamlit, openai).
 
-### 3.2 채팅 UI
-- **말풍선/색상:** 질문=우측·하늘색, 답변=좌측·흰색. 채팅 컨테이너는 **파스텔 하늘색** 유지.
-- **스트리밍:** “답변 준비중…” 말풍선을 좌측에 먼저 띄운 뒤 토큰 단위로 갱신.
-- **모드 선택:** “어법/문장/지문” pill 라디오 — **선택 시 색만 바뀜**(크기 동일·아이콘 없음).
+Reduced inter-module coupling and organized the structure for patches to be applicable on a sectional basis (START~END).
 
-### 3.3 프롬프트 로딩
-- 우선순위: **GitHub → Drive → Fallback**
-  - GitHub: 레포/브랜치/경로는 `GH_REPO`, `GH_BRANCH`, `GH_PROMPTS_PATH`로 설정.
-  - Drive: 보조 모듈(`src.prompt_modes.build_prompt`) 있으면 사용.
-  - Fallback: 자료 연결이 없을 때 **안내 문구**가 선행된 간결 답변.
+1) What We've Accomplished (Summary)
+1.1 Linting & Type Stability
+Ruff: Systematically fixed sorting, unused imports, line length exceeded (E501), unused variables (F841), etc.
 
-### 3.4 증거(근거) 사용 규칙
-- **1차:** 학원 수업자료(텍스트/Markdown) — 파일명이 **‘이유문법’/‘깨알문법’**으로 시작하면 **최우선**.
-- **2차:** 기존 문법서 **PDF 발췌** — 파일명이 **영어**로 시작하면 **보조 근거**.
-- **3차:** 위 자료가 없을 때 **AI 자체지식**으로 간략 안내.
+mypy:
 
----
+Resolved duplicate definitions/re-bindings (especially for Settings) — single alias binding + explicit types.
 
-## 4) 최근 수정 요약 (What Changed)
-- **무한 로딩 방지:** 초기 네트워크 I/O를 제거하고, **관리자 수동 ‘깊은 점검’** 버튼으로 분리.
-- **LLM 시그니처 호환:** 인자 자동 탐지(`messages`/`prompt`/`user_prompt`/스트리밍 콜백).
-- **UI 고정화:** 말풍선/배경/모드 버튼 스타일을 한 번만 주입하여 리런에도 유지.
-- **DISABLE_BG:** 배경은 `secrets.toml`의 `DISABLE_BG="true"`로 제어(※ `config.toml`이 아님).
+Eliminated remaining Optional/Any/attr-defined issues — guards + explicit type hints + Protocols.
 
----
+Ensured exception-safe access for streamlit and other dynamically imported modules (hasattr, getattr, Mapping cast).
 
-## 5) 파일/경로 규약
-- **앱 엔트리:** `app.py` (번호 블록 구조 유지: `[01]..[END]`)
-- **인덱스/RAG:** `src/rag/index_build.py`
-- **오케스트레이터:** `src/ui_orchestrator.py`
-- **관리자 패널:** `src/ui_admin.py`
-- **LLM 프로바이더:** `src/llm/providers.py`
-- **지속 디렉터리:** `~/.maic/persist` (인덱스·매니페스트·체크포인트)
-- **프롬프트:** `prompts.yaml` (레포 루트 권장, `GH_PROMPTS_PATH`로 경로 재지정 가능)
+1.2 Key File Improvements (Functionally Unchanged, Stability↑)
+src/rag_engine.py
 
----
+Resolved F821 by removing global symbol dependencies (using internal wrapper _IndexObj).
 
-## 6) 설정 가이드 (Config & Secrets)
-### 6.1 `.streamlit/config.toml`
-```toml
-[server]
-fileWatcherType = "none"
-runOnSave = false
+Refactored to separate conflicting internal variables in the TF-IDF engine (mypy warnings).
 
-[logger]
-level = "warning"
+src/ui_orchestrator.py
 
-# LLM
-OPENAI_API_KEY = "…"
-GEMINI_API_KEY = "…"
+Removed unused restore_latest function (F841).
 
-# GitHub prompts
-GH_TOKEN = "…"
-GH_REPO  = "owner/repo"
-GH_BRANCH = "main"
-GH_PROMPTS_PATH = "prompts.yaml"
+Eliminated mypy warnings by explicitly typing the details structure.
 
-# App
-APP_MODE = "student"          # or "admin"
-APP_ADMIN_PASSWORD = "0000"
-AUTO_START_MODE = "off"       # "restore" | "on" | "off"
-DISABLE_BG = "false"          # "true"로 끄기
+Cleaned up loose imports/guards and stabilized error log collection.
 
-7) 운영 로직 (결정 트리)
+src/ui_components.py
 
-앱 시작 → _quick_local_attach_only()
+Replaced callable with Callable[..., Any] and added explicit return types.
 
-로컬 인덱스 있으면 READY로 붙임
+src/rag/index_build.py
 
-없으면 관리자에게 깊은 점검 유도
+Added an explicit type (Dict[str, Any]) for the out variable from unpacking ZIP snapshots.
 
-관리자 · 깊은 점검 클릭 → _run_deep_check_and_attach()
+src/rag/__init__.py
 
-Drive 점검(가능할 때) → GitHub Release 복구 → diff로 변경 감지
+Removed export of a non-existent symbol (quick_precheck).
 
-변경 있음: 재빌드 의사결정 표출, 변경 없음: READY
+src/config.py
 
-질문 입력
+Refactored multiple Settings definitions into _SettingsP2/_SettingsP1/_SettingsSimple + single binding.
 
-prompts.yaml GitHub → Drive → Fallback 순으로 생성 후 LLM 호출(스트리밍)
+Eliminated multi-assignment warnings/ignores by declaring Settings: type[_BaseFields].
 
-8) 앞으로 할 일 (Next Actions)
+src/llm/providers.py
 
- 프롬프트 에디터([10C]): 관리자 화면에서 모드별 텍스트 편집 → GitHub 업로드 안정화
+Implemented dynamic import (importlib) for openai + safe response handling.
 
- 증거 주입 자동화: ‘이유문법/깨알문법’·영문 PDF를 자동 스니펫 추출해 EVIDENCE_*에 주입
+Removed unnecessary ignores in _secret() by using guard-based access.
 
- Deep Check UI: 변경 통계 카드 + “재빌드/유지” 버튼
+Formatted over-long lines (E501) into multi-line literals.
 
- 인덱스 빌더: 하위폴더 스캔·Markdown 우선, 증분 빌드(+체크포인트)
+src/backup/github_release.py
 
- 오류 메시지 개선: 학생에게 친절 메시지, 관리자에게 상세 로그
+Completely restructured and sectionalized: Added utility fallbacks, logger Protocol, and ensured get_secret always returns a string.
 
- 회귀 테스트: 말풍선/스트리밍/모드 UI 스냅샷 테스트
+Replaced attribute imports with module imports + runtime guards.
 
- 릴리즈 플로우: GitHub Actions로 prompts.yaml 유효성 + 인덱스 산출물 업로드 자동화
+Made release/asset selection/download/restore logic exception-safe.
 
-9) 배포/릴리즈 체크리스트
+app.py
 
- .streamlit/secrets.toml 채움(키/토큰/모드)
+Reinforced the section for the UI orchestrator with lazy imports and file path fallbacks.
 
- AUTO_START_MODE="off"로 최초 부팅 확인 → 건강 체크 OK
+Improved type and runtime stability with a spec.loader None guard.
 
- 관리자 로그인 → “🔎 자료 자동 점검(깊은 검사)” 수행 → READY
+src/ui_admin.py
 
- prompts.yaml GitHub 경로/브랜치 확인
+Guarded access to st.secrets, removing an ignore directive.
 
- 샘플 질문 3종 테스트(어법/문장/지문)
+1.3 CI/Actions System
+Basic CI: ruff → format → mypy → pytest (if tests exist).
 
- Release 업로드(인덱스 산출물) 후 복구·부팅 재검증
+Nightly: Publishes artifacts/pre-releases (optional) after all gates pass.
 
-10) 부록 — 문제해결 히스토리(요약)
+Release: Publishes an official release on v* tags or manual trigger after all gates pass.
 
-무한 로딩: 초기에 네트워크 I/O → 빠른 부팅 + 수동 깊은 점검
+Configured with caching, parallelism, least privilege permissions, and ready for branch protection integration.
 
-LLM 인자 불일치: 인자 자동 탐지로 호환
+2) Retrospective: Failures & Learnings
+"Failure is an asset" — We document causes and lessons clearly to inform future decisions.
 
-UI 불안정: 스타일 1회 주입으로 리런 호환
+Initial Failure to Detect Recurring Errors
 
-배경 토글: DISABLE_BG는 secrets에서만 제어
+Symptom: The same mypy/ruff errors reappeared in logs but were mistaken for new issues.
 
-11) 메모
+Cause: Section-based patches applied to multiple files simultaneously revealed missing headers (e.g., importlib) later in the process.
 
-프롬프트·인덱스 소스는 GitHub 단일 소스 지향. Drive는 읽기 전용 보조.
+Lesson/Improvement: Established and now adhere to the protocol: "First, check if the log is identical to the previous one, then report my assessment (mistake vs. new cause)."
 
-학생 경험을 우선하여 지연·에러 시에도 즉시 피드백 제공.
-""").strip() + "\n"
+Over-reliance on Attribute Imports
 
-out_path = "/mnt/data/PROJECT_STATUS.md"
-pathlib.Path(out_path).write_text(content, encoding="utf-8")
+Symptom: from src.common.utils import get_secret, logger led to attr-defined errors when a symbol was missing from the module.
 
-print(out_path, "written:", os.path.exists(out_path))
+Lesson: Adopted the module import + getattr guard pattern as the standard.
+
+Dependency on Unnecessary # type: ignore
+
+Symptom: Increase in unused-ignore directives, raising maintenance costs.
+
+Lesson: Eliminate static errors "at the source" using guards, explicit types, and Protocols.
+
+Skipping pytest Stage Due to Lack of Tests
+
+Symptom: Lack of an automated trust signal against functional regressions.
+
+Lesson: It is safer in the long run to have at least minimal smoke tests to fully engage the gate.
+
+3) Core Team Agreements (Mandatory)
+Single Section Replacement (START~END)
+
+Replace exactly one required section at a time. Modifying partial sections or multiple sections at once is prohibited.
+
+Functional Invariance First
+
+The primary goal is to preserve existing functionality while eliminating errors. Refactoring and optimization are separate rounds.
+
+Lint/Type Priority
+
+Ruff/mypy are gates. Adhere locally to the same standards enforced in the pipeline.
+
+Log Reporting Protocol
+
+Always first report whether the error is "the same or different" from the last one.
+
+Always include my opinion on whether it was "a mistake vs. needs new cause investigation."
+
+Guard Dynamic Dependencies
+
+For streamlit, SDKs, and external modules, standardize on module import + hasattr/getattr + fallbacks.
+
+Prohibit Unnecessary Ignores
+
+# type: ignore[...] is a last resort. Resolve issues with types, guards, or Protocols whenever possible.
+
+One Change at a Time
+
+Keep changes small to enable rapid CI cycles and simplify cause-and-effect tracing.
+
+Documentation & Sectioning
+
+All changes must be accompanied by section comments, a summary, and testing methods in the PR description.
+
+4) Roadmap: What's Next
+4.1 Immediate (Urgent)
+Add Smoke Tests (min. 2)
+
+tests/test_smoke_app.py: Smoke test for app entry point import and core function calls.
+
+tests/test_rag_engine.py: Verify in-memory index loading and simple query result shape.
+
+→ This is the minimum set required to activate the pytest gate.
+
+Apply Branch Protection Rules
+
+main Required checks: CI / gate (py3.10/3.11/3.12)
+
+Connect Release Environments (with approver settings).
+
+4.2 Short-Term (1–2 Sprints)
+Introduce pre-commit hooks (ruff/mypy/black-like) — to reduce local mistakes.
+
+Enhance Dependency Reproducibility
+
+Generate requirements.lock with pip-tools and prioritize its use in CI.
+
+Integrate Security Scanning
+
+Add GitHub CodeQL workflow.
+
+Attach SBOM (syft) to releases.
+
+4.3 Mid-Term
+Improve RAG Quality
+
+Make embedding models/tokenizers selectable options.
+
+Enhance chunking/metadata (section hints, page estimation precision).
+
+Introduce a simple evaluation script (Recall@k, MRR, etc.).
+
+Improve UI/UX
+
+Add more granular health check items and timestamps to the diagnostics panel.
+
+Implement download logs + auto-create issue template button.
+
+4.4 Long-Term
+Standardize Deployment (Containers / Infrastructure as Code).
+
+Observability (structured logging, trace IDs, opt-in usage statistics).
+
+Data Lifecycle Management (backup, encryption, retention policies).
+
+5) Plan for the Next Session
+Principle: "Minimize code changes, maximize trust signals."
+
+Add 2 smoke tests (Two separate PRs, one for each section change).
+
+Document and apply branch protection rules to the repository.
+
+Add pre-commit configuration.
+
+(Optional) Draft PRs for CodeQL and SBOM workflows.
+
+6) Operations & Development Checklist
+[ ] Capture the latest successful CI log and include it in release notes.
+
+[ ] Set retention period for nightly pre-releases (e.g., 14 days).
+
+[ ] Periodically check the validity of secrets/tokens (and set expiration alerts).
+
+[ ] Add a Developer Onboarding section to README (local setup, local CI reproduction commands).
+
+[ ] Document the error reporting process (issue templates) and log attachment rules.
+
+7) Appendix A — Summary of Changes (By Section)
+The following is an excerpt of representative items that were actually modified and sectionalized in this session.
+
+src/rag_engine.py
+
+[04] SECRETS/ID HELPERS — START~END
+
+[08] LOCAL TF-IDF QUERY ENGINE — START~END
+
+[09] PUBLIC API — START~END
+
+src/ui_orchestrator.py
+
+[01] lazy imports — START~END
+
+[03] render_index_orchestrator_panel — START~END
+
+src/ui_components.py
+
+[UI-01] TOP OF FILE — START~END
+
+[UI-06] LIST ROW — START~END
+
+src/rag/index_build.py
+
+[03] ZIP 스냅샷 생성/복원 — START~END
+
+src/rag/__init__.py
+
+[01] EXPORTS — START~END
+
+src/config.py
+
+[03] Settings 모델 — START~END (+ reinforced [03-BINDING])
+
+src/llm/providers.py
+
+[LLM-01] IMPORTS & SECRET HELPER — START~END
+
+[LLM-02] OpenAI raw call — START~END
+
+src/backup/github_release.py
+
+[01] IMPORTS & UTILS FALLBACK — START~END
+
+[02] CONSTANTS & PUBLIC EXPORTS — START~END
+
+[03] HEADERS / LOG HELPERS — START~END
+
+[04] RELEASE DISCOVERY — START~END
+
+[05] ASSET DOWNLOAD & EXTRACT — START~END
+
+[06] PUBLIC API: restore_latest — START~END
+
+app.py
+
+[11] 관리자 패널(지연 임포트 + 파일경로 폴백) — START~END
+
+.github/workflows/ci.yml · nightly.yml · release.yml
+
+Gate steps (ruff/mypy/pytest) + cache/permissions/concurrency settings.
+
+8) Appendix B — Local Reproduction Guide
+# 1) Install dependencies
+python -m pip install -U pip wheel
+pip install -r requirements.txt || true
+pip install -U ruff mypy pytest pytest-cov
+
+# 2) Run quality gates (same as CI)
+ruff check . --fix && ruff format .
+mypy .
+pytest -q --maxfail=1 --disable-warnings # when tests/ exists
+
+9) Appendix C — Log Reporting Template (Internal Team Protocol)
+Common template for PRs/Issues/DMs
+
+Summary: (1 line)
+
+Identical/Different: Identical / Different from the last log.
+
+My Assessment: (A mistake/omission vs. needs new cause investigation)
+
+Basis: (File/line/rule name)
+
+Patch Scope: (Section name, START~END, one section only)
+
+Verification: (ruff/mypy/pytest command + expected result)
+
+Conclusion
+The current state is stable, adhering to a "functionally unchanged + strict quality" standard, with automated gates in place for Nightly and Release workflows.
+The next session should start with adding smoke tests and hardening security/reproducibility. This will allow us to further elevate quality while maintaining development velocity.
