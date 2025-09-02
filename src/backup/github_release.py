@@ -146,19 +146,27 @@ def _latest_release(repo: str) -> Optional[dict]:
 
 
 def _pick_best_asset(rel: dict) -> Optional[dict]:
-    """릴리스 자산 중 우선순위(.zip > .tar.gz > 첫 번째)를 선택."""
+    """릴리스 자산 중 우선순위(.zip > .tar.gz/.tgz > .gz > 첫 번째)를 선택."""
     assets = rel.get("assets") or []
     if not assets:
         return None
+    # 1) zip
     for a in assets:
         if str(a.get("name", "")).lower().endswith(".zip"):
             return a
+    # 2) tar.gz / tgz
     for a in assets:
-        if str(a.get("name", "")).lower().endswith(".tar.gz"):
+        n = str(a.get("name", "")).lower()
+        if n.endswith(".tar.gz") or n.endswith(".tgz"):
             return a
+    # 3) 단일 gz (예: chunks.jsonl.gz)
+    for a in assets:
+        n = str(a.get("name", "")).lower()
+        if n.endswith(".gz"):
+            return a
+    # 4) 그 외 첫 번째
     return assets[0] if assets else None
 # [04] END =====================================================================
-
 
 # ===== [05] ASSET DOWNLOAD & EXTRACT =========================================  # [05] START
 def _download_asset(asset: dict) -> Optional[bytes]:
@@ -182,8 +190,47 @@ def _extract_zip(data: bytes, dest_dir: Path) -> bool:
             zf.extractall(dest_dir)
         return True
     except Exception as e:
-        _log(f"압축 해제 실패: {type(e).__name__}: {e}")
+        _log(f"압축 해제 실패(zip): {type(e).__name__}: {e}")
         return False
+
+
+def _extract_targz(data: bytes, dest_dir: Path) -> bool:
+    """TAR.GZ / TGZ 바이트를 dest_dir에 풀기."""
+    try:
+        import tarfile
+        with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tf:
+            tf.extractall(dest_dir)
+        return True
+    except Exception as e:
+        _log(f"압축 해제 실패(tar.gz): {type(e).__name__}: {e}")
+        return False
+
+
+def _extract_gz_to_file(asset_name: str, data: bytes, dest_dir: Path) -> bool:
+    """단일 .gz(예: chunks.jsonl.gz)를 dest_dir/<basename>으로 풀기."""
+    try:
+        import gzip  # 지역 임포트로 상단 구획 변경 불필요
+        base = asset_name[:-3] if asset_name.lower().endswith(".gz") else asset_name
+        out_path = dest_dir / base
+        with gzip.GzipFile(fileobj=io.BytesIO(data), mode="rb") as gf:
+            out_path.write_bytes(gf.read())
+        return True
+    except Exception as e:
+        _log(f"압축 해제 실패(gz): {type(e).__name__}: {e}")
+        return False
+
+
+def _extract_auto(asset_name: str, data: bytes, dest_dir: Path) -> bool:
+    """자산 이름으로 형식을 유추하여 적절히 해제."""
+    n = (asset_name or "").lower()
+    if n.endswith(".zip"):
+        return _extract_zip(data, dest_dir)
+    if n.endswith(".tar.gz") or n.endswith(".tgz"):
+        return _extract_targz(data, dest_dir)
+    if n.endswith(".gz"):
+        return _extract_gz_to_file(asset_name, data, dest_dir)
+    # 알 수 없는 형식: zip 시도(실패 시 False)
+    return _extract_zip(data, dest_dir)
 # [05] END =====================================================================
 
 
