@@ -416,13 +416,10 @@ def _mount_background(
     """배경 렌더 OFF(호출 시 즉시 return)."""
     return
 
-
-# ===== [PATCH 02 / app.py / [09] 부팅 훅(오케스트레이터 오토플로우 호출) / L397–L643] — START =====
-
 # ===== [PATCH / app.py / [09] 부팅 훅(오케스트레이터 오토플로우 호출) / L0397–L0643] — START =====
 # [09] 부팅 훅(오케스트레이터 오토플로우 호출) ================================
 def _boot_autoflow_hook():
-    """앱 부팅 시 1회 오토 플로우 실행(관리자=대화형, 학생=자동)"""
+    """앱 부팅 시 1회 오토 플로우 실행(관리자=대화형, 학생=자동)."""
     try:
         mod = None
         for name in ("src.ui_orchestrator", "ui_orchestrator"):
@@ -438,7 +435,7 @@ def _boot_autoflow_hook():
 
 
 def _set_brain_status(code: str, msg: str, source: str = "", attached: bool = False):
-    """세션 상태를 일관된 방식으로 세팅한다."""
+    """상태 배지/진행선/진단 패널이 공통으로 참조하는 세션 값을 세팅한다."""
     if st is None:
         return
     ss = st.session_state
@@ -446,6 +443,7 @@ def _set_brain_status(code: str, msg: str, source: str = "", attached: bool = Fa
     ss["brain_status_msg"] = msg
     ss["brain_source"] = source
     ss["brain_attached"] = bool(attached)
+    # 편의 플래그(복구/재빌드 권장 노출 등에 사용)
     ss["restore_recommend"] = code in ("MISSING", "ERROR")
     ss.setdefault("index_decision_needed", False)
     ss.setdefault("index_change_stats", {})
@@ -453,11 +451,11 @@ def _set_brain_status(code: str, msg: str, source: str = "", attached: bool = Fa
 
 def _quick_local_attach_only():
     """빠른 부팅: 네트워크 호출 없이 로컬 신호만 확인.
-    규칙: .ready + chunks.jsonl(>0B) 동시 존재 시에만 READY로 승격(SSOT).
+    SSOT 규칙: .ready + chunks.jsonl(>0B) 동시 존재 시에만 READY로 승격.
     """
     if st is None:
         return False
-    
+
     chunks = PERSIST_DIR / "chunks.jsonl"
     ready = PERSIST_DIR / ".ready"
 
@@ -466,25 +464,26 @@ def _quick_local_attach_only():
         if ready.exists() and chunks_ok:
             _set_brain_status("READY", "로컬 인덱스 연결됨(SSOT: ready+chunks)", "local", attached=True)
             return True
-    except Exception:
-        pass
+    except Exception as e:
+        _errlog("빠른 로컬 척도 확인 실패", where="[09]_quick_local_attach_only", exc=e)
 
     _set_brain_status("MISSING", "인덱스 없음(관리자에서 '업데이트 점검' 필요)", "", attached=False)
     return False
 
 
 def _run_deep_check_and_attach():
-    """관리자 버튼 클릭 시 실행되는 네트워크 검사+복구."""
+    """관리자 버튼으로 실행되는 딥체크(Drive 프리체크/변경 감지, GitHub 복구)."""
     if st is None:
         return
     ss = st.session_state
+    # 동적 임포트(런타임 의존을 완화)
     idx = _try_import("src.rag.index_build", ["quick_precheck", "diff_with_manifest"])
     rel = _try_import("src.backup.github_release", ["restore_latest"])
     quick = idx.get("quick_precheck")
     diff = idx.get("diff_with_manifest")
     restore_latest = rel.get("restore_latest")
 
-    # 0) 로컬 먼저
+    # 0) 로컬이 이미 준비라면 그대로 연결(변경 감지만 수행)
     if _is_brain_ready():
         stats = {}
         changed = False
@@ -495,13 +494,13 @@ def _run_deep_check_and_attach():
                 total = int(stats.get("added", 0)) + int(stats.get("changed", 0)) + int(stats.get("removed", 0))
                 changed = total > 0
             except Exception as e:
-                _errlog(f"diff 실패: {e}", where="[deep_check]")
+                _errlog("diff 실패", where="[09]_run_deep_check_and_attach", exc=e)
         msg = "로컬 인덱스 연결됨" + ("(신규/변경 감지)" if changed else "(변경 없음/판단 불가)")
         _set_brain_status("READY", msg, "local", attached=True)
         ss["index_change_stats"] = stats
         return
 
-    # 1) 빠른 프리체크(Drive 폴더/확장자/크기)
+    # 1) Drive 빠른 프리체크(폴더/확장자/크기 등)
     if callable(quick):
         try:
             ok, info = quick()
@@ -510,7 +509,7 @@ def _run_deep_check_and_attach():
                 _set_brain_status("ATTACH", "Drive 자료 감지됨(관리자 승인 필요)", "drive", attached=False)
                 return
         except Exception as e:
-            _errlog(f"quick_precheck 실패: {e}", where="[deep_check]")
+            _errlog("quick_precheck 실패", where="[09]_run_deep_check_and_attach", exc=e)
 
     # 2) (옵션) GitHub 최신 백업 복구
     if callable(restore_latest):
@@ -520,12 +519,11 @@ def _run_deep_check_and_attach():
                 _set_brain_status("READY", "GitHub 최신 백업 복구됨", "github", attached=True)
                 return
         except Exception as e:
-            _errlog(f"restore_latest 실패: {e}", where="[deep_check]")
+            _errlog("restore_latest 실패", where="[09]_run_deep_check_and_attach", exc=e)
 
     # 3) 최종 미준비
     _set_brain_status("MISSING", "인덱스 없음(관리자에서 '업데이트 점검' 필요)", "", attached=False)
 # ===== [PATCH / app.py / [09] 부팅 훅(오케스트레이터 오토플로우 호출) / L0397–L0643] — END =====
-
 
 # ======================= [10] 부팅/인덱스 준비 — START ========================
 def _set_brain_status(code: str, msg: str, source: str = "", attached: bool = False):
