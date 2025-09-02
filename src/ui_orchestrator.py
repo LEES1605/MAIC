@@ -216,6 +216,7 @@ def render_index_orchestrator_panel() -> None:
     - 재인덱싱 버튼을 '항상' 노출(필요 시 안내)
     - READY(.ready + chunks.jsonl>0B) 이전에는 '완료' 스텝 잠금(🔒)
     - 단계별 설명 팝오버/툴팁 제공
+    - 재인덱싱 우선순위: services.index.reindex() → 기존 후보군 폴백
     """
     import time
     from pathlib import Path
@@ -398,11 +399,18 @@ def render_index_orchestrator_panel() -> None:
 
     # ---------- reindex (always visible) ----------
     if do_reindex:
-        idx = _try_import("src.rag.index_build", [
-            "rebuild_index", "build_index", "rebuild", "index_all", "build_all", "build_index_with_checkpoint"
-        ])
-        # 가장 가능성 높은 함수부터 시도
-        fn = next((idx[n] for n in ("rebuild_index","build_index","rebuild","index_all","build_all") if callable(idx.get(n))), None)
+        # 1) 우선 services.index.reindex() 시도
+        svc = _try_import("src.services.index", ["reindex"])
+        fn = svc.get("reindex")
+
+        # 2) 없으면 기존 후보군 폴백
+        if not callable(fn):
+            idx = _try_import("src.rag.index_build", [
+                "rebuild_index", "build_index", "rebuild", "index_all", "build_all", "build_index_with_checkpoint"
+            ])
+            fn = next((idx[n] for n in ("rebuild_index","build_index","rebuild","index_all","build_all","build_index_with_checkpoint")
+                       if callable(idx.get(n))), None)
+
         if callable(fn):
             with st.spinner("재인덱싱(전체) 실행 중…"):
                 ok = False
