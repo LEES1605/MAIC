@@ -215,8 +215,7 @@ def render_index_orchestrator_panel() -> None:
     관리자 진단/지식관리 패널 렌더링.
     - 재인덱싱 버튼을 '항상' 노출(필요 시 안내)
     - READY(.ready + chunks.jsonl>0B) 이전에는 '완료' 스텝 잠금(🔒)
-    - GitHub 최신 릴리스 표기(get_latest_release) 및 복구(restore_latest) 연계
-    - mypy: 불필요한 "type: ignore" 주석 제거
+    - 단계별 설명 팝오버/툴팁 제공
     """
     import time
     from pathlib import Path
@@ -263,22 +262,53 @@ def render_index_orchestrator_panel() -> None:
     PERSIST = _persist_dir()
     ready = _local_ready(PERSIST)
 
-    # ---------- header & stepper ----------
-    st.subheader("🛠 진단 도구")
+    # ---------- steps & tips ----------
     steps = ["프리검사", "백업훑", "변경검지", "다운로드", "복구/해체", "연결성", "완료"]
+    STEP_TIPS = {
+        "프리검사": "로컬 경로 및 신호(.ready/chunks.jsonl) 점검",
+        "백업훑": "GitHub/Drive 백업 존재 여부·최신성 조회(네트워크는 버튼 때만)",
+        "변경검지": "원천(Drive) 대비 증감·변경 파일 탐지(diff)",
+        "다운로드": "릴리스 자산(.zip/.tar.gz/.gz) 다운로드",
+        "복구/해체": "압축 해제 후 로컬에 복구/부착",
+        "연결성": "인덱스 attach, 모델/키 확인",
+        "완료": "학생 질의 가능(READY) 최종 확인",
+    }
+
+    # ✅ 위젯 생성 '이전'에 상태 보정(READY 전 '완료' 선택을 원천 차단)
     st.session_state.setdefault("_orchestrator_step", steps[0])
-
-    # segmented_control가 없을 수도 있는 환경 고려
-    try:
-        sel = st.segmented_control("단계", steps, key="_orchestrator_step")
-    except Exception:
-        sel = st.radio("단계", steps, key="_orchestrator_step", horizontal=True)
-
-    # ✅ READY 전에는 '완료' 스텝 잠금
-    if not ready and sel == "완료":
-        st.warning("아직 인덱스가 준비되지 않았습니다. 먼저 복구/연결을 완료해 주세요. (🔒 잠금)")
+    if not ready and st.session_state["_orchestrator_step"] == "완료":
         st.session_state["_orchestrator_step"] = steps[0]
-        sel = steps[0]
+
+    # ---------- header & stepper ----------
+    left, right = st.columns([1, 1])
+    with left:
+        st.subheader("🛠 진단 도구")
+    with right:
+        # 단계 설명 팝오버(클릭식). 환경에 따라 popover 미지원 시 expander로 폴백
+        try:
+            with st.popover("ⓘ 단계 설명", use_container_width=False):
+                st.markdown("| 단계 | 설명 |")
+                st.markdown("|---|---|")
+                for s in steps:
+                    st.markdown(f"| {s} | {STEP_TIPS.get(s,'—')} |")
+        except Exception:
+            with st.expander("ⓘ 단계 설명", expanded=False):
+                st.markdown("| 단계 | 설명 |")
+                st.markdown("|---|---|")
+                for s in steps:
+                    st.markdown(f"| {s} | {STEP_TIPS.get(s,'—')} |")
+
+    # segmented_control가 없는 환경에서는 radio로 폴백
+    try:
+        sel = st.segmented_control(
+            "단계", steps, key="_orchestrator_step",
+            help="단계 위 또는 ‘ⓘ 단계 설명’을 눌러 각 단계의 의미를 확인하세요."
+        )
+    except Exception:
+        sel = st.radio(
+            "단계", steps, key="_orchestrator_step", horizontal=True,
+            help="‘ⓘ 단계 설명’을 눌러 각 단계의 의미를 확인하세요."
+        )
 
     # ---------- status summary ----------
     with st.container(border=True):
