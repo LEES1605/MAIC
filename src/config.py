@@ -196,14 +196,17 @@ class _SettingsSimple(_BaseFields):
         self.PROMPTS_FILE_NAME = _get("PROMPTS_FILE_NAME", "prompts.yaml")
 
 
-# --- 최종 바인딩: Settings 심볼은 "한 번만" 정의 --------------------------------
+# --- 최종 바인딩: Settings 심볼은 "한 번만" 정의 --------------------------------  # [03-BINDING] START
+# 여러 구현(_SettingsP2/_SettingsP1/_SettingsSimple) 중 하나의 "클래스"를 가리키는 심볼입니다.
+# 명시적으로 type[_BaseFields]로 선언하여 mypy의 다중 할당 경고를 해소합니다.
+Settings: type[_BaseFields]
 if _IMPL == "P2":
-    Settings = _SettingsP2  # type: ignore[assignment]
+    Settings = _SettingsP2
 elif _IMPL == "P1":
-    Settings = _SettingsP1  # type: ignore[assignment]
+    Settings = _SettingsP1
 else:
-    Settings = _SettingsSimple  # type: ignore[assignment]
+    Settings = _SettingsSimple
 
 # 인스턴스(앱 전역에서 import 하여 사용)
 settings = Settings()
-# ===== [03] END ===============================================================
+# [03-BINDING] END
