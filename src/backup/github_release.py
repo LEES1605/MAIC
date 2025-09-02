@@ -8,15 +8,15 @@ import shutil
 import tempfile
 import zipfile
 from pathlib import Path
-from typing import Any, Dict, Optional
 from types import ModuleType
+from typing import Any, Dict, Optional
 
 import requests
 
 # streamlit은 있을 수도/없을 수도 있다.
-# - mypy 충돌 방지: st 변수를 먼저 Any로 선언해 두고, 성공 시 모듈을 대입/실패 시 None을 대입
+# - mypy 충돌 방지: st 변수를 먼저 Any로 선언하고, 런타임에 모듈/None을 대입
 from typing import Any as _AnyForSt
-st: _AnyForSt  # st는 모듈 또는 None을 담는 컨테이너(런타임에 결정)
+st: _AnyForSt
 try:
     import streamlit as _st_mod
     st = _st_mod
@@ -24,7 +24,6 @@ except Exception:
     st = None  # Optional[Any] 취급 → mypy OK
 
 # 공용 유틸: 모듈 동적 임포트 후 존재 확인 + 폴백 제공
-# - mypy 충돌 방지: _utils를 먼저 ModuleType | None으로 선언
 _utils: ModuleType | None
 try:
     _utils = importlib.import_module("src.common.utils")
@@ -33,14 +32,15 @@ except Exception:
 
 
 def get_secret(name: str, default: str = "") -> str:
-    """Streamlit secrets → env → default 순으로 조회."""
+    """Streamlit secrets → env → default 순으로 조회(반환은 항상 str)."""
     # 1) src.common.utils.get_secret 우선
     if _utils is not None:
         func = getattr(_utils, "get_secret", None)
         if callable(func):
             try:
                 val = func(name, default)
-                return val if isinstance(val, str) else str(val)
+                # 외부 util이 Optional/비문자열을 줄 수 있으므로 안전 변환
+                return default if val is None else (val if isinstance(val, str) else str(val))
             except Exception:
                 pass
 
@@ -53,11 +53,12 @@ def get_secret(name: str, default: str = "") -> str:
     except Exception:
         pass
 
-    # 3) 환경변수
-    return os.getenv(name, default)
+    # 3) 환경변수 (Optional → str로 강제)
+    env_v = os.getenv(name)
+    return env_v if env_v is not None else default
 
 
-def logger():
+def logger() -> Any:
     """src.common.utils.logger()가 있으면 사용, 없으면 no-op 로거."""
     if _utils is not None:
         func = getattr(_utils, "logger", None)
@@ -74,7 +75,6 @@ def logger():
 
     return _Logger()
 # [01] END =====================================================================
-
 
 # ===== [02] CONSTANTS & PUBLIC EXPORTS =======================================  # [02] START
 API = "https://api.github.com"
