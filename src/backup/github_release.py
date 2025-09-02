@@ -17,35 +17,60 @@ try:
 except Exception:
     st = None  # pragma: no cover
 
-# 공용 유틸(없을 수도 있음) — 안전 폴백 제공
+# 공용 유틸: "속성 임포트" 금지 → 모듈 임포트 후 존재 확인 + 폴백 제공
 try:
-    # 존재하지 않거나 심볼이 없을 수 있으므로 예외로 감쌉니다.
-    from src.common.utils import get_secret, logger  # noqa: F401
+    import src.common.utils as _utils  # type: ignore[import-not-found]
 except Exception:
-    def get_secret(name: str, default: str = "") -> str:
-        """Streamlit secrets → 환경변수 순으로 조회; 없으면 기본값."""
+    _utils = None  # 모듈 자체가 없을 수 있음
+
+
+def get_secret(name: str, default: str = "") -> str:
+    """Streamlit secrets → env → default 순으로 조회."""
+    # 1) src.common.utils.get_secret 우선
+    if _utils is not None and hasattr(_utils, "get_secret"):
         try:
-            if st is not None and hasattr(st, "secrets"):
-                v = st.secrets.get(name)  # type: ignore[call-arg]
-                if v is not None:
-                    return v if isinstance(v, str) else str(v)
+            val = _utils.get_secret(name, default)  # type: ignore[no-any-return]
+            return val if isinstance(val, str) else str(val)
         except Exception:
             pass
-        return os.getenv(name, default)
+
+    # 2) streamlit.secrets
+    try:
+        if st is not None and hasattr(st, "secrets"):
+            v = st.secrets.get(name)  # 불필요 ignore 제거(가드 후 접근)
+            if v is not None:
+                return v if isinstance(v, str) else str(v)
+    except Exception:
+        pass
+
+    # 3) 환경변수
+    return os.getenv(name, default)
+
+
+def logger():
+    """src.common.utils.logger()가 있으면 사용, 없으면 no-op 로거."""
+    if _utils is not None and hasattr(_utils, "logger"):
+        try:
+            return _utils.logger()
+        except Exception:
+            pass
 
     class _Logger:
-        def info(self, *a: Any, **k: Any) -> None: ...
-        def warning(self, *a: Any, **k: Any) -> None: ...
-        def error(self, *a: Any, **k: Any) -> None: ...
+        def info(self, *a: Any, **k: Any) -> None:
+            pass
 
-    def logger() -> _Logger:
-        return _Logger()
+        def warning(self, *a: Any, **k: Any) -> None:
+            pass
+
+        def error(self, *a: Any, **k: Any) -> None:
+            pass
+
+    return _Logger()
 # [01] END =====================================================================
 
 
 # ===== [02] CONSTANTS & PUBLIC EXPORTS =======================================  # [02] START
 API = "https://api.github.com"
-
 __all__ = ["restore_latest"]
 # [02] END =====================================================================
 
@@ -66,7 +91,6 @@ def _headers(binary: bool = False) -> Dict[str, str]:
     if token:
         h["Authorization"] = f"token {token}"
     if binary:
-        # 자산 다운로드 시에는 octet-stream이 필요
         h["Accept"] = "application/octet-stream"
     return h
 
@@ -119,7 +143,6 @@ def _pick_best_asset(rel: dict) -> Optional[dict]:
 # ===== [05] ASSET DOWNLOAD & EXTRACT =========================================  # [05] START
 def _download_asset(asset: dict) -> Optional[bytes]:
     """GitHub 릴리스 자산을 내려받아 바이트로 반환. 실패 시 None."""
-    # GitHub API 다운로드 URL 우선(use "url"), 없으면 browser_download_url 사용
     url = asset.get("url") or asset.get("browser_download_url")
     if not url:
         return None
