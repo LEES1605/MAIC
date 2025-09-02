@@ -293,7 +293,9 @@ def restore_latest(dest_dir: str | Path) -> bool:
         src_root = tmp
         if len(children) == 1 and children[0].is_dir():
             src_root = children[0]
-            _log(f"평탄화 적용: 최상위 폴더 '{src_root.name}' 내부를 루트로 승격")
+            # 길었던 로그를 두 줄로 분리해 E501 회피
+            _log("평탄화 적용: 최상위 폴더 내부를 루트로 승격")
+            _log(f"승격 대상 폴더: '{src_root.name}'")
 
         # 3) 복사(기존 동일 경로는 교체). '폴더 자체'가 아니라 '폴더 내부'를 복사한다.
         for p in src_root.iterdir():
@@ -309,7 +311,9 @@ def restore_latest(dest_dir: str | Path) -> bool:
                 else:
                     shutil.copy2(p, target)
             except Exception as e:
-                _log(f"파일 복사 실패: {p.name} → {target.name}: {type(e).__name__}: {e}")
+                # 길었던 로그를 두 줄로 분리해 E501 회피
+                _log("파일 복사 실패(일부 항목). 다음 라인에 상세 표시.")
+                _log(f"원본: {p.name} → 대상: {target.name} — {type(e).__name__}: {e}")
                 return False
 
     # 4) SSOT 보정: chunks.jsonl만 존재하고 .ready가 없으면 생성
