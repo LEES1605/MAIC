@@ -242,8 +242,10 @@ def restore_latest(dest_dir: str | Path) -> bool:
         성공 시 True, 실패 시 False (예외를 올리지 않음)
 
     비고:
-        - 기존 파일/디렉터리는 동일 경로일 경우 교체됩니다.
-        - Streamlit 환경이면 진행 로그를 UI에 함께 남깁니다.
+        - .zip/.tar.gz/.tgz/.gz 모두 처리
+        - 압축 해제 결과가 '최상위 단일 폴더'일 경우, 그 폴더를 한 겹 평탄화하여
+          폴더 내부의 파일/디렉터리를 dest_dir 바로 아래로 복사한다.
+        - 복원 후 chunks.jsonl이 있고 .ready가 없으면 자동 생성(SSOT 보정)
     """
     dest = Path(dest_dir).expanduser()
     dest.mkdir(parents=True, exist_ok=True)
@@ -274,24 +276,38 @@ def restore_latest(dest_dir: str | Path) -> bool:
     # 임시 디렉터리를 사용해 원자적 교체에 가깝게 복원
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td)
+
+        # 1) 압축 해제 (.zip/.tar.gz/.tgz/.gz 자동 판별)
         ok = _extract_auto(asset_name, data, tmp)
         if not ok:
             return False
 
-        # 복사(기존 동일 경로는 교체)
-        for p in tmp.iterdir():
-            target = dest / p.name
-            if target.exists():
-                if target.is_dir():
-                    shutil.rmtree(target)
-                else:
-                    target.unlink()
-            if p.is_dir():
-                shutil.copytree(p, target)
-            else:
-                shutil.copy2(p, target)
+        # 2) '최상위 단일 폴더' 감지 → 평탄화 대상 루트 결정
+        #    (예: tmp/maic-2025-08-29/chunks.jsonl  →  dest/chunks.jsonl)
+        children = [p for p in tmp.iterdir() if p.name not in (".DS_Store",) and not p.name.startswith("__MACOSX")]
+        src_root = tmp
+        if len(children) == 1 and children[0].is_dir():
+            src_root = children[0]
+            _log(f"평탄화 적용: 최상위 폴더 '{src_root.name}' 내부를 루트로 승격")
 
-    # SSOT 보정: chunks.jsonl만 존재하고 .ready가 없으면 생성
+        # 3) 복사(기존 동일 경로는 교체). '폴더 자체'가 아니라 '폴더 내부'를 복사한다.
+        for p in src_root.iterdir():
+            target = dest / p.name
+            try:
+                if target.exists():
+                    if target.is_dir():
+                        shutil.rmtree(target)
+                    else:
+                        target.unlink()
+                if p.is_dir():
+                    shutil.copytree(p, target)
+                else:
+                    shutil.copy2(p, target)
+            except Exception as e:
+                _log(f"파일 복사 실패: {p.name} → {target.name}: {type(e).__name__}: {e}")
+                return False
+
+    # 4) SSOT 보정: chunks.jsonl만 존재하고 .ready가 없으면 생성
     try:
         chunks = dest / "chunks.jsonl"
         ready = dest / ".ready"
@@ -302,7 +318,8 @@ def restore_latest(dest_dir: str | Path) -> bool:
 
     _log("복원이 완료되었습니다.")
     return True
-# [06] END =====================================================================
+# ===== [06] PUBLIC API: restore_latest =======================================  # [06] END
+
 
 # ===== [07] PUBLIC API: get_latest_release ===================================  # [07] START
 def get_latest_release(repo: str | None = None) -> Optional[dict]:
