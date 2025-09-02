@@ -1,4 +1,4 @@
-# ===================== src/backup/github_release.py — FULL REPLACEMENT ==================
+# ===== [01] IMPORTS & UTILS FALLBACK ========================================  # [01] START
 from __future__ import annotations
 
 import io
@@ -7,7 +7,7 @@ import shutil
 import tempfile
 import zipfile
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 import requests
 
@@ -19,55 +19,81 @@ except Exception:
 
 # 공용 유틸(없을 수도 있음) — 안전 폴백 제공
 try:
-    from src.common.utils import get_secret, logger  # type: ignore[assignment]
+    # 존재하지 않거나 심볼이 없을 수 있으므로 예외로 감쌉니다.
+    from src.common.utils import get_secret, logger  # noqa: F401
 except Exception:
     def get_secret(name: str, default: str = "") -> str:
+        """Streamlit secrets → 환경변수 순으로 조회; 없으면 기본값."""
+        try:
+            if st is not None and hasattr(st, "secrets"):
+                v = st.secrets.get(name)  # type: ignore[call-arg]
+                if v is not None:
+                    return v if isinstance(v, str) else str(v)
+        except Exception:
+            pass
         return os.getenv(name, default)
 
     class _Logger:
-        def info(self, *a, **k): pass
-        def warning(self, *a, **k): pass
-        def error(self, *a, **k): pass
+        def info(self, *a: Any, **k: Any) -> None: ...
+        def warning(self, *a: Any, **k: Any) -> None: ...
+        def error(self, *a: Any, **k: Any) -> None: ...
 
     def logger() -> _Logger:
         return _Logger()
+# [01] END =====================================================================
 
+
+# ===== [02] CONSTANTS & PUBLIC EXPORTS =======================================  # [02] START
 API = "https://api.github.com"
 
+__all__ = ["restore_latest"]
+# [02] END =====================================================================
 
+
+# ===== [03] HEADERS / LOG HELPERS ============================================  # [03] START
 def _repo() -> str:
+    """대상 저장소 'owner/repo' 문자열을 조회."""
     return get_secret("GITHUB_REPO", "") or os.getenv("GITHUB_REPO", "")
 
 
 def _headers(binary: bool = False) -> Dict[str, str]:
+    """GitHub API 호출용 기본 헤더 구성."""
     token = get_secret("GITHUB_TOKEN", "") or os.getenv("GITHUB_TOKEN", "")
-    h = {"Accept": "application/vnd.github+json", "User-Agent": "maic-backup"}
+    h: Dict[str, str] = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "maic-backup",
+    }
     if token:
         h["Authorization"] = f"token {token}"
     if binary:
+        # 자산 다운로드 시에는 octet-stream이 필요
         h["Accept"] = "application/octet-stream"
     return h
 
 
 def _log(msg: str) -> None:
+    """가능하면 logger/streamlit로도 메시지를 출력."""
     try:
         logger().info(msg)
     except Exception:
         pass
-    if st:
+    if st is not None:
         try:
             st.write(msg)
         except Exception:
             pass
+# [03] END =====================================================================
 
 
+# ===== [04] RELEASE DISCOVERY =================================================  # [04] START
 def _latest_release(repo: str) -> Optional[dict]:
+    """가장 최신 릴리스를 조회. 실패 시 None."""
     if not repo:
         _log("GITHUB_REPO가 설정되지 않았습니다.")
         return None
     url = f"{API}/repos/{repo}/releases/latest"
     try:
-        r = requests.get(url, headers=_headers(), timeout=10)
+        r = requests.get(url, headers=_headers(), timeout=15)
         r.raise_for_status()
         return r.json()
     except Exception as e:
@@ -76,26 +102,29 @@ def _latest_release(repo: str) -> Optional[dict]:
 
 
 def _pick_best_asset(rel: dict) -> Optional[dict]:
+    """릴리스 자산 중 우선순위(.zip > .tar.gz > 첫 번째)를 선택."""
     assets = rel.get("assets") or []
     if not assets:
         return None
-    # 우선순위: .zip > .tar.gz > 첫 번째
     for a in assets:
         if str(a.get("name", "")).lower().endswith(".zip"):
             return a
     for a in assets:
         if str(a.get("name", "")).lower().endswith(".tar.gz"):
             return a
-    return assets[0]
+    return assets[0] if assets else None
+# [04] END =====================================================================
 
 
+# ===== [05] ASSET DOWNLOAD & EXTRACT =========================================  # [05] START
 def _download_asset(asset: dict) -> Optional[bytes]:
+    """GitHub 릴리스 자산을 내려받아 바이트로 반환. 실패 시 None."""
     # GitHub API 다운로드 URL 우선(use "url"), 없으면 browser_download_url 사용
     url = asset.get("url") or asset.get("browser_download_url")
     if not url:
         return None
     try:
-        r = requests.get(url, headers=_headers(binary=True), timeout=30)
+        r = requests.get(url, headers=_headers(binary=True), timeout=60)
         r.raise_for_status()
         return r.content
     except Exception as e:
@@ -104,6 +133,7 @@ def _download_asset(asset: dict) -> Optional[bytes]:
 
 
 def _extract_zip(data: bytes, dest_dir: Path) -> bool:
+    """ZIP 바이트를 dest_dir에 풀기. 성공 True/실패 False."""
     try:
         with zipfile.ZipFile(io.BytesIO(data)) as zf:
             zf.extractall(dest_dir)
@@ -111,15 +141,23 @@ def _extract_zip(data: bytes, dest_dir: Path) -> bool:
     except Exception as e:
         _log(f"압축 해제 실패: {type(e).__name__}: {e}")
         return False
+# [05] END =====================================================================
 
 
+# ===== [06] PUBLIC API: restore_latest =======================================  # [06] START
 def restore_latest(dest_dir: str | Path) -> bool:
     """최신 GitHub Release에서 아티팩트를 내려받아 dest_dir에 복원.
-    반환: 성공 True / 실패 False (예외를 올리지 않음)
-    예상 사용처: app.py에서 로컬 인덱스가 없을 때 자동 복원
+
+    반환:
+        성공 시 True, 실패 시 False (예외를 올리지 않음)
+
+    비고:
+        - 기존 파일/디렉터리는 동일 경로일 경우 교체됩니다.
+        - Streamlit 환경이면 진행 로그를 UI에 함께 남깁니다.
     """
     dest = Path(dest_dir).expanduser()
     dest.mkdir(parents=True, exist_ok=True)
+
     repo = _repo()
     if not repo:
         _log("restore_latest: GITHUB_REPO 미설정")
@@ -142,12 +180,13 @@ def restore_latest(dest_dir: str | Path) -> bool:
     if not data:
         return False
 
-    # 임시 디렉터리 사용 후 교체
+    # 임시 디렉터리를 사용해 원자적 교체에 가깝게 복원
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td)
         ok = _extract_zip(data, tmp)
         if not ok:
             return False
+
         # 복사(기존 동일 경로는 교체)
         for p in tmp.iterdir():
             target = dest / p.name
@@ -163,4 +202,4 @@ def restore_latest(dest_dir: str | Path) -> bool:
 
     _log("복원이 완료되었습니다.")
     return True
-# ===================== end of file =====================================================
+# [06] END =====================================================================
