@@ -1,28 +1,101 @@
+# ===== [00] META =============================================================  # [00] START
 name: Release
-
 on:
   push:
     tags:
-      - "v*.*.*"        # 예: v1.2.3
+      - "v*"
   workflow_dispatch:
-
+    inputs:
+      version:
+        description: "Release version (e.g., v1.2.3)"
+        required: true
 permissions:
-  contents: write   # 릴리스 작성에 필요
+  contents: write
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+# [00] END
 
+# ===== [01] JOB: Gate (Lint/Type/Test) ======================================  # [01] START
 jobs:
-  build-release:
+  gate:
+    name: Gate (ruff + mypy + pytest) • py${{ matrix.python }}
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python: [ "3.10", "3.11", "3.12" ]
     steps:
       - uses: actions/checkout@v4
 
-      - name: Zip artifact
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-${{ matrix.python }}-${{ hashFiles('**/requirements*.txt') }}
+          restore-keys: |
+            pip-${{ runner.os }}-${{ matrix.python }}-
+
+      - name: Install deps
+        run: |
+          python -m pip install -U pip wheel
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          pip install -U ruff mypy pytest pytest-cov
+
+      - name: Ruff — Lint/Format
+        run: |
+          ruff check . --fix
+          ruff format .
+
+      - name: mypy — strict
+        run: |
+          mypy --version
+          mypy .
+
+      - name: pytest (if tests exist)
+        if: hashFiles('tests/**/*.py') != ''
+        run: |
+          pytest -q --maxfail=1 --disable-warnings
+# [01] END
+
+# ===== [02] JOB: Build & Release ============================================ # [02] START
+  publish:
+    name: Build & Publish Release
+    needs: [ gate ]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: ver
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build artifacts
         run: |
           mkdir -p dist
-          zip -r dist/maic-${GITHUB_REF_NAME}.zip . -x ".git/*" ".github/*" "__pycache__/*" ".venv/*"
+          git archive --format zip --output dist/maic-${{ steps.ver.outputs.tag }}.zip HEAD
+          (cd dist && sha256sum maic-${{ steps.ver.outputs.tag }}.zip > maic-${{ steps.ver.outputs.tag }}.zip.sha256)
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v1
         with:
-          files: dist/maic-${{ github.ref_name }}.zip
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: Release ${{ steps.ver.outputs.tag }}
+          prerelease: false
           generate_release_notes: true
+          files: |
+            dist/maic-${{ steps.ver.outputs.tag }}.zip
+            dist/maic-${{ steps.ver.outputs.tag }}.zip.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+# [02] END
