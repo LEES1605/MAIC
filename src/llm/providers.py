@@ -32,7 +32,7 @@ def _secret(name: str, default: Optional[str] = None) -> Optional[str]:
         return os.getenv(name, default)
 
 
-# -------- OpenAI -------------------------------------------------------------
+# =============== [LLM-02] OpenAI raw call — START =================
 def call_openai_raw(
     *,
     system: str,
@@ -54,9 +54,19 @@ def call_openai_raw(
         mod = importlib.import_module("openai")
         OpenAI: Any = getattr(mod, "OpenAI", None)
         if OpenAI is None:
-            return {"ok": False, "provider": "openai", "error": "openai.OpenAI not found", "text": ""}
+            return {
+                "ok": False,
+                "provider": "openai",
+                "error": "openai.OpenAI not found",
+                "text": "",
+            }
     except Exception as e:
-        return {"ok": False, "provider": "openai", "error": f"openai_import_error: {e}", "text": ""}
+        return {
+            "ok": False,
+            "provider": "openai",
+            "error": f"openai_import_error: {e}",
+            "text": "",
+        }
 
     try:
         client: Any = OpenAI(api_key=api_key)
@@ -77,6 +87,7 @@ def call_openai_raw(
             "error": f"{type(e).__name__}: {e}\n{traceback.format_exc()}",
             "text": "",
         }
+# ================ [LLM-02] OpenAI raw call — END ==================
 
 
 # -------- Gemini -------------------------------------------------------------
