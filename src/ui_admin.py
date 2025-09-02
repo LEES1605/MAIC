@@ -11,7 +11,10 @@ import streamlit as st
 
 def _secret(name: str, default: Optional[str] = None) -> Optional[str]:
     try:
-        val = st.secrets.get(name)  # type: ignore[attr-defined]
+        if hasattr(st, "secrets"):
+            val = st.secrets.get(name, None)
+        else:
+            val = None
         if val is None:
             return os.getenv(name, default)
         if isinstance(val, str):
