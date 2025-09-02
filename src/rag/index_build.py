@@ -198,7 +198,6 @@ def rebuild_index(output_dir=None):
         - 청크 경계 사이에 overlap 문자만큼 앞부분을 유지
         """
         chunks = []
-        start = 0
         acc = ""
         acc_start = 0
         pos = 0
