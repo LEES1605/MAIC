@@ -160,7 +160,8 @@ def reindex(dest_dir: Optional[str | Path] = None) -> bool:
     로컬 인덱스를 재구축(또는 초기 구축)합니다.
     - 가능한 인덱서 함수를 동적으로 탐색하여 호출합니다.
     - 인자 시그니처 차이를 흡수(있으면 경로 전달, 아니면 무인자 호출).
-    - 성공 시 SSOT(.ready + chunks.jsonl) 신호를 보정하고 상태를 세션에 반영합니다.
+    - 빌더가 다른 경로에 산출물을 만들더라도, chunks.jsonl(.gz) / chunks/*.jsonl을
+      찾아서 dest 루트로 이관/병합 후 SSOT(.ready + chunks.jsonl) 보정합니다.
 
     반환값: 성공 True / 실패 False
     """
@@ -171,22 +172,145 @@ def reindex(dest_dir: Optional[str | Path] = None) -> bool:
         _set_brain_status("ERROR", "인덱스 경로 생성 실패", "local", attached=False)
         return False
 
+    # ---- 내부 헬퍼: 산출물 탐지/이관/병합 -------------------------------------
+    def _decompress_gz(src: Path, dst: Path) -> bool:
+        try:
+            import gzip
+            with gzip.open(src, "rb") as gf:
+                dst.write_bytes(gf.read())
+            return True
+        except Exception:
+            return False
+
+    def _merge_chunk_dir(chunk_dir: Path, out_file: Path) -> bool:
+        """chunks/*.jsonl 여러 파일을 라인단위로 out_file에 병합."""
+        try:
+            out_file.unlink(missing_ok=True)  # 기존 파일 있으면 교체
+            with out_file.open("wb") as w:
+                for p in sorted(chunk_dir.glob("*.jsonl")):
+                    try:
+                        with p.open("rb") as r:
+                            shutil.copyfileobj(r, w)
+                    except Exception:
+                        continue
+            return out_file.exists() and out_file.stat().st_size > 0
+        except Exception:
+            return False
+
+    def _bring_chunks_to_root(candidates: list[Path]) -> bool:
+        """후보 경로들에서 chunks 산출물을 찾아 base/chunks.jsonl로 만든다."""
+        target = base / "chunks.jsonl"
+
+        # 1) 정확히 chunks.jsonl
+        for c in candidates:
+            p = c / "chunks.jsonl" if c.is_dir() else (c if c.name == "chunks.jsonl" else None)
+            if p and p.exists() and p.is_file() and p.stat().st_size > 0:
+                shutil.copy2(p, target)
+                return True
+
+        # 2) chunks.jsonl.gz
+        for c in candidates:
+            gz = c / "chunks.jsonl.gz" if c.is_dir() else (c if c.name == "chunks.jsonl.gz" else None)
+            if gz and gz.exists() and gz.is_file():
+                return _decompress_gz(gz, target)
+
+        # 3) chunks/ 디렉터리 내 *.jsonl 병합
+        for c in candidates:
+            chunk_dir = (c / "chunks") if c.is_dir() else None
+            if chunk_dir and chunk_dir.is_dir():
+                if _merge_chunk_dir(chunk_dir, target):
+                    return True
+
+        # 4) 광역 탐색(최대 깊이 2): **/chunks.jsonl / **/chunks.jsonl.gz / **/chunks/*.jsonl
+        try:
+            # a) chunks.jsonl
+            found = next((p for p in c for c in candidates for p in c.rglob("chunks.jsonl")), None)
+        except Exception:
+            found = None
+        if found and found.is_file() and found.stat().st_size > 0:
+            shutil.copy2(found, target)
+            return True
+
+        try:
+            # b) chunks.jsonl.gz
+            found_gz = next((p for c in candidates for p in c.rglob("chunks.jsonl.gz")), None)
+        except Exception:
+            found_gz = None
+        if found_gz and found_gz.is_file():
+            return _decompress_gz(found_gz, target)
+
+        try:
+            # c) **/chunks/*.jsonl 병합
+            found_dir = next((d for c in candidates for d in c.rglob("chunks") if d.is_dir()), None)
+        except Exception:
+            found_dir = None
+        if found_dir and _merge_chunk_dir(found_dir, target):
+            return True
+
+        return False
+
+    # ---- 인덱서 선택 및 호출 ---------------------------------------------------
     fn, name = _pick_reindex_fn()
     if not callable(fn):
         _set_brain_status("MISSING", "재인덱싱 함수가 없습니다.", "local", attached=False)
         return False
 
+    # 호출 전후로 후보 경로를 넓게 수집
+    candidates: list[Path] = [base]
     try:
-        # 인자 유무를 런타임에 맞춰 호출 (반환값 사용 안 함)
+        # 모듈이 노출하는 기본 출력 경로도 후보에 추가
         try:
-            fn(base)
+            from src.rag.index_build import PERSIST_DIR as IDX_DIR  # type: ignore
+            candidates.append(Path(str(IDX_DIR)).expanduser())
+        except Exception:
+            pass
+
+        # 인자 유무에 맞춰 호출하고 반환값을 검사
+        ret: Any
+        try:
+            ret = fn(base)  # type: ignore[misc]
         except TypeError:
-            fn()
+            ret = fn()      # type: ignore[misc]
+
+        # 반환값이 경로/딕셔너리면 후보에 추가
+        try:
+            if isinstance(ret, (str, Path)):
+                candidates.append(Path(ret).expanduser())
+            elif isinstance(ret, dict):
+                for k in ("output_dir", "out_dir", "persist_dir", "dir", "path", "chunks_dir"):
+                    v = ret.get(k)
+                    if isinstance(v, (str, Path)):
+                        candidates.append(Path(v).expanduser())
+        except Exception:
+            pass
     except Exception as e:
         _set_brain_status("ERROR", f"재인덱싱 실패: {type(e).__name__}", "local", attached=False)
         return False
 
-    # 성공/부분성공 시 .ready 보정 + 최종 SSOT 판정
+    # ---- 산출물 이관/복원 ------------------------------------------------------
+    # 중복 제거 및 존재하는 경로만
+    uniq: list[Path] = []
+    seen = set()
+    for c in candidates:
+        try:
+            cp = c.resolve()
+        except Exception:
+            cp = c
+        if (str(cp) not in seen) and cp.exists():
+            uniq.append(cp)
+            seen.add(str(cp))
+
+    if not _bring_chunks_to_root(uniq):
+        # 산출물을 찾지 못했거나, 0B → 실패 처리(SSOT 미충족)
+        _set_brain_status(
+            "MISSING",
+            "재인덱싱 완료했지만 산출물(chunks.jsonl)을 찾지 못했습니다.",
+            "local",
+            attached=False,
+        )
+        return False
+
+    # ---- SSOT 보정 및 최종 판정 -------------------------------------------------
     _ensure_ready_signal(base)
     status = index_status(base)
     if status["local_ok"]:
@@ -195,7 +319,7 @@ def reindex(dest_dir: Optional[str | Path] = None) -> bool:
 
     _set_brain_status(
         "MISSING",
-        "재인덱싱 완료했지만 READY 조건 미충족",
+        "재인덱싱 완료했지만 READY 조건(.ready+chunks)이 미충족",
         "local",
         attached=False,
     )
