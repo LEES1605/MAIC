@@ -68,6 +68,7 @@ if st:
     st.set_page_config(page_title="LEES AI Teacher", layout="wide")
 
 # ===== [PATCH 01 / app.py / [04] 경로/상태 & 에러로그 / L071–L179] — START =====
+# ===== [PATCH / app.py / [04] 경로/상태 & 에러로그 / L0071–L0179] — START =====
 # [04] 경로/상태 & 에러로그 =====================================================
 def _persist_dir() -> Path:
     # 1) 인덱서 정의 경로
@@ -87,6 +88,18 @@ def _persist_dir() -> Path:
 
 
 PERSIST_DIR = _persist_dir()
+PERSIST_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _share_persist_dir_into_session(p: Path) -> None:
+    try:
+        if st is not None:
+            st.session_state["_PERSIST_DIR"] = p
+    except Exception:
+        pass
+
+
+_share_persist_dir_into_session(PERSIST_DIR)
 
 
 def _mark_ready() -> None:
@@ -100,7 +113,7 @@ def _mark_ready() -> None:
 def _is_brain_ready() -> bool:
     """인덱스 준비 여부(로컬 신호 기반) — 엄격 판정(SSOT).
     규칙: .ready 파일과 chunks.jsonl 파일이 모두 존재해야 준비(True).
-    이렇게 해야 진단 패널(local_ok)과 진행선/배지 판단이 일치합니다.
+    진단/헤더/진행선이 동일한 기준을 보도록 단일 진실(SSOT)로 통일합니다.
     """
     # 세션에 공유된 경로가 있으면 우선 사용, 없으면 즉시 계산
     p = None
@@ -126,44 +139,22 @@ def _is_brain_ready() -> bool:
 
 def _get_brain_status() -> dict:
     """
-    반환 예: {"code": "READY"|"SCANNING"|"RESTORE"|"MISSING", "source": "local|drive|github|"}
-    UI 헤더 배지/진행선/진단 패널이 공통으로 참조하는 최상위 상태(SSOT)를 제공합니다.
+    반환 예: {"code": "READY"|"SCANNING"|"RESTORING"|"WARN"|"ERROR"|"MISSING", "msg": "..."}
+    세션 상태가 있으면 우선, 없으면 로컬 인덱스 유무로 READY/MISSING 판정.
     """
-    try:
-        if _is_brain_ready():
-            return {"code": "READY", "source": "local"}
-        # 필요시 추가 상태 결합(예: SCANNING/RESTORE)은 여기서 계산
-        return {"code": "MISSING", "source": ""}
-    except Exception:
-        return {"code": "MISSING", "source": ""}
+    if st is None:
+        return {"code": "MISSING", "msg": "Streamlit unavailable"}
 
+    ss = st.session_state
+    code = ss.get("brain_status_code")
+    msg = ss.get("brain_status_msg")
+    if code and msg:
+        return {"code": str(code), "msg": str(msg)}
 
-def _share_persist_dir_into_session(p: Path) -> None:
-    """세션으로 persist 경로 주입."""
-    try:
-        if st is not None:
-            st.session_state["_PERSIST_DIR"] = p
-    except Exception:
-        pass
-
-
-_share_persist_dir_into_session(PERSIST_DIR)
-
-
-def _errlog(msg: str, where: str = "", exc: Exception | None = None) -> None:
-    """표준 에러 로깅(콘솔 + Streamlit 가능 시 캡션)."""
-    try:
-        prefix = f"{where} " if where else ""
-        print(f"[ERR] {prefix}{msg}")
-        if exc:
-            traceback.print_exception(exc)
-        if st is not None:
-            with st.expander("자세한 오류 로그", expanded=False):
-                st.code(f"{prefix}{msg}\n{traceback.format_exc() if exc else ''}")
-    except Exception:
-        pass
-# ===== [PATCH 01 / app.py / [04] 경로/상태 & 에러로그 / L071–L179] — END =====
-
+    if _is_brain_ready():
+        return {"code": "READY", "msg": "로컬 인덱스 연결됨(SSOT)"}
+    return {"code": "MISSING", "msg": "인덱스 없음(관리자에서 '업데이트 점검' 필요)"}
+# ===== [PATCH / app.py / [04] 경로/상태 & 에러로그 / L0071–L0179] — END =====
 
 # [05] 모드/LLM/임포트 헬퍼 =====================================================
 def _is_admin_view() -> bool:
@@ -383,35 +374,53 @@ def _mount_background(
 
 
 # ===== [PATCH 02 / app.py / [09] 부팅 훅(오케스트레이터 오토플로우 호출) / L397–L643] — START =====
+
+# ===== [PATCH / app.py / [09] 부팅 훅(오케스트레이터 오토플로우 호출) / L0397–L0643] — START =====
 # [09] 부팅 훅(오케스트레이터 오토플로우 호출) ================================
-def _set_brain_status(code: str, msg: str = "", source: str = "", attached: bool = False) -> None:
-    """상태 배지/진행선 표시에 사용할 공통 상태(SSOT) 저장."""
+def _boot_autoflow_hook():
+    """앱 부팅 시 1회 오토 플로우 실행(관리자=대화형, 학생=자동)"""
     try:
-        if st is None:
-            return
-        st.session_state.setdefault("brain_status", {})
-        st.session_state["brain_status"].update(
-            {"code": code, "message": msg, "source": source, "attached": attached}
-        )
-    except Exception:
-        pass
+        mod = None
+        for name in ("src.ui_orchestrator", "ui_orchestrator"):
+            try:
+                mod = importlib.import_module(name)
+                break
+            except Exception:
+                mod = None
+        if mod and hasattr(mod, "autoflow_boot_check"):
+            mod.autoflow_boot_check(interactive=_is_admin_view())
+    except Exception as e:
+        _errlog(f"boot_autoflow_hook: {e}", where="[boot_hook]", exc=e)
+
+
+def _set_brain_status(code: str, msg: str, source: str = "", attached: bool = False):
+    """세션 상태를 일관된 방식으로 세팅한다."""
+    if st is None:
+        return
+    ss = st.session_state
+    ss["brain_status_code"] = code
+    ss["brain_status_msg"] = msg
+    ss["brain_source"] = source
+    ss["brain_attached"] = bool(attached)
+    ss["restore_recommend"] = code in ("MISSING", "ERROR")
+    ss.setdefault("index_decision_needed", False)
+    ss.setdefault("index_change_stats", {})
 
 
 def _quick_local_attach_only():
     """빠른 부팅: 네트워크 호출 없이 로컬 신호만 확인.
-    규칙: .ready + chunks.jsonl(>0B) 동시 존재 시에만 READY로 승격.
+    규칙: .ready + chunks.jsonl(>0B) 동시 존재 시에만 READY로 승격(SSOT).
     """
     if st is None:
         return False
-
-    man = PERSIST_DIR / "manifest.json"  # 참고용(SSOT엔 불참여)
+    
     chunks = PERSIST_DIR / "chunks.jsonl"
     ready = PERSIST_DIR / ".ready"
 
     try:
         chunks_ok = chunks.exists() and chunks.stat().st_size > 0
         if ready.exists() and chunks_ok:
-            _set_brain_status("READY", "로컬 인덱스 연결됨(ready+chunks)", "local", attached=True)
+            _set_brain_status("READY", "로컬 인덱스 연결됨(SSOT: ready+chunks)", "local", attached=True)
             return True
     except Exception:
         pass
@@ -420,36 +429,59 @@ def _quick_local_attach_only():
     return False
 
 
-def _render_boot_progress_line() -> None:
-    """헤더 아래 진행선 UI 렌더(READY이면 가장 오른쪽 단계)."""
-    try:
-        if st is None:
-            return
-        bs = st.session_state.get("brain_status") or _get_brain_status()
-        code = (bs.get("code") if isinstance(bs, dict) else None) or "MISSING"
+def _run_deep_check_and_attach():
+    """관리자 버튼 클릭 시 실행되는 네트워크 검사+복구."""
+    if st is None:
+        return
+    ss = st.session_state
+    idx = _try_import("src.rag.index_build", ["quick_precheck", "diff_with_manifest"])
+    rel = _try_import("src.backup.github_release", ["restore_latest"])
+    quick = idx.get("quick_precheck")
+    diff = idx.get("diff_with_manifest")
+    restore_latest = rel.get("restore_latest")
 
-        stages = ["LOCAL_CHECK", "RESTORE", "ATTACH", "READY"]
-        active_idx = stages.index("READY") if code == "READY" else stages.index("ATTACH") if code == "ATTACH" else stages.index("LOCAL_CHECK")
-        st.write(
-            f":small_blue_diamond: 부팅 단계: "
-            f"{' → '.join([f'**{s}**' if i <= active_idx else s for i, s in enumerate(stages)])}"
-        )
-    except Exception:
-        pass
+    # 0) 로컬 먼저
+    if _is_brain_ready():
+        stats = {}
+        changed = False
+        if callable(diff):
+            try:
+                d = diff() or {}
+                stats = d.get("stats") or {}
+                total = int(stats.get("added", 0)) + int(stats.get("changed", 0)) + int(stats.get("removed", 0))
+                changed = total > 0
+            except Exception as e:
+                _errlog(f"diff 실패: {e}", where="[deep_check]")
+        msg = "로컬 인덱스 연결됨" + ("(신규/변경 감지)" if changed else "(변경 없음/판단 불가)")
+        _set_brain_status("READY", msg, "local", attached=True)
+        ss["index_change_stats"] = stats
+        return
 
+    # 1) 빠른 프리체크(Drive 폴더/확장자/크기)
+    if callable(quick):
+        try:
+            ok, info = quick()
+            if ok:
+                ss["index_decision_needed"] = True
+                _set_brain_status("ATTACH", "Drive 자료 감지됨(관리자 승인 필요)", "drive", attached=False)
+                return
+        except Exception as e:
+            _errlog(f"quick_precheck 실패: {e}", where="[deep_check]")
 
-def _boot_orchestrator_auto() -> None:
-    """앱 부팅 시 자동으로 수행되는 오케스트레이션."""
-    try:
-        # 1) 네트워크 호출 없이 로컬로만 빠르게 척도 확인
-        if _quick_local_attach_only():
-            return
+    # 2) (옵션) GitHub 최신 백업 복구
+    if callable(restore_latest):
+        try:
+            ok, note = restore_latest()
+            if ok and _is_brain_ready():
+                _set_brain_status("READY", "GitHub 최신 백업 복구됨", "github", attached=True)
+                return
+        except Exception as e:
+            _errlog(f"restore_latest 실패: {e}", where="[deep_check]")
 
-        # 2) (선택) 로컬 미준비 → 관리 절차 유도(복구/인덱싱)
-        _set_brain_status("MISSING", "로컬 인덱스 미준비", "", attached=False)
-    except Exception as exc:
-        _errlog("부팅 훅 실행 실패", where="[09]", exc=exc)
-# ===== [PATCH 02 / app.py / [09] 부팅 훅(오케스트레이터 오토플로우 호출) / L397–L643] — END =====
+    # 3) 최종 미준비
+    _set_brain_status("MISSING", "인덱스 없음(관리자에서 '업데이트 점검' 필요)", "", attached=False)
+# ===== [PATCH / app.py / [09] 부팅 훅(오케스트레이터 오토플로우 호출) / L0397–L0643] — END =====
+
 
 # ======================= [10] 부팅/인덱스 준비 — START ========================
 def _set_brain_status(code: str, msg: str, source: str = "", attached: bool = False):
