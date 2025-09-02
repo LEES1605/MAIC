@@ -14,14 +14,20 @@ from types import ModuleType
 import requests
 
 # streamlit은 있을 수도/없을 수도 있다.
+# - mypy 충돌 방지: st 변수를 먼저 Any로 선언해 두고, 성공 시 모듈을 대입/실패 시 None을 대입
+from typing import Any as _AnyForSt
+st: _AnyForSt  # st는 모듈 또는 None을 담는 컨테이너(런타임에 결정)
 try:
-    import streamlit as st
+    import streamlit as _st_mod
+    st = _st_mod
 except Exception:
-    st = None  # pragma: no cover
+    st = None  # Optional[Any] 취급 → mypy OK
 
 # 공용 유틸: 모듈 동적 임포트 후 존재 확인 + 폴백 제공
+# - mypy 충돌 방지: _utils를 먼저 ModuleType | None으로 선언
+_utils: ModuleType | None
 try:
-    _utils: ModuleType | None = importlib.import_module("src.common.utils")
+    _utils = importlib.import_module("src.common.utils")
 except Exception:
     _utils = None  # 모듈 자체가 없을 수 있음
 
