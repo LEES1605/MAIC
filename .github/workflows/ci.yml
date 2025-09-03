@@ -41,7 +41,21 @@ jobs:
       - name: Install dev tools
         run: pip install ruff mypy pytest
 
-      # 핵심 수정: 자동 수정 모드 --fix (Ruff 위반 자동 정리 후 0잔여면 통과)
+      # 🔒 오탈자 임포트 가드: 'integration/intergration/intergratoins' 패턴 차단
+      - name: Guard • forbid typo imports
+        shell: bash
+        run: |
+          set -euo pipefail
+          PATTERN='src\.intergration|src\.intergratoins|src\.integration\.|src\.integration$'
+          HITS="$(git grep -nE "$PATTERN" -- ':!*.md' || true)"
+          if [ -n "$HITS" ]; then
+            echo "::error title=Forbidden import detected::Use 'src.integrations.*' (not integration/intergration/intergratoins)"
+            echo "$HITS"
+            exit 1
+          fi
+          echo "OK: no forbidden import typos found."
+
+      # 자동 수정 모드 (--fix)로 가벼운 규칙은 러너에서 정리
       - name: Ruff
         run: ruff check . --fix
 
