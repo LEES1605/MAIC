@@ -4,21 +4,16 @@ Google Drive 'prepared' 폴더 파일 목록 드라이버 (동적 임포트로 �
 
 공개 함수:
     list_prepared_files() -> list[dict]
-        반환 예: [{"id": "...", "name": "doc.pdf", "modified_ts": 1725000000, "size": 12345}, ...]
+        예: [{"id": "...", "name": "doc.pdf", "modified_ts": 1725000000, "size": 12345}, ...]
 
 설정(환경변수/Secrets):
     - GDRIVE_PREPARED_FOLDER_ID   (필수) : 대상 폴더 ID
     - GDRIVE_SA_JSON              (선택) : 서비스계정 JSON 문자열 또는 파일 경로
     - (대안 secrets) st.secrets["gcp_service_account"] / ["GOOGLE_SERVICE_ACCOUNT_JSON"]
 
-권한:
-    - scope: https://www.googleapis.com/auth/drive.readonly
-
-메모:
-    - google-* 라이브러리가 설치되지 않은 환경에서도 정적 검사(mypy/ruff)가 깨지지 않도록
-      모든 외부 모듈은 importlib.import_module 로 '런타임에만' 로드합니다.
+권한: scope = https://www.googleapis.com/auth/drive.readonly
+메모: google-* 모듈은 모두 importlib 로 동적 로딩하여 정적 검사 에러를 방지.
 """
-
 from __future__ import annotations
 
 from typing import Any, Dict, List
@@ -30,7 +25,6 @@ import time
 
 
 def _get_folder_id() -> str:
-    """환경변수/Secrets에서 prepared 폴더 ID를 찾는다."""
     fid = os.getenv("GDRIVE_PREPARED_FOLDER_ID", "").strip()
     if fid:
         return fid
@@ -47,7 +41,6 @@ def _get_folder_id() -> str:
 
 
 def _get_service_account_json() -> Dict[str, Any] | None:
-    """서비스 계정 JSON 반환 (문자열/파일경로/secrets 모두 지원)."""
     v = os.getenv("GDRIVE_SA_JSON", "").strip()
     if v:
         try:
@@ -75,7 +68,6 @@ def _get_service_account_json() -> Dict[str, Any] | None:
 
 
 def _build_credentials():
-    """google-auth 서비스계정 Credentials 객체 생성(동적 임포트)."""
     try:
         svc_mod = importlib.import_module("google.oauth2.service_account")  # type: ignore[import-not-found]
     except Exception as e:
@@ -93,7 +85,6 @@ def _build_credentials():
 
 
 def _rfc3339_to_epoch(s: str) -> int:
-    """RFC3339(Drive modifiedTime) → epoch seconds."""
     try:
         from datetime import datetime
         ss = s.replace("Z", "+00:00")
@@ -107,7 +98,6 @@ def _rfc3339_to_epoch(s: str) -> int:
 
 
 def _list_via_google_api(creds, folder_id: str) -> List[Dict[str, Any]]:
-    """google-api-python-client 경로 (존재 시 우선 사용)."""
     try:
         disc = importlib.import_module("googleapiclient.discovery")  # type: ignore[import-not-found]
     except Exception as e:
@@ -142,7 +132,6 @@ def _list_via_google_api(creds, folder_id: str) -> List[Dict[str, Any]]:
 
 
 def _list_via_rest(creds, folder_id: str) -> List[Dict[str, Any]]:
-    """google-auth + REST(AuthorizedSession) 경로 — 의존성 최소."""
     try:
         req_mod = importlib.import_module("google.auth.transport.requests")  # type: ignore[import-not-found]
     except Exception as e:
@@ -199,10 +188,8 @@ def list_prepared_files() -> List[Dict[str, Any]]:
 
     creds = _build_credentials()
 
-    # 1) google-api-python-client가 있으면 우선 사용
     try:
         return _list_via_google_api(creds, folder_id)
     except Exception:
-        # 2) 없으면 REST 경로로 시도
         return _list_via_rest(creds, folder_id)
 # ============================= [01] GOOGLE DRIVE PREPARED — END =============================
