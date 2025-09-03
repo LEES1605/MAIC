@@ -474,6 +474,7 @@ def publish_backup(persist_dir, keep: int = 5) -> bool:
     import time
     import hashlib
     import urllib.parse
+    from typing import Any
     from pathlib import Path
 
     try:
@@ -499,6 +500,28 @@ def publish_backup(persist_dir, keep: int = 5) -> bool:
                 cnt += b.count(b"\n")
         return cnt
 
+    # ✅ mypy-safe 캐스팅 헬퍼
+    def _as_int(v: Any, default: int) -> int:
+        try:
+            if v is None:
+                return default
+            if isinstance(v, bool):
+                return int(v)
+            if isinstance(v, int):
+                return v
+            if isinstance(v, float):
+                return int(v)
+            if isinstance(v, (bytes, bytearray)):
+                s = v.decode(errors="ignore").strip()
+                return int(s) if s else default
+            if isinstance(v, str):
+                s = v.strip()
+                return int(s) if s else default
+            # 최후 수단
+            return int(v)  # type: ignore[arg-type]
+        except Exception:
+            return default
+
     base = _as_path(persist_dir)
     chunks = base / "chunks.jsonl"
     manifest = base / "manifest.json"
@@ -515,7 +538,7 @@ def publish_backup(persist_dir, keep: int = 5) -> bool:
     # manifest 보정/생성
     mode = (_get_env("MAIC_INDEX_MODE", "STD") or "STD").upper()
     build_id = time.strftime("%Y%m%d-%H%M%S")
-    manifest_obj: dict[str, object] = {}
+    manifest_obj: dict[str, Any] = {}
     try:
         if manifest.exists():
             manifest_obj = json.loads(manifest.read_text(encoding="utf-8") or "{}")
@@ -524,12 +547,11 @@ def publish_backup(persist_dir, keep: int = 5) -> bool:
             manifest_obj["sha256"] = (
                 manifest_obj.get("sha256") or _sha256_file(chunks)
             )
-            manifest_obj["chunks"] = int(
-                manifest_obj.get("chunks") or _count_lines(chunks)
-            )
+            # ✅ object → int 안전 캐스팅
+            manifest_obj["chunks"] = _as_int(manifest_obj.get("chunks"), _count_lines(chunks))
             manifest_obj["file"] = "chunks.jsonl"
             manifest_obj["persist_dir"] = str(base)
-            manifest_obj["version"] = int(manifest_obj.get("version") or 2)
+            manifest_obj["version"] = _as_int(manifest_obj.get("version"), 2)
         else:
             manifest_obj = {
                 "build_id": build_id,
