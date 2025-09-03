@@ -266,7 +266,3 @@ def list_prepared_files() -> List[Dict[str, Any]]:
     except Exception:
         return _list_via_rest(creds, folder_id)
 # ============================= [01] GOOGLE DRIVE PREPARED — END =============================
-'''
-# verify no long lines
-violations = [(i+1, len(l), l) for i,l in enumerate(new_code2.splitlines()) if len(l)>100]
-len(violations)
