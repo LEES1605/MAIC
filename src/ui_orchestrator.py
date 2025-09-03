@@ -220,7 +220,7 @@ def render_index_orchestrator_panel() -> None:
     import time
     from pathlib import Path
     import importlib
-    from typing import Any, Dict, List
+    from typing import Any, Dict, List, Optional
     import shutil
 
     import streamlit as st  # 런타임 임포트
@@ -242,10 +242,8 @@ def render_index_orchestrator_panel() -> None:
         try:
             st.rerun()
         except Exception:
-            try:
-                st.experimental_rerun()
-            except Exception:
-                pass
+            # 일부 환경에선 rerun이 실패할 수 있음(무시)
+            pass
 
     def _apply_pending_step_before_widgets(steps: List[str]) -> None:
         k = "_orchestrator_next_step"
@@ -282,7 +280,7 @@ def render_index_orchestrator_panel() -> None:
                 pass
             return Path.home() / ".maic" / "persist"
 
-        def _snapshot_index_fallback(p: Path | None = None) -> Dict[str, Any]:
+        def _snapshot_index_fallback(p: Optional[Path] = None) -> Dict[str, Any]:
             base = p or _persist_dir_fallback()
             cj = base / "chunks.jsonl"
             try:
@@ -367,20 +365,32 @@ def render_index_orchestrator_panel() -> None:
     st.markdown("#### 작업")
     cA, cB = st.columns([1, 1])
     with cA:
-        do_reindex = st.button("재인덱싱(로컬 기준 → READY)", key="btn_reindex_local",
-                               help="로컬 기준으로 인덱스를 새로 빌드합니다. (릴리스 복구 없음)")
+        do_reindex = st.button(
+            "재인덱싱(로컬 기준 → READY)",
+            key="btn_reindex_local",
+            help="로컬 기준으로 인덱스를 새로 빌드합니다. (릴리스 복구 없음)",
+        )
     with cB:
-        do_force = st.button("강제 인덱싱(+백업 → READY)", key="btn_force_with_backup",
-                             help="로컬 기준 재인덱싱 후 GitHub 릴리스에 백업을 발행합니다.")
+        do_force = st.button(
+            "강제 인덱싱(+백업 → READY)",
+            key="btn_force_with_backup",
+            help="로컬 기준 재인덱싱 후 GitHub 릴리스에 백업을 발행합니다.",
+        )
 
     with st.expander("고급(수동 복구/초기화)"):
         c1, c2 = st.columns([1, 1])
         with c1:
-            do_restore = st.button("수동 복구(릴리스 → READY)", key="btn_restore_manual",
-                                   help="원격 릴리스에서 수동 복구합니다. LOCAL-FIRST 정책에서도 예외적으로 사용할 수 있습니다.")
+            do_restore = st.button(
+                "수동 복구(릴리스 → READY)",
+                key="btn_restore_manual",
+                help="원격 릴리스에서 수동 복구합니다. LOCAL-FIRST 정책에서도 예외적으로 사용할 수 있습니다.",
+            )
         with c2:
-            do_clean = st.button("강제 초기화(로컬)", key="btn_clean",
-                                 help="로컬 persist(.ready, chunks*, chunks/ 디렉터리)만 삭제합니다. 릴리스는 삭제하지 않습니다.")
+            do_clean = st.button(
+                "강제 초기화(로컬)",
+                key="btn_clean",
+                help="로컬 persist(.ready, chunks*, chunks/ 디렉터리)만 삭제합니다. 릴리스는 삭제하지 않습니다.",
+            )
 
     # --- 동작 구현 ---
     if do_reindex:
@@ -400,8 +410,9 @@ def render_index_orchestrator_panel() -> None:
             st.success("재인덱싱 완료(READY).")
             if callable(mark_fn) and isinstance(updates, dict):
                 try:
-                    files: List[Dict[str, Any]] = updates.get("files", [])
-                    mark_fn(PERSIST, files)
+                    files = updates.get("files", [])  # type: ignore[assignment]
+                    if isinstance(files, list):
+                        mark_fn(PERSIST, files)
                 except Exception:
                     pass
             _request_step("완료")
@@ -458,7 +469,7 @@ def render_index_orchestrator_panel() -> None:
 
     if do_clean:
         try:
-            removed = []
+            removed: List[str] = []
             for name in (".ready", "chunks.jsonl", "chunks.jsonl.gz"):
                 p = PERSIST / name
                 if p.exists():
