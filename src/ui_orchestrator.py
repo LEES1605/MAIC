@@ -218,12 +218,14 @@ def render_index_orchestrator_panel() -> None:
     - 단계별 설명 팝오버/툴팁 제공
     - 실패 시 세부 원인(READY 신호/파일 존재/크기/세션 메시지) 즉시 로그 남김
     - 추가: 릴리스 복구 라벨 명확화, 강제 초기화, 파일 스냅샷 보기
+    - NEW: 자동 완료(성공 시 스텝을 '완료'로 이동), 강제 재인덱싱(HQ) 버튼
     """
     import time
     from pathlib import Path
     import importlib
     from typing import Any
     import shutil
+    import os  # NEW
 
     import streamlit as st  # 런타임 임포트
 
@@ -399,7 +401,7 @@ def render_index_orchestrator_panel() -> None:
 
     # ---------- actions ----------
     st.markdown("#### 작업")
-    b1, b2, b3, b4, b5 = st.columns([1, 1, 1, 1, 1])
+    b1, b2, b3, b4, b5, b6 = st.columns([1, 1, 1, 1, 1, 1])
     with b1:
         do_quick = st.button(
             "빠른 점검",
@@ -429,6 +431,12 @@ def render_index_orchestrator_panel() -> None:
             "강제 초기화",
             key="btn_clean",
             help="persist의 .ready / chunks* / chunks/ 를 삭제하고 깨끗이 시작합니다.",
+        )
+    with b6:
+        do_reindex_hq = st.button(
+            "강제 재인덱싱(HQ)",
+            key="btn_reindex_hq",
+            help="강제초기화 후 HQ 모드(작은 청크, 높은 오버랩, 상한↑)로 깊게 재인덱싱합니다.",
         )
 
     # ---------- log area ----------
@@ -501,6 +509,7 @@ def render_index_orchestrator_panel() -> None:
                 if ok and snap["local_ok"]:
                     _log(f"restore 결과: READY — {snap}")
                     st.success("복구 완료.")
+                    st.session_state["_orchestrator_step"] = "완료"  # NEW: 자동 완료
                 elif ok and not snap["local_ok"]:
                     _log(f"restore 결과: MISSING — {snap}")
                     st.warning("복구는 성공했지만 READY 조건(.ready+chunks)이 충족되지 않았습니다.")
@@ -560,6 +569,7 @@ def render_index_orchestrator_panel() -> None:
                     if bs_msg:
                         _log(f"status_msg: {bs_msg}")
                     st.success("재인덱싱 완료.")
+                    st.session_state["_orchestrator_step"] = "완료"  # NEW: 자동 완료
                 elif success and not snap["local_ok"]:
                     _log(f"reindex 결과: MISSING — {snap}")
                     if bs_msg:
@@ -575,6 +585,43 @@ def render_index_orchestrator_panel() -> None:
                 "현재 버전에서 재인덱싱 함수가 정의되지 않았습니다. "
                 "업데이트 점검(릴리스 복구) 또는 수동 인덱싱 스크립트를 사용해 주세요."
             )
+
+    # ---------- reindex (HQ) ----------
+    if do_reindex_hq:
+        # 1) 강제 초기화
+        try:
+            for name in (".ready", "chunks.jsonl", "chunks.jsonl.gz"):
+                (PERSIST / name).unlink(missing_ok=True)
+            d = PERSIST / "chunks"
+            if d.exists() and d.is_dir():
+                shutil.rmtree(d)
+        except Exception as e:
+            _log(f"HQ 초기화 실패: {e}")
+
+        # 2) HQ 모드 토글 (index_build가 env로 스위치)
+        os.environ["MAIC_INDEX_MODE"] = "HQ"
+
+        # 3) 인덱서 직접 호출(서비스 경유 대신 HQ 확실 적용)
+        fn = _try_import("src.rag.index_build", ["rebuild_index"]).get("rebuild_index")
+        if callable(fn):
+            with st.spinner("강제 재인덱싱(HQ) 실행 중…"):
+                try:
+                    try:
+                        fn(PERSIST)
+                    except TypeError:
+                        fn()
+                except Exception as e:
+                    _log(f"rebuild_index(HQ) 예외: {e}")
+
+        # 4) 결과 반영
+        snap = sync_badge_from_fs()
+        if snap["local_ok"]:
+            _log(f"reindex(HQ) 결과: READY — {snap}")
+            st.success("강제 재인덱싱(HQ) 완료.")
+            st.session_state["_orchestrator_step"] = "완료"  # NEW: 자동 완료
+        else:
+            _log(f"reindex(HQ) 결과: MISSING — {snap}")
+            st.warning("HQ 재인덱싱 후 READY 조건(.ready+chunks)이 충족되지 않았습니다.")
 
     # ---------- log view ----------
     st.markdown("#### 오류 로그")
