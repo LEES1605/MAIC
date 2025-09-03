@@ -73,7 +73,8 @@ jobs:
           # 1) 자동수정 가능한 항목은 먼저 고치고
           ruff check . --fix
           # 2) 남은 문제는 GitHub 주석(Annotations)으로 상세 표시
-          ruff check . --output-format=github --show-source --show-fixes
+          #    (Ruff 0.12.x는 --show-source 미지원 → 제거)
+          ruff check . --output-format=github --show-fixes --show-files
 # [04] END
 
 # ===== [05] TYPE CHECK — STRICT (MANDATORY) ================================= # [05] START
