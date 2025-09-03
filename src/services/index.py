@@ -334,6 +334,9 @@ def reindex(dest_dir=None) -> bool:
             ret = fn(tmp_root)
         except TypeError:
             ret = fn()
+        except Exception as e:
+            _set_brain_status("ERROR", f"reindex 빌더 예외: {e}", "local", attached=False)
+            return False
 
         # 3) 후보 경로 수집 → tmp로 정리
         def _size(p: Path) -> int:
@@ -408,11 +411,11 @@ def reindex(dest_dir=None) -> bool:
                     shutil.copy2(best, tmp_chunks)
                     wrote = True
             except Exception:
-                # resolve() 실패 등 예외 시에도 동일 경로 여부 대비
                 if str(best) == str(tmp_chunks):
                     wrote = True
                 else:
-                    raise
+                    _set_brain_status("ERROR", f"chunks 복사 예외: {best}", "local", attached=False)
+                    return False
         # (B) exact gz
         elif exact_gz:
             best_gz = max(exact_gz, key=_size)
@@ -458,7 +461,8 @@ def reindex(dest_dir=None) -> bool:
                     if str(best_any) == str(tmp_chunks):
                         wrote = True
                     else:
-                        raise
+                        _set_brain_status("ERROR", f"fallback 복사 예외: {best_any}", "local", attached=False)
+                        return False
             if not wrote and any_gz:
                 best_any_gz = max(any_gz, key=_size)
                 wrote = _decompress_gz(best_any_gz, tmp_chunks)
@@ -488,10 +492,14 @@ def reindex(dest_dir=None) -> bool:
         tmp_final = target.with_suffix(".jsonl.new")
         if tmp_final.exists():
             tmp_final.unlink()
-        shutil.copy2(tmp_chunks, tmp_final)
-        if target.exists():
-            target.unlink()
-        tmp_final.replace(target)
+        try:
+            shutil.copy2(tmp_chunks, tmp_final)
+            if target.exists():
+                target.unlink()
+            tmp_final.replace(target)
+        except Exception as e:
+            _set_brain_status("ERROR", f"원자 스왑 실패: {e}", "local", attached=False)
+            return False
 
         # 6) manifest + ready
         _write_manifest(base, target, lines)
@@ -520,6 +528,7 @@ def reindex(dest_dir=None) -> bool:
         except Exception:
             pass
 # [07] END =====================================================================
+
 
 # [08] Public API: restore_or_attach() ==========================================
 def restore_or_attach(dest_dir: Optional[str | Path] = None) -> bool:
