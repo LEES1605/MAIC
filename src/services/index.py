@@ -306,7 +306,12 @@ def reindex(dest_dir=None) -> bool:
     base.mkdir(parents=True, exist_ok=True)
 
     if not _acquire_lock(base):
-        _set_brain_status("BUSY", "다른 인덱싱/복구 작업이 진행 중입니다.", "local", attached=False)
+        _set_brain_status(
+            code="BUSY",
+            msg="다른 인덱싱/복구 작업이 진행 중입니다.",
+            origin="local",
+            attached=False,
+        )
         return False
 
     tmp_root: Optional[Path] = None
@@ -318,14 +323,24 @@ def reindex(dest_dir=None) -> bool:
         # 2) 빌더 호출(tmp로 유도)
         fn = _pick_reindex_fn()
         if not callable(fn):
-            _set_brain_status("MISSING", "재인덱싱 함수가 없습니다.", "local", attached=False)
+            _set_brain_status(
+                code="MISSING",
+                msg="재인덱싱 함수가 없습니다.",
+                origin="local",
+                attached=False,
+            )
             return False
         try:
             ret = fn(tmp_root)  # 선호 시그니처
         except TypeError:
             ret = fn()          # 레거시 시그니처
         except Exception as e:
-            _set_brain_status("ERROR", f"reindex 빌더 예외: {e}", "local", attached=False)
+            _set_brain_status(
+                code="ERROR",
+                msg=f"reindex 빌더 예외: {e}",
+                origin="local",
+                attached=False,
+            )
             return False
 
         # 3) 후보 경로 수집 → tmp로 정리
@@ -404,7 +419,12 @@ def reindex(dest_dir=None) -> bool:
                 if str(best) == str(tmp_chunks):
                     wrote = True
                 else:
-                    _set_brain_status("ERROR", f"chunks 복사 예외: {best}", "local", attached=False)
+                    _set_brain_status(
+                        code="ERROR",
+                        msg=f"chunks 복사 예외: {best}",
+                        origin="local",
+                        attached=False,
+                    )
                     return False
         # (B) exact gz
         elif exact_gz:
@@ -451,20 +471,35 @@ def reindex(dest_dir=None) -> bool:
                     if str(best_any) == str(tmp_chunks):
                         wrote = True
                     else:
-                        _set_brain_status("ERROR", f"fallback 복사 예외: {best_any}", "local", attached=False)
+                        _set_brain_status(
+                            code="ERROR",
+                            msg=f"fallback 복사 예외: {best_any}",
+                            origin="local",
+                            attached=False,
+                        )
                         return False
             if not wrote and any_gz:
                 best_any_gz = max(any_gz, key=_size)
                 wrote = _decompress_gz(best_any_gz, tmp_chunks)
 
         if not wrote or (not tmp_chunks.exists()):
-            _set_brain_status("MISSING", "재인덱싱 완료했지만 산출물(chunks.jsonl)을 찾지 못했습니다.", "local", attached=False)
+            _set_brain_status(
+                code="MISSING",
+                msg="재인덱싱 완료했지만 산출물(chunks.jsonl)을 찾지 못했습니다.",
+                origin="local",
+                attached=False,
+            )
             return False
 
         # 4) 검증
         ok, lines = _verify_jsonl(tmp_chunks)
         if not ok:
-            _set_brain_status("ERROR", "산출물 검증 실패(JSONL 파싱/라인수)", "local", attached=False)
+            _set_brain_status(
+                code="ERROR",
+                msg="산출물 검증 실패(JSONL 파싱/라인수)",
+                origin="local",
+                attached=False,
+            )
             return False
 
         # 5) 원자 스왑
@@ -478,7 +513,12 @@ def reindex(dest_dir=None) -> bool:
                 target.unlink()
             tmp_final.replace(target)
         except Exception as e:
-            _set_brain_status("ERROR", f"원자 스왑 실패: {e}", "local", attached=False)
+            _set_brain_status(
+                code="ERROR",
+                msg=f"원자 스왑 실패: {e}",
+                origin="local",
+                attached=False,
+            )
             return False
 
         # 6) manifest + ready
@@ -487,9 +527,19 @@ def reindex(dest_dir=None) -> bool:
 
         stt = index_status(base)
         if stt["local_ok"]:
-            _set_brain_status("READY", "재인덱싱 완료(READY)", "local", attached=True)
+            _set_brain_status(
+                code="READY",
+                msg="재인덱싱 완료(READY)",
+                origin="local",
+                attached=True,
+            )
             return True
-        _set_brain_status("MISSING", "재인덱싱 완료했지만 READY 조건 미충족", "local", attached=False)
+        _set_brain_status(
+            code="MISSING",
+            msg="재인덱싱 완료했지만 READY 조건 미충족",
+            origin="local",
+            attached=False,
+        )
         return False
     finally:
         try:
@@ -502,6 +552,7 @@ def reindex(dest_dir=None) -> bool:
         except Exception:
             pass
 # [07] END =====================================================================
+
 
 
 
