@@ -293,22 +293,30 @@ def _safe_rerun(tag: str, ttl: int = 1) -> None:
     - tag: 'admin:login', 'admin:logout', 'auto_start' 등 식별자
     - ttl: 허용 rerun 횟수(기본 1회)
     """
-    if st is None:
+    # 전역에서 안전하게 st를 조회 (mypy/런타임 모두 안전)
+    st_mod = globals().get("st", None)
+    if st_mod is None:
         return
+
     try:
-        ss = st.session_state
+        ss = getattr(st_mod, "session_state", None)
+        if not isinstance(ss, dict):
+            return
+
         key = "__rerun_counts__"
         counts = ss.get(key)
         if not isinstance(counts, dict):
             counts = {}
+
         cnt = int(counts.get(tag, 0))
         if cnt >= int(ttl):
             return
+
         counts[tag] = cnt + 1
         ss[key] = counts
-        st.rerun()
+        st_mod.rerun()
     except Exception:
-        # 가드 자체 실패 시, 조용히 무시
+        # 가드 자체 실패 시 조용히 무시 (UX를 깨지 않음)
         pass
 # ============================= [06] RERUN GUARD UTILS — END =============================
 
@@ -455,10 +463,11 @@ def _set_brain_status(code: str, msg: str, source: str = "", attached: bool = Fa
     ss.setdefault("index_decision_needed", False)
     ss.setdefault("index_change_stats", {})
 
-# ... (중간 함수들 동일: _quick_local_attach_only, _run_deep_check_and_attach) ...
+# ... (중간 보조 함수들은 기존 그대로 유지) ...
 
 def _auto_start_once():
     """AUTO_START_MODE에 따른 1회성 자동 복원."""
+    # 안전 가드: 중복 실행 방지
     try:
         if st is None or not hasattr(st, "session_state"):
             return
@@ -469,24 +478,34 @@ def _auto_start_once():
         return
 
     mode = (os.getenv("AUTO_START_MODE") or _from_secrets("AUTO_START_MODE", "off") or "off").lower()
-    if mode in ("restore", "on"):
-        rel = _try_import("src.backup.github_release", ["restore_latest"])
-        fn = rel.get("restore_latest")
-        if not callable(fn):
-            return
-        try:
-            if fn(dest_dir=PERSIST_DIR):
-                _mark_ready()
-                if hasattr(st, "toast"):
-                    st.toast("자동 복원 완료", icon="✅")
-                else:
-                    st.success("자동 복원 완료")
-                _set_brain_status("READY", "자동 복원 완료", "release", attached=True)
-                # 🔁 가드된 rerun: 자동복원은 최대 1회만 새로고침
-                _safe_rerun("auto_start", ttl=1)
-        except Exception as e:
-            _errlog(f"auto restore failed: {e}", where="[auto_start]", exc=e)
+    if mode not in ("restore", "on"):
+        return
+
+    # 전역 헬퍼(_try_import) 없이 표준 importlib로 안전하게 시도
+    try:
+        import importlib
+        rel = importlib.import_module("src.backup.github_release")
+        fn = getattr(rel, "restore_latest", None)
+    except Exception:
+        fn = None
+
+    if not callable(fn):
+        return
+
+    try:
+        if fn(dest_dir=PERSIST_DIR):
+            _mark_ready()
+            if hasattr(st, "toast"):
+                st.toast("자동 복원 완료", icon="✅")
+            else:
+                st.success("자동 복원 완료")
+            _set_brain_status("READY", "자동 복원 완료", "release", attached=True)
+            # 자동복원은 최대 1회만 새로고침
+            _safe_rerun("auto_start", ttl=1)
+    except Exception as e:
+        _errlog(f"auto restore failed: {e}", where="[auto_start]", exc=e)
 # ======================== [10] 부팅/인덱스 준비 — END =========================
+
 
 
 # ===== [PATCH / app.py / [11] 관리자 패널(지연 임포트 + 파일경로 폴백) / L0643–L0738] — START =====
