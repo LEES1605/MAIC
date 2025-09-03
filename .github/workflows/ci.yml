@@ -41,13 +41,14 @@ jobs:
       - name: Install dev tools
         run: pip install ruff mypy pytest
 
+      # 핵심 수정: 자동 수정 모드 --fix (Ruff 위반 자동 정리 후 0잔여면 통과)
       - name: Ruff
-        run: ruff check .
+        run: ruff check . --fix
 
       - name: mypy
         run: mypy .
 
-      # 핵심: PYTHONPATH에 repo 루트를 추가해 src 패키지를 인식
+      # src 패키지 인식 위해 PYTHONPATH 설정
       - name: Set PYTHONPATH
         run: echo "PYTHONPATH=$PWD" >> "$GITHUB_ENV"
 
