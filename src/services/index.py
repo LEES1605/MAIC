@@ -177,6 +177,12 @@ def reindex(dest_dir: Optional[str | Path] = None) -> bool:
         except Exception:
             return 0
 
+    def _same(a: Path, b: Path) -> bool:
+        try:
+            return a.resolve() == b.resolve()
+        except Exception:
+            return str(a) == str(b)
+
     def _decompress_gz(src: Path, dst: Path) -> bool:
         try:
             import gzip
@@ -184,6 +190,9 @@ def reindex(dest_dir: Optional[str | Path] = None) -> bool:
                 data = gf.read()
             if not data:
                 return False
+            # samefile 방지: dst가 이미 같은 경로/내용이면 스킵
+            if dst.exists() and _size(dst) == len(data):
+                return True
             dst.write_bytes(data)
             return True
         except Exception:
@@ -208,11 +217,23 @@ def reindex(dest_dir: Optional[str | Path] = None) -> bool:
                     except Exception:
                         continue
             if bytes_written > 0:
-                out_file.unlink(missing_ok=True)
+                if out_file.exists():
+                    out_file.unlink()
                 tmp_out.replace(out_file)
                 return True
             tmp_out.unlink(missing_ok=True)
             return False
+        except Exception:
+            return False
+
+    def _safe_copy(src: Path, dst: Path) -> bool:
+        """dst와 동일 파일이면 스킵, 아니면 copy2. 실패해도 예외를 밖으로 던지지 않는다."""
+        try:
+            if _same(src, dst):
+                return _size(dst) > 0
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst)
+            return True
         except Exception:
             return False
 
@@ -256,8 +277,7 @@ def reindex(dest_dir: Optional[str | Path] = None) -> bool:
 
         if exact:
             best = max(exact, key=_size)
-            shutil.copy2(best, target)
-            return True
+            return _safe_copy(best, target)
         if exact_gz:
             best_gz = max(exact_gz, key=_size)
             return _decompress_gz(best_gz, target)
@@ -266,8 +286,7 @@ def reindex(dest_dir: Optional[str | Path] = None) -> bool:
                 return True
         if any_jsonl:
             best_any = max(any_jsonl, key=_size)
-            shutil.copy2(best_any, target)
-            return True
+            return _safe_copy(best_any, target)
         if any_gz:
             best_any_gz = max(any_gz, key=_size)
             return _decompress_gz(best_any_gz, target)
