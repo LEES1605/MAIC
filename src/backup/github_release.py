@@ -481,7 +481,7 @@ def publish_backup(persist_dir: str | Path, tag_prefix: str = "index") -> dict |
     import gzip
     import json
     import datetime
-    import requests  # type: ignore
+    import requests  # ← 불필요한 "type: ignore" 제거
 
     dest = Path(persist_dir).expanduser()
     src = dest / "chunks.jsonl"
@@ -494,14 +494,8 @@ def publish_backup(persist_dir: str | Path, tag_prefix: str = "index") -> dict |
         _log("publish_backup: GITHUB_REPO 미설정")
         return None
 
-    token = None
-    try:
-        token = GITHUB_TOKEN  # noqa: F821  (모듈 상단에 정의되어 있다고 가정)
-    except Exception:
-        token = None
-    if not token:
-        token = os.getenv("GITHUB_TOKEN", "")
-
+    # 전역 상수/환경변수에서 안전 조회 (mypy: bare name 회피)
+    token = str(globals().get("GITHUB_TOKEN", "")).strip() or os.getenv("GITHUB_TOKEN", "").strip()
     if not token:
         _log("publish_backup: GITHUB_TOKEN 미설정")
         return None
