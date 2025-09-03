@@ -2,10 +2,10 @@
 """
 MAIC integrations package.
 
-- Holds official integration drivers (e.g., Google Drive).
-- Other modules should import from `src.integrations` (not from typo paths).
+- Official integrations live here (e.g., Google Drive).
+- Import from `src.integrations`, not from typo paths.
 """
-# re-export for convenience (some modules import the package and expect `gdrive`)
+# Re-export for convenience; some code does `from src.integrations import gdrive`
 from . import gdrive as gdrive  # noqa: F401
 
 __all__ = ["gdrive"]
