@@ -12,7 +12,7 @@ def _log(msg: str) -> None:
     """프로젝트 어디서 호출해도 안전한 초간단 로거."""
     try:
         # 선택: 세션 상태에 남기는 로거가 있다면 사용
-        from src.state.session import append_admin_log  # type: ignore
+        from src.state.session import append_admin_log
         append_admin_log(str(msg))
         return
     except Exception:
@@ -37,8 +37,7 @@ def _token() -> str:
         return t
     # 선택적 로컬 설정 폴백
     try:
-        from src.backup.github_config import GITHUB_TOKEN as TK  # type: ignore
-
+        from src.backup.github_config import GITHUB_TOKEN as TK
         return str(TK)
     except Exception:
         return ""
@@ -49,8 +48,7 @@ def _repo() -> str:
     if r:
         return r
     try:
-        from src.backup.github_config import GITHUB_REPO as RP  # type: ignore
-
+        from src.backup.github_config import GITHUB_REPO as RP
         return str(RP)
     except Exception:
         return ""
@@ -61,8 +59,7 @@ def _branch() -> str:
     if b:
         return b
     try:
-        from src.backup.github_config import GITHUB_BRANCH as BR  # type: ignore
-
+        from src.backup.github_config import GITHUB_BRANCH as BR
         return str(BR or "main")
     except Exception:
         return "main"
@@ -86,8 +83,6 @@ def _upload_headers(content_type: str) -> Dict[str, str]:
     h["Content-Type"] = content_type
     return h
 # ===== [01] COMMON HELPERS =====================================================  # [01] END
-
-
 
 # ===== [02] CONSTANTS & PUBLIC EXPORTS =======================================  # [02] START
 __all__ = ["restore_latest", "get_latest_release", "publish_backup"]
@@ -500,7 +495,7 @@ def publish_backup(persist_dir, keep: int = 5) -> bool:
                 cnt += b.count(b"\n")
         return cnt
 
-    # ✅ mypy-safe 캐스팅 헬퍼
+    # mypy-safe 캐스팅 헬퍼
     def _as_int(v: Any, default: int) -> int:
         try:
             if v is None:
@@ -518,7 +513,7 @@ def publish_backup(persist_dir, keep: int = 5) -> bool:
                 s = v.strip()
                 return int(s) if s else default
             # 최후 수단
-            return int(v)  # type: ignore[arg-type]
+            return int(v)
         except Exception:
             return default
 
@@ -547,7 +542,6 @@ def publish_backup(persist_dir, keep: int = 5) -> bool:
             manifest_obj["sha256"] = (
                 manifest_obj.get("sha256") or _sha256_file(chunks)
             )
-            # ✅ object → int 안전 캐스팅
             manifest_obj["chunks"] = _as_int(manifest_obj.get("chunks"), _count_lines(chunks))
             manifest_obj["file"] = "chunks.jsonl"
             manifest_obj["persist_dir"] = str(base)
@@ -730,3 +724,4 @@ def publish_backup(persist_dir, keep: int = 5) -> bool:
     _log(f"publish_backup: 완료 — tag={tag}, repo={repo}")
     return True
 # ===== [07] PUBLIC API: publish_backup =======================================  # [07] END
+
