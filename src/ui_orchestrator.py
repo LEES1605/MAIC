@@ -369,6 +369,8 @@ def render_index_orchestrator_panel() -> None:
                     if callable(pub):
                         with st.spinner("GitHub 릴리스(백업) 발행 중…"):
                             ok2 = bool(pub(PERSIST))
+                        if not ok2:
+                            st.info("백업 발행은 건너뛰었거나 실패했습니다. (로컬 READY는 유지됨)")
                 # 3) 상태/스텝
                 snap = sync_badge_from_fs()
                 if callable(mark_fn):
@@ -421,7 +423,7 @@ def render_index_orchestrator_panel() -> None:
                 if snap["local_ok"]:
                     _request_step("완료")
 
-    # --- status ---
+    # --- 상태 요약 ---
     with st.container(border=True):
         st.markdown("#### 상태 요약")
         c1, c2 = st.columns([1, 2])
@@ -461,7 +463,6 @@ def render_index_orchestrator_panel() -> None:
         st.session_state[log_key].append(f"{time.strftime('%H:%M:%S')}  {msg}")
 
     if do_force:
-        # 0) 초기화는 하지 않음(요청 시에만 초기화). 기존에 있으면 덮어쓰기.
         # 1) 재인덱싱
         svc = _try_import("src.services.index", ["reindex"])
         reindex_fn = svc.get("reindex")
@@ -484,6 +485,8 @@ def render_index_orchestrator_panel() -> None:
             if callable(pub):
                 with st.spinner("GitHub 릴리스(백업) 발행 중…"):
                     ok2 = bool(pub(PERSIST))
+                if not ok2:
+                    _log("publish_backup: 반환 없음/실패로 추정 — 로컬 READY는 유지")
         # 3) 상태 반영
         snap = sync_badge_from_fs()
         if ok1 and snap["local_ok"]:
