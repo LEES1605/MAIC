@@ -212,13 +212,12 @@ def autoflow_boot_check(*, interactive: bool) -> None:  # noqa: ARG001 (인터�
 # ================== [03] render_index_orchestrator_panel — START ==================
 def render_index_orchestrator_panel() -> None:
     """
-    관리자 진단/지식관리 패널 렌더링.
-    - 재인덱싱 버튼을 '항상' 노출(필요 시 안내)
-    - READY(.ready + chunks.jsonl>0B) 이전에는 '완료' 스텝 잠금(🔒)
-    - 단계별 설명 팝오버/툴팁 제공
-    - 실패 시 세부 원인(READY 신호/파일 존재/크기/세션 메시지) 즉시 로그 남김
-    - 추가: 릴리스 복구 라벨 명확화, 강제 초기화, 파일 스냅샷 보기
-    - NEW: 자동 완료(성공 시 스텝 ‘완료’ 이동) — 위젯 생성 후 직접 set 금지 → 예약+rerun 방식
+    관리자 진단/지식관리 패널.
+    요구 플로우 구현:
+      - 앱 실행 시 prepared 폴더 신규 검사
+      - 신규 있으면: (A) 재인덱싱→릴리스 백업→로컬 READY, (B) 기존 릴리스 복구→READY 중 선택
+      - 신규 없으면: 자동으로 릴리스 복구(1회)
+      - 강제 인덱싱(+백업) 버튼 제공
     """
     import time
     from pathlib import Path
@@ -229,7 +228,7 @@ def render_index_orchestrator_panel() -> None:
 
     import streamlit as st  # 런타임 임포트
 
-    # ---------- helpers (사용 전에 미리 정의) ----------
+    # ---------- helpers ----------
     def _try_import(modname: str, names: list[str]) -> dict[str, Any]:
         out: dict[str, Any] = {}
         try:
@@ -241,35 +240,7 @@ def render_index_orchestrator_panel() -> None:
                 out[n] = None
         return out
 
-    def _list_files(p: Path, limit: int = 50) -> list[dict[str, Any]]:
-        rows: list[dict[str, Any]] = []
-        try:
-            for idx, q in enumerate(sorted(p.glob("*"))):
-                if idx >= limit:
-                    break
-                try:
-                    rows.append({
-                        "name": q.name,
-                        "type": "dir" if q.is_dir() else "file",
-                        "size": (q.stat().st_size if q.is_file() else -1),
-                    })
-                except Exception:
-                    rows.append({"name": q.name, "type": "?", "size": -1})
-        except Exception:
-            pass
-        return rows
-
-    # 예약 스텝 적용 + rerun 트리거 유틸
-    def _apply_pending_step_before_widgets(steps: list[str]) -> None:
-        # 위젯 생성 전에만 호출
-        next_key = "_orchestrator_next_step"
-        if next_key in st.session_state:
-            val = st.session_state.pop(next_key, None)
-            if val in steps:
-                st.session_state["_orchestrator_step"] = val
-
     def _request_step(step: str) -> None:
-        # 위젯 생성 후에는 직접 set 금지 → 예약하고 rerun
         st.session_state["_orchestrator_next_step"] = step
         try:
             st.rerun()
@@ -279,7 +250,14 @@ def render_index_orchestrator_panel() -> None:
             except Exception:
                 pass
 
-    # --- 세션/스냅샷 API 동적 로드(정적 import 제거) ---
+    def _apply_pending_step_before_widgets(steps: list[str]) -> None:
+        k = "_orchestrator_next_step"
+        if k in st.session_state:
+            val = st.session_state.pop(k, None)
+            if val in steps:
+                st.session_state["_orchestrator_step"] = val
+
+    # --- 세션/스냅샷 API 동적 로드 ---
     def _load_session_api():
         ensure_keys_fn = None
         persist_dir_fn = None
@@ -294,7 +272,6 @@ def render_index_orchestrator_panel() -> None:
         except Exception:
             pass
 
-        # 폴백 구현체들
         def _persist_dir_fallback() -> Path:
             try:
                 from src.rag.index_build import PERSIST_DIR as IDX
@@ -334,78 +311,124 @@ def render_index_orchestrator_panel() -> None:
         )
 
     ensure_keys, _persist_dir, snapshot_index, sync_badge_from_fs = _load_session_api()
-
-    # ---------- state ----------
     ensure_keys()
     PERSIST = _persist_dir()
 
-    # ---------- steps & tips ----------
     steps = ["프리검사", "백업훑", "변경검지", "다운로드", "복구/해체", "연결성", "완료"]
-    STEP_TIPS = {
-        "프리검사": "로컬 경로 및 신호(.ready/chunks.jsonl) 점검",
-        "백업훑": "GitHub/Drive 백업 존재 여부·최신성 조회(네트워크는 버튼 때만)",
-        "변경검지": "원천(Drive) 대비 증감·변경 파일 탐지(diff)",
-        "다운로드": "릴리스 자산(.zip/.tar.gz/.gz) 다운로드",
-        "복구/해체": "압축 해제 후 로컬에 복구/부착(평탄화/병합 포함)",
-        "연결성": "인덱스 attach, 모델/키 확인",
-        "완료": "학생 질의 가능(READY) 최종 확인",
-    }
-
-    # 위젯 생성 전에 ‘예약된 스텝’ 적용
     st.session_state.setdefault("_orchestrator_step", steps[0])
     _apply_pending_step_before_widgets(steps)
 
     # 현 스냅샷
     snap = snapshot_index(PERSIST)
     ready = bool(snap.get("local_ok"))
-    # READY 전 '완료' 선택 차단
-    if not ready and st.session_state["_orchestrator_step"] == "완료":
-        st.session_state["_orchestrator_step"] = steps[0]
 
-    # ---------- header & stepper ----------
-    left, right = st.columns([1, 1])
-    with left:
-        st.subheader("🛠 진단 도구")
-    with right:
+    # --- header ---
+    st.subheader("🛠 진단 도구")
+
+    # === 신규 파일 검사(앱 진입 시) ===
+    chk = _try_import("src.drive.prepared", ["check_prepared_updates", "mark_prepared_consumed"])
+    check_fn = chk.get("check_prepared_updates")
+    mark_fn = chk.get("mark_prepared_consumed")
+    updates = None
+    if callable(check_fn):
         try:
-            with st.popover("ⓘ 단계 설명", use_container_width=False):
-                st.markdown("| 단계 | 설명 |")
-                st.markdown("|---|---|")
-                for s in steps:
-                    st.markdown(f"| {s} | {STEP_TIPS.get(s,'—')} |")
+            updates = check_fn(PERSIST)
         except Exception:
-            with st.expander("ⓘ 단계 설명", expanded=False):
-                st.markdown("| 단계 | 설명 |")
-                st.markdown("|---|---|")
-                for s in steps:
-                    st.markdown(f"| {s} | {STEP_TIPS.get(s,'—')} |")
+            updates = None
 
-    try:
-        st.segmented_control(
-            "단계",
-            steps,
-            key="_orchestrator_step",
-            help="단계 위 또는 ‘ⓘ 단계 설명’을 눌러 각 단계의 의미를 확인하세요.",
-        )
-    except Exception:
-        st.radio(
-            "단계",
-            steps,
-            key="_orchestrator_step",
-            horizontal=True,
-            help="‘ⓘ 단계 설명’을 눌러 각 단계의 의미를 확인하세요.",
-        )
+    # 신규 있음 → 배너 + 선택
+    if isinstance(updates, dict) and updates.get("has_updates"):
+        with st.container(border=True):
+            st.markdown("### ⚡ prepared 폴더에 **신규 파일**이 감지되었습니다.")
+            st.caption(f"파일 수: {updates.get('count', 0)}  |  캐시: {updates.get('cache_path','')}")
+            colA, colB = st.columns([1, 1])
+            with colA:
+                do_apply_new = st.button("신규 반영(재인덱싱 + 백업 → READY)", key="btn_apply_new")
+            with colB:
+                do_restore_old = st.button("기존 릴리스로 복구(→ READY)", key="btn_restore_old")
 
-    # ---------- status summary ----------
+            if do_apply_new:
+                # 1) 재인덱싱
+                svc = _try_import("src.services.index", ["reindex"])
+                reindex_fn = svc.get("reindex")
+                if not callable(reindex_fn):
+                    reindex_fn = _try_import("src.rag.index_build", ["rebuild_index"]).get("rebuild_index")
+                ok1 = False
+                with st.spinner("재인덱싱 중…"):
+                    try:
+                        ok1 = bool(reindex_fn(PERSIST)) if callable(reindex_fn) else False
+                    except TypeError:
+                        ok1 = bool(reindex_fn()) if callable(reindex_fn) else False
+                    except Exception:
+                        ok1 = False
+                # 2) 백업 발행
+                ok2 = False
+                if ok1:
+                    gh = _try_import("src.backup.github_release", ["publish_backup"])
+                    pub = gh.get("publish_backup")
+                    if callable(pub):
+                        with st.spinner("GitHub 릴리스(백업) 발행 중…"):
+                            ok2 = bool(pub(PERSIST))
+                # 3) 상태/스텝
+                snap = sync_badge_from_fs()
+                if callable(mark_fn):
+                    try:
+                        mark_fn(PERSIST, updates.get("files", []))
+                    except Exception:
+                        pass
+                if snap["local_ok"]:
+                    st.success("신규 반영 완료(READY).")
+                    _request_step("완료")
+                else:
+                    st.warning("신규 반영 후 READY 조건이 미충족입니다. 로그를 확인하세요.")
+
+            if do_restore_old:
+                gh2 = _try_import("src.backup.github_release", ["restore_latest"])
+                restore_latest = gh2.get("restore_latest")
+                ok = False
+                if callable(restore_latest):
+                    with st.spinner("기존 릴리스로 복구 중…"):
+                        try:
+                            ok = bool(restore_latest(PERSIST))
+                        except Exception:
+                            ok = False
+                snap = sync_badge_from_fs()
+                if callable(mark_fn):
+                    try:
+                        mark_fn(PERSIST, updates.get("files", []))
+                    except Exception:
+                        pass
+                if ok and snap["local_ok"]:
+                    st.success("복구 완료(READY).")
+                    _request_step("완료")
+                else:
+                    st.warning("복구 실패 또는 READY 미충족. 로그를 확인하세요.")
+
+    # 신규 없음 → 자동 복구(1회), 단 이미 READY면 생략
+    auto_key = "_auto_restore_done"
+    if (not isinstance(updates, dict) or not updates.get("has_updates")) and (not ready):
+        if not st.session_state.get(auto_key, False):
+            gh3 = _try_import("src.backup.github_release", ["restore_latest"])
+            restore_latest = gh3.get("restore_latest")
+            if callable(restore_latest):
+                with st.spinner("신규 없음 → 최신 릴리스 자동 복구 중…"):
+                    try:
+                        restore_latest(PERSIST)
+                    except Exception:
+                        pass
+                st.session_state[auto_key] = True
+                snap = sync_badge_from_fs()
+                if snap["local_ok"]:
+                    _request_step("완료")
+
+    # --- status ---
     with st.container(border=True):
         st.markdown("#### 상태 요약")
-        c1, c2, c3 = st.columns([1, 1, 2])
+        c1, c2 = st.columns([1, 2])
         with c1:
-            st.caption("로컬")
-            st.write("🧠 " + ("**READY** (.ready+chunks)" if ready else "**MISSING**"))
+            st.write("로컬: " + ("**READY**" if ready else "**MISSING**"))
             st.code(str(PERSIST), language="text")
         with c2:
-            st.caption("GitHub")
             gh = _try_import("src.backup.github_release", ["get_latest_release"])
             latest_tag = "—"
             get_latest = gh.get("get_latest_release")
@@ -416,68 +439,76 @@ def render_index_orchestrator_panel() -> None:
                         latest_tag = str(rel.get("tag_name") or rel.get("name") or "없음")
             except Exception:
                 latest_tag = "표시 실패"
-            st.write(f"릴리스: **{latest_tag}**")
-        with c3:
-            st.caption("Drive")
-            st.write("네트워크 점검은 버튼 클릭 시에만 수행합니다.")
+            st.write(f"GitHub 최신 릴리스: **{latest_tag}**")
 
-    # ---------- actions ----------
+    # --- 수동 작업들 ---
     st.markdown("#### 작업")
-    b1, b2, b3, b4, b5, b6 = st.columns([1, 1, 1, 1, 1, 1])
+    b1, b2, b3 = st.columns([1, 1, 1])
     with b1:
-        do_quick = st.button("빠른 점검", key="btn_quick", help="버튼 클릭 시에만 네트워크를 확인합니다.")
+        do_force = st.button("강제 인덱싱(+백업 → READY)", key="btn_force_all",
+                             help="인덱싱 후 자동으로 릴리스 백업을 발행하고 READY로 만듭니다.")
     with b2:
-        do_reset = st.button("결과 초기화", key="btn_reset", help="진단 결과/오류 로그 뷰를 초기화합니다.")
+        do_restore = st.button("수동 복구(릴리스 → READY)", key="btn_restore_manual",
+                               help="최신 릴리스에서 수동 복구합니다.")
     with b3:
-        do_update = st.button("릴리스 복구(업데이트)", key="btn_restore",
-                              help="GitHub 최신 릴리스에서 복구를 시도합니다.")
-    with b4:
-        do_reindex = st.button("재인덱싱", key="btn_reindex",
-                               help="로컬 인덱스를 새로 구축합니다(항상 표시).")
-    with b5:
         do_clean = st.button("강제 초기화", key="btn_clean",
-                             help="persist의 .ready / chunks* / chunks/ 를 삭제하고 깨끗이 시작합니다.")
-    with b6:
-        do_reindex_hq = st.button("강제 재인덱싱(HQ)", key="btn_reindex_hq",
-                                  help="강제초기화 후 HQ 모드(작은 청크, 높은 오버랩, 상한↑)로 깊게 재인덱싱합니다.")
+                             help="persist의 .ready / chunks* / chunks/ 삭제")
 
-    # ---------- log area ----------
     log_key = "_orchestrator_log"
-    if do_reset:
-        st.session_state[log_key] = []
     st.session_state.setdefault(log_key, [])
 
     def _log(msg: str) -> None:
         st.session_state[log_key].append(f"{time.strftime('%H:%M:%S')}  {msg}")
 
-    # ---------- file snapshot ----------
-    with st.expander("📁 현재 PERSIST_DIR 파일 스냅샷(상위 50개)", expanded=False):
-        rows = _list_files(PERSIST, 50)
-        if not rows:
-            st.write("표시할 항목이 없습니다.")
+    if do_force:
+        # 0) 초기화는 하지 않음(요청 시에만 초기화). 기존에 있으면 덮어쓰기.
+        # 1) 재인덱싱
+        svc = _try_import("src.services.index", ["reindex"])
+        reindex_fn = svc.get("reindex")
+        if not callable(reindex_fn):
+            reindex_fn = _try_import("src.rag.index_build", ["rebuild_index"]).get("rebuild_index")
+        with st.spinner("재인덱싱 중…"):
+            ok1 = False
+            try:
+                ok1 = bool(reindex_fn(PERSIST)) if callable(reindex_fn) else False
+            except TypeError:
+                ok1 = bool(reindex_fn()) if callable(reindex_fn) else False
+            except Exception as e:
+                _log(f"reindex 예외: {e}")
+                ok1 = False
+        # 2) 백업 발행
+        ok2 = False
+        if ok1:
+            gh = _try_import("src.backup.github_release", ["publish_backup"])
+            pub = gh.get("publish_backup")
+            if callable(pub):
+                with st.spinner("GitHub 릴리스(백업) 발행 중…"):
+                    ok2 = bool(pub(PERSIST))
+        # 3) 상태 반영
+        snap = sync_badge_from_fs()
+        if ok1 and snap["local_ok"]:
+            st.success("강제 인덱싱(+백업) 완료(READY).")
+            _request_step("완료")
         else:
-            st.dataframe(rows, use_container_width=True, hide_index=True)
+            st.warning("강제 인덱싱(+백업) 후 READY 조건이 미충족입니다. 로그를 확인하세요.")
 
-    # ---------- quick check ----------
-    if do_quick:
-        snap = snapshot_index(PERSIST)
-        _log(f"local: {'READY' if snap['local_ok'] else 'MISSING'} — {snap}")
-        gh_info = _try_import("src.backup.github_release", ["get_latest_release"])
-        get_latest = gh_info.get("get_latest_release")
-        try:
-            rel = get_latest() if callable(get_latest) else None
-            if isinstance(rel, dict):
-                tag = rel.get("tag_name") or rel.get("name") or "없음"
-                _log(f"github: 최신 릴리스 = {tag}")
-                st.success(f"GitHub 최신 릴리스: {tag}")
+    if do_restore:
+        gh2 = _try_import("src.backup.github_release", ["restore_latest"])
+        restore_latest = gh2.get("restore_latest")
+        if callable(restore_latest):
+            with st.spinner("릴리스에서 복구 중…"):
+                try:
+                    ok = bool(restore_latest(PERSIST))
+                except Exception as e:
+                    _log(f"restore_latest 예외: {e}")
+                    ok = False
+            snap = sync_badge_from_fs()
+            if ok and snap["local_ok"]:
+                st.success("복구 완료(READY).")
+                _request_step("완료")
             else:
-                _log("github: 최신 릴리스 없음 또는 조회 실패")
-                st.info("GitHub 최신 릴리스: 없음/조회 실패")
-        except Exception as e:
-            _log(f"github 조회 실패: {e}")
-            st.warning("GitHub 조회 실패(토큰/권한/네트워크)")
+                st.warning("복구 실패 또는 READY 미충족. 로그를 확인하세요.")
 
-    # ---------- clean reset ----------
     if do_clean:
         try:
             removed = []
@@ -491,135 +522,12 @@ def render_index_orchestrator_panel() -> None:
                 shutil.rmtree(d)
                 removed.append("chunks/ (dir)")
             _log(f"강제 초기화: 제거 = {removed or '없음'}")
-            st.success("강제 초기화 완료. 이제 릴리스 복구 또는 재인덱싱을 실행해 주세요.")
+            st.success("강제 초기화 완료.")
         except Exception as e:
             _log(f"강제 초기화 실패: {e}")
             st.error("강제 초기화 실패. 권한/경로를 확인해 주세요.")
 
-    # ---------- update from release ----------
-    if do_update:
-        gh2 = _try_import("src.backup.github_release", ["restore_latest"])
-        restore_latest = gh2.get("restore_latest")
-        if callable(restore_latest):
-            with st.spinner("GitHub 릴리스에서 복구 중…"):
-                ok = False
-                try:
-                    ok = bool(restore_latest(PERSIST))
-                except Exception as e:
-                    _log(f"restore_latest 예외: {e}")
-                snap = sync_badge_from_fs()  # 배지 동기화
-                if ok and snap["local_ok"]:
-                    _log(f"restore 결과: READY — {snap}")
-                    st.success("복구 완료.")
-                    _request_step("완료")  # ← 위젯 생성 후 직접 set 금지 → 예약+rerun
-                elif ok and not snap["local_ok"]:
-                    _log(f"restore 결과: MISSING — {snap}")
-                    st.warning("복구는 성공했지만 READY 조건(.ready+chunks)이 충족되지 않았습니다.")
-                else:
-                    _log(f"restore 실패 — {snap}")
-                    st.error("복구 실패. 오류 로그를 확인해 주세요.")
-        else:
-            st.info("restore_latest 함수를 찾지 못했습니다. 모듈 버전을 확인해 주세요.")
-
-    # ---------- reindex (always visible) ----------
-    if do_reindex:
-        svc = _try_import("src.services.index", ["reindex"])
-        fn = svc.get("reindex")
-        if not callable(fn):
-            idx = _try_import(
-                "src.rag.index_build",
-                [
-                    "rebuild_index",
-                    "build_index",
-                    "rebuild",
-                    "index_all",
-                    "build_all",
-                    "build_index_with_checkpoint",
-                ],
-            )
-            fn = next(
-                (idx[n] for n in (
-                    "rebuild_index","build_index","rebuild","index_all","build_all","build_index_with_checkpoint"
-                ) if callable(idx.get(n))), None
-            )
-
-        if callable(fn):
-            with st.spinner("재인덱싱(전체) 실행 중…"):
-                success = False
-                try:
-                    try:
-                        success = bool(fn(PERSIST))
-                    except TypeError:
-                        success = bool(fn())
-                except Exception as e:
-                    _log(f"reindex 예외: {e}")
-
-                snap = sync_badge_from_fs()  # 배지 동기화
-                bs_msg = str(st.session_state.get("brain_status_msg", ""))
-                if success and snap["local_ok"]:
-                    _log(f"reindex 결과: READY — {snap}")
-                    if bs_msg:
-                        _log(f"status_msg: {bs_msg}")
-                    st.success("재인덱싱 완료.")
-                    _request_step("완료")  # ← 예약+rerun
-                elif success and not snap["local_ok"]:
-                    _log(f"reindex 결과: MISSING — {snap}")
-                    if bs_msg:
-                        _log(f"status_msg: {bs_msg}")
-                    st.warning("재인덱싱 후 READY 조건(.ready+chunks)이 충족되지 않았습니다.")
-                else:
-                    _log(f"reindex 실패 — {snap}")
-                    if bs_msg:
-                        _log(f"status_msg: {bs_msg}")
-                    st.error("재인덱싱 실패. 오류 로그를 확인해 주세요.")
-        else:
-            st.info(
-                "현재 버전에서 재인덱싱 함수가 정의되지 않았습니다. "
-                "업데이트 점검(릴리스 복구) 또는 수동 인덱싱 스크립트를 사용해 주세요."
-            )
-
-    # ---------- reindex (HQ) ----------
-    if do_reindex_hq:
-        # 1) 강제 초기화
-        try:
-            for name in (".ready", "chunks.jsonl", "chunks.jsonl.gz"):
-                (PERSIST / name).unlink(missing_ok=True)
-            d = PERSIST / "chunks"
-            if d.exists() and d.is_dir():
-                shutil.rmtree(d)
-        except Exception as e:
-            _log(f"HQ 초기화 실패: {e}")
-
-        # 2) HQ 모드 토글 (index_build가 env로 스위치)
-        os.environ["MAIC_INDEX_MODE"] = "HQ"
-
-        # 3) 인덱서 직접 호출(서비스 경유 대신 HQ 확실 적용)
-        fn = _try_import("src.rag.index_build", ["rebuild_index"]).get("rebuild_index")
-        if callable(fn):
-            with st.spinner("강제 재인덱싱(HQ) 실행 중…"):
-                try:
-                    try:
-                        fn(PERSIST)
-                    except TypeError:
-                        fn()
-                except Exception as e:
-                    _log(f"rebuild_index(HQ) 예외: {e}")
-
-        # 4) 결과 반영
-        snap = sync_badge_from_fs()
-        if snap["local_ok"]:
-            _log(f"reindex(HQ) 결과: READY — {snap}")
-            st.success("강제 재인덱싱(HQ) 완료.")
-            _request_step("완료")  # ← 예약+rerun
-        else:
-            _log(f"reindex(HQ) 결과: MISSING — {snap}")
-            st.warning("HQ 재인덱싱 후 READY 조건(.ready+chunks)이 충족되지 않았습니다.")
-
-    # ---------- log view ----------
+    # --- 로그 뷰 ---
     st.markdown("#### 오류 로그")
-    st.text_area(
-        "최근 로그",
-        value="\n".join(st.session_state[log_key][-200:]),
-        height=220,
-    )
+    st.text_area("최근 로그", value="\n".join(st.session_state[log_key][-200:]), height=220)
 # =================== [03] render_index_orchestrator_panel — END ===================
