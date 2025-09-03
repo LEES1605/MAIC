@@ -160,18 +160,21 @@ def reindex(dest_dir=None) -> bool:
     - 동시 실행 방지(.lock, TTL 30분)
     - tmp 빌드 → 검증 → 원자 스왑
     - manifest.json 갱신, .ready 보정
+    - LOCAL-FIRST 정책: 빌드 산출물 기준으로 로컬만 갱신(자동 원격 복구 없음)
     """
-    # 지역 임포트(E402 회피)
+    # 지역 임포트(E402 회피 & 테스트 용이성)
     import os
     import json
     import time
     import shutil
     import tempfile
+    import importlib
     from pathlib import Path
-    from typing import Any
+    from typing import Any, Optional, Dict
 
     # ---------- 내부 유틸 ----------
     def _persist_dir() -> Path:
+        # 우선순위: state.session > rag.index_build > config > ~/.maic/persist
         try:
             from src.state.session import persist_dir
             return persist_dir()
@@ -194,9 +197,10 @@ def reindex(dest_dir=None) -> bool:
             from src.state.session import set_brain_status
             set_brain_status(code, msg, origin, attached)
         except Exception:
+            # 상태 반영 실패는 무시(표시용)
             pass
 
-    def index_status(base: Path | None = None) -> dict[str, Any]:
+    def index_status(base: Optional[Path] = None) -> Dict[str, Any]:
         p = base or _persist_dir()
         cj = p / "chunks.jsonl"
         ready = (p / ".ready").exists()
@@ -221,9 +225,9 @@ def reindex(dest_dir=None) -> bool:
             pass
 
     def _pick_reindex_fn():
-        import importlib
+        """가장 먼저 발견되는 빌더 함수를 반환."""
         cands = [
-            ("src.services.index_impl", "reindex"),
+            ("src.services.index_impl", "reindex"),  # 확장 포인트(있으면 최우선)
             ("src.rag.index_build", "rebuild_index"),
             ("src.rag.index_build", "build_index"),
             ("src.rag.index_build", "rebuild"),
@@ -236,14 +240,14 @@ def reindex(dest_dir=None) -> bool:
                 m = importlib.import_module(mod)
                 fn = getattr(m, name, None)
                 if callable(fn):
-                    return fn, f"{mod}:{name}"
+                    return fn
             except Exception:
                 continue
-        return None, ""
+        return None
 
-    def _sha1_file(p: Path) -> str:
+    def _sha256_file(p: Path) -> str:
         import hashlib
-        h = hashlib.sha1()
+        h = hashlib.sha256()
         with p.open("rb") as r:
             for chunk in iter(lambda: r.read(1024 * 1024), b""):
                 h.update(chunk)
@@ -269,16 +273,13 @@ def reindex(dest_dir=None) -> bool:
             "created_at": int(time.time()),
             "mode": mode,
             "file": "chunks.jsonl",
-            "sha1": _sha1_file(chunk_path),
+            "sha256": _sha256_file(chunk_path),
             "chunks": int(count),
             "persist_dir": str(base),
-            "version": 1,
+            "version": 2,
         }
         mf = base / "manifest.json"
-        mf.write_text(
-            json.dumps(manifest, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        mf.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def _lock_path(base: Path) -> Path:
         return base / ".lock"
@@ -300,40 +301,29 @@ def reindex(dest_dir=None) -> bool:
         except Exception:
             return False
 
-    def _release_lock(base: Path) -> None:
-        try:
-            _lock_path(base).unlink(missing_ok=True)
-        except Exception:
-            pass
-
     # ---------- 본문 ----------
     base = Path(dest_dir).expanduser() if dest_dir else _persist_dir()
     base.mkdir(parents=True, exist_ok=True)
 
     if not _acquire_lock(base):
-        _set_brain_status(
-            "BUSY",
-            "다른 인덱싱/복구 작업이 진행 중입니다.",
-            "local",
-            attached=False,
-        )
+        _set_brain_status("BUSY", "다른 인덱싱/복구 작업이 진행 중입니다.", "local", attached=False)
         return False
 
-    tmp_root = None
+    tmp_root: Optional[Path] = None
     try:
         # 1) tmp 작업 디렉터리
         tmp_root = Path(tempfile.mkdtemp(prefix=".build_", dir=str(base)))
         tmp_chunks = tmp_root / "chunks.jsonl"
 
         # 2) 빌더 호출(tmp로 유도)
-        fn, _ = _pick_reindex_fn()
+        fn = _pick_reindex_fn()
         if not callable(fn):
             _set_brain_status("MISSING", "재인덱싱 함수가 없습니다.", "local", attached=False)
             return False
         try:
-            ret = fn(tmp_root)
+            ret = fn(tmp_root)  # 선호 시그니처
         except TypeError:
-            ret = fn()
+            ret = fn()          # 레거시 시그니처
         except Exception as e:
             _set_brain_status("ERROR", f"reindex 빌더 예외: {e}", "local", attached=False)
             return False
@@ -370,11 +360,11 @@ def reindex(dest_dir=None) -> bool:
         except Exception:
             pass
 
-        exact = []
-        exact_gz = []
-        dirs = []
-        any_jsonl = []
-        any_gz = []
+        exact: list[Path] = []
+        exact_gz: list[Path] = []
+        dirs: list[Path] = []
+        any_jsonl: list[Path] = []
+        any_gz: list[Path] = []
         for c in cands:
             if not c.exists():
                 continue
@@ -468,23 +458,13 @@ def reindex(dest_dir=None) -> bool:
                 wrote = _decompress_gz(best_any_gz, tmp_chunks)
 
         if not wrote or (not tmp_chunks.exists()):
-            _set_brain_status(
-                "MISSING",
-                "재인덱싱 완료했지만 산출물(chunks.jsonl)을 찾지 못했습니다.",
-                "local",
-                attached=False,
-            )
+            _set_brain_status("MISSING", "재인덱싱 완료했지만 산출물(chunks.jsonl)을 찾지 못했습니다.", "local", attached=False)
             return False
 
         # 4) 검증
         ok, lines = _verify_jsonl(tmp_chunks)
         if not ok:
-            _set_brain_status(
-                "ERROR",
-                "산출물 검증 실패(JSONL 파싱/라인수)",
-                "local",
-                attached=False,
-            )
+            _set_brain_status("ERROR", "산출물 검증 실패(JSONL 파싱/라인수)", "local", attached=False)
             return False
 
         # 5) 원자 스왑
@@ -502,19 +482,14 @@ def reindex(dest_dir=None) -> bool:
             return False
 
         # 6) manifest + ready
-        _write_manifest(base, target, lines)
+        _write_manifest(base, target, int(lines))
         _ensure_ready_signal(base)
 
-        status = index_status(base)
-        if status["local_ok"]:
+        stt = index_status(base)
+        if stt["local_ok"]:
             _set_brain_status("READY", "재인덱싱 완료(READY)", "local", attached=True)
             return True
-        _set_brain_status(
-            "MISSING",
-            "재인덱싱 완료했지만 READY 조건 미충족",
-            "local",
-            attached=False,
-        )
+        _set_brain_status("MISSING", "재인덱싱 완료했지만 READY 조건 미충족", "local", attached=False)
         return False
     finally:
         try:
@@ -522,12 +497,12 @@ def reindex(dest_dir=None) -> bool:
                 shutil.rmtree(tmp_root, ignore_errors=True)
         except Exception:
             pass
-        # 락 해제
         try:
             (_persist_dir() / ".lock").unlink(missing_ok=True)
         except Exception:
             pass
 # [07] END =====================================================================
+
 
 
 
