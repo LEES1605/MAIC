@@ -331,14 +331,22 @@ def render_index_orchestrator_panel() -> None:
     chk = _try_import("src.drive.prepared", ["check_prepared_updates", "mark_prepared_consumed"])
     check_fn = chk.get("check_prepared_updates")
     mark_fn = chk.get("mark_prepared_consumed")
-    updates = None
+
+    # NOTE: mypy union-attr 방지 — updates를 항상 dict[str, Any]로 보장
+    updates: dict[str, Any] = {}
     if callable(check_fn):
         try:
-            updates = check_fn(PERSIST)
+            res = check_fn(PERSIST)
+            if isinstance(res, dict):
+                updates = res
+            else:
+                updates = {"status": "CHECK_FAILED", "error": "unexpected return type"}
         except Exception:
             updates = {"status": "CHECK_FAILED", "error": "exception in check_prepared_updates"}
+    else:
+        updates = {"status": "CHECK_FAILED", "error": "check_prepared_updates not found"}
 
-    status = (updates or {}).get("status", "CHECK_FAILED")
+    status = updates.get("status", "CHECK_FAILED")
 
     # --- 상태 요약 ---
     with st.container(border=True):
@@ -460,7 +468,7 @@ def render_index_orchestrator_panel() -> None:
     if status == "CHECK_FAILED":
         with st.container(border=True):
             st.warning("prepared 점검에 실패했습니다. 네트워크/권한을 확인해 주세요.")
-            st.caption(str((updates or {}).get("error", "")))
+            st.caption(str(updates.get("error", "")))
 
     # --- 수동 작업들 ---
     st.markdown("#### 작업")
