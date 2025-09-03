@@ -1,10 +1,12 @@
-# =============================== [01] compat shim — START ================================
+# ============================== [01] integrations pkg — START ===============================
 """
-Compatibility shim for old typo path: `src.intergratoins`
+MAIC integrations package.
 
-New code MUST import from `src.integrations`.
-This module re-exports `gdrive` for backward compatibility.
+- Holds official integration drivers (e.g., Google Drive).
+- Other modules should import from `src.integrations` (not from typo paths).
 """
-from src.integrations import gdrive as gdrive  # noqa: F401
+# re-export for convenience (some modules import the package and expect `gdrive`)
+from . import gdrive as gdrive  # noqa: F401
+
 __all__ = ["gdrive"]
-# ================================ [01] compat shim — END =================================
+# =============================== [01] integrations pkg — END ================================
