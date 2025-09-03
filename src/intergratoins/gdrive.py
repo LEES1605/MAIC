@@ -34,7 +34,6 @@ def _get_folder_id() -> str:
     fid = os.getenv("GDRIVE_PREPARED_FOLDER_ID", "").strip()
     if fid:
         return fid
-    # streamlit 은 동적 임포트로만 접근 (정적 검사에서 모듈 없다고 실패하지 않게)
     try:
         st = importlib.import_module("streamlit")  # type: ignore[import-not-found]
         for k in ("GDRIVE_PREPARED_FOLDER_ID", "PREPARED_FOLDER_ID"):
