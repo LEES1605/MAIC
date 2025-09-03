@@ -216,13 +216,14 @@ def render_index_orchestrator_panel() -> None:
       - 기본 원칙: 로컬 인덱스를 진실의 원천으로 사용
       - 부팅 시 자동 릴리스 복구 없음
       - 필요 시 운영자가 수동으로 (1) 재인덱싱 or (2) 릴리스 복구 실행
+      - prepared 폴더에 신규 파일이 있으면 즉시 선택 액션(재인덱싱 vs 복구) 제공
     """
+    import os
     import time
     from pathlib import Path
     import importlib
     from typing import Any, Dict, List, Optional
     import shutil
-    import os
 
     import streamlit as st  # 런타임 임포트
 
@@ -334,6 +335,16 @@ def render_index_orchestrator_panel() -> None:
         except Exception as e:
             updates = {"status": "CHECK_FAILED", "error": str(e)}
 
+    # prepared 상태 해석
+    files_raw: Any = updates.get("files", [])
+    files_list: List[Dict[str, Any]] = files_raw if isinstance(files_raw, list) else []
+    has_prepared = bool(files_list) or str(updates.get("status", "")).upper() in {
+        "NEW",
+        "FOUND",
+        "READY",
+    }
+    prepared_count = len(files_list)
+
     # --- 상태 요약 ---
     with st.container():
         st.markdown("#### 상태 요약")
@@ -342,7 +353,8 @@ def render_index_orchestrator_panel() -> None:
             st.write("로컬: " + ("**READY**" if ready else "**MISSING**"))
             st.code(str(PERSIST), language="text")
         with c2:
-            st.write(f"prepared: **{updates.get('status','CHECK_FAILED')}**")
+            prep_label = updates.get("status", "CHECK_FAILED")
+            st.write(f"prepared: **{prep_label}**")
         with c3:
             gh = _try_import("src.backup.github_release", ["get_latest_release"])
             latest_tag = "—"
@@ -359,7 +371,7 @@ def render_index_orchestrator_panel() -> None:
     # --- 단계 도움말 ---
     with st.expander("ℹ️ 단계 도움말 보기"):
         st.markdown(
-            "- **프리검사**: 준비된(prepared) 신규 파일 유무만 확인합니다. 실패해도 동작엔 영향이 없습니다.\n"
+            "- **프리검사**: prepared 신규 파일 유무만 확인합니다. 실패해도 동작엔 영향이 없습니다.\n"
             "- **로컬 인덱싱**: 로컬 기준으로 인덱스를 빌드합니다. 성공 시 `.ready` 및 `manifest.json`이 갱신됩니다.\n"
             "- **완료**: 최신 인덱스가 활성화된 상태입니다."
         )
@@ -371,6 +383,89 @@ def render_index_orchestrator_panel() -> None:
     def _log(msg: str) -> None:
         st.session_state[log_key].append(f"{time.strftime('%H:%M:%S')}  {msg}")
 
+    # --- prepared 신규 파일이 있을 때 즉시 선택 액션 ---
+    if has_prepared:
+        with st.container(border=True):
+            st.markdown("### 📂 Prepared 감지됨")
+            st.write(
+                "prepared 폴더에 **신규 파일**이 감지되었습니다. "
+                "다음 중 하나를 선택해 진행하세요."
+            )
+            colA, colB = st.columns([1, 1])
+            with colA:
+                do_prepared_reindex = st.button(
+                    "신규 파일로 재인덱싱",
+                    key="btn_prepared_reindex",
+                    help="prepared 폴더의 신규 파일을 바탕으로 로컬 인덱스를 재생성합니다.",
+                )
+            with colB:
+                do_prepared_restore = st.button(
+                    "기존 릴리스에서 복구",
+                    key="btn_prepared_restore",
+                    help="prepared 파일을 보류하고, 최신 GitHub 릴리스에서 복구합니다.",
+                )
+
+            with st.expander(f"파일 미리보기({prepared_count}건)"):
+                # 파일 정보가 있다면 간단히 나열
+                if files_list:
+                    for i, meta in enumerate(files_list[:100], start=1):
+                        name = str(meta.get("name") or meta.get("path") or f"file-{i}")
+                        size = meta.get("size")
+                        size_s = f"{size:,} bytes" if isinstance(size, int) else "-"
+                        st.write(f"- {name}  ·  {size_s}")
+                else:
+                    st.write("파일 목록 정보가 없습니다.")
+
+            # 선택 동작 구현
+            if 'do_prepared_reindex' not in locals():
+                do_prepared_reindex = False
+            if 'do_prepared_restore' not in locals():
+                do_prepared_restore = False
+
+            if do_prepared_reindex:
+                svc = _try_import("src.services.index", ["reindex"])
+                reindex_fn = svc.get("reindex")
+                with st.spinner("재인덱싱(신규 파일 기반) 중…"):
+                    ok = False
+                    try:
+                        ok = bool(reindex_fn(PERSIST)) if callable(reindex_fn) else False
+                    except TypeError:
+                        ok = bool(reindex_fn()) if callable(reindex_fn) else False
+                    except Exception as e:
+                        _log(f"reindex 예외: {e}")
+                        ok = False
+                snap2 = sync_badge_from_fs()
+                if ok and snap2["local_ok"]:
+                    st.success("재인덱싱 완료(READY).")
+                    # prepared 소비 처리(성공시에만)
+                    if callable(mark_fn) and isinstance(files_list, list):
+                        try:
+                            mark_fn(PERSIST, files_list)
+                        except Exception:
+                            pass
+                    _request_step("완료")
+                else:
+                    st.warning("재인덱싱 후 READY 미충족. 로그를 확인하세요.")
+
+            if do_prepared_restore:
+                gh2 = _try_import("src.backup.github_release", ["restore_latest"])
+                restore_latest = gh2.get("restore_latest")
+                if callable(restore_latest):
+                    with st.spinner("최신 릴리스에서 복구 중…"):
+                        try:
+                            ok = bool(restore_latest(PERSIST))
+                        except Exception as e:
+                            _log(f"restore_latest 예외: {e}")
+                            ok = False
+                    snap3 = sync_badge_from_fs()
+                    if ok and snap3["local_ok"]:
+                        st.success("복구 완료(READY).")
+                        # prepared 파일은 그대로 유지(소비하지 않음)
+                        _request_step("완료")
+                    else:
+                        st.warning("복구 실패 또는 READY 미충족. 로그를 확인하세요.")
+
+    # --- 일반 작업 영역 ---
     st.markdown("#### 작업")
     cA, cB, cC = st.columns([1, 1, 1])
     with cA:
@@ -407,7 +502,7 @@ def render_index_orchestrator_panel() -> None:
                 help="로컬 persist(.ready, chunks*, chunks/ 디렉터리)만 삭제합니다. 릴리스는 삭제하지 않습니다.",
             )
 
-    # --- 동작 구현 ---
+    # --- 동작 구현 (공통 유틸) ---
     def _run_reindex_and_maybe_backup(force_backup: bool) -> tuple[bool, bool]:
         svc = _try_import("src.services.index", ["reindex"])
         reindex_fn = svc.get("reindex")
@@ -438,13 +533,8 @@ def render_index_orchestrator_panel() -> None:
         snap2 = sync_badge_from_fs()
         if ok and snap2["local_ok"]:
             st.success("재인덱싱 완료(READY).")
-            if callable(mark_fn) and isinstance(updates, dict):
-                try:
-                    files_raw: Any = updates.get("files", [])
-                    files_list: List[Dict[str, Any]] = files_raw if isinstance(files_raw, list) else []
-                    mark_fn(PERSIST, files_list)
-                except Exception:
-                    pass
+            # prepared 소비: 일반 재인덱싱은 기본적으로 prepared를 사용하지 않을 수 있어
+            # 여기서는 소비하지 않음(선택 액션 구역에서만 소비)
             _request_step("완료")
         else:
             st.warning("재인덱싱 후 READY 미충족. 로그를 확인하세요.")
@@ -453,14 +543,17 @@ def render_index_orchestrator_panel() -> None:
         ok1, ok2 = _run_reindex_and_maybe_backup(force_backup=True)
         snap3 = sync_badge_from_fs()
         if ok1 and snap3["local_ok"]:
-            msg = "강제 인덱싱(+백업) 완료(READY)." if ok2 else "강제 인덱싱 완료(READY). 백업은 실패/생략."
+            msg = (
+                "강제 인덱싱(+백업) 완료(READY)."
+                if ok2
+                else "강제 인덱싱 완료(READY). 백업은 실패/생략."
+            )
             st.success(msg)
             _request_step("완료")
         else:
             st.warning("강제 인덱싱 후 READY 미충족. 로그를 확인하세요.")
 
     if do_force_hq:
-        # HQ 모드: 환경변수로 모드 전달 → manifest.mode=HQ
         prev_mode = os.getenv("MAIC_INDEX_MODE", "")
         os.environ["MAIC_INDEX_MODE"] = "HQ"
         try:
@@ -476,7 +569,11 @@ def render_index_orchestrator_panel() -> None:
                     pass
         snap4 = sync_badge_from_fs()
         if ok1 and snap4["local_ok"]:
-            msg = "강제 인덱싱(HQ, +백업) 완료(READY)." if ok2 else "강제 인덱싱(HQ) 완료. 백업은 실패/생략."
+            msg = (
+                "강제 인덱싱(HQ, +백업) 완료(READY)."
+                if ok2
+                else "강제 인덱싱(HQ) 완료. 백업은 실패/생략."
+            )
             st.success(msg)
             _request_step("완료")
         else:
