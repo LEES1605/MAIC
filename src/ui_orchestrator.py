@@ -222,13 +222,12 @@ def render_index_orchestrator_panel() -> None:
     import importlib
     from typing import Any, Dict, List
     import shutil
-    import os
 
     import streamlit as st  # 런타임 임포트
 
     # ---------- helpers ----------
-    def _try_import(modname: str, names: list[str]) -> dict[str, Any]:
-        out: dict[str, Any] = {}
+    def _try_import(modname: str, names: List[str]) -> Dict[str, Any]:
+        out: Dict[str, Any] = {}
         try:
             m = importlib.import_module(modname)
             for n in names:
@@ -248,7 +247,7 @@ def render_index_orchestrator_panel() -> None:
             except Exception:
                 pass
 
-    def _apply_pending_step_before_widgets(steps: list[str]) -> None:
+    def _apply_pending_step_before_widgets(steps: List[str]) -> None:
         k = "_orchestrator_next_step"
         if k in st.session_state:
             val = st.session_state.pop(k, None)
@@ -283,7 +282,7 @@ def render_index_orchestrator_panel() -> None:
                 pass
             return Path.home() / ".maic" / "persist"
 
-        def _snapshot_index_fallback(p: Path | None = None) -> dict[str, Any]:
+        def _snapshot_index_fallback(p: Path | None = None) -> Dict[str, Any]:
             base = p or _persist_dir_fallback()
             cj = base / "chunks.jsonl"
             try:
@@ -298,7 +297,7 @@ def render_index_orchestrator_panel() -> None:
                 "local_ok": (base / ".ready").exists() and cj.exists() and size > 0,
             }
 
-        def _sync_badge_from_fs_fallback() -> dict[str, Any]:
+        def _sync_badge_from_fs_fallback() -> Dict[str, Any]:
             return _snapshot_index_fallback()
 
         return (
@@ -337,7 +336,7 @@ def render_index_orchestrator_panel() -> None:
             updates = {"status": "CHECK_FAILED", "error": str(e)}
 
     # --- 상태 요약 ---
-    with st.container(border=True):
+    with st.container():
         st.markdown("#### 상태 요약")
         c1, c2, c3 = st.columns([1, 1, 2])
         with c1:
@@ -399,7 +398,6 @@ def render_index_orchestrator_panel() -> None:
         snap = sync_badge_from_fs()
         if ok and snap["local_ok"]:
             st.success("재인덱싱 완료(READY).")
-            # 신규 파일이 표시되던 경우 '반영 완료' 마킹(선택)
             if callable(mark_fn) and isinstance(updates, dict):
                 try:
                     files: List[Dict[str, Any]] = updates.get("files", [])
