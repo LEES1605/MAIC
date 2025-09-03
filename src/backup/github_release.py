@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 from typing import Any, Dict
+from pathlib import Path  # E402 방지: Path를 최상단에서 임포트
 
 API = "https://api.github.com"
 
@@ -107,14 +108,12 @@ __all__ = ["restore_latest", "get_latest_release", "publish_backup"]
 
 
 # ===== [04] RELEASE DISCOVERY =================================================  # [04] START
-from typing import Optional
-import requests
-
-def _latest_release(repo: str) -> Optional[dict]:
+def _latest_release(repo: str) -> dict | None:
     """가장 최신 릴리스를 조회. 실패 시 None."""
     if not repo:
         _log("GITHUB_REPO가 설정되지 않았습니다.")
         return None
+    import requests  # E402 회피: 함수 내부 로컬 임포트
     url = f"{API}/repos/{repo}/releases/latest"
     try:
         r = requests.get(url, headers=_headers(), timeout=15)
@@ -125,7 +124,7 @@ def _latest_release(repo: str) -> Optional[dict]:
         return None
 
 
-def get_latest_release(repo: Optional[str] = None) -> Optional[dict]:
+def get_latest_release(repo: str | None = None) -> dict | None:
     """
     PUBLIC API: 최신 GitHub 릴리스를 반환합니다.
     - repo 인자가 없으면 secrets/env의 GITHUB_REPO를 사용합니다.
@@ -141,7 +140,7 @@ def get_latest_release(repo: Optional[str] = None) -> Optional[dict]:
     return rel
 
 
-def _pick_best_asset(rel: dict) -> Optional[dict]:
+def _pick_best_asset(rel: dict) -> dict | None:
     """릴리스 자산 중 우선순위(.zip > .tar.gz > .gz > 첫 번째)를 선택."""
     assets = rel.get("assets") or []
     if not assets:
@@ -159,19 +158,15 @@ def _pick_best_asset(rel: dict) -> Optional[dict]:
 # [04] END
 
 
-# ===== [05] ASSET DOWNLOAD & EXTRACT =========================================  # [05] START
-from typing import Optional
-from pathlib import Path
-import io
-import zipfile
-import requests
 
-def _download_asset(asset: dict) -> Optional[bytes]:
+# ===== [05] ASSET DOWNLOAD & EXTRACT =========================================  # [05] START
+def _download_asset(asset: dict) -> bytes | None:
     """GitHub 릴리스 자산을 내려받아 바이트로 반환. 실패 시 None."""
     url = asset.get("url") or asset.get("browser_download_url")
     if not url:
         return None
     try:
+        import requests  # E402 회피: 함수 내부 로컬 임포트
         # GitHub 'assets/:id' API는 application/octet-stream을 요구
         hdrs = dict(_headers())
         if "releases/assets/" in url and "browser_download_url" not in asset:
@@ -187,6 +182,7 @@ def _download_asset(asset: dict) -> Optional[bytes]:
 def _extract_zip(data: bytes, dest_dir: Path) -> bool:
     """ZIP 바이트를 dest_dir에 풀기. 성공 True/실패 False."""
     try:
+        import io, zipfile  # E402 회피: 함수 내부 로컬 임포트
         with zipfile.ZipFile(io.BytesIO(data)) as zf:
             zf.extractall(dest_dir)
         return True
@@ -198,7 +194,7 @@ def _extract_zip(data: bytes, dest_dir: Path) -> bool:
 def _extract_targz(data: bytes, dest_dir: Path) -> bool:
     """TAR.GZ / TGZ 바이트를 dest_dir에 풀기."""
     try:
-        import tarfile
+        import tarfile, io  # E402 회피
         with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tf:
             tf.extractall(dest_dir)
         return True
@@ -210,7 +206,7 @@ def _extract_targz(data: bytes, dest_dir: Path) -> bool:
 def _extract_gz_to_file(asset_name: str, data: bytes, dest_dir: Path) -> bool:
     """단일 .gz(예: chunks.jsonl.gz)를 dest_dir/<basename>으로 풀기."""
     try:
-        import gzip
+        import gzip, io  # E402 회피
         base = asset_name[:-3] if asset_name.lower().endswith(".gz") else asset_name
         out_path = dest_dir / base
         with gzip.GzipFile(fileobj=io.BytesIO(data), mode="rb") as gf:
@@ -236,10 +232,6 @@ def _extract_auto(asset_name: str, data: bytes, dest_dir: Path) -> bool:
 
 
 # ===== [06] PUBLIC API: restore_latest =======================================  # [06] START
-from pathlib import Path
-import tempfile
-import shutil
-
 def restore_latest(dest_dir: str | Path) -> bool:
     """최신 GitHub Release에서 아티팩트를 내려받아 dest_dir에 복원.
 
@@ -252,6 +244,9 @@ def restore_latest(dest_dir: str | Path) -> bool:
           폴더 내부의 파일/디렉터리를 dest_dir 바로 아래로 복사한다.
         - 이후 dest 내 산출물을 정리하여 chunks.jsonl을 루트로 모으고 .ready를 보정한다.
     """
+    # E402 회피: 함수 내부 로컬 임포트
+    import tempfile, shutil
+
     dest = Path(dest_dir).expanduser()
     dest.mkdir(parents=True, exist_ok=True)
 
