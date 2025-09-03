@@ -222,6 +222,7 @@ def render_index_orchestrator_panel() -> None:
     import importlib
     from typing import Any, Dict, List, Optional
     import shutil
+    import os
 
     import streamlit as st  # 런타임 임포트
 
@@ -355,6 +356,14 @@ def render_index_orchestrator_panel() -> None:
                 latest_tag = "표시 실패"
             st.write(f"GitHub 최신 릴리스: **{latest_tag}**")
 
+    # --- 단계 도움말 ---
+    with st.expander("ℹ️ 단계 도움말 보기"):
+        st.markdown(
+            "- **프리검사**: 준비된(prepared) 신규 파일 유무만 확인합니다. 실패해도 동작엔 영향이 없습니다.\n"
+            "- **로컬 인덱싱**: 로컬 기준으로 인덱스를 빌드합니다. 성공 시 `.ready` 및 `manifest.json`이 갱신됩니다.\n"
+            "- **완료**: 최신 인덱스가 활성화된 상태입니다."
+        )
+
     # === 작업 버튼(LOCAL-FIRST) ===
     log_key = "_orchestrator_log"
     st.session_state.setdefault(log_key, [])
@@ -363,7 +372,7 @@ def render_index_orchestrator_panel() -> None:
         st.session_state[log_key].append(f"{time.strftime('%H:%M:%S')}  {msg}")
 
     st.markdown("#### 작업")
-    cA, cB = st.columns([1, 1])
+    cA, cB, cC = st.columns([1, 1, 1])
     with cA:
         do_reindex = st.button(
             "재인덱싱(로컬 기준 → READY)",
@@ -375,6 +384,12 @@ def render_index_orchestrator_panel() -> None:
             "강제 인덱싱(+백업 → READY)",
             key="btn_force_with_backup",
             help="로컬 기준 재인덱싱 후 GitHub 릴리스에 백업을 발행합니다.",
+        )
+    with cC:
+        do_force_hq = st.button(
+            "강제 인덱싱(HQ, 느림) + 백업",
+            key="btn_force_hq",
+            help="고품질(HQ) 모드로 인덱싱합니다. 토큰/정제 비용과 시간이 더 들 수 있습니다.",
         )
 
     with st.expander("고급(수동 복구/초기화)"):
@@ -393,22 +408,36 @@ def render_index_orchestrator_panel() -> None:
             )
 
     # --- 동작 구현 ---
-    if do_reindex:
+    def _run_reindex_and_maybe_backup(force_backup: bool) -> tuple[bool, bool]:
         svc = _try_import("src.services.index", ["reindex"])
         reindex_fn = svc.get("reindex")
+        ok1 = False
         with st.spinner("재인덱싱(로컬) 중…"):
-            ok = False
             try:
-                ok = bool(reindex_fn(PERSIST)) if callable(reindex_fn) else False
+                ok1 = bool(reindex_fn(PERSIST)) if callable(reindex_fn) else False
             except TypeError:
-                ok = bool(reindex_fn()) if callable(reindex_fn) else False
+                ok1 = bool(reindex_fn()) if callable(reindex_fn) else False
             except Exception as e:
                 _log(f"reindex 예외: {e}")
-                ok = False
-        snap = sync_badge_from_fs()
-        if ok and snap["local_ok"]:
+                ok1 = False
+        ok2 = False
+        if force_backup and ok1:
+            gh = _try_import("src.backup.github_release", ["publish_backup"])
+            pub = gh.get("publish_backup")
+            if callable(pub):
+                with st.spinner("GitHub 릴리스(백업) 발행 중…"):
+                    try:
+                        ok2 = bool(pub(PERSIST))
+                    except Exception as e:
+                        _log(f"publish_backup 예외: {e}")
+                        ok2 = False
+        return ok1, ok2
+
+    if do_reindex:
+        ok, _ = _run_reindex_and_maybe_backup(force_backup=False)
+        snap2 = sync_badge_from_fs()
+        if ok and snap2["local_ok"]:
             st.success("재인덱싱 완료(READY).")
-            # ✅ 안전 캐스팅: type: ignore 제거
             if callable(mark_fn) and isinstance(updates, dict):
                 try:
                     files_raw: Any = updates.get("files", [])
@@ -421,35 +450,37 @@ def render_index_orchestrator_panel() -> None:
             st.warning("재인덱싱 후 READY 미충족. 로그를 확인하세요.")
 
     if do_force:
-        svc = _try_import("src.services.index", ["reindex"])
-        reindex_fn = svc.get("reindex")
-        with st.spinner("강제 인덱싱(로컬) 중…"):
-            ok1 = False
-            try:
-                ok1 = bool(reindex_fn(PERSIST)) if callable(reindex_fn) else False
-            except TypeError:
-                ok1 = bool(reindex_fn()) if callable(reindex_fn) else False
-            except Exception as e:
-                _log(f"reindex 예외: {e}")
-                ok1 = False
-        ok2 = False
-        if ok1:
-            gh = _try_import("src.backup.github_release", ["publish_backup"])
-            pub = gh.get("publish_backup")
-            if callable(pub):
-                with st.spinner("GitHub 릴리스(백업) 발행 중…"):
-                    try:
-                        ok2 = bool(pub(PERSIST))
-                    except Exception as e:
-                        _log(f"publish_backup 예외: {e}")
-                        ok2 = False
-        snap = sync_badge_from_fs()
-        if ok1 and snap["local_ok"]:
+        ok1, ok2 = _run_reindex_and_maybe_backup(force_backup=True)
+        snap3 = sync_badge_from_fs()
+        if ok1 and snap3["local_ok"]:
             msg = "강제 인덱싱(+백업) 완료(READY)." if ok2 else "강제 인덱싱 완료(READY). 백업은 실패/생략."
             st.success(msg)
             _request_step("완료")
         else:
             st.warning("강제 인덱싱 후 READY 미충족. 로그를 확인하세요.")
+
+    if do_force_hq:
+        # HQ 모드: 환경변수로 모드 전달 → manifest.mode=HQ
+        prev_mode = os.getenv("MAIC_INDEX_MODE", "")
+        os.environ["MAIC_INDEX_MODE"] = "HQ"
+        try:
+            ok1, ok2 = _run_reindex_and_maybe_backup(force_backup=True)
+        finally:
+            # 이전 모드 복원
+            if prev_mode:
+                os.environ["MAIC_INDEX_MODE"] = prev_mode
+            else:
+                try:
+                    del os.environ["MAIC_INDEX_MODE"]
+                except Exception:
+                    pass
+        snap4 = sync_badge_from_fs()
+        if ok1 and snap4["local_ok"]:
+            msg = "강제 인덱싱(HQ, +백업) 완료(READY)." if ok2 else "강제 인덱싱(HQ) 완료. 백업은 실패/생략."
+            st.success(msg)
+            _request_step("완료")
+        else:
+            st.warning("강제 인덱싱(HQ) 후 READY 미충족. 로그를 확인하세요.")
 
     if do_restore:
         gh2 = _try_import("src.backup.github_release", ["restore_latest"])
