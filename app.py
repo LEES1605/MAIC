@@ -913,7 +913,9 @@ def _render_body() -> None:
 
     # 4) 빠른 부팅(로컬만 확인)
     try:
-        _quick_local_attach_only()
+        _qlao = globals().get("_quick_local_attach_only")
+        if callable(_qlao):
+            _qlao()
     except Exception as e:
         _errlog(f"quick attach failed: {e}", where="[render_body]", exc=e)
 
