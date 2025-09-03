@@ -732,7 +732,7 @@ def _render_mode_controls_pills() -> str:
     return ss.get("qa_mode_radio", sel)
 
 
-# [13] 채팅 패널 ==============================================================
+# ============================ [13] 채팅 패널 — START ============================
 def _render_chat_panel():
     ss = st.session_state
     if "chat" not in ss:
@@ -761,7 +761,7 @@ def _render_chat_panel():
     # 메시지 영역 CLOSE(폼은 같은 ChatPane 내부)
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # 인-카드 입력폼 — Enter=전송, 화살표 버튼은 인풋 내부(절대배치, JS 없이)
+    # 인-카드 입력폼 — Enter=전송, 화살표 버튼은 인풋 내부
     with st.form("inpane_chat_form", clear_on_submit=True):
         qtxt = st.text_input(
             "질문 입력",
@@ -789,6 +789,16 @@ def _render_chat_panel():
         ev_notes = ss.get("__evidence_class_notes", "")
         ev_books = ss.get("__evidence_grammar_books", "")
 
+        # (신규) 출처 라벨러 로딩 — 실패해도 안전
+        try:
+            import importlib as _imp
+            _label_mod = _imp.import_module("src.rag.label")
+            _decide_label = getattr(_label_mod, "decide_label", None)
+            _search_hits = getattr(_label_mod, "search_hits", None)
+        except Exception:
+            _decide_label = None
+            _search_hits = None
+
         # 프롬프트 해석 (분리 모듈 우선)
         try:
             from src.prompting.resolve import resolve_prompts
@@ -798,7 +808,6 @@ def _render_chat_panel():
             )
             ss["__prompt_source"] = source
         except Exception:
-            # 안전 폴백: '맥락 요청 금지, 간단 답변부터' 원칙 유지
             ss["__prompt_source"] = "Fallback(Local)"
             if MODE_TOKEN == "문법설명":
                 system_prompt = "모든 출력은 한국어. 장황한 배경설명 금지. 맥락요구 금지. 부족하면 추가질문 1~2개 제시."
@@ -813,7 +822,6 @@ def _render_chat_panel():
         # LLM 호출(스트리밍 대응)
         try:
             from src.llm import providers as _prov
-
             call = getattr(_prov, "call_with_fallback", None)
         except Exception:
             call = None
@@ -822,15 +830,11 @@ def _render_chat_panel():
 
         def _emit(piece: str):
             nonlocal acc
-            import html
-            import re
-
+            import html, re
             acc += str(piece)
-
             def esc(t: str) -> str:
                 t = html.escape(t or "").replace("\n", "<br/>")
                 return re.sub(r"  ", "&nbsp;&nbsp;", t)
-
             ph.markdown(
                 '<div style="display:flex;justify-content:flex-start;margin:8px 0;">'
                 '  <div style="max-width:88%;padding:10px 12px;border-radius:16px;border-top-left-radius:8px;'
@@ -848,7 +852,6 @@ def _render_chat_panel():
         text_final = ""
         try:
             import inspect
-
             if callable(call):
                 sig = inspect.signature(call)
                 params = sig.parameters.keys()
@@ -890,14 +893,10 @@ def _render_chat_panel():
                     or ("yield_text" in params)
                 )
                 if supports_stream:
-                    if "stream" in params:
-                        kwargs["stream"] = True
-                    if "on_token" in params:
-                        kwargs["on_token"] = _emit
-                    if "on_delta" in params:
-                        kwargs["on_delta"] = _emit
-                    if "yield_text" in params:
-                        kwargs["yield_text"] = _emit
+                    if "stream" in params: kwargs["stream"] = True
+                    if "on_token" in params: kwargs["on_token"] = _emit
+                    if "on_delta" in params: kwargs["on_delta"] = _emit
+                    if "yield_text" in params: kwargs["yield_text"] = _emit
                     res = call(**kwargs)
                     text_final = (res.get("text") if isinstance(res, dict) else acc) or acc
                 else:
@@ -913,10 +912,29 @@ def _render_chat_panel():
             text_final = f"(오류) {type(e).__name__}: {e}"
             _emit(text_final)
 
-        ss["chat"].append({"id": f"a{int(time.time() * 1000)}", "role": "assistant", "text": text_final})
+        # (신규) 간단 출처 라벨 결정 + 화면/기록 반영
+        try:
+            hits = _search_hits(question) if callable(_search_hits) else None
+        except Exception:
+            hits = None
+        try:
+            source_label = _decide_label(hits, default_if_none="[AI지식]") if callable(_decide_label) else "[AI지식]"
+        except Exception:
+            source_label = "[AI지식]"
+
+        # 화면에 '출처:' 한 줄 표시
+        try:
+            st.caption(f"출처: {source_label}")
+        except Exception:
+            pass
+
+        # 기록에 라벨을 포함시켜 다음 렌더에도 남도록 저장
+        final_with_src = f"{text_final}\n\n출처: {source_label}"
+
+        ss["chat"].append({"id": f"a{int(time.time() * 1000)}", "role": "assistant", "text": final_with_src})
         ss["_sending"] = False
         st.rerun()
-
+# ============================= [13] 채팅 패널 — END =============================
 
 # ============================ [14] 본문 렌더 — START ============================
 def _render_body() -> None:
