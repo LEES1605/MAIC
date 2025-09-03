@@ -95,38 +95,312 @@ __all__ = ["restore_latest", "get_latest_release"]
 # [02] END =====================================================================
 
 
-# ===== [03] HEADERS / LOG HELPERS ============================================  # [03] START
-def _repo() -> str:
-    """대상 저장소 'owner/repo' 문자열을 조회."""
-    return get_secret("GITHUB_REPO", "") or os.getenv("GITHUB_REPO", "")
+# [03] Release Publish: publish_backup() ========================================  # [03] START
+def publish_backup(persist_dir: str | Path,
+                   keep: int = 5) -> bool:
+    """
+    로컬 인덱스를 GitHub 릴리스에 백업한다.
+    - 입력: persist_dir (예: ~/.maic/persist)
+    - 업로드: chunks.jsonl.gz, manifest.json
+    - 태그 규칙: index-YYYYMMDD-HHMMSS  (가능하면 manifest.build_id를 사용)
+    - 보존 정책: 'index-' 접두 릴리스 중 최신 keep개만 보존(기본 5개)
+    반환: 성공 True / 실패 False
+    """
+    # 표준 라이브러리만 사용
+    import os
+    import io
+    import json
+    import gzip
+    import time
+    import math
+    import shutil
+    import urllib.parse
+    from pathlib import Path
 
-
-def _headers(binary: bool = False) -> Dict[str, str]:
-    """GitHub API 호출용 기본 헤더 구성."""
-    token = get_secret("GITHUB_TOKEN", "") or os.getenv("GITHUB_TOKEN", "")
-    h: Dict[str, str] = {
-        "Accept": "application/vnd.github+json",
-        "User-Agent": "maic-backup",
-    }
-    if token:
-        h["Authorization"] = f"token {token}"
-    if binary:
-        h["Accept"] = "application/octet-stream"
-    return h
-
-
-def _log(msg: str) -> None:
-    """가능하면 logger/streamlit로도 메시지를 출력."""
     try:
-        logger().info(msg)
+        import requests  # 이미 프로젝트 의존성에 포함되어 있다고 가정
     except Exception:
-        pass
-    if st is not None:
+        print("publish_backup: requests 모듈을 찾을 수 없습니다.")
+        return False
+
+    # ---- 유틸 -----------------------------------------------------------------
+    def _as_path(p) -> Path:
+        return p if isinstance(p, Path) else Path(str(p))
+
+    def _read_text(p: Path) -> str | None:
         try:
-            st.write(msg)
+            return p.read_text(encoding="utf-8")
+        except Exception:
+            return None
+
+    def _sha256_file(p: Path) -> str:
+        import hashlib
+        h = hashlib.sha256()
+        with p.open("rb") as r:
+            for chunk in iter(lambda: r.read(1024 * 1024), b""):
+                h.update(chunk)
+        return h.hexdigest()
+
+    def _count_lines(p: Path, limit: int | None = None) -> int:
+        # 큰 파일에서도 빠르게 동작하도록 버퍼링
+        cnt = 0
+        try:
+            with p.open("rb") as f:
+                for b in iter(lambda: f.read(1024 * 1024), b""):
+                    cnt += b.count(b"\n")
+                    if limit and cnt >= limit:
+                        return cnt
+        except Exception:
+            return 0
+        return cnt
+
+    def _gzip_bytes(data: bytes) -> bytes:
+        buf = io.BytesIO()
+        with gzip.GzipFile(fileobj=buf, mode="wb") as gz:
+            gz.write(data)
+        return buf.getvalue()
+
+    def _git_headers(token: str) -> dict[str, str]:
+        return {
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {token}",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "maic-backup-bot",
+        }
+
+    def _upload_headers(token: str, content_type: str) -> dict[str, str]:
+        h = _git_headers(token)
+        h["Content-Type"] = content_type
+        return h
+
+    def _get_env(name: str, default: str = "") -> str:
+        v = os.getenv(name)
+        return v if isinstance(v, str) and v.strip() else default
+
+    # ---- 입력/환경 수집 --------------------------------------------------------
+    base = _as_path(persist_dir)
+    chunks = base / "chunks.jsonl"
+    manifest = base / "manifest.json"
+
+    if not chunks.exists() or chunks.stat().st_size == 0:
+        print("publish_backup: chunks.jsonl 이 존재하지 않거나 비어 있습니다.")
+        return False
+
+    # 환경 변수 우선, 없으면 모듈 상수 시도
+    token = _get_env("GITHUB_TOKEN")
+    repo = _get_env("GITHUB_REPO")
+    branch = _get_env("GITHUB_BRANCH", "main")
+
+    if not token or not repo:
+        # 로컬 상수에 의존(있을 수도, 없을 수도 있음)
+        try:
+            from src.backup.github_config import (  # 선택적
+                GITHUB_TOKEN as _TK,
+                GITHUB_REPO as _RP,
+                GITHUB_BRANCH as _BR,
+            )
+            token = token or _TK
+            repo = repo or _RP
+            branch = branch or _BR or branch
         except Exception:
             pass
-# [03] END =====================================================================
+
+    if not token or not repo:
+        print("publish_backup: GITHUB_TOKEN/GITHUB_REPO 설정을 확인해 주세요.")
+        return False
+
+    api_base = f"https://api.github.com/repos/{repo}"
+    session = requests.Session()
+    session.headers.update(_git_headers(token))
+
+    # ---- manifest 구성(없으면 생성) --------------------------------------------
+    # mode 표시는 환경변수/기존 manifest에서 가져옴(HQ 버튼 대응)
+    mode = (_get_env("MAIC_INDEX_MODE", "STD") or "STD").upper()
+
+    build_id = time.strftime("%Y%m%d-%H%M%S")  # 기본값
+    manifest_obj: dict[str, object] = {}
+    try:
+        if manifest.exists():
+            manifest_obj = json.loads(_read_text(manifest) or "{}")
+            build_id = str(manifest_obj.get("build_id") or build_id)
+            # 최신 스키마 보정
+            manifest_obj["mode"] = str(manifest_obj.get("mode") or mode)
+            manifest_obj["sha256"] = manifest_obj.get("sha256") or _sha256_file(chunks)
+            manifest_obj["chunks"] = int(manifest_obj.get("chunks") or _count_lines(chunks))
+            manifest_obj["file"] = "chunks.jsonl"
+            manifest_obj["persist_dir"] = str(base)
+            manifest_obj["version"] = int(manifest_obj.get("version") or 2)
+        else:
+            manifest_obj = {
+                "build_id": build_id,
+                "created_at": int(time.time()),
+                "mode": mode,
+                "file": "chunks.jsonl",
+                "sha256": _sha256_file(chunks),
+                "chunks": _count_lines(chunks),
+                "persist_dir": str(base),
+                "version": 2,
+            }
+            manifest.write_text(
+                json.dumps(manifest_obj, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+    except Exception as e:
+        print(f"publish_backup: manifest 생성/보정 실패: {e}")
+        return False
+
+    tag = f"index-{build_id}"
+    rel_name = f"{tag} ({mode})"
+
+    # ---- 릴리스 생성 -----------------------------------------------------------
+    try:
+        payload = {
+            "tag_name": tag,
+            "name": rel_name,
+            "target_commitish": branch,
+            "body": (
+                "Automated index backup\n"
+                f"- mode: {mode}\n"
+                f"- chunks: {manifest_obj.get('chunks')}\n"
+                f"- sha256: {manifest_obj.get('sha256')}\n"
+            ),
+            "draft": False,
+            "prerelease": False,
+        }
+        r = session.post(f"{api_base}/releases", json=payload, timeout=30)
+        if r.status_code not in (201, 422):
+            print(f"publish_backup: 릴리스 생성 실패: {r.status_code} {r.text}")
+            return False
+
+        # 422(Unprocessable)인 경우: 동일 태그가 이미 있을 수 있음 → 해당 릴리스 가져오기
+        rel = r.json()
+        if r.status_code == 422:
+            rr = session.get(f"{api_base}/releases/tags/{tag}", timeout=15)
+            if rr.status_code != 200:
+                print(f"publish_backup: 기존 릴리스 조회 실패: {rr.status_code} {rr.text}")
+                return False
+            rel = rr.json()
+
+        upload_url_tpl = rel.get("upload_url", "")
+        upload_url = upload_url_tpl.split("{")[0]  # {?name,label} 제거
+        rel_id = rel.get("id")
+        if not upload_url or not rel_id:
+            print("publish_backup: upload_url 또는 release id를 얻지 못했습니다.")
+            return False
+    except Exception as e:
+        print(f"publish_backup: 릴리스 생성/조회 예외: {e}")
+        return False
+
+    # ---- 에셋 업로드(chunks.jsonl.gz, manifest.json) ---------------------------
+    try:
+        # gzip 압축
+        gz_data = _gzip_bytes(chunks.read_bytes())
+        asset_name = "chunks.jsonl.gz"
+        q = urllib.parse.urlencode({"name": asset_name})
+        urla = f"{upload_url}?{q}"
+        ra = session.post(
+            urla,
+            data=gz_data,
+            headers=_upload_headers(token, "application/gzip"),
+            timeout=60,
+        )
+        # 이미 존재(422)하면 교체 위해 먼저 삭제 후 재업로드
+        if ra.status_code == 422:
+            # 기존 동일 이름 에셋 id 조회
+            assets = session.get(f"{api_base}/releases/{rel_id}/assets", timeout=15).json()
+            old = next((a for a in assets if a.get("name") == asset_name), None)
+            if old:
+                aid = old.get("id")
+                session.delete(f"{api_base}/releases/assets/{aid}", timeout=15)
+                ra = session.post(
+                    urla,
+                    data=gz_data,
+                    headers=_upload_headers(token, "application/gzip"),
+                    timeout=60,
+                )
+        if ra.status_code not in (201, 200):
+            print(f"publish_backup: chunks 업로드 실패: {ra.status_code} {ra.text}")
+            return False
+
+        # manifest.json 업로드(텍스트)
+        m_name = "manifest.json"
+        qm = urllib.parse.urlencode({"name": m_name})
+        urlm = f"{upload_url}?{qm}"
+        rm = session.post(
+            urlm,
+            data=json.dumps(manifest_obj, ensure_ascii=False).encode("utf-8"),
+            headers=_upload_headers(token, "application/json"),
+            timeout=30,
+        )
+        if rm.status_code == 422:
+            assets = session.get(f"{api_base}/releases/{rel_id}/assets", timeout=15).json()
+            old = next((a for a in assets if a.get("name") == m_name), None)
+            if old:
+                aid = old.get("id")
+                session.delete(f"{api_base}/releases/assets/{aid}", timeout=15)
+                rm = session.post(
+                    urlm,
+                    data=json.dumps(manifest_obj, ensure_ascii=False).encode("utf-8"),
+                    headers=_upload_headers(token, "application/json"),
+                    timeout=30,
+                )
+        if rm.status_code not in (201, 200):
+            print(f"publish_backup: manifest 업로드 실패: {rm.status_code} {rm.text}")
+            return False
+    except Exception as e:
+        print(f"publish_backup: 에셋 업로드 예외: {e}")
+        return False
+
+    # ---- 보존 정책 적용(최근 keep개만 유지) ------------------------------------
+    try:
+        rels = []
+        page = 1
+        while True:
+            rr = session.get(
+                f"{api_base}/releases",
+                params={"per_page": 100, "page": page},
+                timeout=15,
+            )
+            if rr.status_code != 200:
+                break
+            batch = rr.json()
+            if not isinstance(batch, list) or not batch:
+                break
+            rels.extend(batch)
+            if len(batch) < 100:
+                break
+            page += 1
+
+        # index-* 태그만 필터
+        index_rels = [
+            r for r in rels
+            if isinstance(r.get("tag_name"), str) and r.get("tag_name", "").startswith("index-")
+        ]
+        # 최신순 정렬(created_at 기준)
+        index_rels.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+
+        # 보존 대상 제외하고 삭제 목록 산출
+        to_delete = index_rels[keep:] if keep > 0 else index_rels
+        for item in to_delete:
+            rid = item.get("id")
+            tname = item.get("tag_name", "")
+            if not rid:
+                continue
+            # 릴리스 삭제
+            session.delete(f"{api_base}/releases/{rid}", timeout=15)
+            # 태그도 정리(실패해도 무시)
+            if tname:
+                tr = session.delete(f"{api_base}/git/refs/tags/{tname}", timeout=15)
+                if tr.status_code not in (204, 200, 404):
+                    print(f"publish_backup: 태그 삭제 실패: {tname} {tr.status_code}")
+    except Exception as e:
+        # 보존 정책 실패는 치명적이지 않음 → True 반환은 유지
+        print(f"publish_backup: 보존 정책 적용 중 예외(무시): {e}")
+
+    print(f"publish_backup: 완료 — tag={tag}, repo={repo}")
+    return True
+# [03] END ======================================================================
+
 
 
 # ===== [04] RELEASE DISCOVERY =================================================  # [04] START
