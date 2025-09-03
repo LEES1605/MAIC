@@ -224,7 +224,7 @@ def render_index_orchestrator_panel() -> None:
     import time
     from pathlib import Path
     import importlib
-    from typing import Any
+    from typing import Any, Dict, List
     import shutil
     import os
 
@@ -331,22 +331,14 @@ def render_index_orchestrator_panel() -> None:
     chk = _try_import("src.drive.prepared", ["check_prepared_updates", "mark_prepared_consumed"])
     check_fn = chk.get("check_prepared_updates")
     mark_fn = chk.get("mark_prepared_consumed")
-
-    # NOTE: mypy union-attr 방지 — updates를 항상 dict[str, Any]로 보장
-    updates: dict[str, Any] = {}
+    updates: Any = None
     if callable(check_fn):
         try:
-            res = check_fn(PERSIST)
-            if isinstance(res, dict):
-                updates = res
-            else:
-                updates = {"status": "CHECK_FAILED", "error": "unexpected return type"}
+            updates = check_fn(PERSIST)
         except Exception:
             updates = {"status": "CHECK_FAILED", "error": "exception in check_prepared_updates"}
-    else:
-        updates = {"status": "CHECK_FAILED", "error": "check_prepared_updates not found"}
 
-    status = updates.get("status", "CHECK_FAILED")
+    status = (updates or {}).get("status", "CHECK_FAILED")
 
     # --- 상태 요약 ---
     with st.container(border=True):
@@ -379,9 +371,12 @@ def render_index_orchestrator_panel() -> None:
 
     # UPDATED → 사용자 선택
     if status == "UPDATED":
+        u: Dict[str, Any] = updates if isinstance(updates, dict) else {}
         with st.container(border=True):
             st.markdown("### ⚡ prepared 폴더에 **신규 파일**이 감지되었습니다.")
-            st.caption(f"파일 수: {updates.get('count', 0)}  |  캐시: {updates.get('cache_path','')}")
+            cnt = int(u.get("count", 0))
+            cache_path = str(u.get("cache_path", ""))
+            st.caption(f"파일 수: {cnt}  |  캐시: {cache_path}")
             colA, colB = st.columns([1, 1])
             with colA:
                 do_apply_new = st.button("신규 반영(재인덱싱 + 백업 → READY)", key="btn_apply_new")
@@ -389,7 +384,6 @@ def render_index_orchestrator_panel() -> None:
                 do_restore_old = st.button("기존 릴리스로 복구(→ READY)", key="btn_restore_old")
 
             if do_apply_new:
-                # 1) 재인덱싱 (서비스가 잠금/원자스왑/검증/manifest 처리)
                 svc = _try_import("src.services.index", ["reindex"])
                 reindex_fn = svc.get("reindex")
                 ok1 = False
@@ -401,7 +395,6 @@ def render_index_orchestrator_panel() -> None:
                     except Exception as e:
                         _log(f"reindex 예외: {e}")
                         ok1 = False
-                # 2) 백업 발행 (실패해도 로컬 READY 유지)
                 ok2 = False
                 if ok1:
                     gh = _try_import("src.backup.github_release", ["publish_backup"])
@@ -411,11 +404,11 @@ def render_index_orchestrator_panel() -> None:
                             ok2 = bool(pub(PERSIST))
                         if not ok2:
                             st.info("백업 발행 실패 또는 생략됨(로컬 READY는 유지됩니다).")
-                # 3) 상태/스텝/마킹
                 snap = sync_badge_from_fs()
                 if callable(mark_fn):
                     try:
-                        mark_fn(PERSIST, updates.get("files", []))
+                        files: List[Dict[str, Any]] = u.get("files", [])
+                        mark_fn(PERSIST, files)
                     except Exception:
                         pass
                 if snap["local_ok"]:
@@ -438,7 +431,8 @@ def render_index_orchestrator_panel() -> None:
                 snap = sync_badge_from_fs()
                 if callable(mark_fn):
                     try:
-                        mark_fn(PERSIST, updates.get("files", []))
+                        files: List[Dict[str, Any]] = u.get("files", [])
+                        mark_fn(PERSIST, files)
                     except Exception:
                         pass
                 if ok and snap["local_ok"]:
@@ -468,7 +462,7 @@ def render_index_orchestrator_panel() -> None:
     if status == "CHECK_FAILED":
         with st.container(border=True):
             st.warning("prepared 점검에 실패했습니다. 네트워크/권한을 확인해 주세요.")
-            st.caption(str(updates.get("error", "")))
+            st.caption(str((updates or {}).get("error", "")))
 
     # --- 수동 작업들 ---
     st.markdown("#### 작업")
@@ -480,8 +474,9 @@ def render_index_orchestrator_panel() -> None:
         do_restore = st.button("수동 복구(릴리스 → READY)", key="btn_restore_manual",
                                help="최신 릴리스에서 수동 복구합니다.")
     with b3:
-        do_clean = st.button("강제 초기화", key="btn_clean",
-                             help="persist의 .ready / chunks* / chunks/ 삭제")
+        do_clean = st.button("강제 초기화(로컬)", key="btn_clean",
+                             help="로컬 persist(.ready / chunks* / chunks/ 디렉터리)만 삭제합니다. "
+                                  "GitHub 릴리스(원격 백업)는 삭제하지 않습니다.")
 
     if do_force:
         svc = _try_import("src.services.index", ["reindex"])
