@@ -111,8 +111,8 @@ def _list_via_google_api(creds, folder_id: str) -> List[Dict[str, Any]]:
     """google-api-python-client 경로 (존재 시 우선 사용)."""
     try:
         disc = importlib.import_module("googleapiclient.discovery")  # type: ignore[import-not-found]
-    except Exception:
-        raise RuntimeError("google-api-python-client not available")
+    except Exception as e:
+        raise RuntimeError("google-api-python-client not available") from e
 
     build = getattr(disc, "build")
     service = build("drive", "v3", credentials=creds, cache_discovery=False)
