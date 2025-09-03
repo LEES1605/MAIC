@@ -408,11 +408,12 @@ def render_index_orchestrator_panel() -> None:
         snap = sync_badge_from_fs()
         if ok and snap["local_ok"]:
             st.success("재인덱싱 완료(READY).")
+            # ✅ 안전 캐스팅: type: ignore 제거
             if callable(mark_fn) and isinstance(updates, dict):
                 try:
-                    files = updates.get("files", [])  # type: ignore[assignment]
-                    if isinstance(files, list):
-                        mark_fn(PERSIST, files)
+                    files_raw: Any = updates.get("files", [])
+                    files_list: List[Dict[str, Any]] = files_raw if isinstance(files_raw, list) else []
+                    mark_fn(PERSIST, files_list)
                 except Exception:
                     pass
             _request_step("완료")
