@@ -518,7 +518,6 @@ def publish_backup(persist_dir, keep: int = 5) -> bool:
             if isinstance(v, str):
                 s = v.strip()
                 return int(s) if s else default
-            # 최후 수단
             return int(v)
         except Exception:
             return default
@@ -548,7 +547,9 @@ def publish_backup(persist_dir, keep: int = 5) -> bool:
             manifest_obj["sha256"] = (
                 manifest_obj.get("sha256") or _sha256_file(chunks)
             )
-            manifest_obj["chunks"] = _as_int(manifest_obj.get("chunks"), _count_lines(chunks))
+            manifest_obj["chunks"] = _as_int(
+                manifest_obj.get("chunks"), _count_lines(chunks)
+            )
             manifest_obj["file"] = "chunks.jsonl"
             manifest_obj["persist_dir"] = str(base)
             manifest_obj["version"] = _as_int(manifest_obj.get("version"), 2)
@@ -644,7 +645,11 @@ def publish_backup(persist_dir, keep: int = 5) -> bool:
             old = next((a for a in assets if a.get("name") == asset_name), None)
             if old:
                 aid = old.get("id")
-                session.delete(f"{API}/releases/assets/{aid}", timeout=15)
+                # ✅ 올바른 삭제 엔드포인트 (repo 포함)
+                session.delete(
+                    f"{API}/repos/{repo}/releases/assets/{aid}",
+                    timeout=15,
+                )
                 ra = session.post(
                     urla,
                     data=gz.getvalue(),
@@ -672,7 +677,11 @@ def publish_backup(persist_dir, keep: int = 5) -> bool:
             old = next((a for a in assets if a.get("name") == m_name), None)
             if old:
                 aid = old.get("id")
-                session.delete(f"{API}/releases/assets/{aid}", timeout=15)
+                # ✅ 올바른 삭제 엔드포인트 (repo 포함)
+                session.delete(
+                    f"{API}/repos/{repo}/releases/assets/{aid}",
+                    timeout=15,
+                )
                 rm = session.post(
                     urlm,
                     data=json.dumps(manifest_obj, ensure_ascii=False).encode("utf-8"),
@@ -730,4 +739,3 @@ def publish_backup(persist_dir, keep: int = 5) -> bool:
     _log(f"publish_backup: 완료 — tag={tag}, repo={repo}")
     return True
 # ===== [07] PUBLIC API: publish_backup =======================================  # [07] END
-
