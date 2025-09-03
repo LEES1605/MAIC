@@ -67,14 +67,13 @@ jobs:
 # [03] END
 
 # ===== [04] RUFF — LINT & FORMAT (AUTO-FIX) ================================= # [04] START
-      - name: Ruff — Lint (auto-fix)
+      - name: Ruff — Lint (auto-fix + GitHub annotations)
         run: |
           ruff --version
+          # 1) 자동수정 가능한 항목은 먼저 고치고
           ruff check . --fix
-
-      - name: Ruff — Format (auto-format)
-        run: |
-          ruff format .
+          # 2) 남은 문제는 GitHub 주석(Annotations)으로 상세 표시
+          ruff check . --output-format=github --show-source --show-fixes
 # [04] END
 
 # ===== [05] TYPE CHECK — STRICT (MANDATORY) ================================= # [05] START
