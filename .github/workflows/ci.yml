@@ -41,6 +41,10 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+
+      - name: Check import paths
+        run: bash scripts/check_import_paths.sh
+
 # [02] END
 
 # ===== [03] CACHE & INSTALL DEPENDENCIES ==================================== # [03] START
