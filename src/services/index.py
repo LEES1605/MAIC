@@ -154,98 +154,227 @@ def _pick_reindex_fn() -> Tuple[Optional[Any], str]:
     return None, ""
 
 
-# [07] Public API: reindex() ====================================================
-def reindex(dest_dir: Optional[str | Path] = None) -> bool:
-    """
-    로컬 인덱스를 재구축(또는 초기 구축)합니다.
-    - 가능한 인덱서 함수를 동적으로 탐색하여 호출합니다.
-    - 인자 시그니처 차이를 흡수(있으면 경로 전달, 아니면 무인자 호출).
-    - 빌더가 다른 경로에 산출물을 만들더라도, 다양한 패턴의 *.jsonl(.gz)와
-      chunks/ 디렉터리를 찾아 dest 루트로 이관/해제/병합 후 SSOT(.ready+chunks) 보정.
-    """
-    base = Path(dest_dir).expanduser() if dest_dir else _persist_dir()
+# [07] Public API: reindex() ====================================================  # [07] START
+from __future__ import annotations
+from pathlib import Path
+from typing import Optional, Any
+import shutil
+import os
+import time
+import json
+import hashlib
+import tempfile
+
+
+def _persist_dir() -> Path:
     try:
-        base.mkdir(parents=True, exist_ok=True)
+        from src.state.session import persist_dir  # type: ignore
+        return persist_dir()
     except Exception:
-        _set_brain_status("ERROR", "인덱스 경로 생성 실패", "local", attached=False)
+        pass
+    try:
+        from src.rag.index_build import PERSIST_DIR as IDX  # type: ignore
+        return Path(str(IDX)).expanduser()
+    except Exception:
+        pass
+    try:
+        from src.config import PERSIST_DIR as CFG  # type: ignore
+        return Path(str(CFG)).expanduser()
+    except Exception:
+        pass
+    return Path.home() / ".maic" / "persist"
+
+
+def _set_brain_status(code: str, msg: str, origin: str, attached: bool) -> None:
+    try:
+        from src.state.session import set_brain_status  # type: ignore
+        set_brain_status(code, msg, origin, attached)
+    except Exception:
+        pass
+
+
+def index_status(base: Path | None = None) -> dict[str, Any]:
+    p = base or _persist_dir()
+    cj = p / "chunks.jsonl"
+    ready = (p / ".ready").exists()
+    try:
+        size = cj.stat().st_size if cj.exists() else 0
+    except Exception:
+        size = 0
+    return {
+        "persist_dir": str(p),
+        "ready_flag": ready,
+        "chunks_exists": cj.exists(),
+        "chunks_size": size,
+        "local_ok": bool(ready and cj.exists() and size > 0),
+    }
+
+
+def _ensure_ready_signal(base: Path) -> None:
+    try:
+        r = base / ".ready"
+        if not r.exists():
+            r.write_text("ok", encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _pick_reindex_fn():
+    import importlib
+    cands = [
+        ("src.services.index_impl", "reindex"),  # 옵셔널 확장 포인트
+        ("src.rag.index_build", "rebuild_index"),
+        ("src.rag.index_build", "build_index"),
+        ("src.rag.index_build", "rebuild"),
+        ("src.rag.index_build", "index_all"),
+        ("src.rag.index_build", "build_all"),
+        ("src.rag.index_build", "build_index_with_checkpoint"),
+    ]
+    for mod, name in cands:
+        try:
+            m = importlib.import_module(mod)
+            fn = getattr(m, name, None)
+            if callable(fn):
+                return fn, f"{mod}:{name}"
+        except Exception:
+            continue
+    return None, ""
+
+
+def _sha1_file(p: Path) -> str:
+    h = hashlib.sha1()
+    with p.open("rb") as r:
+        for chunk in iter(lambda: r.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _verify_jsonl(p: Path, max_lines: int = 100) -> tuple[bool, int]:
+    """간이 검증: 상위 N라인 파싱 ok & 총 라인 수 count"""
+    count = 0
+    try:
+        with p.open("r", encoding="utf-8") as f:
+            for line in f:
+                count += 1
+                if count <= max_lines:
+                    json.loads(line)
+    except Exception:
+        return False, count
+    return (count > 0), count
+
+
+def _write_manifest(base: Path, chunk_path: Path, count: int) -> Path:
+    mode = (os.getenv("MAIC_INDEX_MODE") or "STD").upper()
+    manifest = {
+        "build_id": time.strftime("%Y%m%d-%H%M%S"),
+        "created_at": int(time.time()),
+        "mode": mode,
+        "file": "chunks.jsonl",
+        "sha1": _sha1_file(chunk_path),
+        "chunks": int(count),
+        "persist_dir": str(base),
+        "version": 1,
+    }
+    mf = base / "manifest.json"
+    mf.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    return mf
+
+
+def _lock_path(base: Path) -> Path:
+    return base / ".lock"
+
+
+def _acquire_lock(base: Path, ttl_sec: int = 1800) -> bool:
+    lp = _lock_path(base)
+    now = int(time.time())
+    if lp.exists():
+        try:
+            data = json.loads(lp.read_text(encoding="utf-8"))
+            ts = int(data.get("ts") or 0)
+            if now - ts < ttl_sec:
+                return False  # 다른 작업이 진행 중
+        except Exception:
+            pass
+    try:
+        lp.write_text(json.dumps({"ts": now, "pid": os.getpid()}), encoding="utf-8")
+        return True
+    except Exception:
         return False
 
-    # ---- 내부 헬퍼 --------------------------------------------------------------
-    def _size(p: Path) -> int:
-        try:
-            return p.stat().st_size
-        except Exception:
-            return 0
 
-    def _same(a: Path, b: Path) -> bool:
-        try:
-            return a.resolve() == b.resolve()
-        except Exception:
-            return str(a) == str(b)
+def _release_lock(base: Path) -> None:
+    try:
+        _lock_path(base).unlink(missing_ok=True)
+    except Exception:
+        pass
 
-    def _decompress_gz(src: Path, dst: Path) -> bool:
+
+def reindex(dest_dir: Optional[str | Path] = None) -> bool:
+    """
+    로컬 인덱스를 재구축(또는 초기 구축)합니다. (잠금 + tmp 빌드 → 검증 → 원자 스왑)
+    - 빌더는 항상 tmp 경로에 산출(인자 지원 시 tmp 전달)
+    - 산출물이 유효(jsonl 파싱, 라인수>0)하면 base로 원자 교체
+    - manifest.json 갱신, .ready 보정
+    - 동시 실행 방지(.lock, TTL 30분)
+    """
+    base = Path(dest_dir).expanduser() if dest_dir else _persist_dir()
+    base.mkdir(parents=True, exist_ok=True)
+
+    if not _acquire_lock(base):
+        _set_brain_status("BUSY", "다른 인덱싱/복구 작업이 진행 중입니다.", "local", attached=False)
+        return False
+
+    tmp_root = None
+    try:
+        # --- 1) tmp 작업 디렉터리
+        tmp_root = Path(tempfile.mkdtemp(prefix=".build_", dir=str(base)))
+        tmp_chunks = tmp_root / "chunks.jsonl"
+
+        # --- 2) 빌더 호출(tmp로 유도)
+        fn, name = _pick_reindex_fn()
+        if not callable(fn):
+            _set_brain_status("MISSING", "재인덱싱 함수가 없습니다.", "local", attached=False)
+            return False
+
         try:
-            import gzip
-            with gzip.open(src, "rb") as gf:
-                data = gf.read()
-            if not data:
+            # 우선 tmp 경로 전달 시도
+            ret = fn(tmp_root)
+        except TypeError:
+            # 인자 받지 않는 빌더면 내부에서 base를 썼을 수 있으므로 후처리에서 병합 처리
+            ret = fn()
+
+        # --- 3) 후보 경로 모아 tmp로 정리 (혹시 다른 경로에 만들었어도 끌어오기)
+        def _size(p: Path) -> int:
+            try:
+                return p.stat().st_size
+            except Exception:
+                return 0
+
+        def _decompress_gz(src: Path, dst: Path) -> bool:
+            try:
+                import gzip
+                with gzip.open(src, "rb") as gf:
+                    data = gf.read()
+                if not data:
+                    return False
+                dst.write_bytes(data)
+                return True
+            except Exception:
                 return False
-            # samefile 방지: dst가 이미 같은 경로/내용이면 스킵
-            if dst.exists() and _size(dst) == len(data):
-                return True
-            dst.write_bytes(data)
-            return True
-        except Exception:
-            return False
 
-    def _merge_chunk_dir(chunk_dir: Path, out_file: Path) -> bool:
-        """chunks/*.jsonl 여러 파일을 라인단위로 out_file에 병합."""
+        cands: list[Path] = [tmp_root]
         try:
-            bytes_written = 0
-            tmp_out = out_file.with_suffix(".jsonl.tmp")
-            tmp_out.unlink(missing_ok=True)
-            with tmp_out.open("wb") as w:
-                for p in sorted(chunk_dir.glob("*.jsonl")):
-                    try:
-                        with p.open("rb") as r:
-                            while True:
-                                buf = r.read(1024 * 1024)
-                                if not buf:
-                                    break
-                                w.write(buf)
-                                bytes_written += len(buf)
-                    except Exception:
-                        continue
-            if bytes_written > 0:
-                if out_file.exists():
-                    out_file.unlink()
-                tmp_out.replace(out_file)
-                return True
-            tmp_out.unlink(missing_ok=True)
-            return False
+            if isinstance(ret, (str, Path)):
+                cands.append(Path(ret).expanduser())
+            elif isinstance(ret, dict):
+                for k in ("output_dir", "out_dir", "persist_dir", "dir", "path", "chunks_dir"):
+                    v = ret.get(k)
+                    if isinstance(v, (str, Path)):
+                        cands.append(Path(v).expanduser())
         except Exception:
-            return False
+            pass
 
-    def _safe_copy(src: Path, dst: Path) -> bool:
-        """dst와 동일 파일이면 스킵, 아니면 copy2. 실패해도 예외를 밖으로 던지지 않는다."""
-        try:
-            if _same(src, dst):
-                return _size(dst) > 0
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, dst)
-            return True
-        except Exception:
-            return False
-
-    def _bring_chunks_to_root(cands: list[Path]) -> bool:
-        """후보 경로들에서 산출물을 찾아 base/chunks.jsonl로 만든다."""
-        target = base / "chunks.jsonl"
-
-        # 0바이트 target이 있으면 우선 제거(정상 산출물로 대체 예정)
-        if target.exists() and _size(target) == 0:
-            target.unlink(missing_ok=True)
-
-        # 1) 정확명 우선
+        # chunks.jsonl(.gz) / chunks/ 병합해서 tmp_chunks에 확보
         exact = []
         exact_gz = []
         dirs = []
@@ -275,100 +404,91 @@ def reindex(dest_dir: Optional[str | Path] = None) -> bool:
             except Exception:
                 pass
 
+        wrote = False
         if exact:
             best = max(exact, key=_size)
-            return _safe_copy(best, target)
-        if exact_gz:
+            shutil.copy2(best, tmp_chunks)
+            wrote = True
+        elif exact_gz:
             best_gz = max(exact_gz, key=_size)
-            return _decompress_gz(best_gz, target)
-        for d in dirs:
-            if _merge_chunk_dir(d, target):
-                return True
-        if any_jsonl:
-            best_any = max(any_jsonl, key=_size)
-            return _safe_copy(best_any, target)
-        if any_gz:
-            best_any_gz = max(any_gz, key=_size)
-            return _decompress_gz(best_any_gz, target)
+            wrote = _decompress_gz(best_gz, tmp_chunks)
+        else:
+            # 디렉터리 병합
+            for d in dirs:
+                try:
+                    bytes_written = 0
+                    tmp_out = tmp_chunks.with_suffix(".jsonl.tmp")
+                    tmp_out.unlink(missing_ok=True)
+                    with tmp_out.open("wb") as w:
+                        for p in sorted(d.glob("*.jsonl")):
+                            try:
+                                with p.open("rb") as r:
+                                    while True:
+                                        buf = r.read(1024 * 1024)
+                                        if not buf:
+                                            break
+                                        w.write(buf)
+                                        bytes_written += len(buf)
+                            except Exception:
+                                continue
+                    if bytes_written > 0:
+                        if tmp_chunks.exists():
+                            tmp_chunks.unlink()
+                        tmp_out.replace(tmp_chunks)
+                        wrote = True
+                        break
+                    tmp_out.unlink(missing_ok=True)
+                except Exception:
+                    continue
+            # 범용 *.jsonl/.gz
+            if not wrote and any_jsonl:
+                best_any = max(any_jsonl, key=_size)
+                shutil.copy2(best_any, tmp_chunks)
+                wrote = True
+            if not wrote and any_gz:
+                best_any_gz = max(any_gz, key=_size)
+                wrote = _decompress_gz(best_any_gz, tmp_chunks)
 
+        if not wrote or (not tmp_chunks.exists()):
+            _set_brain_status("MISSING", "재인덱싱 완료했지만 산출물(chunks.jsonl)을 찾지 못했습니다.", "local", attached=False)
+            return False
+
+        # --- 4) 검증
+        ok, lines = _verify_jsonl(tmp_chunks)
+        if not ok:
+            _set_brain_status("ERROR", "산출물 검증 실패(JSONL 파싱/라인수)", "local", attached=False)
+            return False
+
+        # --- 5) 원자 스왑: base/chunks.jsonl 교체
+        target = base / "chunks.jsonl"
+        tmp_final = target.with_suffix(".jsonl.new")
+        if tmp_final.exists():
+            tmp_final.unlink()
+        shutil.copy2(tmp_chunks, tmp_final)
+        if target.exists():
+            target.unlink()
+        tmp_final.replace(target)
+
+        # --- 6) manifest + ready
+        _write_manifest(base, target, lines)
+        _ensure_ready_signal(base)
+
+        status = index_status(base)
+        if status["local_ok"]:
+            _set_brain_status("READY", "재인덱싱 완료(READY)", "local", attached=True)
+            return True
+        _set_brain_status("MISSING", "재인덱싱 완료했지만 READY 조건 미충족", "local", attached=False)
         return False
 
-    # ---- 인덱서 선택 및 호출 ---------------------------------------------------
-    fn, _name = _pick_reindex_fn()
-    if not callable(fn):
-        _set_brain_status("MISSING", "재인덱싱 함수가 없습니다.", "local", attached=False)
-        return False
-
-    # 호출 전후로 후보 경로를 넓게 수집
-    candidates: list[Path] = [base]
-    try:
+    finally:
+        # tmp 정리 & 락 해제
         try:
-            from src.rag.index_build import PERSIST_DIR as IDX_DIR
-            candidates.append(Path(str(IDX_DIR)).expanduser())
+            if tmp_root and tmp_root.exists():
+                shutil.rmtree(tmp_root, ignore_errors=True)
         except Exception:
             pass
-
-        # 인자 유무에 맞춰 호출
-        try:
-            ret = fn(base)
-        except TypeError:
-            ret = fn()
-
-        # 반환값 힌트 흡수
-        try:
-            if isinstance(ret, (str, Path)):
-                candidates.append(Path(ret).expanduser())
-            elif isinstance(ret, dict):
-                for k in (
-                    "output_dir", "out_dir", "persist_dir",
-                    "dir", "path", "chunks_dir",
-                ):
-                    v = ret.get(k)
-                    if isinstance(v, (str, Path)):
-                        candidates.append(Path(v).expanduser())
-        except Exception:
-            pass
-    except Exception as e:
-        _set_brain_status("ERROR", f"재인덱싱 실패: {type(e).__name__}", "local", attached=False)
-        return False
-
-    # ---- 산출물 이관/복원 ------------------------------------------------------
-    uniq: list[Path] = []
-    seen = set()
-    for c in candidates:
-        try:
-            cp = c.resolve()
-        except Exception:
-            cp = c
-        if (str(cp) not in seen) and cp.exists():
-            uniq.append(cp)
-            seen.add(str(cp))
-
-    if not _bring_chunks_to_root(uniq):
-        _set_brain_status(
-            "MISSING",
-            "재인덱싱 완료했지만 산출물(chunks.jsonl)을 찾지 못했습니다.",
-            "local",
-            attached=False,
-        )
-        return False
-
-    # ---- SSOT 보정 및 최종 판정 -------------------------------------------------
-    _ensure_ready_signal(base)
-    status = index_status(base)
-    if status["local_ok"]:
-        _set_brain_status("READY", "재인덱싱 완료(READY)", "local", attached=True)
-        return True
-
-    _set_brain_status(
-        "MISSING",
-        "재인덱싱 완료했지만 READY 조건(.ready+chunks)이 미충족",
-        "local",
-        attached=False,
-    )
-    return False
+        _release_lock(base)
 # [07] END =====================================================================
-
 
 # [08] Public API: restore_or_attach() ==========================================
 def restore_or_attach(dest_dir: Optional[str | Path] = None) -> bool:
