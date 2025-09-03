@@ -145,28 +145,36 @@ def _latest_release(repo: str) -> Optional[dict]:
         return None
 
 
+def get_latest_release(repo: Optional[str] = None) -> Optional[dict]:
+    """
+    PUBLIC API: 최신 GitHub 릴리스를 반환합니다.
+    - repo 인자가 없으면 secrets/env의 GITHUB_REPO를 사용합니다.
+    - 요청/파싱 실패 시 None을 반환합니다(예외 발생하지 않음).
+    """
+    target = (repo or _repo()).strip()
+    rel = _latest_release(target)
+    if rel is None:
+        return None
+    # 최소 필드 정규화(호출측 편의)
+    if "tag_name" not in rel and "name" in rel:
+        rel["tag_name"] = rel.get("name")
+    return rel
+
+
 def _pick_best_asset(rel: dict) -> Optional[dict]:
-    """릴리스 자산 중 우선순위(.zip > .tar.gz/.tgz > .gz > 첫 번째)를 선택."""
+    """릴리스 자산 중 우선순위(.zip > .tar.gz > 첫 번째)를 선택."""
     assets = rel.get("assets") or []
     if not assets:
         return None
-    # 1) zip
     for a in assets:
         if str(a.get("name", "")).lower().endswith(".zip"):
             return a
-    # 2) tar.gz / tgz
     for a in assets:
-        n = str(a.get("name", "")).lower()
-        if n.endswith(".tar.gz") or n.endswith(".tgz"):
+        if str(a.get("name", "")).lower().endswith(".tar.gz"):
             return a
-    # 3) 단일 gz (예: chunks.jsonl.gz)
-    for a in assets:
-        n = str(a.get("name", "")).lower()
-        if n.endswith(".gz"):
-            return a
-    # 4) 그 외 첫 번째
     return assets[0] if assets else None
-# [04] END =====================================================================
+# [04] END
+
 
 # ===== [05] ASSET DOWNLOAD & EXTRACT =========================================  # [05] START
 def _download_asset(asset: dict) -> Optional[bytes]:
