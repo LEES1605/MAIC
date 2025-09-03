@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import importlib
 from typing import Any, Dict
 from pathlib import Path  # E402 방지: Path를 최상단에서 임포트
 
@@ -11,15 +12,16 @@ API = "https://api.github.com"
 def _log(msg: str) -> None:
     """프로젝트 어디서 호출해도 안전한 초간단 로거."""
     try:
-        # 선택: 세션 상태에 남기는 로거가 있다면 사용
-        from src.state.session import append_admin_log
-        append_admin_log(str(msg))
-        return
+        # 동적 임포트로 mypy attr-defined 회피
+        mod = importlib.import_module("src.state.session")
+        fn = getattr(mod, "append_admin_log", None)
+        if callable(fn):
+            fn(str(msg))
+            return
     except Exception:
         pass
     try:
         import logging
-
         logging.getLogger("maic.backup").info(str(msg))
     except Exception:
         # 최후 수단
@@ -35,10 +37,11 @@ def _token() -> str:
     t = _get_env("GITHUB_TOKEN")
     if t:
         return t
-    # 선택적 로컬 설정 폴백
+    # 동적 임포트로 mypy import-not-found 회피
     try:
-        from src.backup.github_config import GITHUB_TOKEN as TK
-        return str(TK)
+        mod = importlib.import_module("src.backup.github_config")
+        tk = getattr(mod, "GITHUB_TOKEN", "")
+        return str(tk) if tk else ""
     except Exception:
         return ""
 
@@ -48,8 +51,9 @@ def _repo() -> str:
     if r:
         return r
     try:
-        from src.backup.github_config import GITHUB_REPO as RP
-        return str(RP)
+        mod = importlib.import_module("src.backup.github_config")
+        rp = getattr(mod, "GITHUB_REPO", "")
+        return str(rp) if rp else ""
     except Exception:
         return ""
 
@@ -59,8 +63,9 @@ def _branch() -> str:
     if b:
         return b
     try:
-        from src.backup.github_config import GITHUB_BRANCH as BR
-        return str(BR or "main")
+        mod = importlib.import_module("src.backup.github_config")
+        br = getattr(mod, "GITHUB_BRANCH", "main")
+        return str(br or "main")
     except Exception:
         return "main"
 
@@ -83,6 +88,7 @@ def _upload_headers(content_type: str) -> Dict[str, str]:
     h["Content-Type"] = content_type
     return h
 # ===== [01] COMMON HELPERS =====================================================  # [01] END
+
 
 # ===== [02] CONSTANTS & PUBLIC EXPORTS =======================================  # [02] START
 __all__ = ["restore_latest", "get_latest_release", "publish_backup"]
