@@ -89,8 +89,7 @@ def _upload_headers(content_type: str) -> Dict[str, str]:
 
 
 # ===== [02] CONSTANTS & PUBLIC EXPORTS =======================================  # [02] START
-API = "https://api.github.com"
-__all__ = ["restore_latest", "get_latest_release"]
+__all__ = ["restore_latest", "get_latest_release", "publish_backup"]
 # [02] END =====================================================================
 
 
@@ -108,6 +107,9 @@ __all__ = ["restore_latest", "get_latest_release"]
 
 
 # ===== [04] RELEASE DISCOVERY =================================================  # [04] START
+from typing import Optional
+import requests
+
 def _latest_release(repo: str) -> Optional[dict]:
     """가장 최신 릴리스를 조회. 실패 시 None."""
     if not repo:
@@ -140,7 +142,7 @@ def get_latest_release(repo: Optional[str] = None) -> Optional[dict]:
 
 
 def _pick_best_asset(rel: dict) -> Optional[dict]:
-    """릴리스 자산 중 우선순위(.zip > .tar.gz > 첫 번째)를 선택."""
+    """릴리스 자산 중 우선순위(.zip > .tar.gz > .gz > 첫 번째)를 선택."""
     assets = rel.get("assets") or []
     if not assets:
         return None
@@ -150,18 +152,31 @@ def _pick_best_asset(rel: dict) -> Optional[dict]:
     for a in assets:
         if str(a.get("name", "")).lower().endswith(".tar.gz"):
             return a
+    for a in assets:
+        if str(a.get("name", "")).lower().endswith(".gz"):
+            return a
     return assets[0] if assets else None
 # [04] END
 
 
 # ===== [05] ASSET DOWNLOAD & EXTRACT =========================================  # [05] START
+from typing import Optional
+from pathlib import Path
+import io
+import zipfile
+import requests
+
 def _download_asset(asset: dict) -> Optional[bytes]:
     """GitHub 릴리스 자산을 내려받아 바이트로 반환. 실패 시 None."""
     url = asset.get("url") or asset.get("browser_download_url")
     if not url:
         return None
     try:
-        r = requests.get(url, headers=_headers(binary=True), timeout=60)
+        # GitHub 'assets/:id' API는 application/octet-stream을 요구
+        hdrs = dict(_headers())
+        if "releases/assets/" in url and "browser_download_url" not in asset:
+            hdrs["Accept"] = "application/octet-stream"
+        r = requests.get(url, headers=hdrs, timeout=60)
         r.raise_for_status()
         return r.content
     except Exception as e:
@@ -195,7 +210,7 @@ def _extract_targz(data: bytes, dest_dir: Path) -> bool:
 def _extract_gz_to_file(asset_name: str, data: bytes, dest_dir: Path) -> bool:
     """단일 .gz(예: chunks.jsonl.gz)를 dest_dir/<basename>으로 풀기."""
     try:
-        import gzip  # 지역 임포트로 상단 구획 변경 불필요
+        import gzip
         base = asset_name[:-3] if asset_name.lower().endswith(".gz") else asset_name
         out_path = dest_dir / base
         with gzip.GzipFile(fileobj=io.BytesIO(data), mode="rb") as gf:
@@ -219,7 +234,12 @@ def _extract_auto(asset_name: str, data: bytes, dest_dir: Path) -> bool:
     return _extract_zip(data, dest_dir)
 # [05] END =====================================================================
 
+
 # ===== [06] PUBLIC API: restore_latest =======================================  # [06] START
+from pathlib import Path
+import tempfile
+import shutil
+
 def restore_latest(dest_dir: str | Path) -> bool:
     """최신 GitHub Release에서 아티팩트를 내려받아 dest_dir에 복원.
 
