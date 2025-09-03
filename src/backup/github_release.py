@@ -322,10 +322,10 @@ def restore_latest(dest_dir: str | Path) -> bool:
         try:
             import gzip
             with gzip.open(src, "rb") as gf:
-                data = gf.read()
-            if not data:
+                data2 = gf.read()
+            if not data2:
                 return False
-            dst.write_bytes(data)
+            dst.write_bytes(data2)
             return True
         except Exception as e:
             _log(f"gz 해제 실패: {type(e).__name__}: {e}")
@@ -426,6 +426,20 @@ def restore_latest(dest_dir: str | Path) -> bool:
         return False
 
     ok_cons = _consolidate_to_target(dest, target)
+
+    # 🔁 최종 폴백: 릴리스 자산이 chunks.jsonl.gz 단일 파일인 경우, 원본 바이트로 직접 해제
+    if not ok_cons and asset_name.lower().endswith(".gz") and data:
+        try:
+            import gzip
+            raw = gzip.decompress(data)
+            if raw:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(raw)
+                _log("자산 바이트 직접 해제: chunks.jsonl 생성(폴백)")
+                ok_cons = True
+        except Exception as e:
+            _log(f"폴백 해제 실패: {type(e).__name__}: {e}")
+
     if not ok_cons:
         _log("산출물 정리 실패: chunks.jsonl을 만들 수 없습니다.")
         # READY 보정 없이 종료
@@ -443,6 +457,7 @@ def restore_latest(dest_dir: str | Path) -> bool:
     _log("복원이 완료되었습니다.")
     return True
 # ===== [06] PUBLIC API: restore_latest =======================================  # [06] END
+
 
 # ===== [07] PUBLIC API: get_latest_release ===================================  # [07] START
 def get_latest_release(repo: str | None = None) -> Optional[dict]:
