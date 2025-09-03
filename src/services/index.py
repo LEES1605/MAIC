@@ -153,7 +153,6 @@ def _pick_reindex_fn() -> Tuple[Optional[Any], str]:
             return fn, name
     return None, ""
 
-
 # [07] Public API: reindex() ====================================================  # [07] START
 def reindex(dest_dir=None) -> bool:
     """
@@ -174,17 +173,17 @@ def reindex(dest_dir=None) -> bool:
     # ---------- 내부 유틸 ----------
     def _persist_dir() -> Path:
         try:
-            from src.state.session import persist_dir  # type: ignore
+            from src.state.session import persist_dir
             return persist_dir()
         except Exception:
             pass
         try:
-            from src.rag.index_build import PERSIST_DIR as IDX  # type: ignore
+            from src.rag.index_build import PERSIST_DIR as IDX
             return Path(str(IDX)).expanduser()
         except Exception:
             pass
         try:
-            from src.config import PERSIST_DIR as CFG  # type: ignore
+            from src.config import PERSIST_DIR as CFG
             return Path(str(CFG)).expanduser()
         except Exception:
             pass
@@ -192,7 +191,7 @@ def reindex(dest_dir=None) -> bool:
 
     def _set_brain_status(code: str, msg: str, origin: str, attached: bool) -> None:
         try:
-            from src.state.session import set_brain_status  # type: ignore
+            from src.state.session import set_brain_status
             set_brain_status(code, msg, origin, attached)
         except Exception:
             pass
@@ -471,7 +470,7 @@ def reindex(dest_dir=None) -> bool:
         tmp_final.replace(target)
 
         # 6) manifest + ready
-        _write_manifest(base, target, lines)
+        _write_manifest(base, target, int(lines))
         _ensure_ready_signal(base)
 
         status = index_status(base)
@@ -497,7 +496,6 @@ def reindex(dest_dir=None) -> bool:
         except Exception:
             pass
 # [07] END =====================================================================
-
 
 # [08] Public API: restore_or_attach() ==========================================
 def restore_or_attach(dest_dir: Optional[str | Path] = None) -> bool:
