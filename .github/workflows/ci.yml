@@ -16,21 +16,64 @@ concurrency:
   cancel-in-progress: true
 # [00] END
 
-# ===== [01] JOB MATRIX & GLOBALS ============================================  # [01] START
+# ============================ [01] MAIN CI (ruff/mypy/pytest) — START ============================
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
 jobs:
-  lint-type-test:
-    name: Lint • Typecheck • Tests (py${{ matrix.python-version }})
+  checks:
+    name: Lint • Typecheck • Tests
     runs-on: ubuntu-latest
-
     strategy:
-      fail-fast: false
       matrix:
-        python-version: [ "3.10", "3.11", "3.12" ]
+        python-version: ["3.10", "3.12"]
 
-    defaults:
-      run:
-        shell: bash
-# [01] END
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Upgrade pip/setuptools/wheel
+        run: python -m pip install -U pip setuptools wheel
+
+      # 선택적 런타임 의존성 설치: requirements.txt가 있으면 설치
+      - name: Install runtime requirements (optional)
+        run: |
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
+
+      # 개발 도구 설치 (ruff/mypy/pytest)
+      - name: Install dev tools
+        run: pip install ruff mypy pytest
+
+      - name: Ruff
+        run: ruff check .
+
+      - name: mypy
+        run: mypy .
+
+      # 핵심 수정: PYTHONPATH에 repo 루트를 추가해 src 패키지를 인식시킴
+      - name: Set PYTHONPATH
+        run: echo "PYTHONPATH=$PWD" >> "$GITHUB_ENV"
+
+      - name: Pytest
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: pytest -q
+# ============================= [01] MAIN CI (ruff/mypy/pytest) — END =============================
 
 # ===== [02] CHECKOUT & PYTHON SETUP ========================================= # [02] START
     steps:
