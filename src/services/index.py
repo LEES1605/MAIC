@@ -161,7 +161,7 @@ def reindex(dest_dir=None) -> bool:
     - tmp 빌드 → 검증 → 원자 스왑
     - manifest.json 갱신, .ready 보정
     """
-    # 지역 임포트로 E402 회피 (파일 상단이 아닌 위치에 정의되기 때문)
+    # 지역 임포트(E402 회피)
     import os
     import json
     import time
@@ -223,7 +223,7 @@ def reindex(dest_dir=None) -> bool:
     def _pick_reindex_fn():
         import importlib
         cands = [
-            ("src.services.index_impl", "reindex"),  # 옵셔널 확장 포인트
+            ("src.services.index_impl", "reindex"),
             ("src.rag.index_build", "rebuild_index"),
             ("src.rag.index_build", "build_index"),
             ("src.rag.index_build", "rebuild"),
@@ -397,14 +397,28 @@ def reindex(dest_dir=None) -> bool:
                 pass
 
         wrote = False
+        # (A) exact match: chunks.jsonl
         if exact:
             best = max(exact, key=_size)
-            shutil.copy2(best, tmp_chunks)
-            wrote = True
+            try:
+                if best.resolve() == tmp_chunks.resolve():
+                    # 이미 목표 경로에 존재 → 복사 불필요
+                    wrote = True
+                else:
+                    shutil.copy2(best, tmp_chunks)
+                    wrote = True
+            except Exception:
+                # resolve() 실패 등 예외 시에도 동일 경로 여부 대비
+                if str(best) == str(tmp_chunks):
+                    wrote = True
+                else:
+                    raise
+        # (B) exact gz
         elif exact_gz:
             best_gz = max(exact_gz, key=_size)
             wrote = _decompress_gz(best_gz, tmp_chunks)
         else:
+            # (C) 디렉터리 병합
             for d in dirs:
                 try:
                     bytes_written = 0
@@ -431,10 +445,20 @@ def reindex(dest_dir=None) -> bool:
                     tmp_out.unlink(missing_ok=True)
                 except Exception:
                     continue
+            # (D) fallback: *.jsonl / *.jsonl.gz
             if not wrote and any_jsonl:
                 best_any = max(any_jsonl, key=_size)
-                shutil.copy2(best_any, tmp_chunks)
-                wrote = True
+                try:
+                    if best_any.resolve() == tmp_chunks.resolve():
+                        wrote = True
+                    else:
+                        shutil.copy2(best_any, tmp_chunks)
+                        wrote = True
+                except Exception:
+                    if str(best_any) == str(tmp_chunks):
+                        wrote = True
+                    else:
+                        raise
             if not wrote and any_gz:
                 best_any_gz = max(any_gz, key=_size)
                 wrote = _decompress_gz(best_any_gz, tmp_chunks)
@@ -470,7 +494,7 @@ def reindex(dest_dir=None) -> bool:
         tmp_final.replace(target)
 
         # 6) manifest + ready
-        _write_manifest(base, target, int(lines))
+        _write_manifest(base, target, lines)
         _ensure_ready_signal(base)
 
         status = index_status(base)
