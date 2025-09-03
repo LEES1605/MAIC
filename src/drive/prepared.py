@@ -1,14 +1,17 @@
 # ============================== [01] prepared-check API — START ==============================
 """
 prepared 폴더 신규 파일 검사.
-- check_prepared_updates(persist_dir) → { has_updates, count, newest_ts, files: [..], cache_path }
-- 내부적으로 src.integrations.gdrive.list_prepared_files()가 있으면 사용, 없으면 빈 리스트 폴백.
-- 마지막 본 상태를 persist_dir/prepared_seen.json에 저장하여 증분 판단.
+- check_prepared_updates(persist_dir) → {
+    status: "UPDATED" | "NO_UPDATES" | "CHECK_FAILED",
+    has_updates, count, newest_ts, files, new_ids, cache_path, error?
+  }
+- src.integrations.gdrive.list_prepared_files()가 있으면 사용, 없으면 빈 리스트 폴백.
+- 마지막 본 상태를 persist_dir/prepared_seen.json에 저장해 증분 판단.
 """
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, List, Dict
+from typing import Any, List, Dict, Tuple
 import json
 import time
 
@@ -38,9 +41,10 @@ def _save_seen(p: Path, data: Dict[str, Any]) -> None:
         pass
 
 
-def _list_prepared_files() -> List[Dict[str, Any]]:
+def _list_prepared_files_safe() -> Tuple[List[Dict[str, Any]], bool, str]:
     """
-    반환 예시: [{ "id": "fileId", "name": "doc.md", "modified_ts": 1725000000 }, ...]
+    반환: (files, ok, error_msg)
+      - files 예: [{ "id": "fileId", "name": "doc.md", "modified_ts": 1725000000 }, ...]
     """
     try:
         import importlib
@@ -50,11 +54,11 @@ def _list_prepared_files() -> List[Dict[str, Any]]:
         if callable(fn):
             out = fn()
             if isinstance(out, list):
-                return out
-    except Exception:
-        pass
-    # 폴백: 통합 모듈이 없으면 빈 리스트(신규 없음으로 처리)
-    return []
+                return out, True, ""
+            return [], False, "unexpected return type from list_prepared_files()"
+        return [], False, "function list_prepared_files() not found"
+    except Exception as e:
+        return [], False, f"{type(e).__name__}: {e}"
 
 
 def check_prepared_updates(persist_dir: Path | str) -> Dict[str, Any]:
@@ -63,7 +67,7 @@ def check_prepared_updates(persist_dir: Path | str) -> Dict[str, Any]:
     cache = _cache_path(base)
     seen_db = _load_seen(cache)
 
-    files = _list_prepared_files()
+    files, ok, err = _list_prepared_files_safe()
     latest_ts = 0
     has_updates = False
     new_ids = []
@@ -78,11 +82,13 @@ def check_prepared_updates(persist_dir: Path | str) -> Dict[str, Any]:
             has_updates = True
             new_ids.append(fid)
 
-    # 캐시 갱신(검사 시점만 갱신, 실제 반영 시점은 호출자가 다시 저장 가능)
+    # 캐시: 검사 시점 기록(실제 반영 시점은 호출자가 mark_prepared_consumed로 저장)
     seen_db["checked_at"] = _now_ts()
     _save_seen(cache, seen_db)
 
-    return {
+    status = "UPDATED" if has_updates else ("NO_UPDATES" if ok else "CHECK_FAILED")
+    out = {
+        "status": status,
         "has_updates": bool(has_updates),
         "count": int(len(files)),
         "newest_ts": int(latest_ts),
@@ -90,6 +96,9 @@ def check_prepared_updates(persist_dir: Path | str) -> Dict[str, Any]:
         "new_ids": new_ids,
         "cache_path": str(cache),
     }
+    if not ok:
+        out["error"] = err
+    return out
 
 
 def mark_prepared_consumed(persist_dir: Path | str, files: List[Dict[str, Any]]) -> None:
