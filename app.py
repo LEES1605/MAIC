@@ -323,20 +323,28 @@ def _safe_rerun(tag: str, ttl: int = 1) -> None:
 # ============================ [07] 헤더(배지·타이틀·⚙️) — START ============================
 def _header():
     """
-    - [배지] [LEES AI Teacher] [⚙️/로그아웃칩]을 '한 줄'에 배치.
-    - ⚙️ 클릭 시 '바로 아래'에 로그인 폼이 펼쳐짐(새로고침/쿼리파람 없음).
-    - 로그인 후엔 톱니 대신 '🚪 로그아웃' 칩이 즉시 표시.
-    - 진행선은 항상 표시(완료도 보이도록) — [06]에서 처리.
+    - 상단 상태 배지 + 브랜드 타이틀 + 관리자 영역(⚙️/로그아웃)을 한 줄 구성.
+    - 관리자 로그인은 st.form으로 처리하여 불필요한 재실행(리렌더)을 최소화.
+    - 로그인/로그아웃/닫기 시에는 _safe_rerun(tag, ttl=1)으로 '최대 1회'만 새로고침.
     """
-    if st is None:
+    st_mod = globals().get("st", None)
+    if st_mod is None:
         return
 
+    st = st_mod  # 지역 별칭(가독성)
     ss = st.session_state
+
+    # 초기 세션 키
+    ss.setdefault("admin_mode", False)
     ss.setdefault("_show_admin_login", False)
 
-    # 상태 배지/스타일(기존 그대로) ...
-    status = _get_brain_status()
-    code = status["code"]
+    # 현재 브레인 상태
+    try:
+        status = _get_brain_status()
+        code = status.get("code", "MISSING")
+    except Exception:
+        code = "MISSING"
+
     badge_txt, badge_class = {
         "READY": ("🟢 준비완료", "green"),
         "SCANNING": ("🟡 준비중", "yellow"),
@@ -346,61 +354,92 @@ def _header():
         "MISSING": ("🔴 미준비", "red"),
     }.get(code, ("🔴 미준비", "red"))
 
+    # 간단 스타일(기존 스타일 구획이 있다면 그대로 유지 가능)
     st.markdown(
         """
-    <style>
-      /* (스타일 블록 기존 그대로) */
-    </style>
-    """,
+        <style>
+          .status-btn { padding: 4px 8px; border-radius: 8px; font-weight: 600; }
+          .status-btn.green { background:#e7f7ee; color:#117a38; }
+          .status-btn.yellow{ background:#fff6e5; color:#8a5b00; }
+          .status-btn.red   { background:#ffeaea; color:#a40000; }
+          .brand-title { font-weight:800; letter-spacing:.2px; }
+        </style>
+        """,
         unsafe_allow_html=True,
     )
 
-    c1, c2, c3 = st.columns([0.0001, 0.0001, 0.0001], gap="small")
-    with st.container():
-        st.markdown('<div id="brand-inline">', unsafe_allow_html=True)
-        with c1:
-            st.markdown(f'<span class="status-btn {badge_class}">{badge_txt}</span>', unsafe_allow_html=True)
-        with c2:
-            st.markdown('<span class="brand-title">LEES AI Teacher</span>', unsafe_allow_html=True)
-        with c3:
-            if ss.get("admin_mode"):
-                if st.button("🚪 로그아웃", key="logout_now", help="관리자 로그아웃", use_container_width=False):
-                    ss["admin_mode"] = False
-                    ss["_show_admin_login"] = False
-                    st.success("로그아웃")
-                    _safe_rerun("admin:logout", ttl=1)   # 🔁 가드된 rerun
-                st.markdown('<span class="logout-chip" style="display:none"></span>', unsafe_allow_html=True)
-            else:
-                if st.button("⚙️", key="open_admin_login", help="관리자 로그인", use_container_width=False):
-                    ss["_show_admin_login"] = not ss.get("_show_admin_login", False)
-        st.markdown("</div>", unsafe_allow_html=True)
+    # 1) 상단 바: 배지 | 타이틀 | 관리자 버튼
+    c1, c2, c3 = st.columns([1, 3, 1], gap="small")
+    with c1:
+        st.markdown(
+            f'<span class="status-btn {badge_class}">{badge_txt}</span>',
+            unsafe_allow_html=True,
+        )
+    with c2:
+        st.markdown('<span class="brand-title">LEES AI Teacher</span>', unsafe_allow_html=True)
+    with c3:
+        if ss.get("admin_mode"):
+            if st.button("🚪 로그아웃", key="logout_now", help="관리자 로그아웃"):
+                ss["admin_mode"] = False
+                ss["_show_admin_login"] = False
+                if hasattr(st, "toast"):
+                    st.toast("로그아웃 완료", icon="👋")
+                else:
+                    st.success("로그아웃 완료")
+                _safe_rerun("admin:logout", ttl=1)
+        else:
+            if st.button("⚙️", key="open_admin_login", help="관리자 로그인"):
+                ss["_show_admin_login"] = not ss.get("_show_admin_login", False)
 
-    # 로그인 폼(제자리 토글)
+    # 2) 관리자 로그인 폼(폼 전송 시에만 재실행 발생 → 불필요 리렌더 감소)
     if not ss.get("admin_mode") and ss.get("_show_admin_login"):
         with st.container(border=True):
-            pwd_set = (
-                _from_secrets("ADMIN_PASSWORD", "")
-                or _from_secrets("APP_ADMIN_PASSWORD", "")
-                or ""
-            )
-            pw = st.text_input("관리자 비밀번호", type="password")
-            cols = st.columns([1, 1, 4])
-            with cols[0]:
-                if st.button("로그인"):
-                    if pw and pwd_set and pw == str(pwd_set):
-                        ss["admin_mode"] = True
-                        ss["_show_admin_login"] = False
-                        st.success("로그인 성공")
-                        _safe_rerun("admin:login", ttl=1)   # 🔁 가드된 rerun
-                    else:
-                        st.error("비밀번호가 올바르지 않습니다.")
-            with cols[1]:
-                if st.button("닫기"):
-                    ss["_show_admin_login"] = False
-                    _safe_rerun("admin:close", ttl=1)       # 🔁 가드된 rerun
+            st.write("🔐 관리자 로그인")
 
-    _render_boot_progress_line()
+            # 비밀번호 원천: secrets 우선 → 환경변수 대체
+            try:
+                pwd_set = (
+                    _from_secrets("ADMIN_PASSWORD", None)
+                    or _from_secrets("APP_ADMIN_PASSWORD", None)
+                    or os.getenv("ADMIN_PASSWORD")
+                    or os.getenv("APP_ADMIN_PASSWORD")
+                    or None
+                )
+            except Exception:
+                pwd_set = None
+
+            with st.form("admin_login_form", clear_on_submit=False):
+                pw = st.text_input("비밀번호", type="password")
+                col_a, col_b = st.columns([1, 1])
+                submit = col_a.form_submit_button("로그인")
+                cancel = col_b.form_submit_button("닫기")
+
+            if cancel:
+                ss["_show_admin_login"] = False
+                _safe_rerun("admin:close", ttl=1)
+
+            if submit:
+                if not pwd_set:
+                    st.error("서버에 관리자 비밀번호가 설정되어 있지 않습니다.")
+                elif pw and str(pw) == str(pwd_set):
+                    ss["admin_mode"] = True
+                    ss["_show_admin_login"] = False
+                    if hasattr(st, "toast"):
+                        st.toast("로그인 성공", icon="✅")
+                    else:
+                        st.success("로그인 성공")
+                    _safe_rerun("admin:login", ttl=1)
+                else:
+                    st.error("비밀번호가 올바르지 않습니다.")
+
+    # 3) 진행선(부팅/복원 상태 시각화)
+    try:
+        _render_boot_progress_line()
+    except Exception:
+        # 진행선 렌더 실패는 UX만 영향 → 조용히 무시
+        pass
 # ============================= [07] 헤더(배지·타이틀·⚙️) — END =============================
+
 
 
 # [08] 배경(완전 비활성) =======================================================
