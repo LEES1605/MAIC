@@ -32,7 +32,8 @@ def _get_folder_id() -> str:
     # streamlit secrets 사용 가능 시 대체
     try:
         st = importlib.import_module("streamlit")
-        fid = (st.secrets.get("GDRIVE_PREPARED_FOLDER_ID") or "").strip()  # type: ignore[attr-defined]
+        secrets_obj = getattr(st, "secrets", {})
+        fid = (secrets_obj.get("GDRIVE_PREPARED_FOLDER_ID") or "").strip()
         if fid:
             return fid
     except Exception:
@@ -63,7 +64,11 @@ def _load_service_account_json() -> Dict[str, Any] | None:
     # 2) streamlit secrets
     try:
         st = importlib.import_module("streamlit")
-        sa_obj = st.secrets.get("gcp_service_account") or st.secrets.get("GOOGLE_SERVICE_ACCOUNT_JSON")  # type: ignore[attr-defined]
+        secrets_obj = getattr(st, "secrets", {})
+        sa_obj = (
+            secrets_obj.get("gcp_service_account")
+            or secrets_obj.get("GOOGLE_SERVICE_ACCOUNT_JSON")
+        )
         if isinstance(sa_obj, dict):
             return dict(sa_obj)
         if isinstance(sa_obj, str):
@@ -85,15 +90,19 @@ def _build_credentials():
         svc_mod = importlib.import_module("google.oauth2.service_account")
         sa_json = _load_service_account_json()
         if sa_json:
-            creds = svc_mod.Credentials.from_service_account_info(sa_json, scopes=scope)  # type: ignore[attr-defined]
+            creds = getattr(svc_mod, "Credentials").from_service_account_info(
+                sa_json,
+                scopes=scope,
+            )
             return creds
     except Exception:
         pass
 
     # ADC
     try:
-        from google.auth import default as google_auth_default  # type: ignore
-        creds, _ = google_auth_default(scopes=scope)
+        auth = importlib.import_module("google.auth")
+        default_fn = getattr(auth, "default")
+        creds, _ = default_fn(scopes=scope)
         return creds
     except Exception:
         pass
@@ -108,11 +117,22 @@ def _list_via_google_api(creds, folder_id: str) -> List[Dict[str, Any]]:
     try:
         disc = importlib.import_module("googleapiclient.discovery")
     except Exception as e:
-        raise RuntimeError(f"googleapiclient.discovery import failed: {e}")
+        raise RuntimeError(
+            f"googleapiclient.discovery import failed: {e}"
+        ) from None
 
-    service = disc.build("drive", "v3", credentials=creds, cache_discovery=False)
+    service = disc.build(
+        "drive",
+        "v3",
+        credentials=creds,
+        cache_discovery=False,
+    )
 
-    q = f"'{folder_id}' in parents and mimeType != 'application/vnd.google-apps.folder' and trashed = false"
+    q = (
+        f"'{folder_id}' in parents and "
+        "mimeType != 'application/vnd.google-apps.folder' and "
+        "trashed = false"
+    )
     res = service.files().list(
         q=q,
         fields="files(id,name,modifiedTime,size,mimeType),nextPageToken",
@@ -173,7 +193,6 @@ def _list_via_rest(creds, folder_id: str) -> List[Dict[str, Any]]:
         session_cls = getattr(req_mod, "AuthorizedSession", None)
         if session_cls is None:
             raise RuntimeError("AuthorizedSession not found")
-
         sess = session_cls(creds)
     except Exception:
         # AuthorizedSession 이 없거나 실패 시, 토큰을 직접 주입하는 간이 대체
@@ -181,20 +200,25 @@ def _list_via_rest(creds, folder_id: str) -> List[Dict[str, Any]]:
 
         # creds.refresh(Request()) 으로 토큰 취득을 시도
         try:
-            from google.auth.transport.requests import Request  # type: ignore
+            req_mod2 = importlib.import_module("google.auth.transport.requests")
+            Request = getattr(req_mod2, "Request")
             creds.refresh(Request())
         except Exception:
             pass
 
         token = getattr(creds, "token", None)
         if not token:
-            raise RuntimeError("No OAuth token available")
+            raise RuntimeError("No OAuth token available") from None
 
         sess = requests.Session()
         sess.headers.update({"Authorization": f"Bearer {token}"})
 
     url = "https://www.googleapis.com/drive/v3/files"
-    q = f"'{folder_id}' in parents and mimeType != 'application/vnd.google-apps.folder' and trashed = false"
+    q = (
+        f"'{folder_id}' in parents and "
+        "mimeType != 'application/vnd.google-apps.folder' and "
+        "trashed = false"
+    )
     params = {
         "q": q,
         "fields": "files(id,name,modifiedTime,size,mimeType),nextPageToken",
@@ -242,3 +266,7 @@ def list_prepared_files() -> List[Dict[str, Any]]:
     except Exception:
         return _list_via_rest(creds, folder_id)
 # ============================= [01] GOOGLE DRIVE PREPARED — END =============================
+'''
+# verify no long lines
+violations = [(i+1, len(l), l) for i,l in enumerate(new_code2.splitlines()) if len(l)>100]
+len(violations)
