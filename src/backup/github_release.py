@@ -459,20 +459,88 @@ def restore_latest(dest_dir: str | Path) -> bool:
 # ===== [06] PUBLIC API: restore_latest =======================================  # [06] END
 
 
-# ===== [07] PUBLIC API: get_latest_release ===================================  # [07] START
-def get_latest_release(repo: str | None = None) -> Optional[dict]:
-    """가장 최신 GitHub Release의 원본 JSON(dict)을 반환.
-    - 성공: GitHub 'latest' 릴리스 JSON(dict) 반환(예: {'tag_name': 'v1.2.3', ...})
-    - 실패/없음: None 반환 (예외는 올리지 않음; 로그만 남김)
+# ===== [07] PUBLIC API: publish_backup =======================================  # [07] START
+def publish_backup(persist_dir: str | Path, tag_prefix: str = "index") -> dict | None:
     """
-    r = (repo or _repo() or "").strip()
-    if not r:
-        _log("get_latest_release: GITHUB_REPO 미설정")
-        return None
-    try:
-        return _latest_release(r)  # 내부에서 raise_for_status/예외 처리
-    except Exception as e:
-        _log(f"get_latest_release 오류: {type(e).__name__}: {e}")
-        return None
-# [07] END =====================================================================
+    현재 로컬 인덱스(PERSIST_DIR/chunks.jsonl)를 GitHub Release로 백업 발행.
+    - 새 태그: {tag_prefix}-YYYYMMDD-HHMMSS
+    - 자산: chunks.jsonl.gz
+    반환: {"tag": "...", "release_id": int, "asset": "chunks.jsonl.gz", "size": int} 또는 None
+    """
+    from pathlib import Path
+    import os
+    import io
+    import gzip
+    import json
+    import datetime
+    import requests  # type: ignore
 
+    dest = Path(persist_dir).expanduser()
+    src = dest / "chunks.jsonl"
+    if not (src.exists() and src.stat().st_size > 0):
+        _log("publish_backup: chunks.jsonl이 없거나 0B")
+        return None
+
+    repo = _repo()
+    if not repo:
+        _log("publish_backup: GITHUB_REPO 미설정")
+        return None
+
+    token = None
+    try:
+        token = GITHUB_TOKEN  # noqa: F821  (모듈 상단에 정의되어 있다고 가정)
+    except Exception:
+        token = None
+    if not token:
+        token = os.getenv("GITHUB_TOKEN", "")
+
+    if not token:
+        _log("publish_backup: GITHUB_TOKEN 미설정")
+        return None
+
+    # 자산 gzip
+    gz_name = "chunks.jsonl.gz"
+    buf = io.BytesIO()
+    with gzip.GzipFile(filename="chunks.jsonl", mode="wb", fileobj=buf) as z:
+        z.write(src.read_bytes())
+    data_bytes = buf.getvalue()
+
+    # 릴리스 생성
+    now = datetime.datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+    tag = f"{tag_prefix}-{now}"
+    api = f"https://api.github.com/repos/{repo}/releases"
+    headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github+json"}
+
+    payload = {"tag_name": tag, "name": tag, "draft": False, "prerelease": False}
+    try:
+        res = requests.post(api, headers=headers, data=json.dumps(payload), timeout=30)
+        if res.status_code >= 300:
+            _log(f"publish_backup: 릴리스 생성 실패 {res.status_code} {res.text[:200]}")
+            return None
+        rel = res.json()
+        upload_url = rel.get("upload_url", "")
+        # upload_url 예: https://uploads.github.com/repos/{repo}/releases/{id}/assets{?name,label}
+        upload_url = upload_url.split("{", 1)[0] + f"?name={gz_name}"
+        rid = int(rel.get("id") or 0)
+    except Exception as e:
+        _log(f"publish_backup: 요청 실패 — {type(e).__name__}: {e}")
+        return None
+
+    # 자산 업로드
+    try:
+        up_headers = {
+            "Authorization": f"token {token}",
+            "Content-Type": "application/gzip",
+            "Accept": "application/vnd.github+json",
+        }
+        res2 = requests.post(upload_url, headers=up_headers, data=data_bytes, timeout=60)
+        if res2.status_code >= 300:
+            _log(f"publish_backup: 자산 업로드 실패 {res2.status_code} {res2.text[:200]}")
+            return None
+    except Exception as e:
+        _log(f"publish_backup: 업로드 예외 — {type(e).__name__}: {e}")
+        return None
+
+    _log(f"백업 발행 완료: {tag} ({len(data_bytes)}B)")
+    return {"tag": tag, "release_id": rid, "asset": gz_name, "size": len(data_bytes)}
+# ===== [07] PUBLIC API: publish_backup =======================================  # [07] END
