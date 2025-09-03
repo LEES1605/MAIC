@@ -28,159 +28,208 @@ def _get_folder_id() -> str:
     fid = os.getenv("GDRIVE_PREPARED_FOLDER_ID", "").strip()
     if fid:
         return fid
+
+    # streamlit secrets 사용 가능 시 대체
     try:
-        st = importlib.import_module("streamlit")  # type: ignore[import-not-found]
-        for k in ("GDRIVE_PREPARED_FOLDER_ID", "PREPARED_FOLDER_ID"):
-            if getattr(st, "secrets", None) and k in st.secrets:
-                v = str(st.secrets[k]).strip()
-                if v:
-                    return v
+        st = importlib.import_module("streamlit")
+        fid = (st.secrets.get("GDRIVE_PREPARED_FOLDER_ID") or "").strip()  # type: ignore[attr-defined]
+        if fid:
+            return fid
     except Exception:
         pass
-    return ""
+
+    raise RuntimeError("GDRIVE_PREPARED_FOLDER_ID not found")
 
 
-def _get_service_account_json() -> Dict[str, Any] | None:
-    v = os.getenv("GDRIVE_SA_JSON", "").strip()
-    if v:
+def _load_service_account_json() -> Dict[str, Any] | None:
+    """
+    우선순위:
+      1) 환경변수 GDRIVE_SA_JSON (JSON 문자열 또는 파일 경로)
+      2) st.secrets["gcp_service_account"] 또는 ["GOOGLE_SERVICE_ACCOUNT_JSON"]
+    """
+    # 1) 환경변수
+    sa = (os.getenv("GDRIVE_SA_JSON") or "").strip()
+    if sa:
+        # 파일 경로일 수 있음
+        p = Path(sa)
+        if p.exists():
+            return json.loads(p.read_text(encoding="utf-8"))
+        # 아니면 JSON 문자열
         try:
-            if v.lstrip().startswith("{"):
-                return json.loads(v)
-            p = Path(v).expanduser()
-            if p.exists():
-                return json.loads(p.read_text(encoding="utf-8"))
+            return json.loads(sa)
         except Exception:
             pass
+
+    # 2) streamlit secrets
     try:
-        st = importlib.import_module("streamlit")  # type: ignore[import-not-found]
-        for k in ("gcp_service_account", "GOOGLE_SERVICE_ACCOUNT_JSON", "GDRIVE_SA_JSON"):
-            if getattr(st, "secrets", None) and k in st.secrets:
-                obj = st.secrets[k]
-                if isinstance(obj, dict):
-                    return dict(obj)
-                try:
-                    return json.loads(str(obj))
-                except Exception:
-                    pass
+        st = importlib.import_module("streamlit")
+        sa_obj = st.secrets.get("gcp_service_account") or st.secrets.get("GOOGLE_SERVICE_ACCOUNT_JSON")  # type: ignore[attr-defined]
+        if isinstance(sa_obj, dict):
+            return dict(sa_obj)
+        if isinstance(sa_obj, str):
+            return json.loads(sa_obj)
     except Exception:
         pass
+
     return None
 
 
 def _build_credentials():
+    """
+    서비스 계정 JSON이 있으면 해당 계정으로, 없으면 ADC(앱 기본 자격증명)로 시도.
+    """
+    scope = ["https://www.googleapis.com/auth/drive.readonly"]
+
+    # google.oauth2.service_account
     try:
-        svc_mod = importlib.import_module("google.oauth2.service_account")  # type: ignore[import-not-found]
-    except Exception as e:
-        raise RuntimeError("google-auth not available") from e
-
-    sa = _get_service_account_json()
-    if not sa:
-        raise RuntimeError("service account json missing")
-
-    scopes = ["https://www.googleapis.com/auth/drive.readonly"]
-    Credentials = getattr(svc_mod, "Credentials", None)
-    if Credentials is None:
-        raise RuntimeError("Credentials class not found in google.oauth2.service_account")
-    return Credentials.from_service_account_info(sa, scopes=scopes)
-
-
-def _rfc3339_to_epoch(s: str) -> int:
-    try:
-        from datetime import datetime
-        ss = s.replace("Z", "+00:00")
-        return int(datetime.fromisoformat(ss).timestamp())
+        svc_mod = importlib.import_module("google.oauth2.service_account")
+        sa_json = _load_service_account_json()
+        if sa_json:
+            creds = svc_mod.Credentials.from_service_account_info(sa_json, scopes=scope)  # type: ignore[attr-defined]
+            return creds
     except Exception:
-        try:
-            import datetime as dt
-            return int(time.mktime(dt.datetime.strptime(s[:19], "%Y-%m-%dT%H:%M:%S").timetuple()))
-        except Exception:
-            return 0
+        pass
+
+    # ADC
+    try:
+        from google.auth import default as google_auth_default  # type: ignore
+        creds, _ = google_auth_default(scopes=scope)
+        return creds
+    except Exception:
+        pass
+
+    raise RuntimeError("No credentials found (service account or ADC)")
 
 
 def _list_via_google_api(creds, folder_id: str) -> List[Dict[str, Any]]:
+    """
+    googleapiclient.discovery 사용
+    """
     try:
-        disc = importlib.import_module("googleapiclient.discovery")  # type: ignore[import-not-found]
+        disc = importlib.import_module("googleapiclient.discovery")
     except Exception as e:
-        raise RuntimeError("google-api-python-client not available") from e
+        raise RuntimeError(f"googleapiclient.discovery import failed: {e}")
 
-    build = getattr(disc, "build")
-    service = build("drive", "v3", credentials=creds, cache_discovery=False)
-    q = f"'{folder_id}' in parents and trashed=false"
-    fields = "files(id,name,modifiedTime,size,mimeType),nextPageToken"
-    page_token = None
-    out: List[Dict[str, Any]] = []
-    while True:
-        resp = (
-            service.files()
-            .list(q=q, fields=fields, pageSize=1000, pageToken=page_token)
-            .execute()
+    service = disc.build("drive", "v3", credentials=creds, cache_discovery=False)
+
+    q = f"'{folder_id}' in parents and mimeType != 'application/vnd.google-apps.folder' and trashed = false"
+    res = service.files().list(
+        q=q,
+        fields="files(id,name,modifiedTime,size,mimeType),nextPageToken",
+        spaces="drive",
+        pageSize=1000,
+        includeItemsFromAllDrives=True,
+        supportsAllDrives=True,
+        corpora="allDrives",
+    ).execute()
+
+    files = []
+    for f in res.get("files", []):
+        modified_ts = _parse_modified_time(f.get("modifiedTime"))
+        size = int(f.get("size") or 0)
+        files.append(
+            {
+                "id": f.get("id"),
+                "name": f.get("name"),
+                "modified_ts": modified_ts,
+                "size": size,
+                "mime": f.get("mimeType"),
+            }
         )
-        for f in resp.get("files", []):
-            out.append(
-                {
-                    "id": f.get("id") or "",
-                    "name": f.get("name") or "",
-                    "modified_ts": _rfc3339_to_epoch(str(f.get("modifiedTime") or "")),
-                    "size": int(f.get("size") or 0),
-                    "mime": f.get("mimeType") or "",
-                }
-            )
-        page_token = resp.get("nextPageToken")
-        if not page_token:
-            break
-    return out
+    return files
+
+
+def _parse_modified_time(s: str | None) -> int:
+    """
+    RFC3339 문자열에서 epoch 초로 변환
+    """
+    if not s:
+        return 0
+    try:
+        # "2024-08-31T10:22:33.000Z" 형태
+        # 표준 라이브러리로 단순 파싱 (정밀도는 초 단위)
+        from datetime import datetime, timezone
+
+        # 끝이 'Z'인 UTC
+        if s.endswith("Z"):
+            s2 = s.replace("Z", "+00:00")
+            dt = datetime.fromisoformat(s2)
+        else:
+            dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return int(dt.timestamp())
+    except Exception:
+        # 실패 시 대략 현재 시각 반환(정렬 목적)
+        return int(time.time())
 
 
 def _list_via_rest(creds, folder_id: str) -> List[Dict[str, Any]]:
+    """
+    googleapiclient 가 불가할 때 requests + google.auth.transport.requests 로 대체
+    """
     try:
-        req_mod = importlib.import_module("google.auth.transport.requests")  # type: ignore[import-not-found]
-    except Exception as e:
-        raise RuntimeError("google-auth transport not available") from e
+        req_mod = importlib.import_module("google.auth.transport.requests")
+        session_cls = getattr(req_mod, "AuthorizedSession", None)
+        if session_cls is None:
+            raise RuntimeError("AuthorizedSession not found")
 
-    AuthorizedSession = getattr(req_mod, "AuthorizedSession", None)
-    if AuthorizedSession is None:
-        raise RuntimeError("AuthorizedSession not found")
+        sess = session_cls(creds)
+    except Exception:
+        # AuthorizedSession 이 없거나 실패 시, 토큰을 직접 주입하는 간이 대체
+        import requests
 
-    sess = AuthorizedSession(creds)
-    base = "https://www.googleapis.com/drive/v3/files"
-    q = f"'{folder_id}' in parents and trashed=false"
+        # creds.refresh(Request()) 으로 토큰 취득을 시도
+        try:
+            from google.auth.transport.requests import Request  # type: ignore
+            creds.refresh(Request())
+        except Exception:
+            pass
+
+        token = getattr(creds, "token", None)
+        if not token:
+            raise RuntimeError("No OAuth token available")
+
+        sess = requests.Session()
+        sess.headers.update({"Authorization": f"Bearer {token}"})
+
+    url = "https://www.googleapis.com/drive/v3/files"
+    q = f"'{folder_id}' in parents and mimeType != 'application/vnd.google-apps.folder' and trashed = false"
     params = {
         "q": q,
         "fields": "files(id,name,modifiedTime,size,mimeType),nextPageToken",
+        "spaces": "drive",
         "pageSize": "1000",
-        "supportsAllDrives": "true",
         "includeItemsFromAllDrives": "true",
+        "supportsAllDrives": "true",
+        "corpora": "allDrives",
     }
-    out: List[Dict[str, Any]] = []
-    page_token = None
-    while True:
-        if page_token:
-            params["pageToken"] = page_token
-        r = sess.get(base, params=params, timeout=30)
-        r.raise_for_status()
-        data = r.json()
-        for f in data.get("files", []):
-            out.append(
-                {
-                    "id": f.get("id") or "",
-                    "name": f.get("name") or "",
-                    "modified_ts": _rfc3339_to_epoch(str(f.get("modifiedTime") or "")),
-                    "size": int(f.get("size") or 0),
-                    "mime": f.get("mimeType") or "",
-                }
-            )
-        page_token = data.get("nextPageToken")
-        if not page_token:
-            break
-    return out
+
+    r = sess.get(url, params=params)
+    r.raise_for_status()
+    data = r.json()
+
+    files = []
+    for f in data.get("files", []):
+        modified_ts = _parse_modified_time(f.get("modifiedTime"))
+        size = int(f.get("size") or 0)
+        files.append(
+            {
+                "id": f.get("id"),
+                "name": f.get("name"),
+                "modified_ts": modified_ts,
+                "size": size,
+                "mime": f.get("mimeType"),
+            }
+        )
+    return files
 
 
 def list_prepared_files() -> List[Dict[str, Any]]:
     """
-    준비(prepared) 폴더의 파일 목록을 반환.
-    - google-api-python-client가 있으면 우선 사용
-    - 없으면 google-auth의 AuthorizedSession으로 REST 호출
-    - 설정/의존성 부족 시 RuntimeError를 던져 상위(로컬 폴백 등)에서 처리
+    prepared 폴더의 (폴더 제외) 파일 목록을 반환
+    - googleapiclient가 있으면 우선 사용
+    - 없으면 REST 대체 경로
     """
     folder_id = _get_folder_id()
     if not folder_id:
