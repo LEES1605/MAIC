@@ -218,14 +218,14 @@ def render_index_orchestrator_panel() -> None:
     - 단계별 설명 팝오버/툴팁 제공
     - 실패 시 세부 원인(READY 신호/파일 존재/크기/세션 메시지) 즉시 로그 남김
     - 추가: 릴리스 복구 라벨 명확화, 강제 초기화, 파일 스냅샷 보기
-    - NEW: 자동 완료(성공 시 스텝을 '완료'로 이동), 강제 재인덱싱(HQ) 버튼
+    - NEW: 자동 완료(성공 시 스텝 ‘완료’ 이동) — 위젯 생성 후 직접 set 금지 → 예약+rerun 방식
     """
     import time
     from pathlib import Path
     import importlib
     from typing import Any
     import shutil
-    import os  # NEW
+    import os
 
     import streamlit as st  # 런타임 임포트
 
@@ -259,7 +259,27 @@ def render_index_orchestrator_panel() -> None:
             pass
         return rows
 
-    # --- NEW: 세션/스냅샷 API 동적 로드(정적 import 제거 → mypy import-not-found 방지) ---
+    # 예약 스텝 적용 + rerun 트리거 유틸
+    def _apply_pending_step_before_widgets(steps: list[str]) -> None:
+        # 위젯 생성 전에만 호출
+        next_key = "_orchestrator_next_step"
+        if next_key in st.session_state:
+            val = st.session_state.pop(next_key, None)
+            if val in steps:
+                st.session_state["_orchestrator_step"] = val
+
+    def _request_step(step: str) -> None:
+        # 위젯 생성 후에는 직접 set 금지 → 예약하고 rerun
+        st.session_state["_orchestrator_next_step"] = step
+        try:
+            st.rerun()
+        except Exception:
+            try:
+                st.experimental_rerun()
+            except Exception:
+                pass
+
+    # --- 세션/스냅샷 API 동적 로드(정적 import 제거) ---
     def _load_session_api():
         ensure_keys_fn = None
         persist_dir_fn = None
@@ -318,8 +338,6 @@ def render_index_orchestrator_panel() -> None:
     # ---------- state ----------
     ensure_keys()
     PERSIST = _persist_dir()
-    snap = snapshot_index(PERSIST)
-    ready = bool(snap.get("local_ok"))
 
     # ---------- steps & tips ----------
     steps = ["프리검사", "백업훑", "변경검지", "다운로드", "복구/해체", "연결성", "완료"]
@@ -333,8 +351,14 @@ def render_index_orchestrator_panel() -> None:
         "완료": "학생 질의 가능(READY) 최종 확인",
     }
 
-    # ✅ 위젯 생성 '이전'에 상태 보정(READY 전 '완료' 선택 차단)
+    # 위젯 생성 전에 ‘예약된 스텝’ 적용
     st.session_state.setdefault("_orchestrator_step", steps[0])
+    _apply_pending_step_before_widgets(steps)
+
+    # 현 스냅샷
+    snap = snapshot_index(PERSIST)
+    ready = bool(snap.get("local_ok"))
+    # READY 전 '완료' 선택 차단
     if not ready and st.session_state["_orchestrator_step"] == "완료":
         st.session_state["_orchestrator_step"] = steps[0]
 
@@ -343,7 +367,6 @@ def render_index_orchestrator_panel() -> None:
     with left:
         st.subheader("🛠 진단 도구")
     with right:
-        # 단계 설명 팝오버(클릭식). 환경에 따라 popover 미지원 시 expander로 폴백
         try:
             with st.popover("ⓘ 단계 설명", use_container_width=False):
                 st.markdown("| 단계 | 설명 |")
@@ -357,7 +380,6 @@ def render_index_orchestrator_panel() -> None:
                 for s in steps:
                     st.markdown(f"| {s} | {STEP_TIPS.get(s,'—')} |")
 
-    # segmented_control가 없는 환경에서는 radio로 폴백
     try:
         st.segmented_control(
             "단계",
@@ -403,41 +425,21 @@ def render_index_orchestrator_panel() -> None:
     st.markdown("#### 작업")
     b1, b2, b3, b4, b5, b6 = st.columns([1, 1, 1, 1, 1, 1])
     with b1:
-        do_quick = st.button(
-            "빠른 점검",
-            key="btn_quick",
-            help="버튼 클릭 시에만 네트워크를 확인합니다.",
-        )
+        do_quick = st.button("빠른 점검", key="btn_quick", help="버튼 클릭 시에만 네트워크를 확인합니다.")
     with b2:
-        do_reset = st.button(
-            "결과 초기화",
-            key="btn_reset",
-            help="진단 결과/오류 로그 뷰를 초기화합니다.",
-        )
+        do_reset = st.button("결과 초기화", key="btn_reset", help="진단 결과/오류 로그 뷰를 초기화합니다.")
     with b3:
-        do_update = st.button(
-            "릴리스 복구(업데이트)",
-            key="btn_restore",
-            help="GitHub 최신 릴리스에서 복구를 시도합니다.",
-        )
+        do_update = st.button("릴리스 복구(업데이트)", key="btn_restore",
+                              help="GitHub 최신 릴리스에서 복구를 시도합니다.")
     with b4:
-        do_reindex = st.button(
-            "재인덱싱",
-            key="btn_reindex",
-            help="로컬 인덱스를 새로 구축합니다(항상 표시).",
-        )
+        do_reindex = st.button("재인덱싱", key="btn_reindex",
+                               help="로컬 인덱스를 새로 구축합니다(항상 표시).")
     with b5:
-        do_clean = st.button(
-            "강제 초기화",
-            key="btn_clean",
-            help="persist의 .ready / chunks* / chunks/ 를 삭제하고 깨끗이 시작합니다.",
-        )
+        do_clean = st.button("강제 초기화", key="btn_clean",
+                             help="persist의 .ready / chunks* / chunks/ 를 삭제하고 깨끗이 시작합니다.")
     with b6:
-        do_reindex_hq = st.button(
-            "강제 재인덱싱(HQ)",
-            key="btn_reindex_hq",
-            help="강제초기화 후 HQ 모드(작은 청크, 높은 오버랩, 상한↑)로 깊게 재인덱싱합니다.",
-        )
+        do_reindex_hq = st.button("강제 재인덱싱(HQ)", key="btn_reindex_hq",
+                                  help="강제초기화 후 HQ 모드(작은 청크, 높은 오버랩, 상한↑)로 깊게 재인덱싱합니다.")
 
     # ---------- log area ----------
     log_key = "_orchestrator_log"
@@ -509,7 +511,7 @@ def render_index_orchestrator_panel() -> None:
                 if ok and snap["local_ok"]:
                     _log(f"restore 결과: READY — {snap}")
                     st.success("복구 완료.")
-                    st.session_state["_orchestrator_step"] = "완료"  # NEW: 자동 완료
+                    _request_step("완료")  # ← 위젯 생성 후 직접 set 금지 → 예약+rerun
                 elif ok and not snap["local_ok"]:
                     _log(f"restore 결과: MISSING — {snap}")
                     st.warning("복구는 성공했지만 READY 조건(.ready+chunks)이 충족되지 않았습니다.")
@@ -536,19 +538,9 @@ def render_index_orchestrator_panel() -> None:
                 ],
             )
             fn = next(
-                (
-                    idx[n]
-                    for n in (
-                        "rebuild_index",
-                        "build_index",
-                        "rebuild",
-                        "index_all",
-                        "build_all",
-                        "build_index_with_checkpoint",
-                    )
-                    if callable(idx.get(n))
-                ),
-                None,
+                (idx[n] for n in (
+                    "rebuild_index","build_index","rebuild","index_all","build_all","build_index_with_checkpoint"
+                ) if callable(idx.get(n))), None
             )
 
         if callable(fn):
@@ -569,7 +561,7 @@ def render_index_orchestrator_panel() -> None:
                     if bs_msg:
                         _log(f"status_msg: {bs_msg}")
                     st.success("재인덱싱 완료.")
-                    st.session_state["_orchestrator_step"] = "완료"  # NEW: 자동 완료
+                    _request_step("완료")  # ← 예약+rerun
                 elif success and not snap["local_ok"]:
                     _log(f"reindex 결과: MISSING — {snap}")
                     if bs_msg:
@@ -618,7 +610,7 @@ def render_index_orchestrator_panel() -> None:
         if snap["local_ok"]:
             _log(f"reindex(HQ) 결과: READY — {snap}")
             st.success("강제 재인덱싱(HQ) 완료.")
-            st.session_state["_orchestrator_step"] = "완료"  # NEW: 자동 완료
+            _request_step("완료")  # ← 예약+rerun
         else:
             _log(f"reindex(HQ) 결과: MISSING — {snap}")
             st.warning("HQ 재인덱싱 후 READY 조건(.ready+chunks)이 충족되지 않았습니다.")
