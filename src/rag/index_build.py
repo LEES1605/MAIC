@@ -85,17 +85,15 @@ def _unpack_snapshot(blob: bytes) -> Dict[str, Any]:
 # ======================= [04] PUBLIC API: rebuild_index — START =======================
 def rebuild_index(output_dir=None):
     """
-    로컬 인덱스를 재구축합니다. (고퀄 버전)
+    로컬 인덱스를 재구축합니다. (고퀄/HQ 모드 지원)
     - 의미 단위 청킹(문단/문장) + 오버랩 적용
     - 마크다운/HTML 정리, 코드블록 제거
     - 메타데이터(id, doc_id, chunk_id, title, source, ext, offsets, lang)
     - 중복 청크 제거(정규화 텍스트 해시)
     - 원자적 쓰기 후 검증 통과 시 .ready 생성
 
-    매개변수:
-        output_dir: str | pathlib.Path | None
-    반환(dict):
-        { "persist_dir": "<경로>", "chunks": <작성 라인 수>, "sources": <소스 루트 수> }
+    환경 변수:
+        MAIC_INDEX_MODE=HQ  → 작은 청크/높은 오버랩/상한↑ (깊은 인덱싱)
     """
     # ---- 내부 헬퍼 및 설정 ------------------------------------------------------
     from pathlib import Path
@@ -105,9 +103,15 @@ def rebuild_index(output_dir=None):
     import hashlib
     import datetime
 
-    TARGET_CHARS = 1200       # 청크 목표 길이(문자)
-    OVERLAP_CHARS = 200       # 청크 간 오버랩
-    MAX_CHUNKS = 800          # 과도한 인덱싱 방지(초기가동 상한)
+    MODE = (os.getenv("MAIC_INDEX_MODE") or "").upper()
+    if MODE == "HQ":
+        TARGET_CHARS = 900      # 더 촘촘하게
+        OVERLAP_CHARS = 250     # 문맥 보존 ↑
+        MAX_CHUNKS = 8000       # 상한 ↑
+    else:
+        TARGET_CHARS = 1200
+        OVERLAP_CHARS = 200
+        MAX_CHUNKS = 800
 
     def _persist_dir() -> Path:
         if output_dir:
@@ -132,7 +136,7 @@ def rebuild_index(output_dir=None):
                 return {str(e).lower() for e in exts}
         except Exception:
             pass
-        # PDF는 외부 라이브러리 없이 안정 추출이 어려워 일단 제외(빈 텍스트 방지)
+        # PDF는 외부 의존성 없이 안정 추출이 어려워 제외(빈 텍스트 방지)
         return {".md", ".txt", ".json", ".csv"}
 
     def _iter_source_roots():
@@ -187,7 +191,6 @@ def rebuild_index(output_dir=None):
         return parts or [s.strip()]
 
     def _split_sentences(p: str) -> list[str]:
-        # 문장 단위 분할(영문/국문 기본 구두점)
         parts = [x.strip() for x in _re_sents.split(p) if x.strip()]
         return parts or [p.strip()]
 
@@ -209,7 +212,6 @@ def rebuild_index(output_dir=None):
                     acc = (acc + " " + sent).strip()
                 else:
                     chunks.append((acc, acc_start, acc_start + len(acc)))
-                    # 오버랩을 위해 acc의 뒤 overlap 부분을 남김
                     if overlap > 0 and len(acc) > overlap:
                         tail = acc[-overlap:]
                         acc = tail
@@ -217,7 +219,6 @@ def rebuild_index(output_dir=None):
                     else:
                         acc = ""
                         acc_start = pos
-                    # 현재 문장 추가 시작
                     if acc:
                         if len(acc) + len(sent) + 1 <= target:
                             acc = (acc + " " + sent).strip()
