@@ -326,7 +326,7 @@ def reindex(dest_dir=None) -> bool:
         tmp_chunks = tmp_root / "chunks.jsonl"
 
         # 2) 빌더 호출(tmp로 유도)
-        fn, _name = _pick_reindex_fn()
+        fn, _ = _pick_reindex_fn()
         if not callable(fn):
             _set_brain_status("MISSING", "재인덱싱 함수가 없습니다.", "local", attached=False)
             return False
@@ -528,6 +528,7 @@ def reindex(dest_dir=None) -> bool:
         except Exception:
             pass
 # [07] END =====================================================================
+
 
 
 # [08] Public API: restore_or_attach() ==========================================
