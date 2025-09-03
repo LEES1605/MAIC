@@ -4,7 +4,7 @@ Smoke test for the app entrypoint without importing it.
 
 목표
 - 네트워크/Streamlit/외부 의존 없이 문법 오류만 조기 탐지
-- src/maic/app.py 경로 기준, 리포 구조에 따라 maic/app.py 대안도 지원
+- 다양한 리포 구조를 지원: src/maic/app.py, maic/app.py, src/app.py, app.py
 """
 
 from pathlib import Path
@@ -12,7 +12,12 @@ from pathlib import Path
 
 def _candidate_paths() -> list[Path]:
     """앱 파일의 후보 경로 목록을 반환."""
-    return [Path("src/maic/app.py"), Path("maic/app.py")]
+    return [
+        Path("src/maic/app.py"),
+        Path("maic/app.py"),
+        Path("src/app.py"),
+        Path("app.py"),
+    ]
 
 
 def _pick_app_path() -> Path:
