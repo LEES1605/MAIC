@@ -471,9 +471,9 @@ def restore_latest(dest_dir: str | Path) -> bool:
 def publish_backup(persist_dir: str | Path, tag_prefix: str = "index") -> dict | None:
     """
     현재 로컬 인덱스(PERSIST_DIR/chunks.jsonl)를 GitHub Release로 백업 발행.
-    - 새 태그: {tag_prefix}-YYYYMMDD-HHMMSS
-    - 자산: chunks.jsonl.gz
-    반환: {"tag": "...", "release_id": int, "asset": "chunks.jsonl.gz", "size": int} 또는 None
+    - 새 태그: {tag_prefix}-YYYYMMDD-HHMMSS-{shortid}
+    - 자산: chunks.jsonl.gz (+ manifest.json 있으면 함께 업로드)
+    반환: {"tag": "...", "release_id": int, "assets": [{"name":..., "size":...}, ...]} 또는 None
     """
     from pathlib import Path
     import os
@@ -481,7 +481,8 @@ def publish_backup(persist_dir: str | Path, tag_prefix: str = "index") -> dict |
     import gzip
     import json
     import datetime
-    import requests  # ← 불필요한 "type: ignore" 제거
+    import requests
+    import hashlib
 
     dest = Path(persist_dir).expanduser()
     src = dest / "chunks.jsonl"
@@ -494,11 +495,17 @@ def publish_backup(persist_dir: str | Path, tag_prefix: str = "index") -> dict |
         _log("publish_backup: GITHUB_REPO 미설정")
         return None
 
-    # 전역 상수/환경변수에서 안전 조회 (mypy: bare name 회피)
     token = str(globals().get("GITHUB_TOKEN", "")).strip() or os.getenv("GITHUB_TOKEN", "").strip()
     if not token:
         _log("publish_backup: GITHUB_TOKEN 미설정")
         return None
+
+    # sha1 → shortid
+    h = hashlib.sha1()
+    with src.open("rb") as r:
+        for b in iter(lambda: r.read(1024 * 1024), b""):
+            h.update(b)
+    shortid = h.hexdigest()[:8]
 
     # 자산 gzip
     gz_name = "chunks.jsonl.gz"
@@ -509,11 +516,19 @@ def publish_backup(persist_dir: str | Path, tag_prefix: str = "index") -> dict |
 
     # 릴리스 생성
     now = datetime.datetime.utcnow().strftime("%Y%m%d-%H%M%S")
-    tag = f"{tag_prefix}-{now}"
+    tag = f"{tag_prefix}-{now}-{shortid}"
     api = f"https://api.github.com/repos/{repo}/releases"
     headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github+json"}
 
-    payload = {"tag_name": tag, "name": tag, "draft": False, "prerelease": False}
+    body = ""
+    mf = dest / "manifest.json"
+    if mf.exists():
+        try:
+            body = mf.read_text(encoding="utf-8")[:4000]  # 본문 길이 제한 대비
+        except Exception:
+            body = ""
+
+    payload = {"tag_name": tag, "name": tag, "body": body, "draft": False, "prerelease": False}
     try:
         res = requests.post(api, headers=headers, data=json.dumps(payload), timeout=30)
         if res.status_code >= 300:
@@ -521,28 +536,44 @@ def publish_backup(persist_dir: str | Path, tag_prefix: str = "index") -> dict |
             return None
         rel = res.json()
         upload_url = rel.get("upload_url", "")
-        # upload_url 예: https://uploads.github.com/repos/{repo}/releases/{id}/assets{?name,label}
-        upload_url = upload_url.split("{", 1)[0] + f"?name={gz_name}"
+        upload_url = upload_url.split("{", 1)[0]  # https://uploads.github.com/.../assets
         rid = int(rel.get("id") or 0)
     except Exception as e:
         _log(f"publish_backup: 요청 실패 — {type(e).__name__}: {e}")
         return None
 
-    # 자산 업로드
-    try:
-        up_headers = {
-            "Authorization": f"token {token}",
-            "Content-Type": "application/gzip",
-            "Accept": "application/vnd.github+json",
-        }
-        res2 = requests.post(upload_url, headers=up_headers, data=data_bytes, timeout=60)
-        if res2.status_code >= 300:
-            _log(f"publish_backup: 자산 업로드 실패 {res2.status_code} {res2.text[:200]}")
-            return None
-    except Exception as e:
-        _log(f"publish_backup: 업로드 예외 — {type(e).__name__}: {e}")
+    assets_meta = []
+
+    # 자산 업로드 함수
+    def _upload(name: str, content_type: str, data: bytes) -> bool:
+        try:
+            up_url = f"{upload_url}?name={name}"
+            up_headers = {
+                "Authorization": f"token {token}",
+                "Content-Type": content_type,
+                "Accept": "application/vnd.github+json",
+            }
+            res2 = requests.post(up_url, headers=up_headers, data=data, timeout=120)
+            if res2.status_code >= 300:
+                _log(f"publish_backup: {name} 업로드 실패 {res2.status_code} {res2.text[:200]}")
+                return False
+            assets_meta.append({"name": name, "size": len(data)})
+            return True
+        except Exception as e:
+            _log(f"publish_backup: {name} 업로드 예외 — {type(e).__name__}: {e}")
+            return False
+
+    # chunks.jsonl.gz
+    if not _upload(gz_name, "application/gzip", data_bytes):
         return None
 
-    _log(f"백업 발행 완료: {tag} ({len(data_bytes)}B)")
-    return {"tag": tag, "release_id": rid, "asset": gz_name, "size": len(data_bytes)}
+    # manifest.json 동반 업로드(있으면)
+    if mf.exists():
+        try:
+            _upload("manifest.json", "application/json", mf.read_bytes())
+        except Exception:
+            pass
+
+    _log(f"백업 발행 완료: {tag} (assets: {[a['name'] for a in assets_meta]})")
+    return {"tag": tag, "release_id": rid, "assets": assets_meta}
 # ===== [07] PUBLIC API: publish_backup =======================================  # [07] END
