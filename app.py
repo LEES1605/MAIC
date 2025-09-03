@@ -286,6 +286,31 @@ def _render_boot_progress_line():
     html.append("</div>")
     st.markdown("".join(html), unsafe_allow_html=True)
 
+# ============================ [06] RERUN GUARD UTILS — START ============================
+def _safe_rerun(tag: str, ttl: int = 1) -> None:
+    """
+    Streamlit rerun을 '태그별 최대 ttl회'로 제한합니다.
+    - tag: 'admin:login', 'admin:logout', 'auto_start' 등 식별자
+    - ttl: 허용 rerun 횟수(기본 1회)
+    """
+    if st is None:
+        return
+    try:
+        ss = st.session_state
+        key = "__rerun_counts__"
+        counts = ss.get(key)
+        if not isinstance(counts, dict):
+            counts = {}
+        cnt = int(counts.get(tag, 0))
+        if cnt >= int(ttl):
+            return
+        counts[tag] = cnt + 1
+        ss[key] = counts
+        st.rerun()
+    except Exception:
+        # 가드 자체 실패 시, 조용히 무시
+        pass
+# ============================= [06] RERUN GUARD UTILS — END =============================
 
 # [07] 헤더(배지·타이틀·⚙️ 한 줄, 타이틀 바로 뒤에 아이콘) ==========================
 def _header():
