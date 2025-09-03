@@ -257,20 +257,23 @@ def render_index_orchestrator_panel() -> None:
             pass
         return rows
 
-    # --- 세션 키 표준화/스냅샷 API 로드 -----------------------------------------
-    try:
-        from src.state.session import (
-            ensure_keys,
-            persist_dir as _persist_dir,
-            snapshot_index,
-            sync_badge_from_fs,
-        )
-    except Exception:
-        # 백업 경로(개발 브랜치에서 모듈 이동 시)
-        def ensure_keys() -> None:
+    # --- NEW: 세션/스냅샷 API 동적 로드(정적 import 제거 → mypy import-not-found 방지) ---
+    def _load_session_api():
+        ensure_keys_fn = None
+        persist_dir_fn = None
+        snapshot_index_fn = None
+        sync_badge_from_fs_fn = None
+        try:
+            mod = importlib.import_module("src.state.session")
+            ensure_keys_fn = getattr(mod, "ensure_keys", None)
+            persist_dir_fn = getattr(mod, "persist_dir", None)
+            snapshot_index_fn = getattr(mod, "snapshot_index", None)
+            sync_badge_from_fs_fn = getattr(mod, "sync_badge_from_fs", None)
+        except Exception:
             pass
 
-        def _persist_dir() -> Path:
+        # 폴백 구현체들
+        def _persist_dir_fallback() -> Path:
             try:
                 from src.rag.index_build import PERSIST_DIR as IDX
                 return Path(str(IDX)).expanduser()
@@ -283,8 +286,8 @@ def render_index_orchestrator_panel() -> None:
                 pass
             return Path.home() / ".maic" / "persist"
 
-        def snapshot_index(p: Path | None = None) -> dict[str, Any]:
-            base = p or _persist_dir()
+        def _snapshot_index_fallback(p: Path | None = None) -> dict[str, Any]:
+            base = p or _persist_dir_fallback()
             cj = base / "chunks.jsonl"
             try:
                 size = cj.stat().st_size if cj.exists() else 0
@@ -298,8 +301,17 @@ def render_index_orchestrator_panel() -> None:
                 "local_ok": (base / ".ready").exists() and cj.exists() and size > 0,
             }
 
-        def sync_badge_from_fs() -> dict[str, Any]:
-            return snapshot_index()
+        def _sync_badge_from_fs_fallback() -> dict[str, Any]:
+            return _snapshot_index_fallback()
+
+        return (
+            ensure_keys_fn or (lambda: None),
+            persist_dir_fn or _persist_dir_fallback,
+            snapshot_index_fn or _snapshot_index_fallback,
+            sync_badge_from_fs_fn or _sync_badge_from_fs_fallback,
+        )
+
+    ensure_keys, _persist_dir, snapshot_index, sync_badge_from_fs = _load_session_api()
 
     # ---------- state ----------
     ensure_keys()
