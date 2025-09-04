@@ -5,13 +5,13 @@
 - 인덱스 저장: JSON(선택). 저장하지 않아도 메모리에서 즉시 검색 가능.
 - 토크나이즈: 영문/숫자/한글을 단어로 인식 (정규식)
 - 스코어: 간단한 TF-IDF
+- 한국어 토큰 정규화: 대표 조사(은/는/이/가/을/를/과/와/로/으로/의/도/만/에게/한테/에서/부터/까지 등)를 말단에서 제거
 """
 
 from __future__ import annotations
 
 import json
 import math
-import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,6 +19,18 @@ from typing import Dict, List, Optional
 
 SUPPORTED_EXTS = {".md", ".txt"}
 TOKEN_RE = re.compile(r"[A-Za-z0-9가-힣]+")
+
+# 말단 조사(길이 긴 것 → 짧은 것 순서) — 과도 절단 방지용으로 토큰 길이가 충분할 때만 제거
+_KR_SUFFIXES = [
+    "으로써", "으로서",
+    "에게서", "한테서",
+    "로부터", "부터", "까지",
+    "이라고", "라고", "이며", "이고",
+    "에게", "한테", "에서",
+    "으로", "처럼", "보다",
+    "과", "와", "로", "의", "도", "만",
+    "은", "는", "이", "가", "을", "를",
+]
 
 
 @dataclass
@@ -39,8 +51,20 @@ def _read_text(path: Path) -> str:
     return ""
 
 
-def _tokenize(text: str) -> List[str]:
-    return [m.group(0).lower() for m in TOKEN_RE.finditer(text)]
+def _normalize_token(tok: str) -> str:
+    """한국어 토큰 말단 조사 제거(너무 짧아지지 않도록 길이 체크)."""
+    t = tok.lower()
+    for suf in _KR_SUFFIXES:
+        if t.endswith(suf) and len(t) - len(suf) >= 2:
+            return t[: -len(suf)]
+    return t
+
+
+def _tokenize_norm(text: str) -> List[str]:
+    toks = [m.group(0) for m in TOKEN_RE.finditer(text)]
+    norm = [_normalize_token(t) for t in toks]
+    # 빈 문자열 제거
+    return [t for t in norm if t]
 
 
 def _title_from_path(p: Path) -> str:
@@ -62,11 +86,11 @@ def build_index(dataset_dir: str) -> Dict:
                 )
             )
 
-    # 역색인과 df 계산
+    # 역색인과 df 계산 (정규화된 토큰 사용)
     postings: Dict[str, Dict[int, int]] = {}
     df: Dict[str, int] = {}
     for d in docs:
-        toks = _tokenize(d.text)
+        toks = _tokenize_norm(d.text)
         if not toks:
             continue
         tf_local: Dict[str, int] = {}
@@ -135,7 +159,7 @@ def search(
     postings = index.get("postings", {})
     N = int(index.get("meta", {}).get("N", 1) or 1)
 
-    q_toks = _tokenize(query)
+    q_toks = _tokenize_norm(query)
     if not q_toks:
         return []
 
@@ -163,7 +187,8 @@ def search(
         except Exception:
             text = ""
         # 첫 쿼리 토큰으로 스니펫
-        snippet = _make_snippet(text, q_toks[0]) if text else ""
+        needle = q_toks[0]
+        snippet = _make_snippet(text, needle) if text else ""
         results.append({"path": path, "title": title, "score": sc, "snippet": snippet})
     return results
 # ============================= [01] SIMPLE RAG SEARCH — END =============================
