@@ -3,7 +3,10 @@
 src.rag.label
 
 - search_hits: RAG(search.py) 인덱스를 캐시/지속화(get_or_build_index)로 확보하여 검색.
-- decide_label: 히트의 경로/제목/소스 키워드로 라벨을 결정.
+- decide_label: 히트의 파일명/확장자 규칙으로 라벨을 결정.
+  * 파일명이 '이유문법*' 또는 '[깨알문법]*' → [이유문법]
+  * 그 외 .pdf 파일 → [문법서적]
+  * 히트가 없을 때만 → [AI지식]
 """
 
 from __future__ import annotations
@@ -18,21 +21,17 @@ try:
     from src.rag.search import (  # type: ignore
         search as _search,
         get_or_build_index as _get_or_build_index,
-        SUPPORTED_EXTS as _EXTS,
     )
 except Exception:  # pragma: no cover
-    # 최소 폴백(테스트/패키징 변동에 대비). 프로젝트 구조에 따라 필요 없을 수 있음.
+    # 최소 폴백(프로젝트 구조에 따라 필요 없을 수 있음)
     from search import search as _search  # type: ignore
     try:
         from search import get_or_build_index as _get_or_build_index  # type: ignore
     except Exception:  # pragma: no cover
         _get_or_build_index = None  # type: ignore
-    try:
-        from search import SUPPORTED_EXTS as _EXTS  # type: ignore
-    except Exception:  # pragma: no cover
-        _EXTS = {".md", ".txt", ".pdf", ".html", ".json"}
 
 __all__ = ["search_hits", "decide_label"]
+
 
 # ── 데이터셋 경로 해석 ────────────────────────────────────────────────────────────
 def _resolve_dataset_dir(dataset_dir: Optional[str]) -> Path:
@@ -40,17 +39,22 @@ def _resolve_dataset_dir(dataset_dir: Optional[str]) -> Path:
     우선순위:
       1) 인자 dataset_dir
       2) ENV: MAIC_DATASET_DIR 또는 RAG_DATASET_DIR
-      3) 기본: 프로젝트 내 'knowledge' 폴더
+      3) <repo>/prepared (있으면)
+      4) <repo>/knowledge (폴백)
     """
     if dataset_dir:
-        p = Path(dataset_dir).expanduser()
-        return p
+        return Path(dataset_dir).expanduser()
 
     env = os.environ.get("MAIC_DATASET_DIR") or os.environ.get("RAG_DATASET_DIR")
     if env:
         return Path(env).expanduser()
 
-    return Path("knowledge").resolve()
+    repo_root = Path(__file__).resolve().parents[2]
+    prepared = (repo_root / "prepared").resolve()
+    if prepared.exists():
+        return prepared
+
+    return (repo_root / "knowledge").resolve()
 
 
 # ── 모듈 레벨 TTL 캐시 (불필요한 재인덱싱 방지) ───────────────────────────────────
@@ -98,7 +102,7 @@ def search_hits(
 ) -> List[Dict[str, Any]]:
     """
     질의어에 대한 상위 히트를 반환합니다.
-    반환 형식 예: [{"path","title","score","snippet","source"} ...]
+    반환 예: [{"path","title","score","snippet","source"} ...]
     """
     q = (query or "").strip()
     if not q:
@@ -117,12 +121,10 @@ def search_hits(
             q, dataset_dir=str(base), index=idx, top_k=int(top_k)
         )
     except TypeError:
-        # 일부 구현은 index 파라미터가 없을 수 있음
         hits = _search(q, dataset_dir=str(base), top_k=int(top_k))  # type: ignore[call-arg]
 
     out: List[Dict[str, Any]] = []
     for h in hits:
-        # 표준화
         out.append(
             {
                 "path": h.get("path"),
@@ -140,25 +142,35 @@ def decide_label(
     default_if_none: str = "[AI지식]",
 ) -> str:
     """
-    히트가 존재하면 경로/제목/소스 키워드로 판단하여 라벨을 반환합니다.
-      - 'iyu', '이유문법' 등 → [이유문법]
-      - 'book', '문법책', '교과서', 'textbook' 등 → [문법책]
-      - 그 외 히트 존재 → [학습자료]
-      - 히트 없으면 default_if_none 반환
+    라벨 규칙:
+      - 파일명이 '이유문법*' 또는 '[깨알문법]*' → [이유문법]
+      - 그 외 .pdf → [문법서적]
+      - 히트가 없으면 → [AI지식]
     """
     items = list(hits or [])
     if not items:
         return default_if_none
 
     top = items[0]
-    path = str(top.get("path", "")).lower()
-    title = str(top.get("title", "")).lower()
-    src = str(top.get("source", "")).lower()
-    hay = f"{path} {title} {src}"
+    path = str(top.get("path", "")).strip()
+    title = str(top.get("title", "")).strip()
 
-    if any(k in hay for k in ("iyu", "이유문법", "reason-grammar", "iyu-grammar")):
+    # 파일명 우선
+    name = Path(path).name if path else title
+    name_lower = name.lower()
+
+    # 1) 이유문법/깨알문법 패턴
+    if name.startswith("이유문법") or name.startswith("[깨알문법"):
         return "[이유문법]"
-    if any(k in hay for k in ("book", "문법책", "교과서", "textbook")):
-        return "[문법책]"
-    return "[학습자료]"
+    # 혹시 영문 표기나 소문자 대비가 필요한 경우를 위한 보조
+    if name_lower.startswith("iyu") or name_lower.startswith("reason-grammar"):
+        return "[이유문법]"
+
+    # 2) PDF → 문법서적
+    if Path(path).suffix.lower() == ".pdf" or name_lower.endswith(".pdf"):
+        return "[문법서적]"
+
+    # 3) 위 규칙에 해당하지 않으면, 코퍼스 특성상 대부분 문법 자료이므로 문법서적으로 간주
+    #    (히트가 없을 때만 [AI지식]을 사용하기로 합의)
+    return "[문법서적]"
 # =============================== [01] RAG LABELER — END ===============================
