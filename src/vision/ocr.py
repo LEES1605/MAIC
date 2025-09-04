@@ -7,8 +7,6 @@
 
 from __future__ import annotations
 
-from typing import Optional
-
 
 def extract_text(file_path: str) -> str:
     try:
