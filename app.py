@@ -811,7 +811,7 @@ def _render_chat_panel():
         prev_role = role
 
     # 스트리밍/유저-즉시 자리(메시지 영역 내부에서 placeholder 확보)
-    ph_user = st.empty()   # ⬅ NEW: 전송 직후 "내 말풍선" 즉시 표출용
+    ph_user = st.empty()   # 전송 직후 "내 말풍선" 즉시 표출용
     ph_ans = st.empty()    # 주답변 스트리밍
     ph_eval = st.empty()   # 평가 스트리밍
 
@@ -875,9 +875,7 @@ def _render_chat_panel():
         )
         submitted = st.form_submit_button("➤", type="secondary")
 
-    # ─────────────────────────────────────────────────────────────────────────
     # (A) 제출 처리 — 내 말풍선 즉시 표시 → 답변 스트리밍
-    # ─────────────────────────────────────────────────────────────────────────
     if submitted and not ss.get("_sending", False):
         question = (qtxt or "").strip()
         if not question:
@@ -949,9 +947,7 @@ def _render_chat_panel():
             source_label = "[AI지식]"
         ss["__last_source_label"] = source_label
 
-        # ─────────────────────────────────────────────────────────────────────
         # (A-1) 주 답변 에이전트 스트리밍
-        # ─────────────────────────────────────────────────────────────────────
         from typing import Any as _AnyT, Dict as _DictT
         acc_ans = ""
 
@@ -988,7 +984,6 @@ def _render_chat_panel():
                 unsafe_allow_html=True,
             )
 
-        # 주 답변 에이전트(있으면) 스트리밍
         full_answer = ""
         try:
             import importlib as _imp2
@@ -1008,7 +1003,6 @@ def _render_chat_panel():
                 full_answer = f"(오류) {type(e).__name__}: {e}"
                 _emit_ans(full_answer)
         else:
-            # provider 폴백 (stream 미지원 시)
             try:
                 from src.llm import providers as _prov
                 call = getattr(_prov, "call_with_fallback", None)
@@ -1019,7 +1013,6 @@ def _render_chat_panel():
                 import inspect as _inspect
                 params = _inspect.signature(call).parameters.keys()
                 kwargs: _DictT[str, _AnyT] = {}
-
                 if "messages" in params:
                     kwargs["messages"] = [
                         {"role": "system", "content": system_prompt or ""},
@@ -1034,7 +1027,6 @@ def _render_chat_panel():
                         kwargs["system_prompt"] = system_prompt or ""
                     elif "system" in params:
                         kwargs["system"] = system_prompt or ""
-
                 res = call(**kwargs)
                 full_answer = res.get("text") if isinstance(res, dict) else str(res)
                 if not full_answer:
@@ -1049,7 +1041,7 @@ def _render_chat_panel():
             {"id": f"a{int(time.time()*1000)}", "role": "assistant", "text": f"{full_answer}\n\n출처: {source_label}"}
         )
 
-        # (B) 평가 스트리밍 -----------------------------------------------------
+        # (B) 평가 스트리밍 — ★여기 수정: 시그니처 동시 지원★ -------------------
         acc_eval = ""
         def _emit_eval(piece: str) -> None:
             nonlocal acc_eval
@@ -1086,10 +1078,28 @@ def _render_chat_panel():
 
         if callable(_eval_stream):
             try:
-                for ch in _eval_stream(question=question, mode=MODE_TOKEN, ctx={"answer": full_answer}):
+                import inspect as _inspect2
+                params = _inspect2.signature(_eval_stream).parameters
+                _kwargs: dict = {"question": question, "mode": MODE_TOKEN}
+                if "answer" in params:
+                    _kwargs["answer"] = full_answer
+                if "ctx" in params:
+                    _kwargs["ctx"] = {"answer": full_answer}
+                # 호출
+                for ch in _eval_stream(**_kwargs):
                     _emit_eval(ch)
                 full_eval = acc_eval or " "
                 _emit_eval(full_eval)
+            except TypeError:
+                # 폴백: 가장 보편적인 형태로 재시도
+                try:
+                    for ch in _eval_stream(question=question, mode=MODE_TOKEN, answer=full_answer):
+                        _emit_eval(ch)
+                    full_eval = acc_eval or " "
+                    _emit_eval(full_eval)
+                except Exception as e2:
+                    full_eval = f"(오류) {type(e2).__name__}: {e2}"
+                    _emit_eval(full_eval)
             except Exception as e:
                 full_eval = f"(오류) {type(e).__name__}: {e}"
                 _emit_eval(full_eval)
