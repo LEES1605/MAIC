@@ -46,9 +46,10 @@ def normalize_to_token_iter(source: TokenSource) -> Iterator[str]:
     # 이터러블/이터레이터
     try:
         iterator = iter(source)  # type: ignore[arg-type]
-    except Exception as e:  # 입력이 이터러블이 아니면 (F821 방지: as e 명시)
+    except Exception:
+        # ❗새 접근: 예외 객체(e)를 아예 사용하지 않아 F821을 원천 차단
         def _err() -> Iterator[str]:
-            yield f"[streaming-normalize-error: {e}]"
+            yield "[streaming-normalize-error]"
         return _err()
 
     def _tokens() -> Iterator[str]:
