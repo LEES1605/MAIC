@@ -16,51 +16,53 @@ concurrency:
   cancel-in-progress: true
 # [00] END
 
-# ===== [01] JOB: Gate (Lint/Type/Test) ======================================  # [01] START
+# ===== [01] JOB: Gate (lint/type/tests/build) ================================ # [01] START
 jobs:
   gate:
-    name: Gate (ruff + mypy + pytest) • py${{ matrix.python }}
+    name: Quality Gate
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python: [ "3.10", "3.11", "3.12" ]
     steps:
       - uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python }}
+          fetch-depth: 0
 
-      - name: Cache pip
-        uses: actions/cache@v4
+      - uses: actions/setup-python@v5
         with:
-          path: ~/.cache/pip
-          key: pip-${{ runner.os }}-${{ matrix.python }}-${{ hashFiles('**/requirements*.txt') }}
-          restore-keys: |
-            pip-${{ runner.os }}-${{ matrix.python }}-
+          python-version: "3.11"
+          cache: "pip"
 
-      - name: Install deps
+      - name: Show tool versions
         run: |
-          python -m pip install -U pip wheel
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-          pip install -U ruff mypy pytest pytest-cov
+          python -V
+          pip -V
+          git rev-parse --short HEAD
+          git describe --tags --always || true
 
-      - name: Ruff — Lint/Format
+      - name: Install build deps
         run: |
-          ruff check . --fix
-          ruff format .
+          python -m pip install --upgrade pip
+          pip install build twine
+          if [ -f requirements-dev.txt ]; then
+            pip install -r requirements-dev.txt
+          else
+            pip install ruff mypy pytest
+          fi
 
-      - name: mypy — strict
+      - name: Ruff (fix)
+        run: ruff check . --fix
+
+      - name: mypy (clear cache)
         run: |
-          mypy --version
+          mypy --clear-cache
           mypy .
 
-      - name: pytest (if tests exist)
-        if: hashFiles('tests/**/*.py') != ''
+      - name: pytest
+        run: pytest -q --maxfail=1 --disable-warnings
+
+      - name: Build & Twine check
         run: |
-          pytest -q --maxfail=1 --disable-warnings
+          python -m build
+          twine check dist/*
 # [01] END
 
 # ===== [02] JOB: Build & Release ============================================ # [02] START
@@ -70,24 +72,34 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Resolve version
         id: ver
+        shell: bash
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "tag=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          set -euo pipefail
+          if [[ "${GITHUB_REF:-}" == refs/tags/v* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
           else
-            echo "tag=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
+            TAG="${{ github.event.inputs.version }}"
           fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
 
-      - name: Build artifacts
+      - name: Build release zip
+        shell: bash
         run: |
+          set -euo pipefail
           mkdir -p dist
-          git archive --format zip --output dist/maic-${{ steps.ver.outputs.tag }}.zip HEAD
-          (cd dist && sha256sum maic-${{ steps.ver.outputs.tag }}.zip > maic-${{ steps.ver.outputs.tag }}.zip.sha256)
+          ZIP="dist/maic-${{ steps.ver.outputs.tag }}.zip"
+          rm -f "$ZIP"
+          git ls-files > files.txt
+          zip -9 -r "$ZIP" -@ < files.txt
+          sha256sum "$ZIP" > "$ZIP.sha256"
 
       - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.ver.outputs.tag }}
           name: Release ${{ steps.ver.outputs.tag }}
