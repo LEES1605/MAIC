@@ -18,14 +18,15 @@ This module is intentionally stdlib-only and mypy/ruff friendly.
 """
 from __future__ import annotations
 
-from typing import Callable, Iterable, Iterator, Optional, Literal, Protocol, Any
+from typing import Callable, Iterable, Iterator, Optional, Literal, Protocol
 import re
 import time
 
 __all__ = ["buffer_tokens", "stream_text"]
 
 # Recognized punctuation and sentence-ending marks (EN + KO + common)
-_PUNCTS = set(list(".,?!:;)]}")] + ["…", "。", "、", "！", "？", "”", "’"])
+_PUNCTS = set(list(".,?!:;)]}") + ["…", "。", "、", "！", "？", "”", "’"])
+
 # Sentence-splitting regex: captures a *complete* sentence chunk.
 #   - Ends with one of [.?!…。！？]
 #   - Allows closing quotes/brackets after end mark
@@ -104,13 +105,11 @@ def buffer_tokens(
     - "sentence": flush on sentence boundary OR forced by latency/length.
     """
     if strategy not in ("none", "punct", "sentence"):
-        # Defensive default
         strategy = "none"
 
     if strategy == "none":
         for tk in tokens:
             if cancel and cancel():
-                # Best-effort early stop; do not yield partial
                 return
             yield tk
         return
@@ -118,20 +117,16 @@ def buffer_tokens(
     buf: str = ""
     last_flush = time.monotonic()
 
-    def _maybe_forced_flush(now: float) -> bool:
+    def _maybe_forced_flush(now: float) -> Optional[str]:
         nonlocal buf, last_flush
         if not buf:
-            return False
+            return None
         if (now - last_flush) >= max_latency or len(buf) >= max_chars:
             out = buf
             buf = ""
             last_flush = now
-            yield_chunk = out
-            # Local generator trick: wrap in a list for type clarity
-            for _chunk in (yield_chunk,):
-                yield _chunk  # type: ignore[misc]
-            return True
-        return False
+            return out
+        return None
 
     try:
         for tk in tokens:
@@ -140,11 +135,11 @@ def buffer_tokens(
 
             s = str(tk or "")
             if not s:
-                # Skip empty tokens silently
+                # Even if token empty, still honor latency flush to avoid starvation
                 now = time.monotonic()
-                # Still honor latency flush to avoid starvation
-                for _ in _maybe_forced_flush(now):
-                    yield _
+                forced = _maybe_forced_flush(now)
+                if forced is not None:
+                    yield forced
                 continue
 
             if strategy == "punct":
@@ -155,9 +150,9 @@ def buffer_tokens(
                     last_flush = now
                     yield out
                     continue
-                # No punctuation seen; forced flush?
-                for _ in _maybe_forced_flush(now):
-                    yield _
+                forced = _maybe_forced_flush(now)
+                if forced is not None:
+                    yield forced
             else:
                 # "sentence"
                 buf += s
@@ -168,18 +163,18 @@ def buffer_tokens(
                     yield complete
                     buf = remainder
                     # After emitting a full sentence, also check latency on remainder
-                    for _ in _maybe_forced_flush(now):
-                        yield _
+                    forced = _maybe_forced_flush(now)
+                    if forced is not None:
+                        yield forced
                 else:
-                    # No sentence boundary; forced flush?
-                    for _ in _maybe_forced_flush(now):
-                        yield _
+                    forced = _maybe_forced_flush(now)
+                    if forced is not None:
+                        yield forced
 
     except Exception as e:
         # Fail-safe: never swallow buffered content
         if buf:
             yield buf
-        # Re-raise to allow caller logging if desired
         raise e
 
     # End-of-stream: flush whatever remains
@@ -205,22 +200,17 @@ def stream_text(
     >>> stream_text(["Hel", "lo", ", ", "wo", "rld", "!"], printer, strategy="punct")
     Hello, world!
     """
-    try:
-        for chunk in buffer_tokens(
-            tokens,
-            strategy=strategy,
-            max_latency=max_latency,
-            max_chars=max_chars,
-            cancel=cancel,
-        ):
-            if cancel and cancel():
-                # Emit what we have and stop
-                if chunk:
-                    on_emit(chunk)
-                return
+    for chunk in buffer_tokens(
+        tokens,
+        strategy=strategy,
+        max_latency=max_latency,
+        max_chars=max_chars,
+        cancel=cancel,
+    ):
+        if cancel and cancel():
             if chunk:
                 on_emit(chunk)
-    except Exception:
-        # Caller should log if needed; keep fail-safe behavior consistent.
-        raise
+            return
+        if chunk:
+            on_emit(chunk)
 # =============================== [01] 스트리밍 버퍼 유틸 — END ================================
