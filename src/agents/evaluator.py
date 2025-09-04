@@ -5,7 +5,7 @@ Co-teacher(미나쌤) — '비평'이 아니라 '보완' 설명을 스트리밍�
 """
 from __future__ import annotations
 
-from typing import Dict, Iterator, Optional, Any, List
+from typing import Dict, Iterator, Optional, Any, List, Mapping
 import inspect
 import re
 from queue import Queue, Empty
@@ -55,7 +55,7 @@ def _split_sentences(text: str) -> List[str]:
 
 
 def _build_io_kwargs(
-    params: Dict[str, inspect.Parameter],
+    params: Mapping[str, inspect.Parameter],
     *,
     system_prompt: str,
     user_prompt: str,
@@ -90,7 +90,9 @@ def _iter_provider_stream(*, system_prompt: str, user_prompt: str) -> Iterator[s
     st_fn = getattr(prov, "stream_text", None)
     if callable(st_fn):
         params = inspect.signature(st_fn).parameters
-        kwargs = _build_io_kwargs(params, system_prompt=system_prompt, user_prompt=user_prompt)
+        kwargs = _build_io_kwargs(
+            params, system_prompt=system_prompt, user_prompt=user_prompt
+        )
         for piece in st_fn(**kwargs):
             yield str(piece or "")
         return
@@ -99,7 +101,9 @@ def _iter_provider_stream(*, system_prompt: str, user_prompt: str) -> Iterator[s
     call = getattr(prov, "call_with_fallback", None)
     if callable(call):
         params = inspect.signature(call).parameters
-        kwargs = _build_io_kwargs(params, system_prompt=system_prompt, user_prompt=user_prompt)
+        kwargs = _build_io_kwargs(
+            params, system_prompt=system_prompt, user_prompt=user_prompt
+        )
 
         q: "Queue[Optional[str]]" = Queue()
 
@@ -138,14 +142,14 @@ def _iter_provider_stream(*, system_prompt: str, user_prompt: str) -> Iterator[s
                     continue
                 if item is None:
                     break
-                yield item
+                yield str(item or "")
             return
 
         # 콜백 미지원 → 폴백
         try:
             res = call(**kwargs)
             txt = res.get("text") if isinstance(res, dict) else str(res)
-            yield txt
+            yield str(txt or "")
             return
         except Exception as e:  # pragma: no cover
             yield f"(오류) {type(e).__name__}: {e}"
@@ -178,7 +182,7 @@ def evaluate_stream(
     got_any = False
     for piece in _iter_provider_stream(system_prompt=sys_p, user_prompt=usr_p):
         got_any = True
-        yield piece
+        yield str(piece or "")
 
     if got_any:
         return
