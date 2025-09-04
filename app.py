@@ -1,7 +1,7 @@
 # [01] future import ==========================================================
 from __future__ import annotations
 
-# [02] imports & bootstrap ====================================================
+# ============================ [02] imports & bootstrap — START ============================
 import importlib
 import importlib.util
 import json
@@ -11,12 +11,17 @@ import time
 import traceback
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from typing import Any as _AnyForSt  # mypy: 전역 st를 Any로 고정
 
+# streamlit: 정적 타입은 Any로(경고 회피), 런타임은 모듈 또는 None
+st: _AnyForSt
 try:
-    import streamlit as st
+    import streamlit as _st_mod
+    st = _st_mod
 except Exception:
-    st = None  # 로컬/테스트 환경 방어
+    st = None  # type: ignore[assignment]  # mypy에선 여전히 Any로 취급
 
+# ============================= [02] imports & bootstrap — END =============================
 
 # [03] secrets → env 승격 & 서버 안정 옵션 ====================================
 def _from_secrets(name: str, default: Optional[str] = None) -> Optional[str]:
