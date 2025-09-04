@@ -734,34 +734,56 @@ def _render_mode_controls_pills() -> str:
 
 # ============================ [13] 채팅 패널 — START ============================
 def _render_chat_panel():
+    # Streamlit 전역 안전 조회
+    st = globals().get("st", None)
+    if st is None:
+        return
+
+    # 필요한 표준 모듈은 내부에서 안전 import
+    try:
+        import time as _time
+    except Exception:
+        _time = None
+
     ss = st.session_state
     if "chat" not in ss:
         ss["chat"] = []
 
-    _inject_chat_styles_once()
+    # 스타일/모드 컨트롤은 있으면 사용, 없으면 폴백
+    _inject = globals().get("_inject_chat_styles_once")
+    if callable(_inject):
+        try:
+            _inject()
+        except Exception:
+            pass
 
-    # 상단: 질문 모드 pill (카톡형에서 입력창 바로 위)
-    cur_label = _render_mode_controls_pills()
-    MODE_TOKEN = {"문법": "문법설명", "문장": "문장구조분석", "지문": "지문분석"}[cur_label]
+    mode_label = "문법"
+    _mode_pills = globals().get("_render_mode_controls_pills")
+    if callable(_mode_pills):
+        try:
+            mode_label = _mode_pills() or "문법"
+        except Exception:
+            mode_label = "문법"
+    MODE_TOKEN = {"문법": "문법설명", "문장": "문장구조분석", "지문": "지문분석"}.get(mode_label, "문법설명")
 
-    # ChatPane — 메시지 영역 OPEN
-    st.markdown('<div class="chatpane"><div class="messages">', unsafe_allow_html=True)
-
-    prev_role = None
+    # 과거 대화 렌더
+    _bubble = globals().get("_render_bubble")
     for m in ss["chat"]:
         role = m.get("role", "assistant")
-        if prev_role is not None and prev_role != role:
-            st.markdown('<div class="turn-sep"></div>', unsafe_allow_html=True)
-        _render_bubble(role, m.get("text", ""))
-        prev_role = role
+        if callable(_bubble):
+            try:
+                _bubble(role, m.get("text", ""))
+            except Exception:
+                with st.chat_message(role):
+                    st.markdown(m.get("text", ""))
+        else:
+            with st.chat_message(role):
+                st.markdown(m.get("text", ""))
 
     # 스트리밍 자리
     ph = st.empty()
 
-    # 메시지 영역 CLOSE(폼은 같은 ChatPane 내부)
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    # 인-카드 입력폼 — Enter=전송, 화살표 버튼은 인풋 내부
+    # 입력폼 (Enter=전송)
     with st.form("inpane_chat_form", clear_on_submit=True):
         qtxt = st.text_input(
             "질문 입력",
@@ -772,10 +794,7 @@ def _render_chat_panel():
         )
         send = st.form_submit_button("➤", type="secondary")
 
-    # ChatPane CLOSE
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    # 제출 처리(빈값/중복 가드)
+    # 제출 처리
     if send and not ss.get("_sending", False):
         question = (qtxt or "").strip()
         if not question:
@@ -783,13 +802,14 @@ def _render_chat_panel():
             return
 
         ss["_sending"] = True
-        ss["chat"].append({"id": f"u{int(time.time() * 1000)}", "role": "user", "text": question})
+        msg_id_u = f"u{int(_time.time() * 1000) if _time else 'u0'}"
+        ss["chat"].append({"id": msg_id_u, "role": "user", "text": question})
 
         # 증거/모드
         ev_notes = ss.get("__evidence_class_notes", "")
         ev_books = ss.get("__evidence_grammar_books", "")
 
-        # (신규) 출처 라벨러 로딩 — 실패해도 안전
+        # 출처 라벨러 (있으면 사용)
         try:
             import importlib as _imp
             _label_mod = _imp.import_module("src.rag.label")
@@ -799,19 +819,18 @@ def _render_chat_panel():
             _decide_label = None
             _search_hits = None
 
-        # 프롬프트 해석 (분리 모듈 우선)
+        # 프롬프트 생성 (외부 모듈이 없으면 간단 폴백)
         try:
             from src.prompting.resolve import resolve_prompts
-
             system_prompt, user_prompt, source = resolve_prompts(
-                MODE_TOKEN, question, ev_notes, ev_books, cur_label, ss
+                MODE_TOKEN, question, ev_notes, ev_books, mode_label, ss
             )
             ss["__prompt_source"] = source
         except Exception:
             ss["__prompt_source"] = "Fallback(Local)"
             if MODE_TOKEN == "문법설명":
-                system_prompt = "모든 출력은 한국어. 장황한 배경설명 금지. 맥락요구 금지. 부족하면 추가질문 1~2개 제시."
-                user_prompt = f"[질문]\n{question}\n- 한 줄 핵심 → 규칙 3~5개 → 예문 1개 → 필요한 추가질문"
+                system_prompt = "모든 출력은 한국어. 장황한 배경설명 금지. 부족하면 추가질문 1–2개 제시."
+                user_prompt = f"[질문]\n{question}\n- 한 줄 핵심 → 규칙 3–5개 → 예문 1개 → 필요한 추가질문"
             elif MODE_TOKEN == "문장구조분석":
                 system_prompt = "모든 출력은 한국어. 불확실성은 %로. 맥락요구 금지."
                 user_prompt = f"[문장]\n{question}\n- S/V/O/C/M 개요 → 성분 식별 → 단계적 설명 → 핵심 포인트"
@@ -819,72 +838,46 @@ def _render_chat_panel():
                 system_prompt = "모든 출력은 한국어. 맥락요구 금지."
                 user_prompt = f"[지문]\n{question}\n- 한 줄 요지 → 구조 요약 → 핵심어 3–6개 + 이유"
 
-        # LLM 호출(스트리밍 대응)
+        # LLM 호출 (스트리밍 on 지원 시 on_token/stream 등 자동 연동)
+        text_final = ""
+        def _emit(piece):
+            nonlocal text_final
+            s = str(piece or "")
+            text_final += s
+            # 간단 스트리밍 미리보기
+            try:
+                ph.markdown(text_final)
+            except Exception:
+                pass
+
         try:
             from src.llm import providers as _prov
             call = getattr(_prov, "call_with_fallback", None)
         except Exception:
             call = None
 
-        acc = ""
-
-        def _emit(piece: str):
-            nonlocal acc
-            import html, re
-            acc += str(piece)
-            def esc(t: str) -> str:
-                t = html.escape(t or "").replace("\n", "<br/>")
-                return re.sub(r"  ", "&nbsp;&nbsp;", t)
-            ph.markdown(
-                '<div style="display:flex;justify-content:flex-start;margin:8px 0;">'
-                '  <div style="max-width:88%;padding:10px 12px;border-radius:16px;border-top-left-radius:8px;'
-                '              line-height:1.6;font-size:15px;box-shadow:0 1px 1px rgba(0,0,0,.05);white-space:pre-wrap;'
-                '              position:relative;border:1px solid #BEE3FF;background:#EAF6FF;color:#0a2540;">'
-                '    <span style="display:inline-block;margin:-2px 0 6px 0;padding:1px 8px;border-radius:999px;'
-                '                 font-size:11px;font-weight:700;background:#DFF1FF;color:#0f5b86;'
-                '                 border:1px solid #BEE3FF;">답변</span><br/>'
-                + esc(acc)
-                + "  </div>"
-                "</div>",
-                unsafe_allow_html=True,
-            )
-
-        text_final = ""
         try:
-            import inspect
             if callable(call):
-                sig = inspect.signature(call)
-                params = sig.parameters.keys()
-                kwargs: Dict[str, Any] = {}
-
+                import inspect as _inspect
+                params = _inspect.signature(call).parameters.keys()
+                kwargs = {}
                 if "messages" in params:
                     kwargs["messages"] = [
                         {"role": "system", "content": system_prompt or ""},
                         {"role": "user", "content": user_prompt},
                     ]
                 else:
-                    if "prompt" in params:
-                        kwargs["prompt"] = user_prompt
-                    elif "user_prompt" in params:
-                        kwargs["user_prompt"] = user_prompt
-                    if "system_prompt" in params:
-                        kwargs["system_prompt"] = system_prompt or ""
-                    elif "system" in params:
-                        kwargs["system"] = system_prompt or ""
-                if "mode_token" in params:
-                    kwargs["mode_token"] = MODE_TOKEN
-                elif "mode" in params:
-                    kwargs["mode"] = MODE_TOKEN
-                if "temperature" in params:
-                    kwargs["temperature"] = 0.2
-                elif "temp" in params:
-                    kwargs["temp"] = 0.2
-                if "timeout_s" in params:
-                    kwargs["timeout_s"] = 90
-                elif "timeout" in params:
-                    kwargs["timeout"] = 90
-                if "extra" in params:
-                    kwargs["extra"] = {"question": question, "mode_key": cur_label}
+                    if "prompt" in params: kwargs["prompt"] = user_prompt
+                    elif "user_prompt" in params: kwargs["user_prompt"] = user_prompt
+                    if "system_prompt" in params: kwargs["system_prompt"] = system_prompt or ""
+                    elif "system" in params: kwargs["system"] = system_prompt or ""
+                if "mode_token" in params: kwargs["mode_token"] = MODE_TOKEN
+                elif "mode" in params: kwargs["mode"] = MODE_TOKEN
+                if "temperature" in params: kwargs["temperature"] = 0.2
+                elif "temp" in params: kwargs["temp"] = 0.2
+                if "timeout_s" in params: kwargs["timeout_s"] = 90
+                elif "timeout" in params: kwargs["timeout"] = 90
+                if "extra" in params: kwargs["extra"] = {"question": question, "mode_key": mode_label}
 
                 supports_stream = (
                     ("stream" in params)
@@ -898,21 +891,21 @@ def _render_chat_panel():
                     if "on_delta" in params: kwargs["on_delta"] = _emit
                     if "yield_text" in params: kwargs["yield_text"] = _emit
                     res = call(**kwargs)
-                    text_final = (res.get("text") if isinstance(res, dict) else acc) or acc
+                    # 일부 어댑터는 text를 반환, 일부는 스트리밍 중 on_*만 호출
+                    text_final = (res.get("text") if isinstance(res, dict) else text_final) or text_final
                 else:
                     res = call(**kwargs)
-                    text_final = res.get("text") if isinstance(res, dict) else str(res)
-                    if not text_final:
-                        text_final = "(응답이 비어있어요)"
-                    _emit(text_final)
+                    text_final = res.get("text") if isinstance(res, dict) else str(res or "")
+                    _emit(text_final or "(응답이 비어있어요)")
             else:
-                text_final = "(오류) LLM 어댑터를 사용할 수 없습니다."
-                _emit(text_final)
+                # 폴백: 간단 데모 스트리밍
+                demo = f"질문: {question}\n\n임시 답변(데모): 스트리밍 표시 중…"
+                for ch in demo:
+                    _emit(ch)
         except Exception as e:
-            text_final = f"(오류) {type(e).__name__}: {e}"
-            _emit(text_final)
+            _emit(f"(오류) {type(e).__name__}: {e}")
 
-        # (신규) 간단 출처 라벨 결정 + 화면/기록 반영
+        # 출처 라벨 결정
         try:
             hits = _search_hits(question) if callable(_search_hits) else None
         except Exception:
@@ -922,19 +915,18 @@ def _render_chat_panel():
         except Exception:
             source_label = "[AI지식]"
 
-        # 화면에 '출처:' 한 줄 표시
+        # 화면/기록 반영
         try:
             st.caption(f"출처: {source_label}")
         except Exception:
             pass
 
-        # 기록에 라벨을 포함시켜 다음 렌더에도 남도록 저장
-        final_with_src = f"{text_final}\n\n출처: {source_label}"
-
-        ss["chat"].append({"id": f"a{int(time.time() * 1000)}", "role": "assistant", "text": final_with_src})
+        msg_id_a = f"a{int(_time.time() * 1000) if _time else 'a0'}"
+        ss["chat"].append({"id": msg_id_a, "role": "assistant", "text": f"{text_final}\n\n출처: {source_label}"})
         ss["_sending"] = False
         st.rerun()
 # ============================= [13] 채팅 패널 — END =============================
+
 
 # ============================ [14] 본문 렌더 — START ============================
 def _render_body() -> None:
