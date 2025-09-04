@@ -2,7 +2,7 @@
 name: Nightly Pre-Release
 
 on:
-  # 매일 00:30 KST 실행 (UTC 15:30)
+  # 매일 00:30 KST (UTC 15:30)
   schedule:
     - cron: "30 15 * * *"
   # 수동 실행 허용
@@ -16,71 +16,93 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  checks:
-    name: Lint & Typecheck
+  gate:
+    name: Quality Gate (lint / type / tests)
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ["3.10", "3.12"]
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
         with:
-          python-version: ${{ matrix.python-version }}
-          cache: pip
+          # 태그/이력 필요(버전/릴리스용)
+          fetch-depth: 0
 
-      - name: Upgrade pip/setuptools/wheel
-        run: python -m pip install -U pip setuptools wheel
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
 
-      # main CI와 동일한 개발 의존성 설치 커맨드로 맞추세요.
-      - name: Install dev deps
+      - name: Show tool versions
         run: |
-          if [ -f pyproject.toml ]; then
-            pip install -e ".[dev]"
+          python -V
+          pip -V
+          git rev-parse --short HEAD
+          git describe --tags --always || true
+
+      - name: Install build deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install build twine
+          if [ -f requirements-dev.txt ]; then
+            pip install -r requirements-dev.txt
           else
-            pip install ruff mypy
+            pip install ruff mypy pytest
           fi
 
-      - name: Ruff
-        run: ruff check .
+      - name: Ruff (fix)
+        run: ruff check . --fix
 
-      - name: mypy
-        run: mypy .
+      - name: mypy (clear cache)
+        run: |
+          mypy --clear-cache
+          mypy .
 
-  prerelease:
-    name: Publish Nightly Pre-Release
-    needs: checks
+      - name: pytest
+        run: pytest -q
+
+      - name: Build & Twine check
+        run: |
+          python -m build
+          twine check dist/*
+
+      - name: Upload dist artifacts (CI)
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ github.sha }}
+          path: dist/*
+
+  publish:
+    name: Draft Nightly Pre-Release
+    needs: [gate]
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # 태그 작업 위해 전체 히스토리 필요
+          fetch-depth: 0
 
-      - id: vars
-        name: Compute nightly tag & name (UTC)
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Resolve nightly tag/name
+        id: vars
         shell: bash
         run: |
-          echo "tag=nightly-$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
-          echo "name=Nightly $(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          TS="$(date -u +'%Y%m%d')"
+          SHA="$(git rev-parse --short HEAD)"
+          TAG="nightly-${TS}-${SHA}"
+          NAME="Nightly ${TS} (${SHA})"
+          echo "tag=${TAG}"   >> "$GITHUB_OUTPUT"
+          echo "name=${NAME}" >> "$GITHUB_OUTPUT"
 
-      - name: Create/Update tag and push
+      - name: Build release zip
         shell: bash
         run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git fetch --tags
-          git tag -f "${{ steps.vars.outputs.tag }}"
-          git push -f origin "${{ steps.vars.outputs.tag }}"
-
-      - name: Build zip artifact
-        shell: bash
-        run: |
+          set -euo pipefail
           ZIP="maic-${{ steps.vars.outputs.tag }}.zip"
-          git archive --format=zip --output "$ZIP" HEAD
+          rm -f "$ZIP"
+          git ls-files > files.txt
+          # 리포 내용 압축(gihtub 워크플로/캐시 제외)
+          zip -9 -r "$ZIP" -@ < files.txt
           sha256sum "$ZIP" > "$ZIP.sha256"
 
       - name: Publish pre-release
@@ -89,6 +111,7 @@ jobs:
           tag_name: ${{ steps.vars.outputs.tag }}
           name:     ${{ steps.vars.outputs.name }}
           prerelease: true
+          generate_release_notes: true
           files: |
             maic-${{ steps.vars.outputs.tag }}.zip
             maic-${{ steps.vars.outputs.tag }}.zip.sha256
