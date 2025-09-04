@@ -45,7 +45,7 @@ def normalize_to_token_iter(source: TokenSource) -> Iterator[str]:
 
     # 이터러블/이터레이터
     try:
-        iterator = iter(source)  # type: ignore[arg-type]
+        iterator = iter(source)
     except Exception:
         # 예외 객체를 쓰지 않음: F821(e 미정의) 원천 차단
         def _err() -> Iterator[str]:
