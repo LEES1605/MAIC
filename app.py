@@ -19,8 +19,7 @@ try:
     import streamlit as _st_mod
     st = _st_mod
 except Exception:
-    st = None  # type: ignore[assignment]  # mypy에선 여전히 Any로 취급
-
+    st = None  # mypy에서 Any로 간주되므로 추가 ignore 불필요
 # ============================= [02] imports & bootstrap — END =============================
 
 # [03] secrets → env 승격 & 서버 안정 옵션 ====================================
