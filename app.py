@@ -781,13 +781,13 @@ def _render_chat_panel():
             role_label = "답변"
             persona = "지피티"
         elif role == "evaluator":
-            role_label = "보완"
+            role_label = "보완"   # 평가 대신 보완(Co-teacher)
             persona = "미나"
         else:
             role_label = "질문"
             persona = None
 
-        # 히스토리 텍스트에서 '출처:' 꼬리표 분리 → 칩으로 표시
+        # 히스토리 텍스트에 '출처:' 꼬리표가 있으면 분리 → 칩으로 표시(assistant/evaluator)
         t = str(text or "")
         m = _re.search(r"^(.*?)(?:\n+|\s+)출처:\s*(.+)$", t, flags=_re.S)
         src = None
@@ -799,10 +799,8 @@ def _render_chat_panel():
 
         body = _html.escape(body).replace("\n", "<br/>")
         body = _re.sub(r"  ", "&nbsp;&nbsp;", body)
-        src_html = (f'<span style="{chip_src}">' + (_html.escape(src) if src else "") + "</span>") \
-            if (src and not is_user) else ""
-        pers_html = (f'<span style="{chip_pers}">' + _html.escape(persona) + "</span>") \
-            if (persona and not is_user) else ""
+        src_html = (f'<span style="{chip_src}">' + (_html.escape(src) if src else "") + "</span>") if (src and not is_user) else ""
+        pers_html = (f'<span style="{chip_pers}">' + _html.escape(persona) + "</span>") if (persona and not is_user) else ""
         st.markdown(
             f'<div style="{wrap}"><div style="{bubble}">'
             f'<span style="{chip_role}">{role_label}</span>'
@@ -891,8 +889,47 @@ def _render_chat_panel():
 
             st.button("닫기", on_click=_close_plus)
 
-    # 입력 폼 (Enter=전송)
+    # ─────────────────────────────────────────────────────────────────────────
+    # 입력 폼 (전송 화살표를 입력칸 '안'에 배치)
+    # ─────────────────────────────────────────────────────────────────────────
     with st.form("inpane_chat_form", clear_on_submit=True):
+        # 래퍼 + 스타일 주입(스코프 제한: #inpane_wrap 내부에만 적용)
+        st.markdown('<div id="inpane_wrap">', unsafe_allow_html=True)
+
+        # CSS: 입력칸 우측 안쪽에 버튼 고정, 입력 텍스트가 겹치지 않도록 padding-right 확장
+        st.markdown(
+            """
+            <style>
+            #inpane_wrap { position: relative; }
+            #inpane_wrap [data-testid="stTextInput"] input {
+                padding-right: 48px;
+            }
+            #inpane_wrap .stButton > button {
+                position: absolute;
+                right: 8px;
+                top: 50%;
+                transform: translateY(-50%);
+                height: 36px;
+                min-height: 36px;
+                width: 36px;
+                padding: 0;
+                border-radius: 999px;
+                line-height: 36px;
+            }
+            /* 모바일 폭 대응: 버튼이 아래로 밀리지 않도록 */
+            @media (max-width: 480px) {
+                #inpane_wrap [data-testid="stTextInput"] input {
+                    padding-right: 56px;
+                }
+                #inpane_wrap .stButton > button {
+                    right: 6px;
+                }
+            }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+
         qtxt = st.text_input(
             "질문 입력",
             value=ss.get("inpane_q", ""),
@@ -901,6 +938,8 @@ def _render_chat_panel():
             key="inpane_q",
         )
         submitted = st.form_submit_button("➤", type="secondary")
+
+        st.markdown("</div>", unsafe_allow_html=True)
 
     # (A) 제출 처리 — 내 말풍선 즉시 표시 → 답변 스트리밍
     if submitted and not ss.get("_sending", False):
