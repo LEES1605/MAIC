@@ -1028,17 +1028,17 @@ def _render_chat_panel():
             ss["__prompt_source"] = "fallback"
 
         # RAG 라벨(출처 칩)
-                try:
+        try:
             import importlib as _imp
             try:
                 _label_mod = _imp.import_module("src.rag.label")
             except Exception:
                 _label_mod = _imp.import_module("label")  # 루트의 label.py 폴백
-                _decide_label = getattr(_label_mod, "decide_label", None)
-                _search_hits = getattr(_label_mod, "search_hits", None)
-            except Exception:
-                _decide_label = None
-                _search_hits = None
+            _decide_label = getattr(_label_mod, "decide_label", None)
+            _search_hits = getattr(_label_mod, "search_hits", None)
+        except Exception:
+            _decide_label = None
+            _search_hits = None
 
 
         try:
