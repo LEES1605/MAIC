@@ -58,7 +58,11 @@ class SentenceBuffer:
     - flush(force): 버퍼를 방출(강제/조건부)
     """
 
-    def __init__(self, on_emit: Callable[[str], None], opts: Optional[BufferOptions] = None) -> None:
+    def __init__(
+        self,
+        on_emit: Callable[[str], None],
+        opts: Optional[BufferOptions] = None,
+    ) -> None:
         self.on_emit = on_emit
         self.opts = opts or BufferOptions()
         self._buf: list[str] = []
@@ -94,7 +98,7 @@ class SentenceBuffer:
         if self.opts.flush_on_newline and "\n" in s:
             parts = s.splitlines(keepends=True)
             keep_tail = ""
-            for i, p in enumerate(parts):
+            for p in parts:
                 if p.endswith("\n"):
                     self._emit(p)
                 else:
