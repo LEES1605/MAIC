@@ -763,14 +763,56 @@ def _render_chat_panel():
     ph_ans = st.empty()
     ph_eval = st.empty()
 
-    # 메시지 영역 CLOSE(폼은 같은 ChatPane 내부)
+    # 메시지 영역 CLOSE(폼/업로더는 같은 ChatPane 내부)
     st.markdown("</div>", unsafe_allow_html=True)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # (NEW) 📷 이미지 업로드 → OCR → 입력칸 자동 주입
+    # ─────────────────────────────────────────────────────────────────────────
+    with st.expander("📷 이미지에서 글자 추출", expanded=False):
+        up = st.file_uploader(
+            "이미지 파일 선택",
+            type=["png", "jpg", "jpeg", "webp", "bmp"],
+            accept_multiple_files=False,
+            help="문제/지문 사진을 올리면 텍스트를 추출해 입력칸에 넣어드려요.",
+            key="ocr_uploader",
+        )
+        if up is not None:
+            try:
+                # 임시 저장 후 OCR 수행
+                tmp_dir = (PERSIST_DIR / "tmp_uploads")
+                tmp_dir.mkdir(parents=True, exist_ok=True)
+                ext = Path(up.name).suffix or ".png"
+                fpath = tmp_dir / f"upl_{int(time.time()*1000)}{ext}"
+                with open(fpath, "wb") as fw:
+                    fw.write(up.getbuffer())
+
+                try:
+                    from src.vision.ocr import extract_text
+                    ocr_txt = extract_text(str(fpath))
+                except Exception:
+                    ocr_txt = ""
+
+                if ocr_txt:
+                    # 입력칸에 자동 주입
+                    ss["inpane_q"] = ocr_txt.strip()
+                    st.caption("✓ OCR 결과를 입력칸에 넣었어요. 필요하면 수정 후 전송하세요.")
+                    preview = (ocr_txt[:180] + "…") if len(ocr_txt) > 180 else ocr_txt
+                    st.code(preview or "(빈 텍스트)")
+                else:
+                    st.warning(
+                        "텍스트를 찾지 못했어요. 이미지 해상도/명암을 확인하거나 "
+                        "다른 이미지를 시도해 보세요."
+                    )
+            except Exception as e:
+                _errlog("OCR 처리 실패", where="[13]_ocr", exc=e)
+                st.error("OCR 처리 중 오류가 발생했어요. 텍스트로 직접 입력해 주세요.")
 
     # 인-카드 입력폼 — Enter=전송, 화살표 버튼은 인풋 내부(절대배치, JS 없이)
     with st.form("inpane_chat_form", clear_on_submit=True):
         qtxt = st.text_input(
             "질문 입력",
-            value="",
+            value=ss.get("inpane_q", ""),
             placeholder="예) 분사구문이 뭐예요?  예) 이 문장 구조 분석해줘",
             label_visibility="collapsed",
             key="inpane_q",
@@ -785,7 +827,9 @@ def _render_chat_panel():
             return
 
         ss["_sending"] = True
-        ss["chat"].append({"id": f"u{int(time.time() * 1000)}", "role": "user", "text": question})
+        ss["chat"].append(
+            {"id": f"u{int(time.time() * 1000)}", "role": "user", "text": question}
+        )
 
         # 증거/모드
         ev_notes = ss.get("__evidence_class_notes", "")
@@ -802,14 +846,25 @@ def _render_chat_panel():
         except Exception:
             ss["__prompt_source"] = "Fallback(Local)"
             if MODE_TOKEN == "문법설명":
-                system_prompt = "모든 출력은 한국어. 장황한 배경설명 금지. 맥락요구 금지. 부족하면 추가질문 1~2개 제시."
-                user_prompt = f"[질문]\n{question}\n- 한 줄 핵심 → 규칙 3~5개 → 예문 1개 → 필요한 추가질문"
+                system_prompt = (
+                    "모든 출력은 한국어. 장황한 배경설명 금지. 맥락요구 금지. "
+                    "부족하면 추가질문 1~2개 제안."
+                )
+                user_prompt = (
+                    f"[질문]\n{question}\n- 한 줄 핵심 → 규칙 3~5개 → 예문 1개 → "
+                    "필요한 추가질문"
+                )
             elif MODE_TOKEN == "문장구조분석":
                 system_prompt = "모든 출력은 한국어. 불확실성은 %로. 맥락요구 금지."
-                user_prompt = f"[문장]\n{question}\n- S/V/O/C/M 개요 → 성분 식별 → 단계적 설명 → 핵심 포인트"
+                user_prompt = (
+                    f"[문장]\n{question}\n- S/V/O/C/M 개요 → 성분 식별 → 단계적 설명 → "
+                    "핵심 포인트"
+                )
             else:
                 system_prompt = "모든 출력은 한국어. 맥락요구 금지."
-                user_prompt = f"[지문]\n{question}\n- 한 줄 요지 → 구조 요약 → 핵심어 3–6개 + 이유"
+                user_prompt = (
+                    f"[지문]\n{question}\n- 한 줄 요지 → 구조 요약 → 핵심어 3–6개 + 이유"
+                )
 
         # ─────────────────────────────────────────────────────────────────────
         # (A) 주 답변 에이전트 스트리밍
@@ -829,11 +884,16 @@ def _render_chat_panel():
 
             ph_ans.markdown(
                 '<div style="display:flex;justify-content:flex-start;margin:8px 0;">'
-                '  <div style="max-width:88%;padding:10px 12px;border-radius:16px;border-top-left-radius:8px;'
-                '              line-height:1.6;font-size:15px;box-shadow:0 1px 1px rgba(0,0,0,.05);white-space:pre-wrap;'
-                '              position:relative;border:1px solid #BEE3FF;background:#EAF6FF;color:#0a2540;">'
-                '    <span style="display:inline-block;margin:-2px 0 6px 0;padding:1px 8px;border-radius:999px;'
-                '                 font-size:11px;font-weight:700;background:#DFF1FF;color:#0f5b86;'
+                '  <div style="max-width:88%;padding:10px 12px;border-radius:16px;'
+                '              border-top-left-radius:8px; line-height:1.6;'
+                '              font-size:15px;box-shadow:0 1px 1px rgba(0,0,0,.05);'
+                '              white-space:pre-wrap; position:relative;'
+                '              border:1px solid #BEE3FF;background:#EAF6FF;'
+                '              color:#0a2540;">'
+                '    <span style="display:inline-block;margin:-2px 0 6px 0;'
+                '                 padding:1px 8px;border-radius:999px;'
+                '                 font-size:11px;font-weight:700;'
+                '                 background:#DFF1FF;color:#0f5b86;'
                 '                 border:1px solid #BEE3FF;">답변</span><br/>'
                 + esc(acc_ans)
                 + "  </div>"
@@ -856,7 +916,11 @@ def _render_chat_panel():
         except Exception:
             hits = None
         try:
-            source_label = _decide_label(hits, default_if_none="[AI지식]") if callable(_decide_label) else "[AI지식]"
+            source_label = (
+                _decide_label(hits, default_if_none="[AI지식]")
+                if callable(_decide_label)
+                else "[AI지식]"
+            )
         except Exception:
             source_label = "[AI지식]"
 
@@ -872,7 +936,11 @@ def _render_chat_panel():
         if callable(_answer_stream):
             # 에이전트 스트리밍
             try:
-                for ch in _answer_stream(question=question, mode=MODE_TOKEN, ctx={"hits": hits, "source_label": source_label}):
+                for ch in _answer_stream(
+                    question=question,
+                    mode=MODE_TOKEN,
+                    ctx={"hits": hits, "source_label": source_label},
+                ):
                     _emit_ans(ch)
                 full_answer = acc_ans or "(응답이 비어있어요)"
             except Exception as e:
@@ -923,7 +991,10 @@ def _render_chat_panel():
                     kwargs["timeout"] = 90
 
                 if "extra" in params:
-                    kwargs["extra"] = {"question": question, "mode_key": cur_label}
+                    kwargs["extra"] = {
+                        "question": question,
+                        "mode_key": cur_label,
+                    }
 
                 supports_stream = (
                     ("stream" in params)
@@ -941,10 +1012,15 @@ def _render_chat_panel():
                     if "yield_text" in params:
                         kwargs["yield_text"] = _emit_ans
                     res = call(**kwargs)
-                    full_answer = (res.get("text") if isinstance(res, dict) else acc_ans) or acc_ans
+                    full_answer = (
+                        (res.get("text") if isinstance(res, dict) else acc_ans)
+                        or acc_ans
+                    )
                 else:
                     res = call(**kwargs)
-                    full_answer = res.get("text") if isinstance(res, dict) else str(res)
+                    full_answer = (
+                        res.get("text") if isinstance(res, dict) else str(res)
+                    )
                     if not full_answer:
                         full_answer = "(응답이 비어있어요)"
                     _emit_ans(full_answer)
@@ -957,7 +1033,13 @@ def _render_chat_panel():
             st.caption(f"출처: {source_label}")
         except Exception:
             pass
-        ss["chat"].append({"id": f"a{int(time.time() * 1000)}", "role": "assistant", "text": f"{full_answer}\n\n출처: {source_label}"})
+        ss["chat"].append(
+            {
+                "id": f"a{int(time.time() * 1000)}",
+                "role": "assistant",
+                "text": f"{full_answer}\n\n출처: {source_label}",
+            }
+        )
 
         # ─────────────────────────────────────────────────────────────────────
         # (B) 평가·보완 에이전트 스트리밍
@@ -975,11 +1057,16 @@ def _render_chat_panel():
 
             ph_eval.markdown(
                 '<div style="display:flex;justify-content:flex-start;margin:8px 0;">'
-                '  <div style="max-width:88%;padding:10px 12px;border-radius:16px;border-top-left-radius:8px;'
-                '              line-height:1.6;font-size:15px;box-shadow:0 1px 1px rgba(0,0,0,.05);white-space:pre-wrap;'
-                '              position:relative;border:1px dashed #BEE3FF;background:#F7FBFF;color:#0a2540;">'
-                '    <span style="display:inline-block;margin:-2px 0 6px 0;padding:1px 8px;border-radius:999px;'
-                '                 font-size:11px;font-weight:700;background:#EEF7FF;color:#0f5b86;'
+                '  <div style="max-width:88%;padding:10px 12px;border-radius:16px;'
+                '              border-top-left-radius:8px; line-height:1.6;'
+                '              font-size:15px;box-shadow:0 1px 1px rgba(0,0,0,.05);'
+                '              white-space:pre-wrap; position:relative;'
+                '              border:1px dashed #BEE3FF;background:#F7FBFF;'
+                '              color:#0a2540;">'
+                '    <span style="display:inline-block;margin:-2px 0 6px 0;'
+                '                 padding:1px 8px;border-radius:999px;'
+                '                 font-size:11px;font-weight:700;'
+                '                 background:#EEF7FF;color:#0f5b86;'
                 '                 border:1px solid #BEE3FF;">평가·보완</span><br/>'
                 + esc2(acc_eval)
                 + "  </div>"
@@ -996,7 +1083,12 @@ def _render_chat_panel():
 
         if callable(_evaluate_stream):
             try:
-                for ch in _evaluate_stream(answer=full_answer, question=question, mode=MODE_TOKEN, ctx={"source_label": source_label}):
+                for ch in _evaluate_stream(
+                    answer=full_answer,
+                    question=question,
+                    mode=MODE_TOKEN,
+                    ctx={"source_label": source_label},
+                ):
                     _emit_eval(ch)
                 full_eval = acc_eval or "(평가 결과가 비어있어요)"
             except Exception as e:
@@ -1004,11 +1096,12 @@ def _render_chat_panel():
                 _emit_eval(full_eval)
         else:
             full_eval = "평가 에이전트를 사용할 수 없어서, 주 답변만 제공했어요."
-
             _emit_eval(full_eval)
 
         # 기록
-        ss["chat"].append({"id": f"e{int(time.time() * 1000)}", "role": "evaluator", "text": full_eval})
+        ss["chat"].append(
+            {"id": f"e{int(time.time() * 1000)}", "role": "evaluator", "text": full_eval}
+        )
 
         ss["_sending"] = False
         st.rerun()
