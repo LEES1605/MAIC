@@ -81,7 +81,7 @@ def _build_io_kwargs(
 def _iter_provider_stream(*, system_prompt: str, user_prompt: str) -> Iterator[str]:
     """가능하면 실스트리밍으로, 아니면 폴백."""
     try:
-        from src.llm import providers as prov  # noqa: WPS433
+        from src.llm import providers as prov
     except Exception as e:  # pragma: no cover
         yield f"(오류) provider 로딩 실패: {type(e).__name__}: {e}"
         return
