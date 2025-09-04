@@ -1,82 +1,141 @@
-# ============================ [01] AGENT: RESPONDER — START ============================
-"""
-주 답변 에이전트 (자료 기반 1차 응답)
-- 목표: 학생 눈높이로 간결한 설명 + 예문 1개
-- 스트리밍 지원: 공급자가 콜백 스트리밍을 지원하지 않더라도,
-  최종 텍스트를 '글자 단위'로 흘려 UX를 유지
-"""
-
+# ================================ [01] Answer Stream — START ================================
 from __future__ import annotations
 
-from typing import Any, Dict, Iterator, Optional
+from typing import Iterator, Dict, Any, Optional, List, Callable
+import inspect
+from queue import Queue, Empty
+from threading import Thread
 
-from src.llm import providers
 
-
-def _compose_prompts(
-    question: str,
-    mode: str,
-    ctx: Optional[Dict[str, Any]],
-) -> Dict[str, str]:
-    q = (question or "").strip()
-    m = (mode or "문법설명").strip()
-
-    sys = (
-        "모든 출력은 한국어. 초등~중등 학생 눈높이. 과도한 배경설명 금지. "
-        "핵심 규칙은 3~5개 bullet로 요약하고, 간단한 예문을 1개 포함. "
-        "모르면 모른다고 말하고, 필요한 경우 추가 질문 1개 제안."
+def _system_prompt(mode: str) -> str:
+    hint = {
+        "문법설명": "핵심 규칙 → 간단 예시 → 흔한 오해 순서로 쉽게 설명하세요.",
+        "문장구조분석": "품사/구문 역할을 표처럼 정리하고 핵심 포인트 3개를 요약하세요.",
+        "지문분석": "주제/요지/세부정보를 구분하고 근거 문장을 제시하세요.",
+    }.get(mode, "학생 눈높이에 맞춰 핵심→예시→한 줄 정리로 설명하세요.")
+    return (
+        "당신은 학생을 돕는 영어 선생님입니다. 불필요한 말은 줄이고, "
+        "짧은 문장과 단계적 설명을 사용하세요. " + hint
     )
-    if m == "문장구조분석":
-        sys += " S/V/O/C/M를 단계적으로 식별하고 불확실성은 '약 n%'로 표기."
-    elif m == "지문분석":
-        sys += " 먼저 한 줄 요지 → 구조 요약 → 핵심어 3~6개(이유 포함) 제시."
 
-    hints = []
-    if isinstance(ctx, dict):
-        if ctx.get("hits"):
-            hints.append("참고자료가 발견되었습니다.")
-        if ctx.get("source_label"):
-            hints.append(f"출처힌트={ctx.get('source_label')}")
 
-    hint_block = "\n".join(hints) if hints else "참고자료 없음"
+def _build_io_kwargs(
+    params: Dict[str, inspect.Parameter],
+    *,
+    system_prompt: str,
+    question: str,
+) -> Dict[str, Any]:
+    """providers API 시그니처에 맞게 kwargs 구성"""
+    kwargs: Dict[str, Any] = {}
+    if "messages" in params:
+        kwargs["messages"] = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": question},
+        ]
+    else:
+        if "prompt" in params:
+            kwargs["prompt"] = question
+        elif "user_prompt" in params:
+            kwargs["user_prompt"] = question
+        if "system_prompt" in params:
+            kwargs["system_prompt"] = system_prompt
+        elif "system" in params:
+            kwargs["system"] = system_prompt
+    return kwargs
 
-    user = f"[질문]\n{q}\n\n[모드]\n{m}\n\n[힌트]\n{hint_block}"
-    return {"system": sys, "user": user}
+
+def _iter_provider_stream(
+    *, system_prompt: str, question: str
+) -> Iterator[str]:
+    """
+    가능한 경우 실제 스트리밍으로 토막을 yield.
+    - 우선순위: providers.stream_text → call_with_fallback(stream+callbacks)
+    - 전부 불가하면 최종 텍스트 한 번만 yield(폴백)
+    """
+    try:
+        from src.llm import providers as prov  # noqa: WPS433
+    except Exception as e:  # pragma: no cover
+        yield f"(오류) provider 로딩 실패: {type(e).__name__}: {e}"
+        return
+
+    # 1) stream_text(messages|prompt)를 지원하면 그대로 사용
+    stream_fn = getattr(prov, "stream_text", None)
+    if callable(stream_fn):
+        params = inspect.signature(stream_fn).parameters
+        kwargs = _build_io_kwargs(params, system_prompt=system_prompt, question=question)
+        for piece in stream_fn(**kwargs):
+            yield str(piece or "")
+        return
+
+    # 2) call_with_fallback + callbacks(on_delta / on_token / yield_text)
+    call = getattr(prov, "call_with_fallback", None)
+    if callable(call):
+        params = inspect.signature(call).parameters
+        kwargs = _build_io_kwargs(params, system_prompt=system_prompt, question=question)
+
+        q: "Queue[Optional[str]]" = Queue()
+
+        def _on_piece(t: Any) -> None:
+            try:
+                q.put(str(t or ""))
+            except Exception:
+                pass
+
+        used_cb = False
+        for name in ("on_delta", "on_token", "yield_text"):
+            if name in params:
+                kwargs[name] = _on_piece
+                used_cb = True
+        if "stream" in params:
+            kwargs["stream"] = True
+
+        # 콜백이 전혀 없으면 스트리밍 불가 → 폴백으로 처리
+        if used_cb:
+            def _runner() -> None:
+                try:
+                    call(**kwargs)
+                except Exception as e:  # pragma: no cover
+                    q.put(f"(오류) {type(e).__name__}: {e}")
+                finally:
+                    q.put(None)
+
+            th = Thread(target=_runner, daemon=True)
+            th.start()
+
+            while True:
+                try:
+                    item = q.get(timeout=0.1)
+                except Empty:
+                    if not th.is_alive() and q.empty():
+                        break
+                    continue
+                if item is None:
+                    break
+                yield item
+            return
+
+        # 콜백 미지원이면 아래 폴백으로
+        try:
+            res = call(**kwargs)
+            txt = res.get("text") if isinstance(res, dict) else str(res)
+            yield txt
+            return
+        except Exception as e:  # pragma: no cover
+            yield f"(오류) {type(e).__name__}: {e}"
+            return
+
+    # 3) 어떤 provider도 없으면 메시지
+    yield "(오류) LLM 어댑터를 찾을 수 없어요."
 
 
 def answer_stream(
-    question: str,
-    mode: str = "문법설명",
-    ctx: Optional[Dict[str, Any]] = None,
+    *, question: str, mode: str, ctx: Optional[Dict[str, Any]] = None
 ) -> Iterator[str]:
     """
-    주 답변을 '토큰 스트림' 형태로 산출합니다.
-    공급자가 콜백 스트리밍을 지원하면 그대로 사용, 아니면 결과 텍스트를 글자 단위로 흘립니다.
-    예외가 나면 사람 친화적 메시지 한 줄을 흘린 뒤 종료합니다.
+    주답변(피티쌤) 스트리밍 제너레이터.
+    App 단에서 문장 버퍼링을 적용하므로, 여기서는 '토막'을 잘게 흘려보내면 됩니다.
     """
-    prompts = _compose_prompts(question, mode, ctx)
-
-    try:
-        acc: list[str] = []
-
-        def _on_token(t: str) -> None:
-            # 콜백 기반 스트리밍 누적
-            acc.append(str(t or ""))
-
-        res = providers.call_with_fallback(
-            system=prompts["system"],
-            prompt=prompts["user"],
-            temperature=0.2,
-            stream=True,
-            on_token=_on_token,
-        )
-        full = "".join(acc) if acc else str(res.get("text") or "")
-        if not full:
-            full = "(응답이 비어있어요)"
-
-        # 스트리밍(공급자 콜백 결과 또는 폴백 텍스트)
-        for ch in full:
-            yield ch
-    except Exception as e:
-        yield f"(오류) {type(e).__name__}: {e}"
-# ============================= [01] AGENT: RESPONDER — END =============================
+    system_prompt = _system_prompt(mode)
+    # 필요 시 ctx 활용 여지(예: RAG 요약 삽입) — 현 단계에선 미사용
+    yield from _iter_provider_stream(system_prompt=system_prompt, question=question)
+# ================================= [01] Answer Stream — END =================================
