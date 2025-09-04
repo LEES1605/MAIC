@@ -110,7 +110,7 @@ def evaluate_stream(
 
     # ── provider 호출 준비 ────────────────────────────────────────────────────
     try:
-        from src.llm import providers as _prov  # type: ignore
+        from src.llm import providers as _prov
     except Exception as e:
         yield f"(오류) provider 로딩 실패: {type(e).__name__}: {e}"
         return
