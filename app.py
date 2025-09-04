@@ -757,37 +757,52 @@ def _render_chat_panel():
         is_user = (role == "user")
 
         # 정렬/버블 스타일
-        wrap = "display:flex;justify-content:flex-end;margin:8px 0;" if is_user else \
-               "display:flex;justify-content:flex-start;margin:8px 0;"
-        base = (
-            "max-width:88%;padding:10px 12px;border-radius:16px;line-height:1.6;font-size:15px;"
-            "box-shadow:0 1px 1px rgba(0,0,0,.05);white-space:pre-wrap;position:relative;"
+        wrap = (
+            "display:flex;justify-content:flex-end;margin:8px 0;"
+            if is_user
+            else "display:flex;justify-content:flex-start;margin:8px 0;"
         )
-        bubble = (base + "border-top-right-radius:8px;border:1px solid #F2E4A2;background:#FFF8CC;color:#333;") if is_user else \
-                 (base + "border-top-left-radius:8px;border:1px solid #BEE3FF;background:#EAF6FF;color:#0a2540;")
+        base = (
+            "max-width:88%;padding:10px 12px;border-radius:16px;line-height:1.6;"
+            "font-size:15px;box-shadow:0 1px 1px rgba(0,0,0,.05);white-space:pre-wrap;"
+            "position:relative;"
+        )
+        bubble = (
+            base
+            + "border-top-right-radius:8px;border:1px solid #F2E4A2;"
+            + "background:#FFF8CC;color:#333;"
+            if is_user
+            else base
+            + "border-top-left-radius:8px;border:1px solid #BEE3FF;"
+            + "background:#EAF6FF;color:#0a2540;"
+        )
 
         # 칩 스타일
-        chip_role = ("display:inline-block;margin:-2px 6px 6px 0;padding:1px 8px;border-radius:999px;"
-                     "font-size:11px;font-weight:700;background:#FFF2B8;color:#6b5200;border:1px solid #F2E4A2;") if is_user else \
-                    ("display:inline-block;margin:-2px 6px 6px 0;padding:1px 8px;border-radius:999px;"
-                     "font-size:11px;font-weight:700;background:#DFF1FF;color:#0f5b86;border:1px solid #BEE3FF;")
-        chip_src  = ("display:inline-block;margin:-2px 0 6px 0;padding:1px 8px;border-radius:999px;"
-                     "font-size:11px;font-weight:700;background:#eef2f6;color:#334155;border:1px solid #cbd5e1;")
-        chip_pers = ("display:inline-block;margin:-2px 6px 6px 0;padding:1px 8px;border-radius:999px;"
-                     "font-size:11px;font-weight:700;background:#f1f5f9;color:#334155;border:1px solid #cbd5e1;")
+        chip_role = (
+            "display:inline-block;margin:-2px 6px 6px 0;padding:1px 8px;border-radius:999px;"
+            "font-size:11px;font-weight:700;background:#FFF2B8;color:#6b5200;"
+            "border:1px solid #F2E4A2;"
+        )
+        chip_src = (
+            "display:inline-block;margin:-2px 0 6px 0;padding:1px 8px;border-radius:999px;"
+            "font-size:11px;font-weight:700;background:#eef2f6;color:#334155;"
+            "border:1px solid #cbd5e1;"
+        )
+        chip_pers = (
+            "display:inline-block;margin:-2px 6px 6px 0;padding:1px 8px;border-radius:999px;"
+            "font-size:11px;font-weight:700;background:#f1f5f9;color:#334155;"
+            "border:1px solid #cbd5e1;"
+        )
 
-        # 역할별 라벨/페르소나
+        # 페르소나 이름 매핑
         if role == "assistant":
-            role_label = "답변"
-            persona = "지피티"
+            persona = "피티쌤"
         elif role == "evaluator":
-            role_label = "보완"   # 평가 대신 보완(Co-teacher)
-            persona = "미나"
+            persona = "미나쌤"
         else:
-            role_label = "질문"
             persona = None
 
-        # 히스토리 텍스트에 '출처:' 꼬리표가 있으면 분리 → 칩으로 표시(assistant/evaluator)
+        # 히스토리 텍스트에서 '출처:' 꼬리표 분리 → 칩으로 표시
         t = str(text or "")
         m = _re.search(r"^(.*?)(?:\n+|\s+)출처:\s*(.+)$", t, flags=_re.S)
         src = None
@@ -799,12 +814,24 @@ def _render_chat_panel():
 
         body = _html.escape(body).replace("\n", "<br/>")
         body = _re.sub(r"  ", "&nbsp;&nbsp;", body)
-        src_html = (f'<span style="{chip_src}">' + (_html.escape(src) if src else "") + "</span>") if (src and not is_user) else ""
-        pers_html = (f'<span style="{chip_pers}">' + _html.escape(persona) + "</span>") if (persona and not is_user) else ""
+
+        if is_user:
+            header = f'<span style="{chip_role}">질문</span>'
+        else:
+            pers_html = (
+                f'<span style="{chip_pers}">{_html.escape(persona)}</span>'
+                if persona
+                else ""
+            )
+            src_html = (
+                f'<span style="{chip_src}">{_html.escape(src)}</span>'
+                if src
+                else ""
+            )
+            header = pers_html + src_html
+
         st.markdown(
-            f'<div style="{wrap}"><div style="{bubble}">'
-            f'<span style="{chip_role}">{role_label}</span>'
-            f'{pers_html}{src_html}<br/>' + body + "</div></div>",
+            f'<div style="{wrap}"><div style="{bubble}">{header}<br/>' + body + "</div></div>",
             unsafe_allow_html=True,
         )
 
@@ -819,8 +846,8 @@ def _render_chat_panel():
 
     # 스트리밍/유저-즉시 자리(메시지 영역 내부에서 placeholder 확보)
     ph_user = st.empty()   # 전송 직후 "내 말풍선" 즉시 표출용
-    ph_ans  = st.empty()   # 주답변 스트리밍(지피티)
-    ph_eval = st.empty()   # 보완 스트리밍(미나)
+    ph_ans = st.empty()    # 주답변 스트리밍(피티쌤)
+    ph_eval = st.empty()   # 보완 스트리밍(미나쌤)
 
     # 메시지 영역 CLOSE(폼/업로더는 같은 ChatPane 내부)
     st.markdown("</div>", unsafe_allow_html=True)
@@ -836,11 +863,15 @@ def _render_chat_panel():
         if st.button("＋", key="plus_btn", help="카메라/앨범에서 이미지로 질문하기"):
             ss["__plus_open"] = not ss.get("__plus_open", False)
     with cols[1]:
-        st.caption("이미지로 질문하고 싶다면 ＋ 버튼을 눌러 촬영하거나 앨범에서 선택하세요.")
+        st.caption(
+            "이미지로 질문하고 싶다면 ＋ 버튼을 눌러 촬영하거나 앨범에서 선택하세요."
+        )
 
     if ss.get("__plus_open"):
         with st.container():
-            st.markdown("**입력 도우미** · 이미지를 가져와 텍스트로 변환해 드려요.")
+            st.markdown(
+                "**입력 도우미** · 이미지를 가져와 텍스트로 변환해 드려요."
+            )
             tabs = st.tabs(["📷 카메라", "🖼️ 앨범(사진)"])
 
             # 공통 OCR 함수
@@ -863,14 +894,23 @@ def _render_chat_panel():
                         ocr_txt = ""
                     if ocr_txt:
                         ss["inpane_q"] = ocr_txt.strip()
-                        st.success("✓ OCR 결과를 입력칸에 넣었어요. 필요하면 수정 후 전송하세요.")
-                        preview = (ocr_txt[:180] + "…") if len(ocr_txt) > 180 else ocr_txt
+                        st.success(
+                            "✓ OCR 결과를 입력칸에 넣었어요. 필요하면 수정 후 전송하세요."
+                        )
+                        preview = (
+                            ocr_txt[:180] + "…" if len(ocr_txt) > 180 else ocr_txt
+                        )
                         st.code(preview or "(빈 텍스트)")
                         return
-                    st.warning("텍스트를 찾지 못했어요. 명암·해상도를 확인하거나 다른 이미지를 시도해 주세요.")
+                    st.warning(
+                        "텍스트를 찾지 못했어요. 명암·해상도를 확인하거나 "
+                        "다른 이미지를 시도해 주세요."
+                    )
                 except Exception as e:
                     _errlog("OCR 처리 실패", where="[13]_ocr_plus", exc=e)
-                    st.error("OCR 처리 중 오류가 발생했어요. 텍스트로 직접 입력해 주세요.")
+                    st.error(
+                        "OCR 처리 중 오류가 발생했어요. 텍스트로 직접 입력해 주세요."
+                    )
 
             with tabs[0]:
                 cam = st.camera_input("카메라로 촬영", key="camera_input")
@@ -893,10 +933,7 @@ def _render_chat_panel():
     # 입력 폼 (전송 화살표를 입력칸 '안'에 배치)
     # ─────────────────────────────────────────────────────────────────────────
     with st.form("inpane_chat_form", clear_on_submit=True):
-        # 래퍼 + 스타일 주입(스코프 제한: #inpane_wrap 내부에만 적용)
         st.markdown('<div id="inpane_wrap">', unsafe_allow_html=True)
-
-        # CSS: 입력칸 우측 안쪽에 버튼 고정, 입력 텍스트가 겹치지 않도록 padding-right 확장
         st.markdown(
             """
             <style>
@@ -916,14 +953,11 @@ def _render_chat_panel():
                 border-radius: 999px;
                 line-height: 36px;
             }
-            /* 모바일 폭 대응: 버튼이 아래로 밀리지 않도록 */
             @media (max-width: 480px) {
                 #inpane_wrap [data-testid="stTextInput"] input {
                     padding-right: 56px;
                 }
-                #inpane_wrap .stButton > button {
-                    right: 6px;
-                }
+                #inpane_wrap .stButton > button { right: 6px; }
             }
             </style>
             """,
@@ -938,7 +972,6 @@ def _render_chat_panel():
             key="inpane_q",
         )
         submitted = st.form_submit_button("➤", type="secondary")
-
         st.markdown("</div>", unsafe_allow_html=True)
 
     # (A) 제출 처리 — 내 말풍선 즉시 표시 → 답변 스트리밍
@@ -950,23 +983,32 @@ def _render_chat_panel():
 
         ss["_sending"] = True
         # 1) 히스토리 기록
-        ss["chat"].append({"id": f"u{int(time.time()*1000)}", "role": "user", "text": question})
+        ss["chat"].append(
+            {"id": f"u{int(time.time()*1000)}", "role": "user", "text": question}
+        )
         # 2) 내 말풍선 즉시 표시
         import html as _html, re as _re
         _wrap = "display:flex;justify-content:flex-end;margin:8px 0;"
-        _bubble = ("max-width:88%;padding:10px 12px;border-radius:16px;line-height:1.6;font-size:15px;"
-                   "box-shadow:0 1px 1px rgba(0,0,0,.05);white-space:pre-wrap;position:relative;"
-                   "border-top-right-radius:8px;border:1px solid #F2E4A2;background:#FFF8CC;color:#333;")
-        _chip_user = ("display:inline-block;margin:-2px 6px 6px 0;padding:1px 8px;border-radius:999px;"
-                      "font-size:11px;font-weight:700;background:#FFF2B8;color:#6b5200;border:1px solid #F2E4A2;")
+        _bubble = (
+            "max-width:88%;padding:10px 12px;border-radius:16px;line-height:1.6;"
+            "font-size:15px;box-shadow:0 1px 1px rgba(0,0,0,.05);white-space:pre-wrap;"
+            "position:relative;border-top-right-radius:8px;border:1px solid #F2E4A2;"
+            "background:#FFF8CC;color:#333;"
+        )
+        _chip_user = (
+            "display:inline-block;margin:-2px 6px 6px 0;padding:1px 8px;border-radius:999px;"
+            "font-size:11px;font-weight:700;background:#FFF2B8;color:#6b5200;"
+            "border:1px solid #F2E4A2;"
+        )
         _body = _html.escape(question).replace("\n", "<br/>")
         _body = _re.sub(r"  ", "&nbsp;&nbsp;", _body)
         ph_user.markdown(
-            f'<div style="{_wrap}"><div style="{_bubble}"><span style="{_chip_user}">질문</span><br/>{_body}</div></div>',
+            f'<div style="{_wrap}"><div style="{_bubble}"><span style="{_chip_user}">'
+            "질문</span><br/>" + _body + "</div></div>",
             unsafe_allow_html=True,
         )
 
-        # (참고) 증거/모드
+        # 증거/모드
         ev_notes = ss.get("__evidence_class_notes", "")
         ev_books = ss.get("__evidence_grammar_books", "")
 
@@ -996,14 +1038,19 @@ def _render_chat_panel():
         except Exception:
             hits = None
         try:
-            source_label = (_decide_label(hits, default_if_none="[AI지식]") if callable(_decide_label) else "[AI지식]")
+            source_label = (
+                _decide_label(hits, default_if_none="[AI지식]")
+                if callable(_decide_label)
+                else "[AI지식]"
+            )
         except Exception:
             source_label = "[AI지식]"
         ss["__last_source_label"] = source_label
 
-        # (A-1) 주 답변 에이전트 스트리밍 (지피티)
+        # (A-1) 주 답변 에이전트 스트리밍 (피티쌤)
         from typing import Any as _AnyT, Dict as _DictT
         acc_ans = ""
+
         def _emit_ans(piece: str) -> None:
             nonlocal acc_ans
             import html, re
@@ -1020,13 +1067,16 @@ def _render_chat_panel():
                 '              box-shadow:0 1px 1px rgba(0,0,0,.05);white-space:pre-wrap; position:relative;'
                 '              border:1px solid #BEE3FF;background:#EAF6FF;color:#0a2540;">'
                 '    <span style="display:inline-block;margin:-2px 6px 6px 0;padding:1px 8px;border-radius:999px;'
-                '                 font-size:11px;font-weight:700;background:#DFF1FF;color:#0f5b86;border:1px solid #BEE3FF;">답변</span>'
-                '    <span style="display:inline-block;margin:-2px 6px 6px 0;padding:1px 8px;border-radius:999px;'
-                '                 font-size:11px;font-weight:700;background:#f1f5f9;color:#334155;border:1px solid #cbd5e1;">지피티</span>'
+                '                 font-size:11px;font-weight:700;background:#f1f5f9;color:#334155;'
+                '                 border:1px solid #cbd5e1;">피티쌤</span>'
                 '    <span style="display:inline-block;margin:-2px 0 6px 0;padding:1px 8px;border-radius:999px;'
-                '                 font-size:11px;font-weight:700;background:#eef2f6;color:#334155;border:1px solid #cbd5e1;">'
-                + esc(str(ss.get("__last_source_label",""))) + '</span><br/>' + esc(acc_ans) +
-                "  </div></div>", unsafe_allow_html=True,
+                '                 font-size:11px;font-weight:700;background:#eef2f6;color:#334155;'
+                '                 border:1px solid #cbd5e1;">'
+                + esc(str(ss.get("__last_source_label", "")))
+                + "</span><br/>"
+                + esc(acc_ans)
+                + "  </div></div>",
+                unsafe_allow_html=True,
             )
 
         full_answer = ""
@@ -1083,13 +1133,17 @@ def _render_chat_panel():
                 _emit_ans(full_answer)
 
         # 기록(본문+출처 꼬리표 → 히스토리 렌더 시 칩으로 분리)
-        ss["chat"].append({
-            "id": f"a{int(time.time()*1000)}", "role": "assistant",
-            "text": f"{full_answer}\n\n출처: {source_label}",
-        })
+        ss["chat"].append(
+            {
+                "id": f"a{int(time.time()*1000)}",
+                "role": "assistant",
+                "text": f"{full_answer}\n\n출처: {source_label}",
+            }
+        )
 
-        # (B) 보완(Co-teacher) 스트리밍 (미나)
+        # (B) 보완(Co-teacher) 스트리밍 (미나쌤)
         acc_eval = ""
+
         def _emit_eval(piece: str) -> None:
             nonlocal acc_eval
             import html, re
@@ -1106,13 +1160,16 @@ def _render_chat_panel():
                 '              box-shadow:0 1px 1px rgba(0,0,0,.04);white-space:pre-wrap; position:relative;'
                 '              border:1px dashed #C7D2FE;background:#EEF2FF;color:#1e293b;">'
                 '    <span style="display:inline-block;margin:-2px 6px 6px 0;padding:1px 8px;border-radius:999px;'
-                '                 font-size:11px;font-weight:700;background:#E0E7FF;color:#3730A3;border:1px solid #C7D2FE;">보완</span>'
-                '    <span style="display:inline-block;margin:-2px 6px 6px 0;padding:1px 8px;border-radius:999px;'
-                '                 font-size:11px;font-weight:700;background:#f1f5f9;color:#334155;border:1px solid #cbd5e1;">미나</span>'
+                '                 font-size:11px;font-weight:700;background:#f1f5f9;color:#334155;'
+                '                 border:1px solid #cbd5e1;">미나쌤</span>'
                 '    <span style="display:inline-block;margin:-2px 0 6px 0;padding:1px 8px;border-radius:999px;'
-                '                 font-size:11px;font-weight:700;background:#eef2f6;color:#334155;border:1px solid #cbd5e1;">'
-                + esc2(str(ss.get("__last_source_label",""))) + '</span><br/>' + esc2(acc_eval) +
-                "  </div></div>", unsafe_allow_html=True,
+                '                 font-size:11px;font-weight:700;background:#eef2f6;color:#334155;'
+                '                 border:1px solid #cbd5e1;">'
+                + esc2(str(ss.get("__last_source_label", "")))
+                + "</span><br/>"
+                + esc2(acc_eval)
+                + "  </div></div>",
+                unsafe_allow_html=True,
             )
 
         try:
@@ -1154,14 +1211,18 @@ def _render_chat_panel():
             _emit_eval(full_eval)
 
         # 기록 — evaluator에도 출처 꼬리표 부여
-        ss["chat"].append({
-            "id": f"e{int(time.time()*1000)}", "role": "evaluator",
-            "text": f"{full_eval}\n\n출처: {source_label}",
-        })
+        ss["chat"].append(
+            {
+                "id": f"e{int(time.time()*1000)}",
+                "role": "evaluator",
+                "text": f"{full_eval}\n\n출처: {source_label}",
+            }
+        )
 
         ss["_sending"] = False
         st.rerun()
 # ============================= [13] 채팅 패널 — END =============================
+
 
 
 # ============================ [14] 본문 렌더 — START ============================
