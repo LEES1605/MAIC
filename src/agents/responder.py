@@ -53,7 +53,7 @@ def _iter_provider_stream(
     - 전부 불가하면 최종 텍스트 한 번만 yield(폴백)
     """
     try:
-        from src.llm import providers as prov  # noqa: WPS433
+        from src.llm import providers as prov
     except Exception as e:  # pragma: no cover
         yield f"(오류) provider 로딩 실패: {type(e).__name__}: {e}"
         return
