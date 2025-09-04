@@ -6,15 +6,6 @@
 - ChatGPT, Gemini 등 서로 다른 SDK의 스트리밍을 '토큰 문자열 이터레이터'로 정규화
 - 스트리밍 도중 취소/타임아웃/예외에 대비
 - Streamlit의 write_stream 유무에 따라 자동 폴백
-
-사용 예 (app.py 내부):
-    from src.llm.streaming import normalize_to_token_iter, render_stream_safely
-
-    token_iter = normalize_to_token_iter(provider_answer_stream(prompt))
-    full_text = render_stream_safely(st, token_iter)
-
-주의
-- 여기서는 외부 SDK에 의존하지 않습니다. '토큰 이터러블/제너레이터'만 받습니다.
 """
 
 from __future__ import annotations
@@ -55,7 +46,7 @@ def normalize_to_token_iter(source: TokenSource) -> Iterator[str]:
     # 이터러블/이터레이터
     try:
         iterator = iter(source)  # type: ignore[arg-type]
-    except Exception as e:  # 입력이 이터러블이 아니면  ← as e 추가 (F821 해결)
+    except Exception as e:  # 입력이 이터러블이 아니면 (F821 방지: as e 명시)
         def _err() -> Iterator[str]:
             yield f"[streaming-normalize-error: {e}]"
         return _err()
