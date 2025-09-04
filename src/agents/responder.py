@@ -2,7 +2,8 @@
 """
 주 답변 에이전트 (자료 기반 1차 응답)
 - 목표: 학생 눈높이로 간결한 설명 + 예문 1개
-- 스트리밍 지원: 공급자가 콜백 스트리밍을 지원하지 않더라도, 최종 텍스트를 '글자 단위'로 흘려서 UX 유지
+- 스트리밍 지원: 공급자가 콜백 스트리밍을 지원하지 않더라도,
+  최종 텍스트를 '글자 단위'로 흘려 UX를 유지
 """
 
 from __future__ import annotations
@@ -12,7 +13,11 @@ from typing import Any, Dict, Iterator, Optional
 from src.llm import providers
 
 
-def _compose_prompts(question: str, mode: str, ctx: Optional[Dict[str, Any]]) -> Dict[str, str]:
+def _compose_prompts(
+    question: str,
+    mode: str,
+    ctx: Optional[Dict[str, Any]],
+) -> Dict[str, str]:
     q = (question or "").strip()
     m = (mode or "문법설명").strip()
 
