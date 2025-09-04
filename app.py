@@ -780,18 +780,21 @@ def _render_chat_panel():
             "display:inline-block;margin:-2px 0 6px 0;padding:1px 8px;border-radius:999px;font-size:11px;font-weight:700;"
             "background:#eef2f6;color:#334155;border:1px solid #cbd5e1;"
         )
-        # 텍스트 끝의 '출처: ...' 꼬리표 분리 → 칩으로 표시
+        # 텍스트 끝의 '출처: ...' 꼬리표 분리 → 칩으로 표시(assistant/evaluator용)
         t = str(text or "")
-        m = re.search(r"^(.*?)(?:\n+|\s+)출처:\s*(.+)$", t, flags=re.S)
+        import re as _re
+        m = _re.search(r"^(.*?)(?:\n+|\s+)출처:\s*(.+)$", t, flags=_re.S)
         src = None
         if m:
             body = m.group(1)
             src = m.group(2).strip()
         else:
             body = t
-        body = html.escape(body).replace("\n", "<br/>")
-        body = re.sub(r"  ", "&nbsp;&nbsp;", body)
-        src_html = (f'<span style="{chip_src}">' + (html.escape(src) if src else "") + "</span>") if (src and not is_user) else ""
+
+        import html as _html
+        body = _html.escape(body).replace("\n", "<br/>")
+        body = _re.sub(r"  ", "&nbsp;&nbsp;", body)
+        src_html = (f'<span style="{chip_src}">' + (_html.escape(src) if src else "") + "</span>") if (src and not is_user) else ""
         st.markdown(
             f'<div style="{wrap}"><div style="{bubble}">'
             f'<span style="{chip}">' + ("질문" if is_user else "답변") + "</span>"
@@ -807,15 +810,16 @@ def _render_chat_panel():
         _render_bubble(role, m.get("text", ""))
         prev_role = role
 
-    # 스트리밍 자리(주답변/평가 각각 별도 placeholder)
-    ph_ans = st.empty()
-    ph_eval = st.empty()
+    # 스트리밍/유저-즉시 자리(메시지 영역 내부에서 placeholder 확보)
+    ph_user = st.empty()   # ⬅ NEW: 전송 직후 "내 말풍선" 즉시 표출용
+    ph_ans = st.empty()    # 주답변 스트리밍
+    ph_eval = st.empty()   # 평가 스트리밍
 
     # 메시지 영역 CLOSE(폼/업로더는 같은 ChatPane 내부)
     st.markdown("</div>", unsafe_allow_html=True)
 
     # ─────────────────────────────────────────────────────────────────────────
-    # (NEW) 📷 이미지 업로드 → OCR → 입력칸 자동 주입
+    # 📷 이미지 업로드 → OCR → 입력칸 자동 주입
     # ─────────────────────────────────────────────────────────────────────────
     with st.expander("📷 이미지에서 글자 추출", expanded=False):
         up = st.file_uploader(
@@ -860,230 +864,247 @@ def _render_chat_panel():
                 _errlog("OCR 처리 실패", where="[13]_ocr", exc=e)
                 st.error("OCR 처리 중 오류가 발생했어요. 텍스트로 직접 입력해 주세요.")
 
+    # 인-카드 입력폼 — Enter=전송
+    with st.form("inpane_chat_form", clear_on_submit=True):
+        qtxt = st.text_input(
+            "질문 입력",
+            value=ss.get("inpane_q", ""),
+            placeholder="예) 분사구문이 뭐예요?  예) 이 문장 구조 분석해줘",
+            label_visibility="collapsed",
+            key="inpane_q",
+        )
+        submitted = st.form_submit_button("➤", type="secondary")
+
     # ─────────────────────────────────────────────────────────────────────────
-    # (A) 주 답변 에이전트 스트리밍
+    # (A) 제출 처리 — 내 말풍선 즉시 표시 → 답변 스트리밍
     # ─────────────────────────────────────────────────────────────────────────
-    from typing import Any as _AnyT, Dict as _DictT
-    acc_ans = ""
+    if submitted and not ss.get("_sending", False):
+        question = (qtxt or "").strip()
+        if not question:
+            st.warning("질문을 입력해 주세요.")
+            return
 
-    def _emit_ans(piece: str) -> None:
-        nonlocal acc_ans
-        import html, re
-        acc_ans += str(piece or "")
-
-        def esc(t: str) -> str:
-            t = html.escape(t or "").replace("\n", "<br/>")
-            return re.sub(r"  ", "&nbsp;&nbsp;", t)
-
-        ph_ans.markdown(
-            '<div style="display:flex;justify-content:flex-start;margin:8px 0;">'
-            '  <div style="max-width:88%;padding:10px 12px;border-radius:16px;'
-            '              border-top-left-radius:8px; line-height:1.6;'
-            '              font-size:15px;box-shadow:0 1px 1px rgba(0,0,0,.05);'
-            '              white-space:pre-wrap; position:relative;'
-            '              border:1px solid #BEE3FF;background:#EAF6FF;'
-            '              color:#0a2540;">'
-            '    <span style="display:inline-block;margin:-2px 6px 6px 0;'
-            '                 padding:1px 8px;border-radius:999px;'
-            '                 font-size:11px;font-weight:700;'
-            '                 background:#DFF1FF;color:#0f5b86;'
-            '                 border:1px solid #BEE3FF;">답변</span>'
-            '    <span style="display:inline-block;margin:-2px 0 6px 0;'
-            '                 padding:1px 8px;border-radius:999px;'
-            '                 font-size:11px;font-weight:700;'
-            '                 background:#eef2f6;color:#334155;'
-            '                 border:1px solid #cbd5e1;">' + esc(str(ss.get("__last_source_label",""))) + '</span><br/>'
-            + esc(acc_ans)
-            + "  </div>"
-            "</div>",
+        ss["_sending"] = True
+        # 1) 히스토리 기록
+        ss["chat"].append({"id": f"u{int(time.time()*1000)}", "role": "user", "text": question})
+        # 2) 내 말풍선 즉시 표시(placeholder 사용)
+        import html as _html, re as _re
+        _wrap = "display:flex;justify-content:flex-end;margin:8px 0;"
+        _bubble = (
+            "max-width:88%;padding:10px 12px;border-radius:16px;line-height:1.6;font-size:15px;"
+            "box-shadow:0 1px 1px rgba(0,0,0,.05);white-space:pre-wrap;position:relative;"
+            "border-top-right-radius:8px;border:1px solid #F2E4A2;background:#FFF8CC;color:#333;"
+        )
+        _chip_user = (
+            "display:inline-block;margin:-2px 6px 6px 0;padding:1px 8px;border-radius:999px;font-size:11px;font-weight:700;"
+            "background:#FFF2B8;color:#6b5200;border:1px solid #F2E4A2;"
+        )
+        _body = _html.escape(question).replace("\n", "<br/>")
+        _body = _re.sub(r"  ", "&nbsp;&nbsp;", _body)
+        ph_user.markdown(
+            f'<div style="{_wrap}"><div style="{_bubble}">'
+            f'<span style="{_chip_user}">질문</span><br/>{_body}</div></div>',
             unsafe_allow_html=True,
         )
 
-    # 프롬프트 해석
-    try:
-        from src.prompting.resolve import resolve_prompts
-        # ⬇ 사용하지 않는 user_prompt는 언더스코어 변수로 받아 Ruff 억제
-        system_prompt, _resolved_user_prompt, source = resolve_prompts(
-            MODE_TOKEN,
-            ss.get("inpane_q", "").strip() if ss.get("inpane_q") else "",
-            ss.get("__evidence_class_notes", ""),
-            ss.get("__evidence_grammar_books", ""),
-            cur_label,
-            ss,
-        )
-        ss["__prompt_source"] = source
-    except Exception:
-        system_prompt = ""
-        # (삭제됨) user_prompt 대입 — 더이상 변수 사용 안 함
-        ss["__prompt_source"] = "fallback"
+        # (참고) 증거/모드
+        ev_notes = ss.get("__evidence_class_notes", "")
+        ev_books = ss.get("__evidence_grammar_books", "")
 
-    # RAG 라벨(출처 칩)
-    try:
-        import importlib as _imp
-        _label_mod = _imp.import_module("src.rag.label")
-        _decide_label = getattr(_label_mod, "decide_label", None)
-        _search_hits = getattr(_label_mod, "search_hits", None)
-    except Exception:
-        _decide_label = None
-        _search_hits = None
-
-    try:
-        hits = _search_hits(ss.get("inpane_q","")) if callable(_search_hits) else None
-    except Exception:
-        hits = None
-    try:
-        source_label = (
-            _decide_label(hits, default_if_none="[AI지식]") if callable(_decide_label) else "[AI지식]"
-        )
-    except Exception:
-        source_label = "[AI지식]"
-    ss["__last_source_label"] = source_label
-
-    # 주 답변 에이전트(있으면) 스트리밍
-    full_answer = ""
-    try:
-        import importlib as _imp2
-        _resp = _imp2.import_module("src.agents.responder")
-        _answer_stream = getattr(_resp, "answer_stream", None)
-    except Exception:
-        _answer_stream = None
-
-    if callable(_answer_stream):
+        # 프롬프트 해석
         try:
-            for ch in _answer_stream(
-                question=(ss.get("inpane_q","") or "").strip(), mode=MODE_TOKEN, ctx={"hits": hits, "source_label": source_label}
-            ):
-                _emit_ans(ch)
-            full_answer = acc_ans or "(응답이 비어있어요)"
-        except Exception as e:
-            full_answer = f"(오류) {type(e).__name__}: {e}"
-            _emit_ans(full_answer)
-    else:
-        # provider 폴백 (stream 미지원 시)
-        try:
-            from src.llm import providers as _prov
-            call = getattr(_prov, "call_with_fallback", None)
-        except Exception:
-            call = None
-
-        if callable(call):
-            import inspect as _inspect
-            params = _inspect.signature(call).parameters.keys()
-            kwargs: _DictT[str, _AnyT] = {}
-
-            # messages / prompt 인자 구성
-            if "messages" in params:
-                kwargs["messages"] = [
-                    {"role": "system", "content": system_prompt or ""},
-                    {"role": "user", "content": (ss.get("inpane_q","") or "")},
-                ]
-            else:
-                if "prompt" in params:
-                    kwargs["prompt"] = (ss.get("inpane_q","") or "")
-                elif "user_prompt" in params:
-                    kwargs["user_prompt"] = (ss.get("inpane_q","") or "")
-                if "system_prompt" in params:
-                    kwargs["system_prompt"] = system_prompt or ""
-                elif "system" in params:
-                    kwargs["system"] = system_prompt or ""
-
-            # 스트리밍 지원 시 콜백 연결 (람다+바다코끼리 제거 → 함수 콜백만 사용)
-            supports_stream = (
-                ("stream" in params)
-                or ("on_token" in params)
-                or ("on_delta" in params)
-                or ("yield_text" in params)
+            from src.prompting.resolve import resolve_prompts
+            system_prompt, _resolved_user_prompt, source = resolve_prompts(
+                MODE_TOKEN,
+                question,
+                ev_notes,
+                ev_books,
+                cur_label,
+                ss,
             )
-            if supports_stream:
-                if "stream" in params:
-                    kwargs["stream"] = True
-                if "on_token" in params:
-                    kwargs["on_token"] = _emit_ans
-                if "on_delta" in params:
-                    kwargs["on_delta"] = _emit_ans
-                if "yield_text" in params:
-                    kwargs["yield_text"] = _emit_ans
+            ss["__prompt_source"] = source
+        except Exception:
+            system_prompt = ""
+            ss["__prompt_source"] = "fallback"
+
+        # RAG 라벨(출처 칩)
+        try:
+            import importlib as _imp
+            _label_mod = _imp.import_module("src.rag.label")
+            _decide_label = getattr(_label_mod, "decide_label", None)
+            _search_hits = getattr(_label_mod, "search_hits", None)
+        except Exception:
+            _decide_label = None
+            _search_hits = None
+
+        try:
+            hits = _search_hits(question) if callable(_search_hits) else None
+        except Exception:
+            hits = None
+        try:
+            source_label = (
+                _decide_label(hits, default_if_none="[AI지식]") if callable(_decide_label) else "[AI지식]"
+            )
+        except Exception:
+            source_label = "[AI지식]"
+        ss["__last_source_label"] = source_label
+
+        # ─────────────────────────────────────────────────────────────────────
+        # (A-1) 주 답변 에이전트 스트리밍
+        # ─────────────────────────────────────────────────────────────────────
+        from typing import Any as _AnyT, Dict as _DictT
+        acc_ans = ""
+
+        def _emit_ans(piece: str) -> None:
+            nonlocal acc_ans
+            import html, re
+            acc_ans += str(piece or "")
+
+            def esc(t: str) -> str:
+                t = html.escape(t or "").replace("\n", "<br/>")
+                return re.sub(r"  ", "&nbsp;&nbsp;", t)
+
+            ph_ans.markdown(
+                '<div style="display:flex;justify-content:flex-start;margin:8px 0;">'
+                '  <div style="max-width:88%;padding:10px 12px;border-radius:16px;'
+                '              border-top-left-radius:8px; line-height:1.6;'
+                '              font-size:15px;box-shadow:0 1px 1px rgba(0,0,0,.05);'
+                '              white-space:pre-wrap; position:relative;'
+                '              border:1px solid #BEE3FF;background:#EAF6FF;'
+                '              color:#0a2540;">'
+                '    <span style="display:inline-block;margin:-2px 6px 6px 0;'
+                '                 padding:1px 8px;border-radius:999px;'
+                '                 font-size:11px;font-weight:700;'
+                '                 background:#DFF1FF;color:#0f5b86;'
+                '                 border:1px solid #BEE3FF;">답변</span>'
+                '    <span style="display:inline-block;margin:-2px 0 6px 0;'
+                '                 padding:1px 8px;border-radius:999px;'
+                '                 font-size:11px;font-weight:700;'
+                '                 background:#eef2f6;color:#334155;'
+                '                 border:1px solid #cbd5e1;">' + esc(str(ss.get("__last_source_label",""))) + '</span><br/>'
+                + esc(acc_ans)
+                + "  </div>"
+                "</div>",
+                unsafe_allow_html=True,
+            )
+
+        # 주 답변 에이전트(있으면) 스트리밍
+        full_answer = ""
+        try:
+            import importlib as _imp2
+            _resp = _imp2.import_module("src.agents.responder")
+            _answer_stream = getattr(_resp, "answer_stream", None)
+        except Exception:
+            _answer_stream = None
+
+        if callable(_answer_stream):
+            try:
+                for ch in _answer_stream(
+                    question=question, mode=MODE_TOKEN, ctx={"hits": hits, "source_label": source_label}
+                ):
+                    _emit_ans(ch)
+                full_answer = acc_ans or "(응답이 비어있어요)"
+            except Exception as e:
+                full_answer = f"(오류) {type(e).__name__}: {e}"
+                _emit_ans(full_answer)
+        else:
+            # provider 폴백 (stream 미지원 시)
+            try:
+                from src.llm import providers as _prov
+                call = getattr(_prov, "call_with_fallback", None)
+            except Exception:
+                call = None
+
+            if callable(call):
+                import inspect as _inspect
+                params = _inspect.signature(call).parameters.keys()
+                kwargs: _DictT[str, _AnyT] = {}
+
+                if "messages" in params:
+                    kwargs["messages"] = [
+                        {"role": "system", "content": system_prompt or ""},
+                        {"role": "user", "content": question},
+                    ]
+                else:
+                    if "prompt" in params:
+                        kwargs["prompt"] = question
+                    elif "user_prompt" in params:
+                        kwargs["user_prompt"] = question
+                    if "system_prompt" in params:
+                        kwargs["system_prompt"] = system_prompt or ""
+                    elif "system" in params:
+                        kwargs["system"] = system_prompt or ""
+
                 res = call(**kwargs)
-                full_answer = (
-                    (res.get("text") if isinstance(res, dict) else acc_ans)
-                    or acc_ans
-                )
-            else:
-                res = call(**kwargs)
-                full_answer = (
-                    res.get("text") if isinstance(res, dict) else str(res)
-                )
+                full_answer = res.get("text") if isinstance(res, dict) else str(res)
                 if not full_answer:
                     full_answer = "(응답이 비어있어요)"
                 _emit_ans(full_answer)
-        else:
-            full_answer = "(오류) LLM 어댑터를 사용할 수 없습니다."
-            _emit_ans(full_answer)
+            else:
+                full_answer = "(오류) LLM 어댑터를 사용할 수 없습니다."
+                _emit_ans(full_answer)
 
-    # 기록(본문+출처 꼬리표 → 히스토리 렌더 시 칩으로 분리)
-    ss["chat"].append(
-        {"id": f"a{int(time.time()*1000)}", "role": "assistant", "text": f"{full_answer}\n\n출처: {source_label}"}
-    )
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # (B) 평가 에이전트 스트리밍
-    # ─────────────────────────────────────────────────────────────────────────
-    acc_eval = ""
-    def _emit_eval(piece: str) -> None:
-        nonlocal acc_eval
-        import html, re
-        acc_eval += str(piece or "")
-        def esc2(t: str) -> str:
-            t = html.escape(t or "").replace("\n", "<br/>")
-            return re.sub(r"  ", "&nbsp;&nbsp;", t)
-        ph_eval.markdown(
-            '<div style="display:flex;justify-content:flex-start;margin:8px 0;">'
-            '  <div style="max-width:88%;padding:10px 12px;border-radius:16px;'
-            '              border-top-left-radius:8px; line-height:1.6;'
-            '              font-size:13px;box-shadow:0 1px 1px rgba(0,0,0,.04);'
-            '              white-space:pre-wrap; position:relative;'
-            '              border:1px dashed #C7D2FE;background:#EEF2FF;'
-            '              color:#1e293b;">'
-            '    <span style="display:inline-block;margin:-2px 0 6px 0;'
-            '                 padding:1px 8px;border-radius:999px;'
-            '                 font-size:11px;font-weight:700;'
-            '                 background:#E0E7FF;color:#3730A3;'
-            '                 border:1px solid #C7D2FE;">평가</span><br/>'
-            + esc2(acc_eval)
-            + "  </div>"
-            "</div>",
-            unsafe_allow_html=True,
+        # 기록(본문+출처 꼬리표 → 히스토리 렌더 시 칩으로 분리)
+        ss["chat"].append(
+            {"id": f"a{int(time.time()*1000)}", "role": "assistant", "text": f"{full_answer}\n\n출처: {source_label}"}
         )
 
-    try:
-        import importlib as _imp3
-        _eval = _imp3.import_module("src.agents.evaluator")
-        _eval_stream = getattr(_eval, "evaluate_stream", None)
-    except Exception:
-        _eval_stream = None
+        # (B) 평가 스트리밍 -----------------------------------------------------
+        acc_eval = ""
+        def _emit_eval(piece: str) -> None:
+            nonlocal acc_eval
+            import html, re
+            acc_eval += str(piece or "")
+            def esc2(t: str) -> str:
+                t = html.escape(t or "").replace("\n", "<br/>")
+                return re.sub(r"  ", "&nbsp;&nbsp;", t)
+            ph_eval.markdown(
+                '<div style="display:flex;justify-content:flex-start;margin:8px 0;">'
+                '  <div style="max-width:88%;padding:10px 12px;border-radius:16px;'
+                '              border-top-left-radius:8px; line-height:1.6;'
+                '              font-size:13px;box-shadow:0 1px 1px rgba(0,0,0,.04);'
+                '              white-space:pre-wrap; position:relative;'
+                '              border:1px dashed #C7D2FE;background:#EEF2FF;'
+                '              color:#1e293b;">'
+                '    <span style="display:inline-block;margin:-2px 0 6px 0;'
+                '                 padding:1px 8px;border-radius:999px;'
+                '                 font-size:11px;font-weight:700;'
+                '                 background:#E0E7FF;color:#3730A3;'
+                '                 border:1px solid #C7D2FE;">평가</span><br/>'
+                + esc2(acc_eval)
+                + "  </div>"
+                "</div>",
+                unsafe_allow_html=True,
+            )
 
-    if callable(_eval_stream):
         try:
-            for ch in _eval_stream(question=(ss.get("inpane_q","") or "").strip(), mode=MODE_TOKEN, ctx={"answer": full_answer}):
-                _emit_eval(ch)
-            full_eval = acc_eval or " "
-            _emit_eval(full_eval)
-        except Exception as e:
-            full_eval = f"(오류) {type(e).__name__}: {e}"
-            _emit_eval(full_eval)
-    else:
-        full_eval = "평가 에이전트를 사용할 수 없어서, 주 답변만 제공했어요."
-        _emit_eval(full_eval)
+            import importlib as _imp3
+            _eval = _imp3.import_module("src.agents.evaluator")
+            _eval_stream = getattr(_eval, "evaluate_stream", None)
+        except Exception:
+            _eval_stream = None
 
-    # 기록
-    ss["chat"].append(
-        {"id": f"e{int(time.time() * 1000)}", "role": "evaluator", "text": full_eval}
-    )
+        if callable(_eval_stream):
+            try:
+                for ch in _eval_stream(question=question, mode=MODE_TOKEN, ctx={"answer": full_answer}):
+                    _emit_eval(ch)
+                full_eval = acc_eval or " "
+                _emit_eval(full_eval)
+            except Exception as e:
+                full_eval = f"(오류) {type(e).__name__}: {e}"
+                _emit_eval(full_eval)
+        else:
+            full_eval = "평가 에이전트를 사용할 수 없어서, 주 답변만 제공했어요."
+            _emit_eval(full_eval)
 
-    ss["_sending"] = False
-    st.rerun()
+        # 기록
+        ss["chat"].append(
+            {"id": f"e{int(time.time() * 1000)}", "role": "evaluator", "text": full_eval}
+        )
+
+        ss["_sending"] = False
+        st.rerun()
 # ============================= [13] 채팅 패널 — END =============================
-
 
 # ============================ [14] 본문 렌더 — START ============================
 def _render_body() -> None:
