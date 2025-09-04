@@ -1,216 +1,201 @@
-# ============================== [01] 스트리밍 버퍼 유틸 — START ===============================
+# ============================== [01] Streaming Buffer — START ==============================
 """
-Streaming utilities for token-to-text buffering with multiple strategies.
+Sentence-level streaming buffer.
 
-Strategies
+목적
+- 모델이 토큰/청크 단위로 내보내는 문자열을 '읽기 좋은' 단위로 모아 방출합니다.
+- 플러시 트리거: 문장부호(EN/KO), 개행, 최대 지연 시간, 최소 문자 수.
+
+사용 예시
 ---------
-- "none":     emit every token immediately.
-- "punct":    buffer until punctuation/newline is seen, then flush.
-- "sentence": buffer until a sentence boundary is detected, then flush.
+from src.llm.streaming import BufferOptions, SentenceBuffer
 
-Safety
-------
-- Time-based and length-based forced flush to avoid long delays.
-- Optional cancellation check to stop gracefully.
-- Robust to provider quirks (tokens with/without spaces).
-
-This module is intentionally stdlib-only and mypy/ruff friendly.
+buf = SentenceBuffer(on_emit=print, opts=BufferOptions())
+for piece in provider_stream():  # 토큰 또는 청크
+    buf.feed(piece)
+buf.flush(force=True)
 """
 from __future__ import annotations
 
-from typing import Callable, Iterable, Iterator, Optional, Literal, Protocol
-import re
+from dataclasses import dataclass
+from typing import Callable, Optional, Tuple, Iterable
 import time
+import re
 
-__all__ = ["buffer_tokens", "stream_text"]
 
-# Recognized punctuation and sentence-ending marks (EN + KO + common)
-_PUNCTS = set(list(".,?!:;)]}") + ["…", "。", "、", "！", "？", "”", "’"])
-
-# Sentence-splitting regex: captures a *complete* sentence chunk.
-#   - Ends with one of [.?!…。！？]
-#   - Allows closing quotes/brackets after end mark
-#   - Followed by whitespace or end-of-string
-_SENT_SPLIT_RE = re.compile(
-    r"(.+?(?:[\.!\?]|…|。|！|？)(?:[\"'\)\]]+)?)(?:\s+|$)",
-    flags=re.S,
+# 문장 경계 후보 문자(영/한 + 일반적 구두점)
+_PUNCTS = set(
+    list(".,?!:;)]}") + ["…", "。", "、", "！", "？", "”", "’", "·", "—", "–"]
 )
 
+# 문장 종료로 **강하게** 취급할 문자
+_STRONG_END = set(list(".?!") + ["。", "！", "？", "…"])
 
-class _CancelCheck(Protocol):
-    def __call__(self) -> bool: ...
-
-
-def _has_punct(s: str) -> bool:
-    """Return True if `s` contains punctuation or a newline boundary worth flushing."""
-    if not s:
-        return False
-    if "\n" in s or "\r" in s:
-        return True
-    for ch in s:
-        if ch in _PUNCTS:
-            return True
-    return False
+# 공백 패턴(연속 공백을 한 번에 인지)
+_WS_RE = re.compile(r"\s+")
 
 
-def _split_complete_sentences(buf: str) -> tuple[str, str]:
+@dataclass
+class BufferOptions:
     """
-    Split `buf` into (complete, remainder) where `complete` includes
-    all full sentences from the start of buffer.
+    스트리밍 버퍼 옵션
     """
-    last_end = -1
-    m_last = None
-    for m in _SENT_SPLIT_RE.finditer(buf):
-        m_last = m
-        last_end = m.end()
-    if m_last is None:
-        return "", buf
-    # Include up to the last complete sentence boundary
-    return buf[:last_end], buf[last_end:]
+    min_emit_chars: int = 28
+    # 강한 종료부호가 없더라도 이 길이를 넘으면 가벼운 플러시를 허용
+    soft_emit_chars: int = 64
+    # 최장 지연(ms): 마지막 방출 이후 이 시간이 지나면 보수적으로 플러시
+    max_latency_ms: int = 350
+    # 강한 종료부호가 들어오면 바로 플러시(단, 최소 글자수는 만족해야 함)
+    flush_on_strong_punct: bool = True
+    # 개행이 들어오면 줄 단위로 플러시
+    flush_on_newline: bool = True
 
 
-def buffer_tokens(
-    tokens: Iterable[str],
-    *,
-    strategy: Literal["none", "punct", "sentence"] = "none",
-    max_latency: float = 0.6,
-    max_chars: int = 600,
-    cancel: Optional[_CancelCheck] = None,
-) -> Iterator[str]:
+class SentenceBuffer:
     """
-    Convert a token stream into text chunks according to a buffering strategy.
-
-    Parameters
-    ----------
-    tokens : Iterable[str]
-        Incoming text tokens (already decoded from provider).
-    strategy : {"none", "punct", "sentence"}
-        Buffering strategy (see module docstring).
-    max_latency : float
-        Seconds before we force-flush any pending buffer (for non-"none").
-    max_chars : int
-        Max buffer length before forced flush.
-    cancel : Callable[[], bool], optional
-        Return True to cancel streaming; remaining buffer will be flushed.
-
-    Yields
-    ------
-    str
-        Buffered text chunk to render.
-
-    Notes
-    -----
-    - "none": ignores latency/length and yields each token immediately.
-    - "punct": flush on punctuation/newline OR forced by latency/length.
-    - "sentence": flush on sentence boundary OR forced by latency/length.
+    토큰/청크 스트림을 문장 단위로 변환하는 버퍼.
+    - feed(piece): 입력(토큰/청크) 수신
+    - flush(force): 버퍼를 방출(강제/조건부)
     """
-    if strategy not in ("none", "punct", "sentence"):
-        strategy = "none"
 
-    if strategy == "none":
-        for tk in tokens:
-            if cancel and cancel():
-                return
-            yield tk
-        return
+    def __init__(self, on_emit: Callable[[str], None], opts: Optional[BufferOptions] = None) -> None:
+        self.on_emit = on_emit
+        self.opts = opts or BufferOptions()
+        self._buf: list[str] = []
+        self._last_emit_at: float = time.monotonic()
 
-    buf: str = ""
-    last_flush = time.monotonic()
+    # 내부 유틸
+    def _now_ms(self) -> int:
+        return int((time.monotonic() - self._last_emit_at) * 1000)
 
-    def _maybe_forced_flush(now: float) -> Optional[str]:
-        nonlocal buf, last_flush
-        if not buf:
-            return None
-        if (now - last_flush) >= max_latency or len(buf) >= max_chars:
-            out = buf
-            buf = ""
-            last_flush = now
-            return out
-        return None
+    def _buffer_text(self) -> str:
+        return "".join(self._buf)
 
-    try:
-        for tk in tokens:
-            if cancel and cancel():
-                break
-
-            s = str(tk or "")
-            if not s:
-                # Even if token empty, still honor latency flush to avoid starvation
-                now = time.monotonic()
-                forced = _maybe_forced_flush(now)
-                if forced is not None:
-                    yield forced
-                continue
-
-            if strategy == "punct":
-                buf += s
-                now = time.monotonic()
-                if _has_punct(s):
-                    out, buf = buf, ""
-                    last_flush = now
-                    yield out
-                    continue
-                forced = _maybe_forced_flush(now)
-                if forced is not None:
-                    yield forced
-            else:
-                # "sentence"
-                buf += s
-                now = time.monotonic()
-                complete, remainder = _split_complete_sentences(buf)
-                if complete:
-                    last_flush = now
-                    yield complete
-                    buf = remainder
-                    # After emitting a full sentence, also check latency on remainder
-                    forced = _maybe_forced_flush(now)
-                    if forced is not None:
-                        yield forced
-                else:
-                    forced = _maybe_forced_flush(now)
-                    if forced is not None:
-                        yield forced
-
-    except Exception as e:
-        # Fail-safe: never swallow buffered content
-        if buf:
-            yield buf
-        raise e
-
-    # End-of-stream: flush whatever remains
-    if buf:
-        yield buf
-
-
-def stream_text(
-    tokens: Iterable[str],
-    on_emit: Callable[[str], None],
-    *,
-    strategy: Literal["none", "punct", "sentence"] = "none",
-    max_latency: float = 0.6,
-    max_chars: int = 600,
-    cancel: Optional[_CancelCheck] = None,
-) -> None:
-    """
-    Consume tokens and call `on_emit(chunk)` for each buffered chunk.
-
-    Example
-    -------
-    >>> def printer(x: str): print(x, end="")
-    >>> stream_text(["Hel", "lo", ", ", "wo", "rld", "!"], printer, strategy="punct")
-    Hello, world!
-    """
-    for chunk in buffer_tokens(
-        tokens,
-        strategy=strategy,
-        max_latency=max_latency,
-        max_chars=max_chars,
-        cancel=cancel,
-    ):
-        if cancel and cancel():
-            if chunk:
-                on_emit(chunk)
+    def _emit(self, text: str) -> None:
+        txt = text
+        if not txt:
             return
-        if chunk:
-            on_emit(chunk)
-# =============================== [01] 스트리밍 버퍼 유틸 — END ================================
+        self.on_emit(txt)
+        self._last_emit_at = time.monotonic()
+
+    def _try_flush_by_rules(self) -> None:
+        """
+        규칙 기반 플러시:
+        - 강한 종결부호(. ? ! … 등) 등장 + 최소 글자수 충족
+        - 줄바꿈
+        - soft 길이 초과
+        - 최대 지연 경과
+        """
+        s = self._buffer_text()
+        if not s:
+            return
+
+        # 1) 줄바꿈 기준
+        if self.opts.flush_on_newline and "\n" in s:
+            parts = s.splitlines(keepends=True)
+            keep_tail = ""
+            for i, p in enumerate(parts):
+                if p.endswith("\n"):
+                    self._emit(p)
+                else:
+                    keep_tail = p
+            self._buf = [keep_tail]
+            return
+
+        # 2) 강한 종결부호 기준
+        if self.opts.flush_on_strong_punct and any(ch in _STRONG_END for ch in s):
+            if len(s) >= self.opts.min_emit_chars:
+                self._emit(s)
+                self._buf = []
+                return
+
+        # 3) soft 길이 초과 시(단어 경계 고려)
+        if len(s) >= self.opts.soft_emit_chars:
+            cut = self._cut_at_last_boundary(s)
+            if cut:
+                self._emit(cut)
+                rest = s[len(cut) :]
+                self._buf = [rest]
+                return
+
+        # 4) 최대 지연
+        if self._now_ms() >= self.opts.max_latency_ms:
+            cut = self._cut_at_last_boundary(s)
+            if not cut:
+                cut = s
+            self._emit(cut)
+            rest = s[len(cut) :]
+            self._buf = [rest]
+
+    @staticmethod
+    def _cut_at_last_boundary(s: str) -> str:
+        """
+        '단어 경계/구두점'을 우선 고려해 자르는 헬퍼.
+        - 마지막 구두점 또는 공백 위치를 찾아 거기까지만 방출.
+        """
+        last_ws = -1
+        last_p = -1
+        for i, ch in enumerate(s):
+            if _WS_RE.match(ch):
+                last_ws = i
+            if ch in _PUNCTS:
+                last_p = i
+        # 구두점이 더 좋고, 없으면 공백, 그것도 없으면 빈 문자열
+        idx = max(last_p, last_ws)
+        return s[: idx + 1] if idx >= 0 else ""
+
+    # 외부 API
+    def feed(self, piece: str) -> None:
+        """
+        토큰/청크를 버퍼에 추가하고, 규칙에 따라 필요 시 방출.
+        """
+        if not piece:
+            return
+        self._buf.append(piece)
+        self._try_flush_by_rules()
+
+    def flush(self, force: bool = False) -> None:
+        """
+        남은 내용을 방출.
+        - force=False: 남은 내용 그대로 한 번 방출
+        - force=True : 남은 내용 전부를 반드시 방출
+        """
+        s = self._buffer_text()
+        if not s:
+            return
+        if force:
+            self._emit(s)
+            self._buf = []
+            return
+        # non-force: 가능한 경계까지 자르고 방출
+        cut = self._cut_at_last_boundary(s)
+        if cut:
+            self._emit(cut)
+            rest = s[len(cut) :]
+            self._buf = [rest]
+        else:
+            # 경계가 없으면 전부 방출
+            self._emit(s)
+            self._buf = []
+
+
+def make_stream_handler(
+    on_emit: Callable[[str], None],
+    opts: Optional[BufferOptions] = None,
+) -> Tuple[Callable[[str], None], Callable[[], None]]:
+    """
+    간편 핸들러 생성기.
+    - 반환값: (on_piece, on_close)
+    - on_piece(text): 토막 입력
+    - on_close(): 마무리(강제 플러시)
+    """
+    buf = SentenceBuffer(on_emit=on_emit, opts=opts)
+
+    def on_piece(text: str) -> None:
+        buf.feed(text)
+
+    def on_close() -> None:
+        buf.flush(force=True)
+
+    return on_piece, on_close
+# =============================== [01] Streaming Buffer — END ===============================
