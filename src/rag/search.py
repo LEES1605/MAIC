@@ -15,7 +15,7 @@ import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 SUPPORTED_EXTS = {".md", ".txt"}
 TOKEN_RE = re.compile(r"[A-Za-z0-9가-힣]+")
@@ -105,7 +105,8 @@ def _make_snippet(text: str, needle: str, width: int = 120) -> str:
     text_l = text.replace("\n", " ")
     pos = text_l.lower().find(needle.lower())
     if pos < 0:
-        return text_l[:width] + ("…" if len(text_l) > width else "")
+        base = text_l[:width]
+        return base + ("…" if len(text_l) > width else "")
     start = max(0, pos - width // 2)
     end = min(len(text_l), pos + width // 2)
     prefix = "…" if start > 0 else ""
