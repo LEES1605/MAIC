@@ -15,7 +15,12 @@ from typing import Any, Dict, Iterator, Optional
 from src.llm import providers
 
 
-def _compose_prompts(answer: str, question: str, mode: str, ctx: Optional[Dict[str, Any]]) -> Dict[str, str]:
+def _compose_prompts(
+    answer: str,
+    question: str,
+    mode: str,
+    ctx: Optional[Dict[str, Any]],
+) -> Dict[str, str]:
     a = (answer or "").strip()
     q = (question or "").strip()
     m = (mode or "문법설명").strip()
@@ -42,7 +47,9 @@ def _compose_prompts(answer: str, question: str, mode: str, ctx: Optional[Dict[s
 
     hint_block = "\n".join(hints) if hints else "추가 힌트 없음"
 
-    user = f"[질문]\n{q}\n\n[주답변]\n{a}\n\n[모드]\n{m}\n\n[요청]\n{wants}\n\n[힌트]\n{hint_block}"
+    user = (
+        f"[질문]\n{q}\n\n[주답변]\n{a}\n\n[모드]\n{m}\n\n[요청]\n{wants}\n\n[힌트]\n{hint_block}"
+    )
     return {"system": sys, "user": user}
 
 
