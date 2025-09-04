@@ -5,7 +5,7 @@ import importlib  # ← 누락으로 F821 발생 → 추가
 import json
 import os
 import traceback
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Callable
 
 import requests
 
@@ -157,26 +157,53 @@ def call_gemini_raw(
         }
 
 
-# -------- Fallback orchestrator ----------------------------------------------
+# ================= [PATCH] call_with_fallback — REPLACE THIS FUNCTION ONLY =================
 def call_with_fallback(
     *,
     system: str,
     prompt: str,
     prefer: str = "gemini",  # "gemini" | "openai"
     temperature: float = 0.2,
+    # ▼ 새로 추가된 선택 인자들(하위호환 유지용) — 있어도 되고 없어도 됨
+    stream: Optional[bool] = None,
+    on_token: Optional[Callable[[str], None]] = None,
+    on_delta: Optional[Callable[[str], None]] = None,
+    yield_text: Optional[Callable[[str], None]] = None,
+    **_: Any,  # 알 수 없는 추가 인자는 조용히 무시(호환성)
 ) -> Dict[str, Any]:
     """
-    우선순위 제공자 실패 시 다른 쪽으로 폴백. 텍스트만 반환.
+    우선순위 제공자 실패 시 다른 쪽으로 폴백.
+    - 스트리밍 콜백(on_token/on_delta/yield_text)이 주어지면 텍스트를 '토큰 단위'로 흘려줍니다.
+    - 콜백이 없으면 기존처럼 완성된 텍스트만 반환합니다.
+    반환: {"ok": bool, "provider": str, "text": str, "error": str|None}
     """
     order = ["gemini", "openai"] if prefer == "gemini" else ["openai", "gemini"]
     last: Dict[str, Any] | None = None
+
     for name in order:
         if name == "gemini":
             res = call_gemini_raw(system=system, prompt=prompt, temperature=temperature)
         else:
             res = call_openai_raw(system=system, prompt=prompt, temperature=temperature)
+
         if res.get("ok"):
-            return res
+            text = str(res.get("text") or "")
+            # 스트리밍 요청/콜백이 있으면 토큰(여기선 글자) 단위로 흘려줌
+            streamer = on_token or on_delta or yield_text
+            if (stream or streamer) and text:
+                cb = streamer
+                try:
+                    for ch in text:
+                        try:
+                            cb(ch)  # 한 토큰(여기선 글자)씩 전달
+                        except Exception:
+                            # 콜백 오류는 사용자 UX를 깨지 않도록 무시
+                            pass
+                except Exception:
+                    pass
+            return {"ok": True, "provider": name, "text": text, "error": None}
         last = res
+
     return last or {"ok": False, "provider": "unknown", "error": "all_failed", "text": ""}
-# ============================= providers.py — END ============================
+# =========================================================================================
+
