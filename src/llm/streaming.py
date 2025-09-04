@@ -27,7 +27,13 @@ class StreamCancelled(Exception):
     pass
 
 
-TokenSource = Union[str, Iterable[str], Iterator[str], Callable[[], Union[str, Iterable[str], Iterator[str]]]]
+# E501 방지: 타입 별칭을 여러 줄로 분리
+TokenSource = Union[
+    str,
+    Iterable[str],
+    Iterator[str],
+    Callable[[], Union[str, Iterable[str], Iterator[str]]],
+]
 
 
 def normalize_to_token_iter(source: TokenSource) -> Iterator[str]:
@@ -63,7 +69,11 @@ def normalize_to_token_iter(source: TokenSource) -> Iterator[str]:
     return _tokens()
 
 
-def stream_with_cancellation(tokens: Iterator[str], is_cancelled: Optional[Callable[[], bool]] = None) -> Iterator[str]:
+# E501 방지: 함수 시그니처를 여러 줄로 분리
+def stream_with_cancellation(
+    tokens: Iterator[str],
+    is_cancelled: Optional[Callable[[], bool]] = None,
+) -> Iterator[str]:
     """
     취소 신호를 주기적으로 확인하며 토큰을 흘려보냄.
     is_cancelled()가 True를 반환하면 StreamCancelled 발생.
@@ -86,7 +96,7 @@ def render_stream_safely(st_mod, token_iter: Iterator[str]) -> str:
     """
     if st_mod is None:
         # Streamlit이 없으면 그냥 모두 이어붙여서 반환
-        buf = []
+        buf: list[str] = []
         for t in token_iter:
             buf.append(t)
         return "".join(buf)
@@ -108,7 +118,7 @@ def render_stream_safely(st_mod, token_iter: Iterator[str]) -> str:
         return "".join(acc)
     except Exception:
         # 마지막 폴백: 그냥 전부 모아서 한 번에 출력
-        acc2 = []
+        acc2: list[str] = []
         for t in token_iter:
             acc2.append(t)
         st_mod.markdown("".join(acc2))
