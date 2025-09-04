@@ -1,7 +1,7 @@
 # ================================ [01] Answer Stream — START ================================
 from __future__ import annotations
 
-from typing import Iterator, Dict, Any, Optional, List, Callable
+from typing import Iterator, Dict, Any, Optional, List, Callable, Mapping
 import inspect
 from queue import Queue, Empty
 from threading import Thread
@@ -20,7 +20,7 @@ def _system_prompt(mode: str) -> str:
 
 
 def _build_io_kwargs(
-    params: Dict[str, inspect.Parameter],
+    params: Mapping[str, inspect.Parameter],
     *,
     system_prompt: str,
     question: str,
@@ -62,7 +62,9 @@ def _iter_provider_stream(
     stream_fn = getattr(prov, "stream_text", None)
     if callable(stream_fn):
         params = inspect.signature(stream_fn).parameters
-        kwargs = _build_io_kwargs(params, system_prompt=system_prompt, question=question)
+        kwargs = _build_io_kwargs(
+            params, system_prompt=system_prompt, question=question
+        )
         for piece in stream_fn(**kwargs):
             yield str(piece or "")
         return
@@ -71,7 +73,9 @@ def _iter_provider_stream(
     call = getattr(prov, "call_with_fallback", None)
     if callable(call):
         params = inspect.signature(call).parameters
-        kwargs = _build_io_kwargs(params, system_prompt=system_prompt, question=question)
+        kwargs = _build_io_kwargs(
+            params, system_prompt=system_prompt, question=question
+        )
 
         q: "Queue[Optional[str]]" = Queue()
 
@@ -111,14 +115,14 @@ def _iter_provider_stream(
                     continue
                 if item is None:
                     break
-                yield item
+                yield str(item or "")
             return
 
         # 콜백 미지원이면 아래 폴백으로
         try:
             res = call(**kwargs)
             txt = res.get("text") if isinstance(res, dict) else str(res)
-            yield txt
+            yield str(txt or "")
             return
         except Exception as e:  # pragma: no cover
             yield f"(오류) {type(e).__name__}: {e}"
@@ -137,5 +141,7 @@ def answer_stream(
     """
     system_prompt = _system_prompt(mode)
     # 필요 시 ctx 활용 여지(예: RAG 요약 삽입) — 현 단계에선 미사용
-    yield from _iter_provider_stream(system_prompt=system_prompt, question=question)
+    yield from _iter_provider_stream(
+        system_prompt=system_prompt, question=question
+    )
 # ================================= [01] Answer Stream — END =================================
