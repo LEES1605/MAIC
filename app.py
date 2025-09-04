@@ -781,13 +781,13 @@ def _render_chat_panel():
             role_label = "답변"
             persona = "지피티"
         elif role == "evaluator":
-            role_label = "보완"   # 평가 대신 보완(Co-teacher)
+            role_label = "보완"
             persona = "미나"
         else:
             role_label = "질문"
             persona = None
 
-        # 히스토리 텍스트에 '출처:' 꼬리표가 있으면 분리 → 칩으로 표시(assistant/evaluator)
+        # 히스토리 텍스트에서 '출처:' 꼬리표 분리 → 칩으로 표시
         t = str(text or "")
         m = _re.search(r"^(.*?)(?:\n+|\s+)출처:\s*(.+)$", t, flags=_re.S)
         src = None
@@ -799,8 +799,10 @@ def _render_chat_panel():
 
         body = _html.escape(body).replace("\n", "<br/>")
         body = _re.sub(r"  ", "&nbsp;&nbsp;", body)
-        src_html = (f'<span style="{chip_src}">' + (_html.escape(src) if src else "") + "</span>") if (src and not is_user) else ""
-        pers_html = (f'<span style="{chip_pers}">' + _html.escape(persona) + "</span>") if (persona and not is_user) else ""
+        src_html = (f'<span style="{chip_src}">' + (_html.escape(src) if src else "") + "</span>") \
+            if (src and not is_user) else ""
+        pers_html = (f'<span style="{chip_pers}">' + _html.escape(persona) + "</span>") \
+            if (persona and not is_user) else ""
         st.markdown(
             f'<div style="{wrap}"><div style="{bubble}">'
             f'<span style="{chip_role}">{role_label}</span>'
@@ -826,47 +828,70 @@ def _render_chat_panel():
     st.markdown("</div>", unsafe_allow_html=True)
 
     # ─────────────────────────────────────────────────────────────────────────
-    # 📷 이미지 업로드 → OCR → 입력칸 자동 주입
+    # ＋ 입력 도우미: 카메라/앨범 → OCR → 입력칸 자동 주입
     # ─────────────────────────────────────────────────────────────────────────
-    with st.expander("📷 이미지에서 글자 추출", expanded=False):
-        up = st.file_uploader(
-            "이미지 파일 선택",
-            type=["png", "jpg", "jpeg", "webp", "bmp"],
-            accept_multiple_files=False,
-            help="문제/지문 사진을 올리면 텍스트를 추출해 입력칸에 넣어드려요.",
-            key="ocr_uploader",
-        )
-        if up is not None:
-            try:
-                tmp_dir = (PERSIST_DIR / "tmp_uploads")
-                tmp_dir.mkdir(parents=True, exist_ok=True)
-                ext = Path(up.name).suffix or ".png"
-                fpath = tmp_dir / f"upl_{int(time.time()*1000)}{ext}"
-                with open(fpath, "wb") as fw:
-                    fw.write(up.getbuffer())
+    def _close_plus() -> None:
+        ss["__plus_open"] = False
 
-                import importlib
-                ocr_txt = ""
+    cols = st.columns([1, 12])
+    with cols[0]:
+        if st.button("＋", key="plus_btn", help="카메라/앨범에서 이미지로 질문하기"):
+            ss["__plus_open"] = not ss.get("__plus_open", False)
+    with cols[1]:
+        st.caption("이미지로 질문하고 싶다면 ＋ 버튼을 눌러 촬영하거나 앨범에서 선택하세요.")
+
+    if ss.get("__plus_open"):
+        with st.container():
+            st.markdown("**입력 도우미** · 이미지를 가져와 텍스트로 변환해 드려요.")
+            tabs = st.tabs(["📷 카메라", "🖼️ 앨범(사진)"])
+
+            # 공통 OCR 함수
+            def _ocr_and_fill(bin_file, filename_hint: str) -> None:
                 try:
-                    _m = importlib.import_module("src.vision.ocr")
-                    _fn = getattr(_m, "extract_text", None)
-                    if callable(_fn):
-                        ocr_txt = str(_fn(str(fpath)) or "")
-                except Exception:
+                    tmp_dir = (PERSIST_DIR / "tmp_uploads")
+                    tmp_dir.mkdir(parents=True, exist_ok=True)
+                    ext = Path(filename_hint).suffix or ".png"
+                    fpath = tmp_dir / f"upl_{int(time.time() * 1000)}{ext}"
+                    with open(fpath, "wb") as fw:
+                        fw.write(bin_file.getbuffer())
+                    import importlib
                     ocr_txt = ""
+                    try:
+                        _m = importlib.import_module("src.vision.ocr")
+                        _fn = getattr(_m, "extract_text", None)
+                        if callable(_fn):
+                            ocr_txt = str(_fn(str(fpath)) or "")
+                    except Exception:
+                        ocr_txt = ""
+                    if ocr_txt:
+                        ss["inpane_q"] = ocr_txt.strip()
+                        st.success("✓ OCR 결과를 입력칸에 넣었어요. 필요하면 수정 후 전송하세요.")
+                        preview = (ocr_txt[:180] + "…") if len(ocr_txt) > 180 else ocr_txt
+                        st.code(preview or "(빈 텍스트)")
+                        return
+                    st.warning("텍스트를 찾지 못했어요. 명암·해상도를 확인하거나 다른 이미지를 시도해 주세요.")
+                except Exception as e:
+                    _errlog("OCR 처리 실패", where="[13]_ocr_plus", exc=e)
+                    st.error("OCR 처리 중 오류가 발생했어요. 텍스트로 직접 입력해 주세요.")
 
-                if ocr_txt:
-                    ss["inpane_q"] = ocr_txt.strip()
-                    st.caption("✓ OCR 결과를 입력칸에 넣었어요. 필요하면 수정 후 전송하세요.")
-                    preview = (ocr_txt[:180] + "…") if len(ocr_txt) > 180 else ocr_txt
-                    st.code(preview or "(빈 텍스트)")
-                else:
-                    st.warning("텍스트를 찾지 못했어요. 이미지 해상도/명암을 확인하거나 다른 이미지를 시도해 보세요.")
-            except Exception as e:
-                _errlog("OCR 처리 실패", where="[13]_ocr", exc=e)
-                st.error("OCR 처리 중 오류가 발생했어요. 텍스트로 직접 입력해 주세요.")
+            with tabs[0]:
+                cam = st.camera_input("카메라로 촬영", key="camera_input")
+                if cam is not None:
+                    _ocr_and_fill(cam, "camera.png")
 
-    # 입력 폼
+            with tabs[1]:
+                up = st.file_uploader(
+                    "앨범에서 선택",
+                    type=["png", "jpg", "jpeg", "webp", "bmp"],
+                    accept_multiple_files=False,
+                    key="album_uploader",
+                )
+                if up is not None:
+                    _ocr_and_fill(up, up.name)
+
+            st.button("닫기", on_click=_close_plus)
+
+    # 입력 폼 (Enter=전송)
     with st.form("inpane_chat_form", clear_on_submit=True):
         qtxt = st.text_input(
             "질문 입력",
@@ -975,7 +1000,11 @@ def _render_chat_panel():
 
         if callable(_answer_stream):
             try:
-                for ch in _answer_stream(question=question, mode=MODE_TOKEN, ctx={"hits": hits, "source_label": source_label}):
+                for ch in _answer_stream(
+                    question=question,
+                    mode=MODE_TOKEN,
+                    ctx={"hits": hits, "source_label": source_label},
+                ):
                     _emit_ans(ch)
                 full_answer = acc_ans or "(응답이 비어있어요)"
             except Exception as e:
@@ -1069,7 +1098,9 @@ def _render_chat_panel():
                 _emit_eval(full_eval)
             except TypeError:
                 try:
-                    for ch in _eval_stream(question=question, mode=MODE_TOKEN, answer=full_answer):
+                    for ch in _eval_stream(
+                        question=question, mode=MODE_TOKEN, answer=full_answer
+                    ):
                         _emit_eval(ch)
                     full_eval = acc_eval or " "
                     _emit_eval(full_eval)
