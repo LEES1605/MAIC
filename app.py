@@ -835,7 +835,7 @@ def _render_chat_panel():
                 with open(fpath, "wb") as fw:
                     fw.write(up.getbuffer())
 
-                # (수정) 정적 import → 동적 import + fallback (mypy-safe)
+                # (mypy-safe) 동적 import + fallback
                 import importlib
                 ocr_txt = ""
                 try:
@@ -847,7 +847,6 @@ def _render_chat_panel():
                     ocr_txt = ""
 
                 if ocr_txt:
-                    # 입력칸에 자동 주입
                     ss["inpane_q"] = ocr_txt.strip()
                     st.caption("✓ OCR 결과를 입력칸에 넣었어요. 필요하면 수정 후 전송하세요.")
                     preview = (ocr_txt[:180] + "…") if len(ocr_txt) > 180 else ocr_txt
@@ -903,7 +902,8 @@ def _render_chat_panel():
     # 프롬프트 해석
     try:
         from src.prompting.resolve import resolve_prompts
-        system_prompt, user_prompt, source = resolve_prompts(
+        # ⬇ 사용하지 않는 user_prompt는 언더스코어 변수로 받아 Ruff 억제
+        system_prompt, _resolved_user_prompt, source = resolve_prompts(
             MODE_TOKEN,
             ss.get("inpane_q", "").strip() if ss.get("inpane_q") else "",
             ss.get("__evidence_class_notes", ""),
@@ -914,7 +914,7 @@ def _render_chat_panel():
         ss["__prompt_source"] = source
     except Exception:
         system_prompt = ""
-        user_prompt = ss.get("inpane_q", "") or ""
+        # (삭제됨) user_prompt 대입 — 더이상 변수 사용 안 함
         ss["__prompt_source"] = "fallback"
 
     # RAG 라벨(출처 칩)
