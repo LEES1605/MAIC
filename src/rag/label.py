@@ -1,213 +1,164 @@
-# ============================== [01] Co-Teacher Evaluator — START ==============================
+# ============================== [01] RAG LABELER — START ==============================
 """
-Co-teacher(미나쌤) — '비평'이 아니라 '보완' 설명을 스트리밍으로 제공합니다.
-가능하면 provider의 실스트리밍을 사용하고, 불가하면 최종 텍스트를 문장 단위로 나눠 yield합니다.
+src.rag.label
+
+- search_hits: RAG(search.py) 인덱스를 캐시/지속화(get_or_build_index)로 확보하여 검색.
+- decide_label: 히트의 경로/제목/소스 키워드로 라벨을 결정.
 """
+
 from __future__ import annotations
 
-from typing import Dict, Iterator, Optional, Any, List, Mapping
-import inspect
-import re
-from queue import Queue, Empty
-from threading import Thread
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, Optional
+import os
+import time
 
-
-def _system_prompt(mode: str) -> str:
-    mode_hint = {
-        "문법설명": "핵심 규칙 → 간단 예시 → 흔한 오해 순서로 학생 눈높이에 맞춰 설명.",
-        "문장구조분석": "품사/구문 역할을 표처럼 정리, 핵심 포인트 3개 요약.",
-        "지문분석": "주제/요지/세부정보를 구분하고 근거 문장을 명확히 제시.",
-    }.get(mode, "핵심→예시→한 줄 정리 순으로 간결히 설명.")
-    return (
-        "당신은 '미나쌤'이라는 보조 선생님(Co-teacher)입니다. "
-        "첫 번째 선생님(피티쌤)의 답변을 바탕으로, 학생이 더 쉽게 이해하도록 "
-        "중복을 최소화하며 빠진 부분을 보충하고 쉬운 비유/예시 또는 심화 포인트를 추가하세요. "
-        "비평/채점/메타 피드백은 금지. " + mode_hint
+# RAG 검색기 (패키지 기준)
+try:
+    from src.rag.search import (  # type: ignore
+        search as _search,
+        get_or_build_index as _get_or_build_index,
+        SUPPORTED_EXTS as _EXTS,
     )
-
-
-def _user_prompt(question: str, answer: Optional[str]) -> str:
-    a = (answer or "").strip()
-    head = "학생 질문:\n" + question.strip()
-    if a:
-        head += "\n\n첫 번째 선생님(피티쌤)의 답변을 바탕으로 보완해 주세요."
-        body = (
-            "\n\n[피티쌤의 답변]\n"
-            f"{a}\n\n[요청]\n"
-            "- 비평 금지, 중복 최소화\n"
-            "- 더 쉬운 설명 또는 심화 포인트 보완\n"
-            "- 핵심 → 예시 → 한 줄 정리"
-        )
-    else:
-        body = (
-            "\n\n[요청]\n"
-            "- 핵심 → 예시 → 한 줄 정리\n"
-            "- 질문 의도에 맞는 보완 설명"
-        )
-    return head + body
-
-
-def _split_sentences(text: str) -> List[str]:
-    if not text:
-        return []
-    parts = re.split(r"(?<=[\.!\?。！？])\s+", text.strip())
-    return [p for p in parts if p]
-
-
-def _build_io_kwargs(
-    params: Mapping[str, inspect.Parameter],
-    *,
-    system_prompt: str,
-    user_prompt: str,
-) -> Dict[str, Any]:
-    kwargs: Dict[str, Any] = {}
-    if "messages" in params:
-        kwargs["messages"] = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ]
-    else:
-        if "prompt" in params:
-            kwargs["prompt"] = system_prompt + "\n\n" + user_prompt
-        elif "user_prompt" in params:
-            kwargs["user_prompt"] = user_prompt
-        if "system_prompt" in params:
-            kwargs["system_prompt"] = system_prompt
-        elif "system" in params:
-            kwargs["system"] = system_prompt
-    return kwargs
-
-
-def _iter_provider_stream(*, system_prompt: str, user_prompt: str) -> Iterator[str]:
-    """가능하면 실스트리밍으로, 아니면 폴백."""
+except Exception:  # pragma: no cover
+    # 최소 폴백(테스트/패키징 변동에 대비). 프로젝트 구조에 따라 필요 없을 수 있음.
+    from search import search as _search  # type: ignore
     try:
-        from src.llm import providers as prov  # noqa: WPS433
-    except Exception as e:  # pragma: no cover
-        yield f"(오류) provider 로딩 실패: {type(e).__name__}: {e}"
-        return
-
-    # 1) stream_text 우선
-    st_fn = getattr(prov, "stream_text", None)
-    if callable(st_fn):
-        params = inspect.signature(st_fn).parameters
-        kwargs = _build_io_kwargs(
-            params, system_prompt=system_prompt, user_prompt=user_prompt
-        )
-        for piece in st_fn(**kwargs):
-            yield str(piece or "")
-        return
-
-    # 2) call_with_fallback + callbacks
-    call = getattr(prov, "call_with_fallback", None)
-    if callable(call):
-        params = inspect.signature(call).parameters
-        kwargs = _build_io_kwargs(
-            params, system_prompt=system_prompt, user_prompt=user_prompt
-        )
-
-        q: "Queue[Optional[str]]" = Queue()
-
-        def _on_piece(t: Any) -> None:
-            try:
-                q.put(str(t or ""))
-            except Exception:
-                pass
-
-        used_cb = False
-        for name in ("on_delta", "on_token", "yield_text"):
-            if name in params:
-                kwargs[name] = _on_piece
-                used_cb = True
-        if "stream" in params:
-            kwargs["stream"] = True
-
-        if used_cb:
-            def _runner() -> None:
-                try:
-                    call(**kwargs)
-                except Exception as e:  # pragma: no cover
-                    q.put(f"(오류) {type(e).__name__}: {e}")
-                finally:
-                    q.put(None)
-
-            th = Thread(target=_runner, daemon=True)
-            th.start()
-
-            while True:
-                try:
-                    item = q.get(timeout=0.1)
-                except Empty:
-                    if not th.is_alive() and q.empty():
-                        break
-                    continue
-                if item is None:
-                    break
-                yield str(item or "")
-            return
-
-        # 콜백 미지원 → 폴백
-        try:
-            res = call(**kwargs)
-            txt = res.get("text") if isinstance(res, dict) else str(res)
-            yield str(txt or "")
-            return
-        except Exception as e:  # pragma: no cover
-            yield f"(오류) {type(e).__name__}: {e}"
-            return
-
-    yield "(오류) LLM 어댑터를 찾을 수 없어요."
-
-
-def evaluate_stream(
-    *,
-    question: str,
-    mode: str,
-    answer: Optional[str] = None,
-    ctx: Optional[Dict[str, Any]] = None,
-) -> Iterator[str]:
-    """
-    미나쌤 보완 스트림.
-    - provider가 스트리밍을 지원하면 토막 단위로 yield
-    - 아니면 최종 텍스트를 문장 단위로 분할 후 여러 번 yield
-    """
-    if not answer and ctx and isinstance(ctx, dict):
-        maybe = ctx.get("answer")
-        if isinstance(maybe, str):
-            answer = maybe
-
-    sys_p = _system_prompt(mode)
-    usr_p = _user_prompt(question, answer)
-
-    # 실스트리밍 시도
-    got_any = False
-    for piece in _iter_provider_stream(system_prompt=sys_p, user_prompt=usr_p):
-        got_any = True
-        yield str(piece or "")
-
-    if got_any:
-        return
-
-    # 폴백: 문장 분할 스트림
+        from search import get_or_build_index as _get_or_build_index  # type: ignore
+    except Exception:  # pragma: no cover
+        _get_or_build_index = None  # type: ignore
     try:
-        from src.llm import providers as prov
-        call = getattr(prov, "call_with_fallback", None)
+        from search import SUPPORTED_EXTS as _EXTS  # type: ignore
+    except Exception:  # pragma: no cover
+        _EXTS = {".md", ".txt", ".pdf", ".html", ".json"}
+
+__all__ = ["search_hits", "decide_label"]
+
+# ── 데이터셋 경로 해석 ────────────────────────────────────────────────────────────
+def _resolve_dataset_dir(dataset_dir: Optional[str]) -> Path:
+    """
+    우선순위:
+      1) 인자 dataset_dir
+      2) ENV: MAIC_DATASET_DIR 또는 RAG_DATASET_DIR
+      3) 기본: 프로젝트 내 'knowledge' 폴더
+    """
+    if dataset_dir:
+        p = Path(dataset_dir).expanduser()
+        return p
+
+    env = os.environ.get("MAIC_DATASET_DIR") or os.environ.get("RAG_DATASET_DIR")
+    if env:
+        return Path(env).expanduser()
+
+    return Path("knowledge").resolve()
+
+
+# ── 모듈 레벨 TTL 캐시 (불필요한 재인덱싱 방지) ───────────────────────────────────
+_CACHED_INDEX: Optional[Dict[str, Any]] = None
+_CACHED_DIR: Optional[str] = None
+_CACHED_AT: float = 0.0
+_TTL_SECS: int = 30
+
+
+def _ensure_index(base_dir: Path) -> Optional[Dict[str, Any]]:
+    """
+    캐시된 인덱스를 반환. TTL 내에는 재검사/재빌드 생략.
+    get_or_build_index가 있으면 디스크 캐시도 활용.
+    """
+    global _CACHED_INDEX, _CACHED_DIR, _CACHED_AT
+    now = time.time()
+    ds = str(base_dir.resolve())
+
+    if (
+        _CACHED_INDEX is not None
+        and _CACHED_DIR == ds
+        and (now - _CACHED_AT) < _TTL_SECS
+    ):
+        return _CACHED_INDEX
+
+    idx: Optional[Dict[str, Any]] = None
+    try:
+        if callable(_get_or_build_index):
+            idx = _get_or_build_index(ds, use_cache=True)  # type: ignore[call-arg]
     except Exception:
-        call = None
+        idx = None
 
-    if callable(call):
-        params = inspect.signature(call).parameters
-        kwargs = _build_io_kwargs(params, system_prompt=sys_p, user_prompt=usr_p)
-        try:
-            res = call(**kwargs)
-        except Exception as e:  # pragma: no cover
-            yield f"(오류) {type(e).__name__}: {e}"
-            return
-        txt = res.get("text") if isinstance(res, dict) else str(res)
-        if not txt:
-            txt = "보완할 내용을 찾지 못했어요. 질문을 조금 더 구체적으로 알려줄래요?"
-        for chunk in _split_sentences(txt):
-            yield chunk
-        return
+    _CACHED_INDEX = idx
+    _CACHED_DIR = ds
+    _CACHED_AT = now
+    return _CACHED_INDEX
 
-    yield "보완 에이전트를 사용할 수 없어서, 주 답변만 제공했어요."
-# =============================== [01] Co-Teacher Evaluator — END ===============================
+
+# ── Public API ───────────────────────────────────────────────────────────────────
+def search_hits(
+    query: str,
+    *,
+    dataset_dir: Optional[str] = None,
+    top_k: int = 5,
+) -> List[Dict[str, Any]]:
+    """
+    질의어에 대한 상위 히트를 반환합니다.
+    반환 형식 예: [{"path","title","score","snippet","source"} ...]
+    """
+    q = (query or "").strip()
+    if not q:
+        return []
+
+    base = _resolve_dataset_dir(dataset_dir)
+    if not base.exists():
+        return []
+
+    # 인덱스 확보(캐시/지속화)
+    idx = _ensure_index(base)
+
+    # search() 시그니처 차이에 대비해 dataset_dir/index 전달을 시도
+    try:
+        hits = _search(  # type: ignore[call-arg]
+            q, dataset_dir=str(base), index=idx, top_k=int(top_k)
+        )
+    except TypeError:
+        # 일부 구현은 index 파라미터가 없을 수 있음
+        hits = _search(q, dataset_dir=str(base), top_k=int(top_k))  # type: ignore[call-arg]
+
+    out: List[Dict[str, Any]] = []
+    for h in hits:
+        # 표준화
+        out.append(
+            {
+                "path": h.get("path"),
+                "title": h.get("title"),
+                "score": h.get("score"),
+                "snippet": h.get("snippet"),
+                "source": h.get("source", ""),
+            }
+        )
+    return out
+
+
+def decide_label(
+    hits: Iterable[Dict[str, Any]] | None,
+    default_if_none: str = "[AI지식]",
+) -> str:
+    """
+    히트가 존재하면 경로/제목/소스 키워드로 판단하여 라벨을 반환합니다.
+      - 'iyu', '이유문법' 등 → [이유문법]
+      - 'book', '문법책', '교과서', 'textbook' 등 → [문법책]
+      - 그 외 히트 존재 → [학습자료]
+      - 히트 없으면 default_if_none 반환
+    """
+    items = list(hits or [])
+    if not items:
+        return default_if_none
+
+    top = items[0]
+    path = str(top.get("path", "")).lower()
+    title = str(top.get("title", "")).lower()
+    src = str(top.get("source", "")).lower()
+    hay = f"{path} {title} {src}"
+
+    if any(k in hay for k in ("iyu", "이유문법", "reason-grammar", "iyu-grammar")):
+        return "[이유문법]"
+    if any(k in hay for k in ("book", "문법책", "교과서", "textbook")):
+        return "[문법책]"
+    return "[학습자료]"
+# =============================== [01] RAG LABELER — END ===============================
