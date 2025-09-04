@@ -781,7 +781,7 @@ def _render_chat_panel():
             role_label = "답변"
             persona = "지피티"
         elif role == "evaluator":
-            role_label = "보완"   # ← 평가 대신 보완(Co-teacher)
+            role_label = "보완"   # 평가 대신 보완(Co-teacher)
             persona = "미나"
         else:
             role_label = "질문"
@@ -944,8 +944,11 @@ def _render_chat_panel():
             nonlocal acc_ans
             import html, re
             acc_ans += str(piece or "")
+
             def esc(t: str) -> str:
-                t = html.escape(t or "").replace("\n", "<br/>"); return re.sub(r"  ", "&nbsp;&nbsp;", t)
+                t = html.escape(t or "").replace("\n", "<br/>")
+                return re.sub(r"  ", "&nbsp;&nbsp;", t)
+
             ph_ans.markdown(
                 '<div style="display:flex;justify-content:flex-start;margin:8px 0;">'
                 '  <div style="max-width:88%;padding:10px 12px;border-radius:16px;'
@@ -994,13 +997,18 @@ def _render_chat_panel():
                         {"role": "user", "content": question},
                     ]
                 else:
-                    if "prompt" in params: kwargs["prompt"] = question
-                    elif "user_prompt" in params: kwargs["user_prompt"] = question
-                    if "system_prompt" in params: kwargs["system_prompt"] = system_prompt or ""
-                    elif "system" in params: kwargs["system"] = system_prompt or ""
+                    if "prompt" in params:
+                        kwargs["prompt"] = question
+                    elif "user_prompt" in params:
+                        kwargs["user_prompt"] = question
+                    if "system_prompt" in params:
+                        kwargs["system_prompt"] = system_prompt or ""
+                    elif "system" in params:
+                        kwargs["system"] = system_prompt or ""
                 res = call(**kwargs)
                 full_answer = res.get("text") if isinstance(res, dict) else str(res)
-                if not full_answer: full_answer = "(응답이 비어있어요)"
+                if not full_answer:
+                    full_answer = "(응답이 비어있어요)"
                 _emit_ans(full_answer)
             else:
                 full_answer = "(오류) LLM 어댑터를 사용할 수 없습니다."
@@ -1018,8 +1026,11 @@ def _render_chat_panel():
             nonlocal acc_eval
             import html, re
             acc_eval += str(piece or "")
+
             def esc2(t: str) -> str:
-                t = html.escape(t or "").replace("\n", "<br/>"); return re.sub(r"  ", "&nbsp;&nbsp;", t)
+                t = html.escape(t or "").replace("\n", "<br/>")
+                return re.sub(r"  ", "&nbsp;&nbsp;", t)
+
             ph_eval.markdown(
                 '<div style="display:flex;justify-content:flex-start;margin:8px 0;">'
                 '  <div style="max-width:88%;padding:10px 12px;border-radius:16px;'
@@ -1048,8 +1059,10 @@ def _render_chat_panel():
                 import inspect as _inspect2
                 params = _inspect2.signature(_eval_stream).parameters
                 _kwargs: dict = {"question": question, "mode": MODE_TOKEN}
-                if "answer" in params: _kwargs["answer"] = full_answer
-                if "ctx" in params:    _kwargs["ctx"] = {"answer": full_answer}
+                if "answer" in params:
+                    _kwargs["answer"] = full_answer
+                if "ctx" in params:
+                    _kwargs["ctx"] = {"answer": full_answer}
                 for ch in _eval_stream(**_kwargs):
                     _emit_eval(ch)
                 full_eval = acc_eval or " "
@@ -1070,7 +1083,7 @@ def _render_chat_panel():
             full_eval = "보완 에이전트를 사용할 수 없어서, 주 답변만 제공했어요."
             _emit_eval(full_eval)
 
-        # 기록 — ★evaluator에도 출처 꼬리표 부여★
+        # 기록 — evaluator에도 출처 꼬리표 부여
         ss["chat"].append({
             "id": f"e{int(time.time()*1000)}", "role": "evaluator",
             "text": f"{full_eval}\n\n출처: {source_label}",
@@ -1079,6 +1092,7 @@ def _render_chat_panel():
         ss["_sending"] = False
         st.rerun()
 # ============================= [13] 채팅 패널 — END =============================
+
 
 # ============================ [14] 본문 렌더 — START ============================
 def _render_body() -> None:
