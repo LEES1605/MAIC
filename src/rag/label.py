@@ -1,123 +1,213 @@
-# ============================ [01] RAG LABELER — START ============================
+# ============================== [01] Co-Teacher Evaluator — START ==============================
 """
-출처 라벨러
-- search_hits: 경량 RAG(search.py)를 사용해 prepared/ 또는 RAG_DATASET_DIR에서 검색
-- decide_label: 히트의 경로/제목/소스 키워드로 [이유문법]/[문법책]/[AI지식] 판정
+Co-teacher(미나쌤) — '비평'이 아니라 '보완' 설명을 스트리밍으로 제공합니다.
+가능하면 provider의 실스트리밍을 사용하고, 불가하면 최종 텍스트를 문장 단위로 나눠 yield합니다.
 """
-
 from __future__ import annotations
 
-import os
-from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
-
-# 경량 RAG 검색기
-from src.rag import search as _rag
-
-
-def _project_root() -> Path:
-    """
-    src/rag/label.py 기준으로 프로젝트 루트 추정.
-    .../src/rag/label.py → parents[2] == repo root 로 가정.
-    """
-    return Path(__file__).resolve().parents[2]
+from typing import Dict, Iterator, Optional, Any, List, Mapping
+import inspect
+import re
+from queue import Queue, Empty
+from threading import Thread
 
 
-def _prepared_dir() -> Path:
-    """
-    기본 코퍼스 위치 추정: <repo>/prepared
-    (없으면 빈 결과 반환하게 두고, 테스트/CI에서는 tmp 코퍼스로 동작)
-    """
-    return _project_root() / "prepared"
-
-
-def search_hits(
-    query: str,
-    *,
-    dataset_dir: Optional[str] = None,
-    top_k: int = 5,
-) -> List[Dict[str, Any]]:
-    """
-    질의어로 상위 히트들을 반환.
-    - 우선순위: 인자 dataset_dir > 환경변수 RAG_DATASET_DIR > <repo>/prepared
-    - 반환: [{"path","title","score","snippet","source"} ...]
-    """
-    q = (query or "").strip()
-    if not q:
-        return []
-
-    # 코퍼스 위치 결정
-    base_dir = (
-        Path(dataset_dir)
-        if dataset_dir
-        else Path(os.getenv("RAG_DATASET_DIR", ""))
+def _system_prompt(mode: str) -> str:
+    mode_hint = {
+        "문법설명": "핵심 규칙 → 간단 예시 → 흔한 오해 순서로 학생 눈높이에 맞춰 설명.",
+        "문장구조분석": "품사/구문 역할을 표처럼 정리, 핵심 포인트 3개 요약.",
+        "지문분석": "주제/요지/세부정보를 구분하고 근거 문장을 명확히 제시.",
+    }.get(mode, "핵심→예시→한 줄 정리 순으로 간결히 설명.")
+    return (
+        "당신은 '미나쌤'이라는 보조 선생님(Co-teacher)입니다. "
+        "첫 번째 선생님(피티쌤)의 답변을 바탕으로, 학생이 더 쉽게 이해하도록 "
+        "중복을 최소화하며 빠진 부분을 보충하고 쉬운 비유/예시 또는 심화 포인트를 추가하세요. "
+        "비평/채점/메타 피드백은 금지. " + mode_hint
     )
-    if not str(base_dir):
-        base_dir = _prepared_dir()
 
-    if not base_dir.exists():
-        return []
 
-    # 인덱스 빌드 및 검색
-    try:
-        idx = _rag.build_index(str(base_dir))
-        hits = _rag.search(q, index=idx, top_k=int(top_k))
-    except Exception:
-        return []
-
-    # 각 히트에 source 필드 보강(라벨 판정 근거)
-    out: List[Dict[str, Any]] = []
-    for h in hits:
-        path = str(h.get("path", "")).lower()
-        title = str(h.get("title", "")).lower()
-        hay = f"{path} {title}"
-
-        if any(k in hay for k in ("iyu", "이유문법", "reason-grammar", "iyu-grammar")):
-            src = "iyu"
-        elif any(k in hay for k in ("book", "문법책", "교과서", "textbook")):
-            src = "book"
-        else:
-            src = "other"
-
-        out.append(
-            {
-                "path": h.get("path"),
-                "title": h.get("title"),
-                "score": h.get("score"),
-                "snippet": h.get("snippet"),
-                "source": src,
-            }
+def _user_prompt(question: str, answer: Optional[str]) -> str:
+    a = (answer or "").strip()
+    head = "학생 질문:\n" + question.strip()
+    if a:
+        head += "\n\n첫 번째 선생님(피티쌤)의 답변을 바탕으로 보완해 주세요."
+        body = (
+            "\n\n[피티쌤의 답변]\n"
+            f"{a}\n\n[요청]\n"
+            "- 비평 금지, 중복 최소화\n"
+            "- 더 쉬운 설명 또는 심화 포인트 보완\n"
+            "- 핵심 → 예시 → 한 줄 정리"
         )
-    return out
+    else:
+        body = (
+            "\n\n[요청]\n"
+            "- 핵심 → 예시 → 한 줄 정리\n"
+            "- 질문 의도에 맞는 보완 설명"
+        )
+    return head + body
 
 
-def decide_label(
-    hits: Iterable[Dict[str, Any]] | None,
-    default_if_none: str = "[AI지식]",
-) -> str:
-    """
-    히트가 있을 경우 경로/제목/소스 키워드로 라벨 판정.
-    - [이유문법] 키워드(iyu/이유문법 등)가 보이면 우선.
-    - 다음으로 [문법책]/[교과서]/textbook 등.
-    - 없으면 [AI지식].
-    """
+def _split_sentences(text: str) -> List[str]:
+    if not text:
+        return []
+    parts = re.split(r"(?<=[\.!\?。！？])\s+", text.strip())
+    return [p for p in parts if p]
+
+
+def _build_io_kwargs(
+    params: Mapping[str, inspect.Parameter],
+    *,
+    system_prompt: str,
+    user_prompt: str,
+) -> Dict[str, Any]:
+    kwargs: Dict[str, Any] = {}
+    if "messages" in params:
+        kwargs["messages"] = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+    else:
+        if "prompt" in params:
+            kwargs["prompt"] = system_prompt + "\n\n" + user_prompt
+        elif "user_prompt" in params:
+            kwargs["user_prompt"] = user_prompt
+        if "system_prompt" in params:
+            kwargs["system_prompt"] = system_prompt
+        elif "system" in params:
+            kwargs["system"] = system_prompt
+    return kwargs
+
+
+def _iter_provider_stream(*, system_prompt: str, user_prompt: str) -> Iterator[str]:
+    """가능하면 실스트리밍으로, 아니면 폴백."""
     try:
-        items = list(hits or [])
-        if not items:
-            return default_if_none
+        from src.llm import providers as prov  # noqa: WPS433
+    except Exception as e:  # pragma: no cover
+        yield f"(오류) provider 로딩 실패: {type(e).__name__}: {e}"
+        return
 
-        # 상위 1개를 우선 참고(스코어가 가장 높음)
-        top = items[0]
-        path = str(top.get("path", "")).lower()
-        title = str(top.get("title", "")).lower()
-        src = str(top.get("source", "")).lower()
-        hay = f"{path} {title} {src}"
+    # 1) stream_text 우선
+    st_fn = getattr(prov, "stream_text", None)
+    if callable(st_fn):
+        params = inspect.signature(st_fn).parameters
+        kwargs = _build_io_kwargs(
+            params, system_prompt=system_prompt, user_prompt=user_prompt
+        )
+        for piece in st_fn(**kwargs):
+            yield str(piece or "")
+        return
 
-        if any(k in hay for k in ("iyu", "이유문법", "reason-grammar", "iyu-grammar")):
-            return "[이유문법]"
-        if any(k in hay for k in ("book", "문법책", "교과서", "textbook")):
-            return "[문법책]"
-        return default_if_none
+    # 2) call_with_fallback + callbacks
+    call = getattr(prov, "call_with_fallback", None)
+    if callable(call):
+        params = inspect.signature(call).parameters
+        kwargs = _build_io_kwargs(
+            params, system_prompt=system_prompt, user_prompt=user_prompt
+        )
+
+        q: "Queue[Optional[str]]" = Queue()
+
+        def _on_piece(t: Any) -> None:
+            try:
+                q.put(str(t or ""))
+            except Exception:
+                pass
+
+        used_cb = False
+        for name in ("on_delta", "on_token", "yield_text"):
+            if name in params:
+                kwargs[name] = _on_piece
+                used_cb = True
+        if "stream" in params:
+            kwargs["stream"] = True
+
+        if used_cb:
+            def _runner() -> None:
+                try:
+                    call(**kwargs)
+                except Exception as e:  # pragma: no cover
+                    q.put(f"(오류) {type(e).__name__}: {e}")
+                finally:
+                    q.put(None)
+
+            th = Thread(target=_runner, daemon=True)
+            th.start()
+
+            while True:
+                try:
+                    item = q.get(timeout=0.1)
+                except Empty:
+                    if not th.is_alive() and q.empty():
+                        break
+                    continue
+                if item is None:
+                    break
+                yield str(item or "")
+            return
+
+        # 콜백 미지원 → 폴백
+        try:
+            res = call(**kwargs)
+            txt = res.get("text") if isinstance(res, dict) else str(res)
+            yield str(txt or "")
+            return
+        except Exception as e:  # pragma: no cover
+            yield f"(오류) {type(e).__name__}: {e}"
+            return
+
+    yield "(오류) LLM 어댑터를 찾을 수 없어요."
+
+
+def evaluate_stream(
+    *,
+    question: str,
+    mode: str,
+    answer: Optional[str] = None,
+    ctx: Optional[Dict[str, Any]] = None,
+) -> Iterator[str]:
+    """
+    미나쌤 보완 스트림.
+    - provider가 스트리밍을 지원하면 토막 단위로 yield
+    - 아니면 최종 텍스트를 문장 단위로 분할 후 여러 번 yield
+    """
+    if not answer and ctx and isinstance(ctx, dict):
+        maybe = ctx.get("answer")
+        if isinstance(maybe, str):
+            answer = maybe
+
+    sys_p = _system_prompt(mode)
+    usr_p = _user_prompt(question, answer)
+
+    # 실스트리밍 시도
+    got_any = False
+    for piece in _iter_provider_stream(system_prompt=sys_p, user_prompt=usr_p):
+        got_any = True
+        yield str(piece or "")
+
+    if got_any:
+        return
+
+    # 폴백: 문장 분할 스트림
+    try:
+        from src.llm import providers as prov
+        call = getattr(prov, "call_with_fallback", None)
     except Exception:
-        return default_if_none
-# ============================= [01] RAG LABELER — END =============================
+        call = None
+
+    if callable(call):
+        params = inspect.signature(call).parameters
+        kwargs = _build_io_kwargs(params, system_prompt=sys_p, user_prompt=usr_p)
+        try:
+            res = call(**kwargs)
+        except Exception as e:  # pragma: no cover
+            yield f"(오류) {type(e).__name__}: {e}"
+            return
+        txt = res.get("text") if isinstance(res, dict) else str(res)
+        if not txt:
+            txt = "보완할 내용을 찾지 못했어요. 질문을 조금 더 구체적으로 알려줄래요?"
+        for chunk in _split_sentences(txt):
+            yield chunk
+        return
+
+    yield "보완 에이전트를 사용할 수 없어서, 주 답변만 제공했어요."
+# =============================== [01] Co-Teacher Evaluator — END ===============================
