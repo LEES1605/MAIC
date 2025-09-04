@@ -32,10 +32,8 @@ def _system_prompt(mode: str) -> str:
 
     return (
         "당신은 '미나'라는 이름의 보조 선생님(Co-teacher)입니다. "
-        "첫 번째 선생님(지피티)의 답변을 바탕으로 학생이 더 쉽게 이해하도록 "
-        "'보완 설명'을 제공합니다. "
-        "비평/평가/채점은 금지하며, 중복을 최소화하고 빠진 부분을 보충하거나 "
-        "더 쉬운 비유·예시, 또는 심화 포인트를 추가하세요. "
+        "첫 번째 선생님(지피티)의 답변을 바탕으로 학생이 더 쉽게 이해하도록 '보완 설명'을 제공합니다. "
+        "비평/평가/채점은 금지하며, 중복을 최소화하고 빠진 부분을 보충하거나 더 쉬운 비유·예시, 또는 심화 포인트를 추가하세요. "
         f"{mode_hint} "
         "스타일: 친절한 한국어, 짧은 문장, 불릿/번호 목록 적극 사용, 과한 이모지는 지양."
     )
@@ -46,22 +44,10 @@ def _user_prompt(question: str, answer: Optional[str]) -> str:
     a = (answer or "").strip()
     head = "학생 질문:\n" + question.strip()
     if a:
-        head += (
-            "\n\n첫 번째 선생님(지피티)의 답변 요약을 바탕으로 보완해 주세요."
-        )
-        body = (
-            "\n\n[지피티의 답변]\n"
-            f"{a}\n\n[요청]\n"
-            "- 비평 금지, 중복 최소화\n"
-            "- 더 쉬운 설명 또는 심화 포인트 보완\n"
-            "- 핵심 → 예시 → 한 줄 정리"
-        )
+        head += "\n\n첫 번째 선생님(지피티)의 답변 요약을 바탕으로 보완해 주세요."
+        body = f"\n\n[지피티의 답변]\n{a}\n\n[요청]\n- 비평 금지, 중복 최소화\n- 더 쉬운 설명 또는 심화 포인트 보완\n- 핵심 → 예시 → 한 줄 정리"
     else:
-        body = (
-            "\n\n[요청]\n"
-            "- 핵심 → 예시 → 한 줄 정리\n"
-            "- 질문 의도에 맞는 보완 설명"
-        )
+        body = "\n\n[요청]\n- 핵심 → 예시 → 한 줄 정리\n- 질문 의도에 맞는 보완 설명"
     return head + body
 
 
@@ -85,8 +71,7 @@ def evaluate_stream(
     ctx: Optional[Dict[str, Any]] = None,
 ) -> Iterator[str]:
     """
-    첫 번째 답변(지피티)을 '기반'으로 학생에게 도움이 되는 보완 설명을 생성해
-    문장 단위로 `yield`합니다.
+    첫 번째 답변(지피티)을 '기반'으로 학생에게 도움이 되는 보완 설명을 생성해 문장 단위로 `yield`합니다.
 
     Parameters
     ----------
@@ -95,9 +80,9 @@ def evaluate_stream(
     mode : str
         "문법설명" | "문장구조분석" | "지문분석" 등.
     answer : Optional[str]
-        주 답변(지피티)의 전체 텍스트. 없으면 ctx['answer']를 조회합니다.
+        주 답변(지피티)의 전체 텍스트. 없으면 ctx['answer']를 조회.
     ctx : Optional[dict]
-        추가 컨텍스트. {'answer': '...'} 형태를 지원합니다.
+        추가 컨텍스트. {'answer': '...'} 형태를 지원.
     """
     # ── 입력 정리 ─────────────────────────────────────────────────────────────
     if not answer and ctx and isinstance(ctx, dict):
@@ -110,7 +95,7 @@ def evaluate_stream(
 
     # ── provider 호출 준비 ────────────────────────────────────────────────────
     try:
-        from src.llm import providers as _prov
+        from src.llm import providers as _prov  # type: ignore
     except Exception as e:
         yield f"(오류) provider 로딩 실패: {type(e).__name__}: {e}"
         return
@@ -149,9 +134,7 @@ def evaluate_stream(
 
     text = res.get("text") if isinstance(res, dict) else str(res)
     if not text:
-        text = (
-            "보완할 내용을 찾지 못했어요. 질문을 조금 더 구체적으로 알려줄래요?"
-        )
+        text = "보완할 내용을 찾지 못했어요. 질문을 조금 더 구체적으로 알려줄래요?"
 
     # ── 문장 단위로 분할하여 다회 yield ───────────────────────────────────────
     for chunk in _split_sentences(text):
