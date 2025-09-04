@@ -47,7 +47,7 @@ def normalize_to_token_iter(source: TokenSource) -> Iterator[str]:
     try:
         iterator = iter(source)  # type: ignore[arg-type]
     except Exception:
-        # ❗새 접근: 예외 객체(e)를 아예 사용하지 않아 F821을 원천 차단
+        # 예외 객체를 쓰지 않음: F821(e 미정의) 원천 차단
         def _err() -> Iterator[str]:
             yield "[streaming-normalize-error]"
         return _err()
