@@ -778,20 +778,23 @@ def _render_chat_panel():
         )
 
         # 칩 스타일
+        # 사용자 '나' 칩(노랑) — 22px
         chip_role = (
-            "display:inline-block;margin:-2px 6px 6px 0;padding:1px 8px;border-radius:999px;"
-            "font-size:11px;font-weight:700;background:#FFF2B8;color:#6b5200;"
+            "display:inline-block;margin:-2px 6px 6px 0;padding:2px 10px;border-radius:999px;"
+            "font-size:22px;font-weight:700;background:#FFF2B8;color:#6b5200;"
             "border:1px solid #F2E4A2;"
         )
+        # 출처 칩(회색)
         chip_src = (
             "display:inline-block;margin:-2px 0 6px 0;padding:1px 8px;border-radius:999px;"
             "font-size:11px;font-weight:700;background:#eef2f6;color:#334155;"
             "border:1px solid #cbd5e1;"
         )
+        # 쌤 칩(답변 태그색: 연파랑) — 22px
         chip_pers = (
-            "display:inline-block;margin:-2px 6px 6px 0;padding:1px 8px;border-radius:999px;"
-            "font-size:11px;font-weight:700;background:#f1f5f9;color:#334155;"
-            "border:1px solid #cbd5e1;"
+            "display:inline-block;margin:-2px 6px 6px 0;padding:2px 10px;border-radius:999px;"
+            "font-size:22px;font-weight:700;background:#DFF1FF;color:#0f5b86;"
+            "border:1px solid #BEE3FF;"
         )
 
         # 페르소나 이름 매핑
@@ -816,7 +819,7 @@ def _render_chat_panel():
         body = _re.sub(r"  ", "&nbsp;&nbsp;", body)
 
         if is_user:
-            header = f'<span style="{chip_role}">질문</span>'
+            header = f'<span style="{chip_role}">나</span>'
         else:
             pers_html = (
                 f'<span style="{chip_pers}">{_html.escape(persona)}</span>'
@@ -995,20 +998,21 @@ def _render_chat_panel():
             "position:relative;border-top-right-radius:8px;border:1px solid #F2E4A2;"
             "background:#FFF8CC;color:#333;"
         )
+        # 사용자 '나' 칩 — 22px
         _chip_user = (
-            "display:inline-block;margin:-2px 6px 6px 0;padding:1px 8px;border-radius:999px;"
-            "font-size:11px;font-weight:700;background:#FFF2B8;color:#6b5200;"
+            "display:inline-block;margin:-2px 6px 6px 0;padding:2px 10px;border-radius:999px;"
+            "font-size:22px;font-weight:700;background:#FFF2B8;color:#6b5200;"
             "border:1px solid #F2E4A2;"
         )
         _body = _html.escape(question).replace("\n", "<br/>")
         _body = _re.sub(r"  ", "&nbsp;&nbsp;", _body)
         ph_user.markdown(
             f'<div style="{_wrap}"><div style="{_bubble}"><span style="{_chip_user}">'
-            "질문</span><br/>" + _body + "</div></div>",
+            "나</span><br/>" + _body + "</div></div>",
             unsafe_allow_html=True,
         )
 
-        # 증거/모드
+        # (참고) 증거/모드
         ev_notes = ss.get("__evidence_class_notes", "")
         ev_books = ss.get("__evidence_grammar_books", "")
 
@@ -1047,7 +1051,7 @@ def _render_chat_panel():
             source_label = "[AI지식]"
         ss["__last_source_label"] = source_label
 
-        # (A-1) 주 답변 에이전트 스트리밍 (피티쌤)
+        # (A-1) 주 답변 에이전트 스트리밍 (피티쌤) — 문장 버퍼 연결
         from typing import Any as _AnyT, Dict as _DictT
         acc_ans = ""
 
@@ -1060,15 +1064,16 @@ def _render_chat_panel():
                 t = html.escape(t or "").replace("\n", "<br/>")
                 return re.sub(r"  ", "&nbsp;&nbsp;", t)
 
+            # 피티쌤(연파랑 22px) + 출처
             ph_ans.markdown(
                 '<div style="display:flex;justify-content:flex-start;margin:8px 0;">'
                 '  <div style="max-width:88%;padding:10px 12px;border-radius:16px;'
                 '              border-top-left-radius:8px; line-height:1.6;font-size:15px;'
                 '              box-shadow:0 1px 1px rgba(0,0,0,.05);white-space:pre-wrap; position:relative;'
                 '              border:1px solid #BEE3FF;background:#EAF6FF;color:#0a2540;">'
-                '    <span style="display:inline-block;margin:-2px 6px 6px 0;padding:1px 8px;border-radius:999px;'
-                '                 font-size:11px;font-weight:700;background:#f1f5f9;color:#334155;'
-                '                 border:1px solid #cbd5e1;">피티쌤</span>'
+                '    <span style="display:inline-block;margin:-2px 6px 6px 0;padding:2px 10px;border-radius:999px;'
+                '                 font-size:22px;font-weight:700;background:#DFF1FF;color:#0f5b86;'
+                '                 border:1px solid #BEE3FF;">피티쌤</span>'
                 '    <span style="display:inline-block;margin:-2px 0 6px 0;padding:1px 8px;border-radius:999px;'
                 '                 font-size:11px;font-weight:700;background:#eef2f6;color:#334155;'
                 '                 border:1px solid #cbd5e1;">'
@@ -1078,6 +1083,25 @@ def _render_chat_panel():
                 + "  </div></div>",
                 unsafe_allow_html=True,
             )
+
+        # 문장 버퍼 핸들러 생성
+        try:
+            from src.llm.streaming import BufferOptions, make_stream_handler
+            emit_chunk_ans, close_stream_ans = make_stream_handler(
+                on_emit=_emit_ans,
+                opts=BufferOptions(
+                    min_emit_chars=28,
+                    soft_emit_chars=64,
+                    max_latency_ms=350,
+                    flush_on_strong_punct=True,
+                    flush_on_newline=True,
+                ),
+            )
+        except Exception:
+            def emit_chunk_ans(x: str) -> None:
+                _emit_ans(x)
+            def close_stream_ans() -> None:
+                pass
 
         full_answer = ""
         try:
@@ -1094,7 +1118,8 @@ def _render_chat_panel():
                     mode=MODE_TOKEN,
                     ctx={"hits": hits, "source_label": source_label},
                 ):
-                    _emit_ans(ch)
+                    emit_chunk_ans(ch)
+                close_stream_ans()
                 full_answer = acc_ans or "(응답이 비어있어요)"
             except Exception as e:
                 full_answer = f"(오류) {type(e).__name__}: {e}"
@@ -1141,7 +1166,7 @@ def _render_chat_panel():
             }
         )
 
-        # (B) 보완(Co-teacher) 스트리밍 (미나쌤)
+        # (B) 보완(Co-teacher) 스트리밍 (미나쌤) — 문장 버퍼 연결
         acc_eval = ""
 
         def _emit_eval(piece: str) -> None:
@@ -1153,15 +1178,16 @@ def _render_chat_panel():
                 t = html.escape(t or "").replace("\n", "<br/>")
                 return re.sub(r"  ", "&nbsp;&nbsp;", t)
 
+            # 미나쌤(연파랑 22px) + 출처
             ph_eval.markdown(
                 '<div style="display:flex;justify-content:flex-start;margin:8px 0;">'
                 '  <div style="max-width:88%;padding:10px 12px;border-radius:16px;'
                 '              border-top-left-radius:8px; line-height:1.6;font-size:13px;'
                 '              box-shadow:0 1px 1px rgba(0,0,0,.04);white-space:pre-wrap; position:relative;'
                 '              border:1px dashed #C7D2FE;background:#EEF2FF;color:#1e293b;">'
-                '    <span style="display:inline-block;margin:-2px 6px 6px 0;padding:1px 8px;border-radius:999px;'
-                '                 font-size:11px;font-weight:700;background:#f1f5f9;color:#334155;'
-                '                 border:1px solid #cbd5e1;">미나쌤</span>'
+                '    <span style="display:inline-block;margin:-2px 6px 6px 0;padding:2px 10px;border-radius:999px;'
+                '                 font-size:22px;font-weight:700;background:#DFF1FF;color:#0f5b86;'
+                '                 border:1px solid #BEE3FF;">미나쌤</span>'
                 '    <span style="display:inline-block;margin:-2px 0 6px 0;padding:1px 8px;border-radius:999px;'
                 '                 font-size:11px;font-weight:700;background:#eef2f6;color:#334155;'
                 '                 border:1px solid #cbd5e1;">'
@@ -1171,6 +1197,24 @@ def _render_chat_panel():
                 + "  </div></div>",
                 unsafe_allow_html=True,
             )
+
+        try:
+            from src.llm.streaming import BufferOptions, make_stream_handler
+            emit_chunk_eval, close_stream_eval = make_stream_handler(
+                on_emit=_emit_eval,
+                opts=BufferOptions(
+                    min_emit_chars=28,
+                    soft_emit_chars=64,
+                    max_latency_ms=350,
+                    flush_on_strong_punct=True,
+                    flush_on_newline=True,
+                ),
+            )
+        except Exception:
+            def emit_chunk_eval(x: str) -> None:
+                _emit_eval(x)
+            def close_stream_eval() -> None:
+                pass
 
         try:
             import importlib as _imp3
@@ -1189,7 +1233,8 @@ def _render_chat_panel():
                 if "ctx" in params:
                     _kwargs["ctx"] = {"answer": full_answer}
                 for ch in _eval_stream(**_kwargs):
-                    _emit_eval(ch)
+                    emit_chunk_eval(ch)
+                close_stream_eval()
                 full_eval = acc_eval or " "
                 _emit_eval(full_eval)
             except TypeError:
@@ -1197,7 +1242,8 @@ def _render_chat_panel():
                     for ch in _eval_stream(
                         question=question, mode=MODE_TOKEN, answer=full_answer
                     ):
-                        _emit_eval(ch)
+                        emit_chunk_eval(ch)
+                    close_stream_eval()
                     full_eval = acc_eval or " "
                     _emit_eval(full_eval)
                 except Exception as e2:
