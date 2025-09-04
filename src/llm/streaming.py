@@ -1,118 +1,226 @@
-# ============================ [01] LLM STREAMING WRAPPER — START ============================
+# ============================== [01] 스트리밍 버퍼 유틸 — START ===============================
 """
-스트리밍 응답을 안전하게 처리하기 위한 공용 유틸.
+Streaming utilities for token-to-text buffering with multiple strategies.
 
-목표
-- ChatGPT, Gemini 등 서로 다른 SDK의 스트리밍을 '토큰 문자열 이터레이터'로 정규화
-- 스트리밍 도중 취소/타임아웃/예외에 대비
-- Streamlit의 write_stream 유무에 따라 자동 폴백
+Strategies
+---------
+- "none":     emit every token immediately.
+- "punct":    buffer until punctuation/newline is seen, then flush.
+- "sentence": buffer until a sentence boundary is detected, then flush.
+
+Safety
+------
+- Time-based and length-based forced flush to avoid long delays.
+- Optional cancellation check to stop gracefully.
+- Robust to provider quirks (tokens with/without spaces).
+
+This module is intentionally stdlib-only and mypy/ruff friendly.
 """
-
 from __future__ import annotations
 
-from typing import Callable, Iterable, Iterator, Optional, Union
+from typing import Callable, Iterable, Iterator, Optional, Literal, Protocol, Any
+import re
+import time
+
+__all__ = ["buffer_tokens", "stream_text"]
+
+# Recognized punctuation and sentence-ending marks (EN + KO + common)
+_PUNCTS = set(list(".,?!:;)]}")] + ["…", "。", "、", "！", "？", "”", "’"])
+# Sentence-splitting regex: captures a *complete* sentence chunk.
+#   - Ends with one of [.?!…。！？]
+#   - Allows closing quotes/brackets after end mark
+#   - Followed by whitespace or end-of-string
+_SENT_SPLIT_RE = re.compile(
+    r"(.+?(?:[\.!\?]|…|。|！|？)(?:[\"'\)\]]+)?)(?:\s+|$)",
+    flags=re.S,
+)
 
 
-class StreamCancelled(Exception):
-    """사용자 취소 등으로 스트리밍을 중단할 때 사용하는 예외."""
-    pass
+class _CancelCheck(Protocol):
+    def __call__(self) -> bool: ...
 
 
-# E501 방지: 타입 별칭을 여러 줄로 분리
-TokenSource = Union[
-    str,
-    Iterable[str],
-    Iterator[str],
-    Callable[[], Union[str, Iterable[str], Iterator[str]]],
-]
+def _has_punct(s: str) -> bool:
+    """Return True if `s` contains punctuation or a newline boundary worth flushing."""
+    if not s:
+        return False
+    if "\n" in s or "\r" in s:
+        return True
+    for ch in s:
+        if ch in _PUNCTS:
+            return True
+    return False
 
 
-def normalize_to_token_iter(source: TokenSource) -> Iterator[str]:
+def _split_complete_sentences(buf: str) -> tuple[str, str]:
     """
-    다양한 입력을 '토큰 문자열 이터레이터'로 정규화.
-    - str           ->  한 번만 yield
-    - iterable/iter ->  그대로 yield
-    - callable      ->  호출 결과를 다시 정규화
+    Split `buf` into (complete, remainder) where `complete` includes
+    all full sentences from the start of buffer.
     """
-    if callable(source):
-        return normalize_to_token_iter(source())
-
-    # 문자열 1회성
-    if isinstance(source, str):
-        def _once() -> Iterator[str]:
-            yield source
-        return _once()
-
-    # 이터러블/이터레이터
-    try:
-        iterator = iter(source)
-    except Exception:
-        # 예외 객체를 쓰지 않음: F821(e 미정의) 원천 차단
-        def _err() -> Iterator[str]:
-            yield "[streaming-normalize-error]"
-        return _err()
-
-    def _tokens() -> Iterator[str]:
-        for chunk in iterator:
-            # 안전 장치: None/비문자 타입이 오면 문자열로 강제
-            if chunk is None:
-                continue
-            yield str(chunk)
-    return _tokens()
+    last_end = -1
+    m_last = None
+    for m in _SENT_SPLIT_RE.finditer(buf):
+        m_last = m
+        last_end = m.end()
+    if m_last is None:
+        return "", buf
+    # Include up to the last complete sentence boundary
+    return buf[:last_end], buf[last_end:]
 
 
-# E501 방지: 함수 시그니처를 여러 줄로 분리
-def stream_with_cancellation(
-    tokens: Iterator[str],
-    is_cancelled: Optional[Callable[[], bool]] = None,
+def buffer_tokens(
+    tokens: Iterable[str],
+    *,
+    strategy: Literal["none", "punct", "sentence"] = "none",
+    max_latency: float = 0.6,
+    max_chars: int = 600,
+    cancel: Optional[_CancelCheck] = None,
 ) -> Iterator[str]:
     """
-    취소 신호를 주기적으로 확인하며 토큰을 흘려보냄.
-    is_cancelled()가 True를 반환하면 StreamCancelled 발생.
-    """
-    for t in tokens:
-        if is_cancelled is not None:
-            try:
-                if is_cancelled():
-                    raise StreamCancelled("stream cancelled by user")
-            except Exception:
-                # 취소 콜백 오류는 무시하고 계속
-                pass
-        yield t
+    Convert a token stream into text chunks according to a buffering strategy.
 
+    Parameters
+    ----------
+    tokens : Iterable[str]
+        Incoming text tokens (already decoded from provider).
+    strategy : {"none", "punct", "sentence"}
+        Buffering strategy (see module docstring).
+    max_latency : float
+        Seconds before we force-flush any pending buffer (for non-"none").
+    max_chars : int
+        Max buffer length before forced flush.
+    cancel : Callable[[], bool], optional
+        Return True to cancel streaming; remaining buffer will be flushed.
 
-def render_stream_safely(st_mod, token_iter: Iterator[str]) -> str:
-    """
-    Streamlit 유틸: write_stream이 있으면 사용, 없으면 placeholder로 폴백.
-    반환값은 누적된 전체 텍스트.
-    """
-    if st_mod is None:
-        # Streamlit이 없으면 그냥 모두 이어붙여서 반환
-        buf: list[str] = []
-        for t in token_iter:
-            buf.append(t)
-        return "".join(buf)
+    Yields
+    ------
+    str
+        Buffered text chunk to render.
 
-    # 1) 최신 API가 있으면 그대로 사용
+    Notes
+    -----
+    - "none": ignores latency/length and yields each token immediately.
+    - "punct": flush on punctuation/newline OR forced by latency/length.
+    - "sentence": flush on sentence boundary OR forced by latency/length.
+    """
+    if strategy not in ("none", "punct", "sentence"):
+        # Defensive default
+        strategy = "none"
+
+    if strategy == "none":
+        for tk in tokens:
+            if cancel and cancel():
+                # Best-effort early stop; do not yield partial
+                return
+            yield tk
+        return
+
+    buf: str = ""
+    last_flush = time.monotonic()
+
+    def _maybe_forced_flush(now: float) -> bool:
+        nonlocal buf, last_flush
+        if not buf:
+            return False
+        if (now - last_flush) >= max_latency or len(buf) >= max_chars:
+            out = buf
+            buf = ""
+            last_flush = now
+            yield_chunk = out
+            # Local generator trick: wrap in a list for type clarity
+            for _chunk in (yield_chunk,):
+                yield _chunk  # type: ignore[misc]
+            return True
+        return False
+
     try:
-        if hasattr(st_mod, "write_stream"):
-            return st_mod.write_stream(token_iter)
-    except Exception:
-        pass
+        for tk in tokens:
+            if cancel and cancel():
+                break
 
-    # 2) 구버전 폴백: placeholder를 이용해 점진 렌더
+            s = str(tk or "")
+            if not s:
+                # Skip empty tokens silently
+                now = time.monotonic()
+                # Still honor latency flush to avoid starvation
+                for _ in _maybe_forced_flush(now):
+                    yield _
+                continue
+
+            if strategy == "punct":
+                buf += s
+                now = time.monotonic()
+                if _has_punct(s):
+                    out, buf = buf, ""
+                    last_flush = now
+                    yield out
+                    continue
+                # No punctuation seen; forced flush?
+                for _ in _maybe_forced_flush(now):
+                    yield _
+            else:
+                # "sentence"
+                buf += s
+                now = time.monotonic()
+                complete, remainder = _split_complete_sentences(buf)
+                if complete:
+                    last_flush = now
+                    yield complete
+                    buf = remainder
+                    # After emitting a full sentence, also check latency on remainder
+                    for _ in _maybe_forced_flush(now):
+                        yield _
+                else:
+                    # No sentence boundary; forced flush?
+                    for _ in _maybe_forced_flush(now):
+                        yield _
+
+    except Exception as e:
+        # Fail-safe: never swallow buffered content
+        if buf:
+            yield buf
+        # Re-raise to allow caller logging if desired
+        raise e
+
+    # End-of-stream: flush whatever remains
+    if buf:
+        yield buf
+
+
+def stream_text(
+    tokens: Iterable[str],
+    on_emit: Callable[[str], None],
+    *,
+    strategy: Literal["none", "punct", "sentence"] = "none",
+    max_latency: float = 0.6,
+    max_chars: int = 600,
+    cancel: Optional[_CancelCheck] = None,
+) -> None:
+    """
+    Consume tokens and call `on_emit(chunk)` for each buffered chunk.
+
+    Example
+    -------
+    >>> def printer(x: str): print(x, end="")
+    >>> stream_text(["Hel", "lo", ", ", "wo", "rld", "!"], printer, strategy="punct")
+    Hello, world!
+    """
     try:
-        ph = st_mod.empty()
-        acc: list[str] = []
-        for t in token_iter:
-            acc.append(t)
-            ph.markdown("".join(acc))
-        return "".join(acc)
+        for chunk in buffer_tokens(
+            tokens,
+            strategy=strategy,
+            max_latency=max_latency,
+            max_chars=max_chars,
+            cancel=cancel,
+        ):
+            if cancel and cancel():
+                # Emit what we have and stop
+                if chunk:
+                    on_emit(chunk)
+                return
+            if chunk:
+                on_emit(chunk)
     except Exception:
-        # 마지막 폴백: 그냥 전부 모아서 한 번에 출력
-        acc2: list[str] = []
-        for t in token_iter:
-            acc2.append(t)
-        st_mod.markdown("".join(acc2))
-        return "".join(acc2)
-# ============================= [01] LLM STREAMING WRAPPER — END =============================
+        # Caller should log if needed; keep fail-safe behavior consistent.
+        raise
+# =============================== [01] 스트리밍 버퍼 유틸 — END ================================
