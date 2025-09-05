@@ -103,6 +103,7 @@ def rebuild_index(output_dir=None):
     import hashlib
     import datetime
     import importlib
+    from typing import Any  # mypy 타입 주석용
 
     MODE = (os.getenv("MAIC_INDEX_MODE") or "").upper()
     if MODE == "HQ":
@@ -132,7 +133,7 @@ def rebuild_index(output_dir=None):
         return Path.home() / ".maic" / "persist"
 
     # --- 허용 확장자: search.py와 일치(.md/.txt/.pdf/.csv/.json) --------------
-    def _allowed_exts() -> set:
+    def _allowed_exts() -> set[str]:
         try:
             exts = globals().get("ALLOWED_EXTS")
             if exts:
@@ -171,7 +172,7 @@ def rebuild_index(output_dir=None):
                 return ""
             import io as _io
             reader = PdfReader(_io.BytesIO(blob))
-            parts = []
+            parts: list[str] = []
             for page in getattr(reader, "pages", []):
                 try:
                     t = page.extract_text() or ""
@@ -196,7 +197,7 @@ def rebuild_index(output_dir=None):
         return parts or [p.strip()]
 
     def _chunk_text(text: str, target: int, overlap: int) -> list[tuple[str, int, int]]:
-        chunks = []
+        chunks: list[tuple[str, int, int]] = []
         acc = ""
         acc_start = 0
         pos = 0
@@ -232,7 +233,7 @@ def rebuild_index(output_dir=None):
         return chunks
 
     # ---------- JSONL 쓰기 ----------
-    def _write_jsonl_atomic(lines, out_file: Path) -> int:
+    def _write_jsonl_atomic(lines: list[dict[str, Any]], out_file: Path) -> int:
         tmp = out_file.with_suffix(".jsonl.tmp")
         try:
             if tmp.exists():
@@ -279,7 +280,7 @@ def rebuild_index(output_dir=None):
     files = list_files() if callable(list_files) else []
     # files: [{"id","name","modified_ts","size","mime"?}, ...]
 
-    roots = [p for p in _iter_source_roots()]
+    # ⬇⬇⬇ mypy 타입 명시 ⬇⬇⬇
     lines: list[dict[str, Any]] = []
     seen: set[str] = set()
 
@@ -376,11 +377,11 @@ def rebuild_index(output_dir=None):
         except Exception:
             pass
         # manifest.json(문서 헤더만) 기록 — UI 가시화용
-        headers = {}
+        headers: dict[str, dict[str, str]] = {}
         for obj in lines:
             d = obj.get("doc_id")
             if d and d not in headers:
-                headers[d] = {"title": obj.get("title"), "source": obj.get("source")}
+                headers[d] = {"title": str(obj.get("title") or ""), "source": str(obj.get("source") or "")}
         try:
             (dest / "manifest.json").write_text(json.dumps({"docs": headers}, ensure_ascii=False, indent=2), encoding="utf-8")
         except Exception:
@@ -388,4 +389,3 @@ def rebuild_index(output_dir=None):
 
     return {"chunks": count, "dest": str(dest), "roots": ["gdrive:prepared"]}
 # ======================== [04] PUBLIC API: rebuild_index — END ========================
-
