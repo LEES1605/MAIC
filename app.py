@@ -923,11 +923,17 @@ def _render_body() -> None:
 
 # ========================= [15] ADMIN: Index Panel — START =========================
 def _render_admin_index_panel() -> None:
-    """관리자용 인덱싱 패널: 강제 재인덱싱(HQ) + 인덱싱 전/후 파일 목록 확인."""
+    """
+    관리자용 인덱싱 패널(중복 정리 버전):
+      - 강제 인덱싱 버튼은 제거(오케스트레이터에서만 수행).
+      - '업데이트 점검(Drive/Local)'과 데이터셋 경로/사전 스캔만 제공.
+      - prepared 로더는 디버그 메시지(expander)로 왜 실패했는지 보여줌.
+    """
     import importlib
     import importlib.util
+    import os
     from pathlib import Path
-    from typing import Any, Callable, Dict, List, Tuple, Optional
+    from typing import Any, Callable, Dict, List, Optional, Tuple
 
     if st is None or not _is_admin_view():
         return
@@ -985,54 +991,6 @@ def _render_admin_index_panel() -> None:
 
         return None, None, tried
 
-    # ---- 전체 파일 재조회(드라이버별) ----
-    def _list_all_prepared_files(driver_hint: Optional[str] = None) -> List[Dict[str, Any]]:
-        """
-        Drive면 gdrive.list_prepared_files(), Local이면 prepared._list_from_local()로 '전량' 조회.
-        mypy 대응을 위해 명시 타입 주석을 사용한다.
-        """
-        files: List[Dict[str, Any]] = []  # ← 명시 타입
-
-        # 1) 힌트가 drive면 드라이브 우선
-        if (driver_hint or "").lower() == "drive":
-            try:
-                gdrv = importlib.import_module("src.integrations.gdrive")
-                lf = getattr(gdrv, "list_prepared_files", None)
-                if callable(lf):
-                    out = lf() or []
-                    if isinstance(out, list) and out:
-                        return out
-            except Exception:
-                pass
-
-        # 2) 로컬 스캐너 폴백 (prepared._list_from_local)
-        for modname in ("prepared", "src.prepared"):
-            try:
-                prep_mod = importlib.import_module(modname)
-            except Exception:
-                prep_mod = None
-            if prep_mod:
-                lf_local = getattr(prep_mod, "_list_from_local", None)
-                if callable(lf_local):
-                    try:
-                        out2, ok, _err = lf_local()
-                        if ok and isinstance(out2, list):
-                            return out2
-                    except Exception:
-                        pass
-
-        # 3) 최종 드라이브 폴백
-        try:
-            gdrv = importlib.import_module("src.integrations.gdrive")
-            lf = getattr(gdrv, "list_prepared_files", None)
-            if callable(lf):
-                out3 = lf() or []
-                if isinstance(out3, list):
-                    return out3
-        except Exception:
-            pass
-        return files  # 비어있을 수도 있음
-
     with st.container(border=True):
         st.subheader("📚 인덱싱(관리자)")
 
@@ -1055,7 +1013,6 @@ def _render_admin_index_panel() -> None:
             # knowledge 폴더가 없더라도 fallback 제공(반드시 Path 반환)
             return (repo_root / "knowledge").resolve()
 
-        # ← 여기서 함수 정의가 끝났으니 반드시 '들여쓰기 해제' 상태여야 함!
         ds = _resolve_dataset_dir_for_ui()
         st.write(f"**Dataset Dir:** `{str(ds)}`")
 
@@ -1071,11 +1028,9 @@ def _render_admin_index_panel() -> None:
                 files_preview.append(p)
         st.caption(f"사전 스캔: {len(files_preview)}개 파일 후보")
 
-        # 인덱싱 버튼
-        c1, c2, _ = st.columns([1, 1, 2])
+        # 작업 버튼(중복 제거 정책: 여기서는 '업데이트 점검'만 제공)
+        c1, _ = st.columns([1, 3])
         with c1:
-            do_rebuild = st.button("강제 인덱싱(HQ, 느림)+백업", type="primary")
-        with c2:
             do_check = st.button("업데이트 점검(Drive/Local)")
 
         # 업데이트 점검
@@ -1083,7 +1038,7 @@ def _render_admin_index_panel() -> None:
             chk, _mark, dbg = _load_prepared_api()
             if callable(chk):
                 try:
-                    check_info: Dict[str, Any] = chk(PERSIST_DIR) or {}   # ← 변수명 분리
+                    check_info: Dict[str, Any] = chk(PERSIST_DIR) or {}
                     st.write(check_info)
                 except Exception as e:
                     _errlog(f"check prepared failed: {e}", where="[admin-index.check]", exc=e)
@@ -1094,246 +1049,71 @@ def _render_admin_index_panel() -> None:
                     for m in dbg:
                         st.write("• " + m)
 
-        # 강제 인덱싱(HQ)
-        if do_rebuild:
-            prog = st.progress(0.0, text="HQ 인덱싱 중…")
-            try:
-                from src.rag import index_build as _idx
-                os.environ["MAIC_INDEX_MODE"] = "HQ"   # ← HQ 모드 강제
-                _idx.rebuild_index()                   # .ready / chunks.jsonl 생성
-                prog.progress(1.0, text="인덱싱 완료")
-                st.success("강제 재인덱싱 완료 (HQ)")
+        st.caption("ⓘ 강제 인덱싱(로컬/백업/HQ)은 ‘🛠 진단 도구(오케스트레이터)’에서만 수행하도록 단일화했습니다.")
+# ========================== [15] ADMIN: Index Panel — END ==========================
 
-                # 인덱싱 직후 '전체' 소비(seen) 마킹
-                chk, mark, dbg = _load_prepared_api()
-                if callable(chk) and callable(mark):
-                    try:
-                        post_info: Dict[str, Any] = chk(PERSIST_DIR) or {}  # ← 변수명 분리
-                        driver = str(post_info.get("driver") or "").lower()
-                        full_list = _list_all_prepared_files(driver_hint=driver)
-                        if full_list:
-                            mark(PERSIST_DIR, full_list)
-                            st.caption(f"✓ prepared 신규 파일을 소비(seen) 처리했습니다. (총 {len(full_list)}개)")
-                        else:
-                            st.caption("※ prepared 전체 목록을 불러오지 못해 소비 마킹을 건너뜁니다.")
-                    except Exception:
-                        pass
-                else:
-                    st.warning("prepared 모듈을 불러오지 못해 소비 마킹을 건너뜁니다.")
-                    with st.expander("왜 못 찾았나요? (진단)"):
-                        for m in dbg:
-                            st.write("• " + m)
-
-            except Exception as e:
-                prog.progress(0.0)
-                _errlog(f"reindex failed: {e}", where="[admin-index.rebuild]", exc=e)
-                st.error("강제 재인덱싱 중 오류가 발생했어요.")
-
-        # (선택) 인덱싱 후 요약 미리보기
-        try:
-            import json
-            try:
-                from src.rag.index_build import PERSIST_DIR as _PERSIST
-                persist = Path(str(_PERSIST)).expanduser()
-            except Exception:
-                persist = Path.home() / ".maic" / "persist"
-
-            cj = persist / "chunks.jsonl"
-            docs_table: List[Dict[str, Any]] = []
-            if cj.exists():
-                seen = set()
-                total_lines = 0
-                with cj.open("r", encoding="utf-8") as rf:
-                    for line in rf:
-                        line = line.strip()
-                        if not line:
-                            continue
-                        total_lines += 1
-                        try:
-                            obj = json.loads(line)
-                        except Exception:
-                            continue
-                        doc_id = obj.get("doc_id") or obj.get("source") or ""
-                        title = obj.get("title") or ""
-                        source = obj.get("source") or ""
-                        if doc_id and doc_id not in seen:
-                            seen.add(doc_id)
-                            docs_table.append({"title": title, "path": source})
-                        if len(docs_table) >= 400:
-                            break
-                st.caption(f"인덱싱 청크 수: **{total_lines}** · 문서 수(고유 doc_id): **{len(docs_table)}**")
-                if docs_table:
-                    st.dataframe(docs_table, hide_index=True, use_container_width=True)
-            else:
-                st.info("`chunks.jsonl`이 아직 없어 결과를 표시할 수 없습니다.")
-        except Exception as e:
-            _errlog(f"list docs failed: {e}", where="[admin-index.list]", exc=e)
-            st.error("문서 목록 표시 중 오류가 발생했어요.")
-# ========================= [15] ADMIN: Index Panel — END =========================
-
-# ========================= [16] Indexed Sources Panel — START ==========================
+# ========================= [16] Indexed Sources Panel — START =========================
 def _render_admin_indexed_sources_panel() -> None:
     """
-    현재 인덱스(chunks.jsonl)를 읽어 문서 단위로 집계/표시.
-    열: 출처라벨 · 제목 · 문서ID · 경로 · 확장자 · 크기(bytes) · 수정시각(KST) · 청크개수
+    현재 인덱스(chunks.jsonl)를 읽어 문서 단위로 요약/표시.
+    - 고유 doc_id(또는 source) 기준으로 문서 수 집계
+    - 전체 청크 라인 수와 함께 간단한 표 제공(최대 400행)
     """
     import json
     from pathlib import Path
-    from typing import Any, Dict, List
-    from datetime import datetime, timezone
-    try:
-        from zoneinfo import ZoneInfo
-        _KST = ZoneInfo("Asia/Seoul")
-    except Exception:
-        _KST = None
-
-    def _to_kst(s: str) -> str:
-        if not s:
-            return ""
-        try:
-            if s.endswith("Z"):
-                dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
-            else:
-                dt = datetime.fromisoformat(s)
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            return dt.astimezone(_KST).strftime("%Y-%m-%d %H:%M:%S %Z") if _KST else dt.isoformat()
-        except Exception:
-            return s
+    from typing import Dict, List
 
     if st is None or not _is_admin_view():
         return
 
-    # persist
-    def _persist_dir() -> Path:
-        try:
-            from src.rag.index_build import PERSIST_DIR as IDX_DIR
-            return Path(str(IDX_DIR)).expanduser()
-        except Exception:
-            pass
-        try:
-            from src.config import PERSIST_DIR as CFG_DIR
-            return Path(str(CFG_DIR)).expanduser()
-        except Exception:
-            pass
-        return Path.home() / ".maic" / "persist"
+    # PERSIST_DIR 결정(전역 또는 인덱서 공개값 우선)
+    try:
+        from src.rag.index_build import PERSIST_DIR as _PERSIST
+        persist = Path(str(_PERSIST)).expanduser()
+    except Exception:
+        persist = PERSIST_DIR
 
-    persist = _persist_dir()
-    chunks_path = persist / "chunks.jsonl"
-    manifest_path = persist / "manifest.json"
+    cj = persist / "chunks.jsonl"
+    docs_table: List[Dict[str, str]] = []
+    if not cj.exists():
+        st.info("인덱스 결과(chunks.jsonl)가 아직 없습니다.")
+        return
 
-    MAX_ROWS = 5000
+    seen = set()
+    total_lines = 0
+    try:
+        with cj.open("r", encoding="utf-8") as r:
+            for line in r:
+                line = line.strip()
+                if not line:
+                    continue
+                total_lines += 1
+                try:
+                    obj = json.loads(line)
+                except Exception:
+                    continue
+                doc_id = obj.get("doc_id") or obj.get("source") or ""
+                title = obj.get("title") or ""
+                source = obj.get("source") or ""
+                if doc_id and doc_id not in seen:
+                    seen.add(doc_id)
+                    docs_table.append({"title": title, "path": source})
+                if len(docs_table) >= 400:
+                    break
+    except Exception as e:
+        _errlog(f"chunks.jsonl 파싱 실패: {e}", where="[indexed-sources]")
 
-    with st.container(border=True):
-        st.subheader("📄 인덱싱된 파일 목록 (읽기 전용)")
-        st.caption(f"경로: `{str(chunks_path)}`")
-
-        if not chunks_path.exists():
-            st.info("아직 인덱스가 없습니다. 먼저 인덱싱을 수행해 주세요.")
-            return
-
-        # manifest(optional)
-        manifest_docs: Dict[str, Dict[str, str]] = {}
-        try:
-            if manifest_path.exists():
-                data = json.loads(manifest_path.read_text(encoding="utf-8"))
-                if isinstance(data, dict):
-                    manifest_docs = dict(data.get("docs") or {})
-        except Exception:
-            manifest_docs = {}
-
-        # 집계
-        docs: Dict[str, Dict[str, Any]] = {}
-        total_lines = 0
-        parse_errors = 0
-
-        def _src_label(title: str, source: str, ext: str) -> str:
-            # 간단 라벨러(필요시 보강)
-            if source.startswith("drive:"):
-                return "Drive"
-            if source.startswith("local:"):
-                return "Local"
-            return "Unknown"
-
-        try:
-            with chunks_path.open("r", encoding="utf-8") as rf:  # ← 파일핸들 이름 rf
-                for raw in rf:
-                    line = raw.strip()
-                    if not line:
-                        continue
-                    total_lines += 1
-                    try:
-                        obj = json.loads(line)
-                    except Exception:
-                        parse_errors += 1
-                        continue
-
-                    doc_id = str(obj.get("doc_id") or "")
-                    source = str(obj.get("source") or "")
-                    title = str(obj.get("title") or "")
-                    ext = str(obj.get("ext") or "")
-                    bsize = int(obj.get("size") or obj.get("bytes") or 0)
-                    mtime = _to_kst(str(obj.get("mtime") or ""))
-
-                    row = docs.get(doc_id)
-                    if row is None:
-                        man = manifest_docs.get(doc_id) or {}
-                        if not title:
-                            title = str(obj.get("title") or man.get("title") or "")
-                        if not source:
-                            source = str(obj.get("source") or man.get("source") or "")
-                        row = {
-                            "출처": _src_label(title, source, ext),
-                            "제목": title or Path(source).stem,
-                            "문서ID": doc_id,
-                            "경로": source,
-                            "확장자": ext,
-                            "크기(bytes)": bsize,
-                            "수정시각": mtime,
-                            "청크개수": 0,
-                        }
-                        docs[doc_id] = row
-                    row["청크개수"] = int(row.get("청크개수", 0)) + 1
-                    if bsize and bsize != row.get("크기(bytes)", 0):
-                        row["크기(bytes)"] = bsize
-                    if mtime and mtime > (row.get("수정시각") or ""):
-                        row["수정시각"] = mtime
-        except Exception as e:
-            _errlog(f"read chunks.jsonl failed: {e}", where="[indexed-sources.read]", exc=e)
-            st.error("인덱스 파일을 읽는 중 오류가 발생했어요.")
-            return
-
-        rows: List[Dict[str, Any]] = list(docs.values())
-        rows.sort(key=lambda r: (r.get("출처") or "", r.get("제목") or ""))
-
-        st.markdown(f"- 총 청크 라인: **{total_lines:,}** · 파싱오류: **{parse_errors:,}** · 문서 수: **{len(rows):,}**")
-
-        c1, c2 = st.columns([2, 1])
-        with c1:
-            q = st.text_input("필터(제목/경로/문서ID 포함 검색)", value="")
-        with c2:
-            st.caption("행 개수 제한: 최대 5000")
-        if q:
-            ql = q.strip().lower()
-            rows = [r for r in rows if ql in str(r.get("제목","")).lower() or ql in str(r.get("경로","")).lower() or ql in str(r.get("문서ID","")).lower()]
-
-        limited = False
-        if len(rows) > MAX_ROWS:
-            rows = rows[:MAX_ROWS]
-            limited = True
-
-        st.dataframe(rows, hide_index=True, use_container_width=True)
-        if limited:
-            st.caption("※ 행이 많아 상위 5,000개만 표시 중입니다. 필터를 이용해 범위를 좁혀주세요.")
-
-        import io, csv
-        buf = io.StringIO()
-        writer = csv.DictWriter(buf, fieldnames=["출처","제목","문서ID","경로","확장자","크기(bytes)","수정시각","청크개수"])
-        writer.writeheader()
-        for row in rows:                  # ← 행 변수명 row
-            writer.writerow(row)          # ← Mapping[str, Any]로 명확
-        st.download_button("CSV 다운로드", data=buf.getvalue().encode("utf-8-sig"), file_name="indexed_sources.csv", mime="text/csv")
-# ========================= [16] Indexed Sources Panel — END ==========================
+    st.caption(
+        f"인덱싱 청크 수(표본 아님): **{total_lines}** · "
+        f"문서 수(고유 doc_id 기준): **{len(docs_table)}**"
+    )
+    if docs_table:
+        st.dataframe(docs_table, hide_index=True, use_container_width=True)
+        if total_lines > len(docs_table):
+            st.caption("※ 표는 고유 문서 기준으로 최대 400건까지만 표시합니다.")
+    else:
+        st.info("인덱스 결과가 비어 있습니다.")
+# ========================== [16] Indexed Sources Panel — END ==========================
 
 
 # [17] main ===================================================================
