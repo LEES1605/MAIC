@@ -926,10 +926,10 @@ def _render_body() -> None:
 
 # ========================= [15] ADMIN: Index Panel — START =========================
 def _render_admin_index_panel() -> None:
-    """관리자용 인덱싱 패널(미니멀 UI):
+    """관리자 인덱싱 패널(미니멀 UI, F821 수정 버전):
     - 데이터셋 스캔(예상 목록)
-    - 🔁 강제 재인덱싱(HQ) 1종만 제공(오케스트레이터와 버튼 중복 제거)
-    - 인덱싱 후 prepared 신규 파일 소비(seen) 마킹(루트/서비스/통합 모듈까지 폭넓은 폴백)
+    - 🔁 강제 재인덱싱(HQ) 1종만 제공
+    - 인덱싱 후 prepared 신규 파일 소비(seen) 마킹(루트/서비스/통합 모듈까지 폴백)
     - 간단 결과 미리보기(chunks.jsonl 요약)
     """
     import importlib
@@ -942,157 +942,7 @@ def _render_admin_index_panel() -> None:
     if st is None or not _is_admin_view():
         return
 
-    with st.container(border=True):
-        st.subheader("📚 인덱싱(관리자)")
-
-        # ── 데이터셋 경로 해석: Google Drive 동기화된 prepared 우선 ────────────────
-        def _resolve_dataset_dir_for_ui() -> Path:
-            # 1) 명시적 환경변수
-            env = os.getenv("MAIC_DATASET_DIR") or os.getenv("RAG_DATASET_DIR")
-            if env:
-                return Path(env).expanduser()
-
-            # 2) 레이블 모듈의 내부 헬퍼(있을 때만)
-            try:
-                mod = importlib.import_module("src.rag.label")
-                fn = getattr(mod, "_resolve_dataset_dir", None)
-                if callable(fn):
-                    ds = fn(None)
-                    if isinstance(ds, Path):
-                        return ds
-            except Exception:
-                pass
-
-            # 3) 리포 루트의 prepared/가 있으면 그쪽(요구사항대로 source=prepared만)
-            repo_root = Path(__file__).resolve().parent
-            prepared = (repo_root / "prepared").resolve()
-            if prepared.exists():
-                return prepared
-
-            # 4) 최종 폴백
-            return (repo_root / "knowledge").resolve()
-
-        ds = _resolve_dataset_dir_for_ui()
-        st.write(f"**Dataset Dir:** `{str(ds)}`")
-
-        # ── 사전 스캔(예상 대상) ────────────────────────────────────────────────
-        files: List[Path] = []
-        sup: set[str] = {".md", ".txt", ".pdf"}
-        try:
-            rag = importlib.import_module("src.rag.search")
-            sup = set(getattr(rag, "SUPPORTED_EXTS", sup))
-        except Exception:
-            pass
-
-        try:
-            for p in sorted(ds.rglob("*")):
-                if p.is_file() and p.suffix.lower() in sup:
-                    files.append(p)
-        except Exception:
-            files = []
-
-        with st.expander("이번에 인덱싱할 파일(예상)", expanded=bool(files)):
-            if files:
-                data = [{"title": p.stem, "path": str(p)} for p in files[:300]]
-                st.dataframe(data, hide_index=True, use_container_width=True)
-                if len(files) > 300:
-                    st.caption(f"… 외 {len(files) - 300}개")
-            else:
-                st.info("대상 파일이 없거나 스캔에 실패했습니다.")
-
-        # ── 동작 UI(중복 제거: HQ만 제공) ─────────────────────────────────────────
-        col1, col2 = st.columns([1, 3])
-        do_rebuild = col1.button("🔁 강제 재인덱싱(HQ)", help="캐시를 무시하고 고품질(HQ)로 인덱스를 새로 만듭니다.")
-        show_after = col2.toggle("인덱싱 결과 표시", value=True)
-
-        if do_rebuild:
-            prog = st.progress(0.0, text="인덱싱 중…")
-            try:
-                from src.rag import index_build as _idx
-                os.environ["MAIC_INDEX_MODE"] = "HQ"
-                _idx.rebuild_index()  # .ready / chunks.jsonl 생성
-                prog.progress(1.0, text="인덱싱 완료")
-                st.success("강제 재인덱싱 완료 (HQ)")
-            except Exception as e:
-                prog.progress(0.0)
-                _errlog(f"reindex failed: {e}", where="[admin-index.rebuild]", exc=e)
-                st.error("강제 재인덱싱 중 오류가 발생했어요.")
-            else:
-                # 인덱싱 성공 시 prepared 신규파일 소비(seen) 처리
-                try:
-                    persist: Path
-                    try:
-                        from src.rag.index_build import PERSIST_DIR as _P
-                        persist = Path(str(_P)).expanduser()
-                    except Exception:
-                        from src.config import PERSIST_DIR as _PC  # type: ignore[no-redef]
-                        persist = Path(str(_PC)).expanduser()
-
-                    chk, mark, dbg = _load_prepared_api()
-                    if callable(chk) and callable(mark):
-                        info: Dict[str, Any] = {}
-                        try:
-                            info = chk(persist) or {}
-                        except TypeError:
-                            # 시그니처가 () 인 구현 폴백
-                            info = chk() or {}
-                        files_list: List[str] = list(info.get("files") or [])
-                        if files_list:
-                            try:
-                                mark(persist, files_list)
-                            except TypeError:
-                                mark(files_list)
-                            st.caption("✓ prepared 신규 파일을 소비(seen) 처리했습니다.")
-                    else:
-                        st.warning("prepared 모듈을 불러오지 못해 소비 마킹을 건너뜁니다.")
-                        with st.expander("왜 못 찾았나요? (진단)"):
-                            for m in dbg:
-                                st.write("• " + m)
-                except Exception:
-                    pass
-
-        # ── 인덱싱 후 간단 요약 ─────────────────────────────────────────────────
-        if show_after:
-            try:
-                from src.rag.index_build import PERSIST_DIR as _PP
-                persist = Path(str(_PP)).expanduser()
-            except Exception:
-                persist = Path.home() / ".maic" / "persist"
-
-            cj = persist / "chunks.jsonl"
-            docs_table: List[Dict[str, Any]] = []
-            if cj.exists():
-                seen_ids: set[str] = set()
-                total_lines: int = 0
-                with cj.open("r", encoding="utf-8") as rf:
-                    for line in rf:
-                        line = line.strip()
-                        if not line:
-                            continue
-                        total_lines += 1
-                        try:
-                            obj = json.loads(line)
-                        except Exception:
-                            continue
-                        doc_id = obj.get("doc_id") or obj.get("source") or ""
-                        title = obj.get("title") or ""
-                        source = obj.get("source") or ""
-                        if doc_id and doc_id not in seen_ids:
-                            seen_ids.add(doc_id)
-                            docs_table.append({"title": title, "path": source})
-                        if len(docs_table) >= 400:
-                            break
-                st.caption(f"인덱싱 청크 수(표본 아님): **{total_lines}** · 문서 수(고유 doc_id 기준): **{len(docs_table)}**")
-                if docs_table:
-                    st.dataframe(docs_table, hide_index=True, use_container_width=True)
-                    if total_lines > len(docs_table):
-                        st.caption("※ 표는 고유 문서 기준으로 최대 400건까지만 표시합니다.")
-                else:
-                    st.info("인덱스 결과가 비어 있습니다.")
-            else:
-                st.info("`chunks.jsonl`이 아직 없어 결과를 표시할 수 없습니다.")
-
-    # ── prepared API 안전 폴백 로더 ───────────────────────────────────────────────
+    # ─────────────── 먼저 정의: _load_prepared_api (F821 방지) ───────────────
     def _load_prepared_api() -> Tuple[
         Optional[Callable[..., Dict[str, Any]]],
         Optional[Callable[..., Any]],
@@ -1147,6 +997,158 @@ def _render_admin_index_panel() -> None:
                     tried.append(f"fail: {path} ({e})")
 
         return None, None, tried
+
+    # ────────────────────────────────────────────────────────────────────────
+
+    with st.container(border=True):
+        st.subheader("📚 인덱싱(관리자)")
+
+        # ── 데이터셋 경로 해석: Google Drive 동기화된 prepared 우선 ─────────────
+        def _resolve_dataset_dir_for_ui() -> Path:
+            # 1) 명시적 환경변수
+            env = os.getenv("MAIC_DATASET_DIR") or os.getenv("RAG_DATASET_DIR")
+            if env:
+                return Path(env).expanduser()
+
+            # 2) 레이블 모듈의 내부 헬퍼(있을 때만)
+            try:
+                mod = importlib.import_module("src.rag.label")
+                fn = getattr(mod, "_resolve_dataset_dir", None)
+                if callable(fn):
+                    ds = fn(None)
+                    if isinstance(ds, Path):
+                        return ds
+            except Exception:
+                pass
+
+            # 3) 리포 루트의 prepared/가 있으면 그쪽(요구사항: source=prepared만)
+            repo_root = Path(__file__).resolve().parent
+            prepared = (repo_root / "prepared").resolve()
+            if prepared.exists():
+                return prepared
+
+            # 4) 최종 폴백
+            return (repo_root / "knowledge").resolve()
+
+        ds = _resolve_dataset_dir_for_ui()
+        st.write(f"**Dataset Dir:** `{str(ds)}`")
+
+        # ── 사전 스캔(예상 대상) ───────────────────────────────────────────────
+        files: List[Path] = []
+        sup: set[str] = {".md", ".txt", ".pdf"}
+        try:
+            rag = importlib.import_module("src.rag.search")
+            sup = set(getattr(rag, "SUPPORTED_EXTS", sup))
+        except Exception:
+            pass
+
+        try:
+            for p in sorted(ds.rglob("*")):
+                if p.is_file() and p.suffix.lower() in sup:
+                    files.append(p)
+        except Exception:
+            files = []
+
+        with st.expander("이번에 인덱싱할 파일(예상)", expanded=bool(files)):
+            if files:
+                data = [{"title": p.stem, "path": str(p)} for p in files[:300]]
+                st.dataframe(data, hide_index=True, use_container_width=True)
+                if len(files) > 300:
+                    st.caption(f"… 외 {len(files) - 300}개")
+            else:
+                st.info("대상 파일이 없거나 스캔에 실패했습니다.")
+
+        # ── 동작 UI(중복 제거: HQ만 제공) ──────────────────────────────────────
+        col1, col2 = st.columns([1, 3])
+        do_rebuild = col1.button("🔁 강제 재인덱싱(HQ)", help="캐시를 무시하고 고품질(HQ)로 인덱스를 새로 만듭니다.")
+        show_after = col2.toggle("인덱싱 결과 표시", value=True)
+
+        # ── 강제 인덱싱(HQ) ──────────────────────────────────────────────────
+        if do_rebuild:
+            prog = st.progress(0.0, text="인덱싱 중…")
+            try:
+                from src.rag import index_build as _idx
+                os.environ["MAIC_INDEX_MODE"] = "HQ"
+                _idx.rebuild_index()  # .ready / chunks.jsonl 생성
+                prog.progress(1.0, text="인덱싱 완료")
+                st.success("강제 재인덱싱 완료 (HQ)")
+            except Exception as e:
+                prog.progress(0.0)
+                _errlog(f"reindex failed: {e}", where="[admin-index.rebuild]", exc=e)
+                st.error("강제 재인덱싱 중 오류가 발생했어요.")
+            else:
+                # 인덱싱 성공 시 prepared 신규파일 소비(seen) 처리
+                try:
+                    try:
+                        from src.rag.index_build import PERSIST_DIR as _P
+                        persist = Path(str(_P)).expanduser()
+                    except Exception:
+                        from src.config import PERSIST_DIR as _PC  # type: ignore[no-redef]
+                        persist = Path(str(_PC)).expanduser()
+
+                    chk, mark, dbg = _load_prepared_api()
+                    if callable(chk) and callable(mark):
+                        info: Dict[str, Any] = {}
+                        try:
+                            info = chk(persist) or {}
+                        except TypeError:
+                            # 시그니처가 () 인 구현 폴백
+                            info = chk() or {}
+                        files_list: List[str] = list(info.get("files") or [])
+                        if files_list:
+                            try:
+                                mark(persist, files_list)
+                            except TypeError:
+                                mark(files_list)
+                            st.caption("✓ prepared 신규 파일을 소비(seen) 처리했습니다.")
+                    else:
+                        st.warning("prepared 모듈을 불러오지 못해 소비 마킹을 건너뜁니다.")
+                        with st.expander("왜 못 찾았나요? (진단)"):
+                            for m in dbg:
+                                st.write("• " + m)
+                except Exception:
+                    pass
+
+        # ── 인덱싱 후 간단 요약 ───────────────────────────────────────────────
+        if show_after:
+            try:
+                from src.rag.index_build import PERSIST_DIR as _PP
+                persist = Path(str(_PP)).expanduser()
+            except Exception:
+                persist = Path.home() / ".maic" / "persist"
+
+            cj = persist / "chunks.jsonl"
+            docs_table: List[Dict[str, Any]] = []
+            if cj.exists():
+                seen_ids: set[str] = set()
+                total_lines: int = 0
+                with cj.open("r", encoding="utf-8") as rf:
+                    for line in rf:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        total_lines += 1
+                        try:
+                            obj = json.loads(line)
+                        except Exception:
+                            continue
+                        doc_id = obj.get("doc_id") or obj.get("source") or ""
+                        title = obj.get("title") or ""
+                        source = obj.get("source") or ""
+                        if doc_id and doc_id not in seen_ids:
+                            seen_ids.add(doc_id)
+                            docs_table.append({"title": title, "path": source})
+                        if len(docs_table) >= 400:
+                            break
+                st.caption(f"인덱싱 청크 수(표본 아님): **{total_lines}** · 문서 수(고유 doc_id 기준): **{len(docs_table)}**")
+                if docs_table:
+                    st.dataframe(docs_table, hide_index=True, use_container_width=True)
+                    if total_lines > len(docs_table):
+                        st.caption("※ 표는 고유 문서 기준으로 최대 400건까지만 표시합니다.")
+                else:
+                    st.info("인덱스 결과가 비어 있습니다.")
+            else:
+                st.info("`chunks.jsonl`이 아직 없어 결과를 표시할 수 없습니다.")
 # ========================= [15] ADMIN: Index Panel — END =========================
 
 # ========================= [16] Indexed Sources Panel — START ==========================
