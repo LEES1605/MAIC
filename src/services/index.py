@@ -169,7 +169,7 @@ def reindex(dest_dir=None) -> bool:
         fn = getattr(mod, "rebuild_index", None)
         if not callable(fn):
             return False
-        res = fn(output_dir=base) if base else fn()
+        fn(output_dir=base) if base else fn()
     except Exception:
         return False
 
