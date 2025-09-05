@@ -18,7 +18,7 @@ import time
 
 # RAG 검색기 (패키지 기준)
 try:
-    from src.rag.search import (  # type: ignore
+    from src.rag.search import (
         search as _search,
         get_or_build_index as _get_or_build_index,
     )
@@ -83,7 +83,7 @@ def _ensure_index(base_dir: Path) -> Optional[Dict[str, Any]]:
     idx: Optional[Dict[str, Any]] = None
     try:
         if callable(_get_or_build_index):
-            idx = _get_or_build_index(ds, use_cache=True)  # type: ignore[call-arg]
+            idx = _get_or_build_index(ds, use_cache=True)
     except Exception:
         idx = None
 
@@ -117,11 +117,9 @@ def search_hits(
 
     # search() 시그니처 차이에 대비해 dataset_dir/index 전달을 시도
     try:
-        hits = _search(  # type: ignore[call-arg]
-            q, dataset_dir=str(base), index=idx, top_k=int(top_k)
-        )
+        hits = _search(q, dataset_dir=str(base), index=idx, top_k=int(top_k))
     except TypeError:
-        hits = _search(q, dataset_dir=str(base), top_k=int(top_k))  # type: ignore[call-arg]
+        hits = _search(q, dataset_dir=str(base), top_k=int(top_k))
 
     out: List[Dict[str, Any]] = []
     for h in hits:
@@ -162,7 +160,6 @@ def decide_label(
     # 1) 이유문법/깨알문법 패턴
     if name.startswith("이유문법") or name.startswith("[깨알문법"):
         return "[이유문법]"
-    # 혹시 영문 표기나 소문자 대비가 필요한 경우를 위한 보조
     if name_lower.startswith("iyu") or name_lower.startswith("reason-grammar"):
         return "[이유문법]"
 
@@ -170,7 +167,6 @@ def decide_label(
     if Path(path).suffix.lower() == ".pdf" or name_lower.endswith(".pdf"):
         return "[문법서적]"
 
-    # 3) 위 규칙에 해당하지 않으면, 코퍼스 특성상 대부분 문법 자료이므로 문법서적으로 간주
-    #    (히트가 없을 때만 [AI지식]을 사용하기로 합의)
+    # 3) 나머지(히트가 존재하는 경우)는 문법 자료로 간주
     return "[문법서적]"
 # =============================== [01] RAG LABELER — END ===============================
