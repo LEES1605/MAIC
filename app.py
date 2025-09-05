@@ -927,73 +927,81 @@ def _render_admin_index_panel() -> None:
     import importlib
     import importlib.util
     from pathlib import Path
+    from typing import Any, Callable, Dict, List, Tuple, Optional
 
     if st is None or not _is_admin_view():
         return
 
-    # ---- prepared API 로더(모듈 임포트 + 파일경로 폴백) ----
-    def _load_prepared_api():
+    # ---- prepared API 로더(루트 prepared 우선 + 파일경로 폴백) ----
+    def _load_prepared_api() -> Tuple[Optional[Callable[..., Dict[str, Any]]], Optional[Callable[..., Any]], List[str]]:
         """
         반환: (chk, mark, debug_msgs)
           - chk: check_prepared_updates 함수 또는 None
           - mark: mark_prepared_consumed 함수 또는 None
-          - debug_msgs: 어디서 뭘 시도했는지 메시지 리스트
+          - debug_msgs: 시도 결과 로그
         """
-        tried: list[str] = []
-        chk = mark = None
+        tried: List[str] = []
+        chk: Optional[Callable[..., Dict[str, Any]]] = None
+        mark: Optional[Callable[..., Any]] = None
 
-        # 1) 모듈 이름으로 임포트 시도
+        # 1) 모듈명 임포트 (루트 prepared 우선)
         for modname in ("prepared", "src.prepared", "src.services.prepared"):
             try:
                 m = importlib.import_module(modname)
-                tried.append(f"import {modname} 성공")
+                tried.append(f"import {modname} OK")
                 chk = getattr(m, "check_prepared_updates", None)
                 mark = getattr(m, "mark_prepared_consumed", None)
                 if callable(chk) and callable(mark):
                     return chk, mark, tried
-                tried.append(f"{modname} 에 함수 누락(check/mark)")
+                tried.append(f"{modname}: 함수 누락(check/mark)")
             except Exception as e:
-                tried.append(f"import {modname} 실패: {e}")
+                tried.append(f"import {modname} FAIL: {e}")
 
-        # 2) 파일 경로에서 직접 로드(프로젝트 루트/표준 src 경로 둘 다 시도)
+        # 2) 파일경로 폴백 로드
         for candidate in ("prepared.py", "src/prepared.py"):
             try:
-                if not Path(candidate).exists():
+                p = Path(candidate)
+                if not p.exists():
                     tried.append(f"{candidate} 없음")
                     continue
-                spec = importlib.util.spec_from_file_location("prepared_fallback", candidate)
+                spec = importlib.util.spec_from_file_location("prepared_fallback", str(p))
                 if spec and spec.loader:
                     mod = importlib.util.module_from_spec(spec)
                     spec.loader.exec_module(mod)
-                    tried.append(f"file-load {candidate} 성공")
+                    tried.append(f"file-load {candidate} OK")
                     chk = getattr(mod, "check_prepared_updates", None)
                     mark = getattr(mod, "mark_prepared_consumed", None)
                     if callable(chk) and callable(mark):
                         return chk, mark, tried
-                    tried.append(f"{candidate} 에 함수 누락(check/mark)")
+                    tried.append(f"{candidate}: 함수 누락(check/mark)")
                 else:
                     tried.append(f"file-load {candidate} spec/loader 없음")
             except Exception as e:
-                tried.append(f"file-load {candidate} 실패: {e}")
+                tried.append(f"file-load {candidate} FAIL: {e}")
 
         return None, None, tried
 
     # ---- 전체 파일 재조회(드라이버별) ----
-    def _list_all_prepared_files(driver_hint: str | None = None):
-        """Drive면 gdrive.list_prepared_files(), local이면 prepared._list_from_local()로 전량 조회."""
-        files = []
-        # 1) driver 힌트가 drive면 gdrive 우선
+    def _list_all_prepared_files(driver_hint: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        Drive면 gdrive.list_prepared_files(), Local이면 prepared._list_from_local()로 '전량' 조회.
+        mypy 대응을 위해 명시 타입 주석을 사용한다.
+        """
+        files: List[Dict[str, Any]] = []  # ← (mypy) 명시 타입 주석
+
+        # 1) 힌트가 drive면 드라이브 우선
         if (driver_hint or "").lower() == "drive":
             try:
                 gdrv = importlib.import_module("src.integrations.gdrive")
                 lf = getattr(gdrv, "list_prepared_files", None)
                 if callable(lf):
-                    files = lf() or []
-                    if isinstance(files, list) and files:
-                        return files
+                    out = lf() or []
+                    if isinstance(out, list) and out:
+                        return out
             except Exception:
                 pass
-        # 2) prepared 내부 로컬 스캐너 폴백
+
+        # 2) 로컬 스캐너 폴백 (prepared._list_from_local)
         for modname in ("prepared", "src.prepared"):
             try:
                 prep_mod = importlib.import_module(modname)
@@ -1003,19 +1011,20 @@ def _render_admin_index_panel() -> None:
                 lf_local = getattr(prep_mod, "_list_from_local", None)
                 if callable(lf_local):
                     try:
-                        files2, ok, _ = lf_local()
-                        if ok and isinstance(files2, list):
-                            return files2
+                        out2, ok, _err = lf_local()
+                        if ok and isinstance(out2, list):
+                            return out2
                     except Exception:
                         pass
-        # 3) 최종 드라이브 폴백 시도(힌트가 없어도 한 번 더)
+
+        # 3) 최종 드라이브 폴백
         try:
             gdrv = importlib.import_module("src.integrations.gdrive")
             lf = getattr(gdrv, "list_prepared_files", None)
             if callable(lf):
-                files3 = lf() or []
-                if isinstance(files3, list):
-                    return files3
+                out3 = lf() or []
+                if isinstance(out3, list):
+                    return out3
         except Exception:
             pass
         return files  # 비어있을 수도 있음
@@ -1036,16 +1045,16 @@ def _render_admin_index_panel() -> None:
             if env:
                 return Path(env).expanduser()
             repo_root = Path(__file__).resolve().parent
-            prepared = (repo_root / "prepared").resolve()
-            if prepared.exists():
-                return prepared
+            prepared_dir = (repo_root / "prepared").resolve()
+            if prepared_dir.exists():
+                return prepared_dir
             return (repo_root / "knowledge").resolve()
 
         ds = _resolve_dataset_dir_for_ui()
         st.write(f"**Dataset Dir:** `{str(ds)}`")
 
         # 사전 스캔
-        files: list[Path] = []
+        files_preview: List[Path] = []
         try:
             rag = importlib.import_module("src.rag.search")
             SUP = getattr(rag, "SUPPORTED_EXTS", {".md", ".txt", ".pdf"})
@@ -1053,8 +1062,8 @@ def _render_admin_index_panel() -> None:
             SUP = {".md", ".txt", ".pdf"}
         for p in sorted(ds.rglob("*")):
             if p.is_file() and p.suffix.lower() in SUP:
-                files.append(p)
-        st.caption(f"사전 스캔: {len(files)}개 파일 후보")
+                files_preview.append(p)
+        st.caption(f"사전 스캔: {len(files_preview)}개 파일 후보")
 
         # 인덱싱 버튼
         c1, c2, _ = st.columns([1, 1, 2])
@@ -1063,7 +1072,7 @@ def _render_admin_index_panel() -> None:
         with c2:
             do_check = st.button("업데이트 점검(Drive/Local)")
 
-        # 업데이트 점검(Drive→Local 폴백)
+        # 업데이트 점검
         if do_check:
             chk, _mark, dbg = _load_prepared_api()
             if callable(chk):
@@ -1089,11 +1098,11 @@ def _render_admin_index_panel() -> None:
                 prog.progress(1.0, text="인덱싱 완료")
                 st.success("강제 재인덱싱 완료 (HQ)")
 
-                # (핵심) ‘미리보기 20개’가 아니라 ‘전체’ 소비 마킹
+                # 인덱싱 직후 '전체' 소비(seen) 마킹
                 chk, mark, dbg = _load_prepared_api()
                 if callable(chk) and callable(mark):
                     try:
-                        info = chk(PERSIST_DIR) or {}
+                        info: Dict[str, Any] = chk(PERSIST_DIR) or {}
                         driver = str(info.get("driver") or "").lower()
                         full_list = _list_all_prepared_files(driver_hint=driver)
                         if full_list:
@@ -1102,7 +1111,7 @@ def _render_admin_index_panel() -> None:
                         else:
                             st.caption("※ prepared 전체 목록을 불러오지 못해 소비 마킹을 건너뜁니다.")
                     except Exception:
-                        pass  # 소비 마킹 실패는 치명적 아님
+                        pass
                 else:
                     st.warning("prepared 모듈을 불러오지 못해 소비 마킹을 건너뜁니다.")
                     with st.expander("왜 못 찾았나요? (진단)"):
@@ -1124,7 +1133,7 @@ def _render_admin_index_panel() -> None:
                 persist = Path.home() / ".maic" / "persist"
 
             cj = persist / "chunks.jsonl"
-            docs_table = []
+            docs_table: List[Dict[str, Any]] = []
             if cj.exists():
                 seen = set()
                 total_lines = 0
@@ -1155,6 +1164,7 @@ def _render_admin_index_panel() -> None:
             _errlog(f"list docs failed: {e}", where="[admin-index.list]", exc=e)
             st.error("문서 목록 표시 중 오류가 발생했어요.")
 # ========================= [15] ADMIN: Index Panel — END =========================
+
 
 # ========================= [16] Indexed Sources Panel — START ==========================
 def _render_admin_indexed_sources_panel() -> None:
