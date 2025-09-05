@@ -1041,14 +1041,15 @@ def _render_admin_index_panel() -> None:
                     return fn(None)
             except Exception:
                 pass
-        env = os.getenv("MAIC_DATASET_DIR") or os.getenv("RAG_DATASET_DIR")
-        if env:
-            ds = Path(env).expanduser()
-        else:
+            env = os.getenv("MAIC_DATASET_DIR") or os.getenv("RAG_DATASET_DIR")
+            if env:
+                return Path(env).expanduser()
             repo_root = Path(__file__).resolve().parent
             prepared_dir = (repo_root / "prepared").resolve()
-            ds = prepared_dir if prepared_dir.exists() else (repo_root / "knowledge").resolve()
-
+            if prepared_dir.exists():
+                return prepared_dir
+    # knowledge 폴더가 없더라도 fallback 제공
+    return (repo_root / "knowledge").resolve()
         st.write(f"**Dataset Dir:** `{str(ds)}`")
 
         # 사전 스캔
