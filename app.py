@@ -925,23 +925,58 @@ def _render_body() -> None:
 def _render_admin_index_panel() -> None:
     """관리자용 인덱싱 패널: 강제 재인덱싱(HQ) + 인덱싱 전/후 파일 목록 확인."""
     import importlib
+    import importlib.util
     from pathlib import Path
 
     if st is None or not _is_admin_view():
         return
 
-    # ---- prepared API 로더(런타임 동적 임포트) ----
+    # ---- prepared API 로더(모듈 임포트 + 파일경로 폴백) ----
     def _load_prepared_api():
+        """
+        반환: (chk, mark, debug_msgs)
+          - chk: check_prepared_updates 함수 또는 None
+          - mark: mark_prepared_consumed 함수 또는 None
+          - debug_msgs: 어디서 뭘 시도했는지 메시지 리스트
+        """
+        tried: list[str] = []
         chk = mark = None
-        # 우선순위: prepared(루트) → src.prepared → src.services.prepared(과거명)
+
+        # 1) 모듈 이름으로 임포트 시도
         for modname in ("prepared", "src.prepared", "src.services.prepared"):
             try:
                 m = importlib.import_module(modname)
-                chk = getattr(m, "check_prepared_updates", None) if chk is None else chk
-                mark = getattr(m, "mark_prepared_consumed", None) if mark is None else mark
-            except Exception:
-                continue
-        return chk, mark
+                tried.append(f"import {modname} 성공")
+                chk = getattr(m, "check_prepared_updates", None)
+                mark = getattr(m, "mark_prepared_consumed", None)
+                if callable(chk) and callable(mark):
+                    return chk, mark, tried
+                tried.append(f"{modname} 에 함수 누락(check/mark)")
+            except Exception as e:
+                tried.append(f"import {modname} 실패: {e}")
+
+        # 2) 파일 경로에서 직접 로드(프로젝트 루트/표준 src 경로 둘 다 시도)
+        for candidate in ("prepared.py", "src/prepared.py"):
+            try:
+                if not Path(candidate).exists():
+                    tried.append(f"{candidate} 없음")
+                    continue
+                spec = importlib.util.spec_from_file_location("prepared_fallback", candidate)
+                if spec and spec.loader:
+                    mod = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(mod)
+                    tried.append(f"file-load {candidate} 성공")
+                    chk = getattr(mod, "check_prepared_updates", None)
+                    mark = getattr(mod, "mark_prepared_consumed", None)
+                    if callable(chk) and callable(mark):
+                        return chk, mark, tried
+                    tried.append(f"{candidate} 에 함수 누락(check/mark)")
+                else:
+                    tried.append(f"file-load {candidate} spec/loader 없음")
+            except Exception as e:
+                tried.append(f"file-load {candidate} 실패: {e}")
+
+        return None, None, tried
 
     # ---- 전체 파일 재조회(드라이버별) ----
     def _list_all_prepared_files(driver_hint: str | None = None):
@@ -959,23 +994,20 @@ def _render_admin_index_panel() -> None:
             except Exception:
                 pass
         # 2) prepared 내부 로컬 스캐너 폴백
-        try:
-            prep_mod = importlib.import_module("prepared")
-        except Exception:
+        for modname in ("prepared", "src.prepared"):
             try:
-                prep_mod = importlib.import_module("src.prepared")
+                prep_mod = importlib.import_module(modname)
             except Exception:
                 prep_mod = None
-        if prep_mod:
-            # 내부 함수지만 문제없음: 타입/필드 규격 동일
-            lf_local = getattr(prep_mod, "_list_from_local", None)
-            if callable(lf_local):
-                try:
-                    files2, ok, _ = lf_local()
-                    if ok and isinstance(files2, list):
-                        return files2
-                except Exception:
-                    pass
+            if prep_mod:
+                lf_local = getattr(prep_mod, "_list_from_local", None)
+                if callable(lf_local):
+                    try:
+                        files2, ok, _ = lf_local()
+                        if ok and isinstance(files2, list):
+                            return files2
+                    except Exception:
+                        pass
         # 3) 최종 드라이브 폴백 시도(힌트가 없어도 한 번 더)
         try:
             gdrv = importlib.import_module("src.integrations.gdrive")
@@ -1033,7 +1065,7 @@ def _render_admin_index_panel() -> None:
 
         # 업데이트 점검(Drive→Local 폴백)
         if do_check:
-            chk, _mark = _load_prepared_api()
+            chk, _mark, dbg = _load_prepared_api()
             if callable(chk):
                 try:
                     info = chk(PERSIST_DIR)
@@ -1043,6 +1075,9 @@ def _render_admin_index_panel() -> None:
                     st.error("업데이트 점검 중 오류가 발생했어요.")
             else:
                 st.warning("prepared 모듈(check_prepared_updates)을 찾지 못했습니다.")
+                with st.expander("왜 못 찾았나요? (진단)"):
+                    for m in dbg:
+                        st.write("• " + m)
 
         # 강제 인덱싱(HQ)
         if do_rebuild:
@@ -1055,23 +1090,24 @@ def _render_admin_index_panel() -> None:
                 st.success("강제 재인덱싱 완료 (HQ)")
 
                 # (핵심) ‘미리보기 20개’가 아니라 ‘전체’ 소비 마킹
-                chk, mark = _load_prepared_api()
+                chk, mark, dbg = _load_prepared_api()
                 if callable(chk) and callable(mark):
                     try:
-                        # 1) 현재 드라이버 확인 (drive / local)
                         info = chk(PERSIST_DIR) or {}
                         driver = str(info.get("driver") or "").lower()
-                        # 2) 드라이버에 맞게 전체 목록을 재조회
                         full_list = _list_all_prepared_files(driver_hint=driver)
                         if full_list:
                             mark(PERSIST_DIR, full_list)
                             st.caption(f"✓ prepared 신규 파일을 소비(seen) 처리했습니다. (총 {len(full_list)}개)")
                         else:
-                            # 목록이 0이라면 그냥 통과 (Drive 권한/네트워크 문제 가능)
                             st.caption("※ prepared 전체 목록을 불러오지 못해 소비 마킹을 건너뜁니다.")
                     except Exception:
-                        # 소비 마킹 실패는 치명적 아님 — 조용히 무시
-                        pass
+                        pass  # 소비 마킹 실패는 치명적 아님
+                else:
+                    st.warning("prepared 모듈을 불러오지 못해 소비 마킹을 건너뜁니다.")
+                    with st.expander("왜 못 찾았나요? (진단)"):
+                        for m in dbg:
+                            st.write("• " + m)
 
             except Exception as e:
                 prog.progress(0.0)
@@ -1119,7 +1155,6 @@ def _render_admin_index_panel() -> None:
             _errlog(f"list docs failed: {e}", where="[admin-index.list]", exc=e)
             st.error("문서 목록 표시 중 오류가 발생했어요.")
 # ========================= [15] ADMIN: Index Panel — END =========================
-
 
 # ========================= [16] Indexed Sources Panel — START ==========================
 def _render_admin_indexed_sources_panel() -> None:
