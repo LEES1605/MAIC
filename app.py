@@ -894,7 +894,11 @@ def _render_body() -> None:
     if _is_admin_view():
         _render_admin_panels()
         try:
-            _render_admin_index_panel()
+            _admin_idx = globals().get("_render_admin_index_panel")
+            if callable(_admin_idx):
+                _admin_idx()
+            else:
+                st.info("관리자 인덱싱 패널이 비활성화되어 있습니다. [16] 구획이 없거나 주입되지 않았습니다.")
         except Exception as e:
             _errlog(f"admin index panel failed: {e}", where="[admin-index]", exc=e)
         st.caption("ⓘ 복구/재인덱싱은 상단 ‘🛠 진단 도구’ 또는 아래 인덱싱 패널에서 수행할 수 있어요.")
@@ -955,7 +959,7 @@ def _render_admin_index_panel() -> None:
     with st.container(border=True):
         st.subheader("📚 인덱싱(관리자)")
 
-        # dataset_dir 해석
+        # dataset_dir 해석 (env → prepared → knowledge)
         def _resolve_dataset_dir_for_ui() -> Path:
             try:
                 mod = importlib.import_module("src.rag.label")
@@ -976,7 +980,7 @@ def _render_admin_index_panel() -> None:
         ds = _resolve_dataset_dir_for_ui()
         st.write(f"**Dataset Dir:** `{str(ds)}`")
 
-        # 사전 스캔: 이번에 인덱싱 대상 파일 예비목록
+        # 사전 스캔
         files: list[Path] = []
         rag = None
         try:
@@ -1005,7 +1009,6 @@ def _render_admin_index_panel() -> None:
         if do_rebuild:
             prog = st.progress(0.0, text="인덱싱 중…")
             try:
-                # 실제 재인덱싱(HQ)
                 if rag is None:
                     rag = importlib.import_module("src.rag.search")
                 rebuild = getattr(rag, "rebuild_and_cache", None)
@@ -1030,7 +1033,6 @@ def _render_admin_index_panel() -> None:
                     get_or = getattr(rag, "get_or_build_index", None)
                     if callable(get_or):
                         idx = get_or(str(ds), use_cache=True)
-                # 결과 문서 목록 표시
                 docs = (idx or {}).get("docs", [])
                 st.caption(f"인덱싱 문서 수: **{len(docs)}**")
                 if docs:
@@ -1039,7 +1041,6 @@ def _render_admin_index_panel() -> None:
                     if len(docs) > 400:
                         st.caption(f"… 외 {len(docs) - 400}개")
                 else:
-                    # 혹시 인덱스가 비어있으면, 사전 스캔 목록이라도 보여줌
                     if files:
                         st.info("인덱스 결과가 비어 있어 사전 스캔 목록을 대신 표시합니다.")
                         data = [{"title": p.stem, "path": str(p)} for p in files[:400]]
