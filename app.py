@@ -930,11 +930,11 @@ def _render_admin_index_panel() -> None:
     if st is None or not _is_admin_view():
         return
 
-    # ---- prepared API 로더(런타임 동적 임포트; mypy missing-import 회피) ----
+    # ---- prepared API 로더(런타임 동적 임포트) ----
     def _load_prepared_api():
         chk = mark = None
-        # 우선순위: src.prepared → prepared (루트) → src.services.prepared(과거명)
-        for modname in ("src.prepared", "prepared", "src.services.prepared"):
+        # 우선순위: prepared(루트) → src.prepared → src.services.prepared(과거명)
+        for modname in ("prepared", "src.prepared", "src.services.prepared"):
             try:
                 m = importlib.import_module(modname)
                 chk = getattr(m, "check_prepared_updates", None) if chk is None else chk
@@ -942,6 +942,51 @@ def _render_admin_index_panel() -> None:
             except Exception:
                 continue
         return chk, mark
+
+    # ---- 전체 파일 재조회(드라이버별) ----
+    def _list_all_prepared_files(driver_hint: str | None = None):
+        """Drive면 gdrive.list_prepared_files(), local이면 prepared._list_from_local()로 전량 조회."""
+        files = []
+        # 1) driver 힌트가 drive면 gdrive 우선
+        if (driver_hint or "").lower() == "drive":
+            try:
+                gdrv = importlib.import_module("src.integrations.gdrive")
+                lf = getattr(gdrv, "list_prepared_files", None)
+                if callable(lf):
+                    files = lf() or []
+                    if isinstance(files, list) and files:
+                        return files
+            except Exception:
+                pass
+        # 2) prepared 내부 로컬 스캐너 폴백
+        try:
+            prep_mod = importlib.import_module("prepared")
+        except Exception:
+            try:
+                prep_mod = importlib.import_module("src.prepared")
+            except Exception:
+                prep_mod = None
+        if prep_mod:
+            # 내부 함수지만 문제없음: 타입/필드 규격 동일
+            lf_local = getattr(prep_mod, "_list_from_local", None)
+            if callable(lf_local):
+                try:
+                    files2, ok, _ = lf_local()
+                    if ok and isinstance(files2, list):
+                        return files2
+                except Exception:
+                    pass
+        # 3) 최종 드라이브 폴백 시도(힌트가 없어도 한 번 더)
+        try:
+            gdrv = importlib.import_module("src.integrations.gdrive")
+            lf = getattr(gdrv, "list_prepared_files", None)
+            if callable(lf):
+                files3 = lf() or []
+                if isinstance(files3, list):
+                    return files3
+        except Exception:
+            pass
+        return files  # 비어있을 수도 있음
 
     with st.container(border=True):
         st.subheader("📚 인덱싱(관리자)")
@@ -1009,17 +1054,25 @@ def _render_admin_index_panel() -> None:
                 prog.progress(1.0, text="인덱싱 완료")
                 st.success("강제 재인덱싱 완료 (HQ)")
 
-                # (중요) Drive/Local 신규파일 '소비(seen)' 마킹
+                # (핵심) ‘미리보기 20개’가 아니라 ‘전체’ 소비 마킹
                 chk, mark = _load_prepared_api()
                 if callable(chk) and callable(mark):
                     try:
-                        info = chk(PERSIST_DIR)
-                        files_list = (info or {}).get("files") or []
-                        if files_list:
-                            mark(PERSIST_DIR, files_list)
-                            st.caption("✓ prepared 신규 파일을 소비(seen) 처리했습니다.")
+                        # 1) 현재 드라이버 확인 (drive / local)
+                        info = chk(PERSIST_DIR) or {}
+                        driver = str(info.get("driver") or "").lower()
+                        # 2) 드라이버에 맞게 전체 목록을 재조회
+                        full_list = _list_all_prepared_files(driver_hint=driver)
+                        if full_list:
+                            mark(PERSIST_DIR, full_list)
+                            st.caption(f"✓ prepared 신규 파일을 소비(seen) 처리했습니다. (총 {len(full_list)}개)")
+                        else:
+                            # 목록이 0이라면 그냥 통과 (Drive 권한/네트워크 문제 가능)
+                            st.caption("※ prepared 전체 목록을 불러오지 못해 소비 마킹을 건너뜁니다.")
                     except Exception:
-                        pass  # 소비 마킹 실패는 치명적 아님
+                        # 소비 마킹 실패는 치명적 아님 — 조용히 무시
+                        pass
+
             except Exception as e:
                 prog.progress(0.0)
                 _errlog(f"reindex failed: {e}", where="[admin-index.rebuild]", exc=e)
@@ -1039,7 +1092,7 @@ def _render_admin_index_panel() -> None:
             if cj.exists():
                 seen = set()
                 total_lines = 0
-                with cj.open("r", encoding="utf-8") as rf:   # ← 파일핸들 이름 rf로
+                with cj.open("r", encoding="utf-8") as rf:
                     for line in rf:
                         line = line.strip()
                         if not line:
@@ -1066,6 +1119,7 @@ def _render_admin_index_panel() -> None:
             _errlog(f"list docs failed: {e}", where="[admin-index.list]", exc=e)
             st.error("문서 목록 표시 중 오류가 발생했어요.")
 # ========================= [15] ADMIN: Index Panel — END =========================
+
 
 # ========================= [16] Indexed Sources Panel — START ==========================
 def _render_admin_indexed_sources_panel() -> None:
