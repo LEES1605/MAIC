@@ -434,6 +434,15 @@ def render_index_orchestrator_panel() -> None:
                     except Exception as e:
                         _log(f"reindex 예외: {e}")
                         ok = False
+                    # -------- 폴백: index_build.rebuild_index --------
+                    if not ok:
+                        try:
+                            from src.rag import index_build as _idx
+                            r = _idx.rebuild_index(PERSIST)
+                            ok = bool(r and r.get("chunks", 0) > 0)
+                        except Exception as e:
+                            _log(f"rebuild_index 폴백 예외: {e}")
+                            ok = False
                 snap2 = sync_badge_from_fs()
                 if ok and snap2["local_ok"]:
                     st.success("재인덱싱 완료(READY).")
@@ -515,6 +524,15 @@ def render_index_orchestrator_panel() -> None:
             except Exception as e:
                 _log(f"reindex 예외: {e}")
                 ok1 = False
+            # -------- 폴백: index_build.rebuild_index --------
+            if not ok1:
+                try:
+                    from src.rag import index_build as _idx
+                    r = _idx.rebuild_index(PERSIST)
+                    ok1 = bool(r and r.get("chunks", 0) > 0)
+                except Exception as e:
+                    _log(f"rebuild_index 폴백 예외: {e}")
+                    ok1 = False
         ok2 = False
         if force_backup and ok1:
             gh = _try_import("src.backup.github_release", ["publish_backup"])
