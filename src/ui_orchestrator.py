@@ -137,6 +137,31 @@ def _lazy_imports() -> Dict[str, Any]:
 
     return deps
 # =========================== [01] lazy imports — END ==============================
+# ======================= [01b] autoflow_boot_check — START ========================
+def autoflow_boot_check(*, interactive: bool = False) -> None:
+    """
+    앱 부팅 시 1회 호출되는 오케스트레이션 진입점.
+    - interactive=True  : 관리자 모드(대화형) — 패널 토글을 자동으로 열도록 힌트만 둠
+    - interactive=False : 학생/일반 모드  — 아무 것도 강제하지 않음(무해)
+    - 예외는 내부에서 `_add_error`로 흡수(앱 크래시 방지)
+    """
+    try:
+        import streamlit as st  # 지역 import: Streamlit 미설치 환경 대응
+        ss = st.session_state if hasattr(st, "session_state") else {}
+        # 1) persist dir 공유(있다면 app.py가 이미 넣었음)
+        if isinstance(ss, dict) and "_PERSIST_DIR" in ss:
+            pass  # no-op
+
+        # 2) 관리자 모드 힌트: 패널을 '열도록' 플래그만 설정(UX만; 강제 렌더 X)
+        if interactive and isinstance(ss, dict):
+            # 최초 1회만 열리도록(사용자가 닫으면 존중)
+            ss.setdefault("_admin_diag_open", True)
+
+        # 3) 추가적으로 나중에 확장 가능(예: 자동 상태 점검/가벼운 사전 체크)
+        #    현재는 무해한 no-op로 유지해 안전성 확보
+    except BaseException as e:  # broad: 여기서 예외로 앱이 죽으면 안 됨
+        _add_error(e)
+# ======================== [01b] autoflow_boot_check — END =========================
 
 
 # ====================== [02] Index Orchestrator Panel — START ======================
@@ -146,9 +171,8 @@ def render_index_orchestrator_panel() -> None:
     - 여기서는 상태/경로/가이드만 노출 + '관리자 인덱싱 패널([15]) 열기' 버튼만 제공.
     - 실제 강제 인덱싱(HQ)+백업/파일 미리보기는 app.py의 [15]/[16]에서 수행.
     """
-    # ── 지역 import (ruff E402 회피) ─────────────────────────────────────────
+    # ── 지역 import (필요한 것만; ruff F401 방지) ───────────────────────────
     from pathlib import Path
-    import importlib
 
     try:
         import streamlit as st
@@ -212,7 +236,6 @@ def render_index_orchestrator_panel() -> None:
             "- `chunks.jsonl`이 없거나 0B이면 READY가 되지 않습니다."
         )
 # ======================= [02] Index Orchestrator Panel — END =======================
-
 
 # ================== [03] render_index_orchestrator_panel — START ==================
 # (삭제됨) — 기능은 [02] Index Orchestrator Panel에 통합되었습니다.
