@@ -1,11 +1,13 @@
 # ============================ [01] SIMPLE RAG SEARCH — START ============================
 """
 경량 RAG 검색기.
+
 - 지원 확장자: .md, .txt, .pdf
 - 인덱스 저장: JSON(선택). 저장하지 않아도 메모리에서 즉시 검색 가능.
 - 토크나이즈: 영문/숫자/한글을 단어로 인식 (정규식)
 - 스코어: 간단한 TF-IDF
-- 한국어 토큰 정규화: 대표 조사(은/는/이/가/을/를/과/와/로/으로/의/도/만/에게/한테/에서/부터/까지 등) 제거
+- 한국어 토큰 정규화: 대표 조사(예: 은/는/이/가/을/를/과/와/로/의/도/만/
+  에게/한테/에서/부터/까지 등)를 제거
 - PDF 처리:
   * PyPDF2 등이 설치되어 있으면 본문을 추출
   * 미설치/추출 실패 시, 파일명(제목)만으로 최소 인덱싱
@@ -15,10 +17,12 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import re
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 SUPPORTED_EXTS = {".md", ".txt", ".pdf"}
 TOKEN_RE = re.compile(r"[A-Za-z0-9가-힣]+")
@@ -71,7 +75,6 @@ def _read_text_pdf(path: Path) -> str:
     외부 라이브러리가 없을 수 있으므로 예외를 모두 잡아 폴백합니다.
     """
     try:
-        # PyPDF2 우선 시도
         try:
             from PyPDF2 import PdfReader  # type: ignore
         except Exception:
@@ -96,8 +99,6 @@ def _read_text(path: Path) -> str:
     suf = path.suffix.lower()
     if suf == ".pdf":
         return _read_text_pdf(path)
-
-    # 텍스트 파일 인코딩 추정(실패하면 공백 반환)
     for enc in ("utf-8", "utf-8-sig", "cp949", "euc-kr", "latin1"):
         try:
             return path.read_text(encoding=enc)
@@ -136,12 +137,10 @@ def build_index(dataset_dir: str) -> Dict:
         if p.is_file() and p.suffix.lower() in SUPPORTED_EXTS:
             raw = _read_text(p)
             title = _title_from_path(p)
-            # PDF 추출 실패 → 파일명으로 최소 인덱싱
             if not raw and p.suffix.lower() == ".pdf":
                 raw = title
             docs.append(Doc(id=len(docs), path=str(p), title=title, text=raw))
 
-    # 역색인과 df 계산 (정규화된 토큰 사용)
     postings: Dict[str, Dict[int, int]] = {}
     df: Dict[str, int] = {}
     for d in docs:
@@ -218,7 +217,6 @@ def search(
     if not q_toks:
         return []
 
-    # 쿼리 tf
     q_tf: Dict[str, int] = {}
     for t in q_toks:
         q_tf[t] = q_tf.get(t, 0) + 1
@@ -233,7 +231,6 @@ def search(
 
     ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
     results: List[Dict] = []
-    # 스니펫 생성을 위해 텍스트를 다시 읽음(인덱스에는 본문 저장 안함)
     for doc_id, sc in ranked:
         path = docs[doc_id]["path"]
         title = docs[doc_id]["title"]
@@ -246,27 +243,15 @@ def search(
         results.append({"path": path, "title": title, "score": sc, "snippet": snippet})
     return results
 # ============================= [01] SIMPLE RAG SEARCH — END =============================
+
 # ========================= [02] PERSISTENT CACHE LAYER — START =========================
-"""
-RAG 인덱스 캐시/지속화 레이어.
+# RAG 인덱스 캐시/지속화 레이어:
+# - 데이터셋 파일 목록·크기·mtime을 해시(sha1)로 요약해 '시그니처' 생성
+# - 동일 시그니처면 디스크에 저장된 인덱스를 재사용
+# - 다르면 재빌드 후 저장
+# - 캐시 경로: ~/.maic/persist/rag_cache/<sha1(absdir)>__<sig>.json
 
-- 데이터셋 폴더의 파일 목록·크기·mtime을 해시(sha1)로 요약해 '시그니처' 생성
-- 시그니처가 같으면 디스크에 저장된 인덱스를 재사용
-- 시그니처가 다르면 자동으로 재빌드 후 저장
-- 기본 캐시 경로: ~/.maic/persist/rag_cache/<hash>.json
-"""
-from __future__ import annotations
-
-from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
-from pathlib import Path
-import hashlib
-import json
-import os
-
-# ---- 캐시 루트 경로 ---------------------------------------------------------------
 def _default_persist_dir() -> Path:
-    # 홈 디렉터리 하위 고정(프로세스/런타임에 독립)
     return Path("~/.maic/persist").expanduser()
 
 
@@ -279,7 +264,6 @@ def _cache_dir() -> Path:
     return p
 
 
-# ---- 데이터셋 시그니처(변경 감지) --------------------------------------------------
 def _dataset_signature(dataset_dir: str) -> str:
     base = Path(dataset_dir)
     h = hashlib.sha1()
@@ -307,12 +291,7 @@ def _cache_path_for(dataset_dir: str) -> Path:
     return _cache_dir() / name
 
 
-# ---- public API -----------------------------------------------------------------------
-def get_or_build_index(
-    dataset_dir: str,
-    *,
-    use_cache: bool = True,
-) -> Dict:
+def get_or_build_index(dataset_dir: str, *, use_cache: bool = True) -> Dict:
     """
     캐시 사용 시:
       1) 시그니처 기반 파일명을 계산
@@ -327,7 +306,7 @@ def get_or_build_index(
         try:
             return load_index(str(cpath))
         except Exception:
-            pass  # 손상된 캐시는 무시하고 재빌드
+            pass
 
     idx = build_index(dataset_dir)
     try:
@@ -336,9 +315,8 @@ def get_or_build_index(
         pass
     return idx
 # ========================== [02] PERSISTENT CACHE LAYER — END ==========================
-# ========================= [03] REBUILD API — START =========================
-from typing import Dict
 
+# ========================= [03] REBUILD API — START =========================
 def rebuild_and_cache(dataset_dir: str) -> Dict:
     """
     데이터셋을 '항상' 새로 인덱싱하고, 디스크 캐시에 저장 후 인덱스를 반환합니다.
@@ -352,5 +330,3 @@ def rebuild_and_cache(dataset_dir: str) -> Dict:
         pass
     return idx
 # ========================== [03] REBUILD API — END ==========================
-
-
