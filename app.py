@@ -736,544 +736,185 @@ def _render_mode_controls_pills() -> str:
     return ss.get("qa_mode_radio", sel)
 
 # ============================ [13] 채팅 패널 — START ============================
-# [13] 채팅 패널 ==============================================================
-def _render_chat_panel():
+# 주 역할:
+# - 질문(나) → 피티쌤(주답변, 스트리밍) → 미나쌤(보완, 스트리밍) 순서로 출력
+# - 각 말풍선에 이름 칩(나/피티쌤/미나쌤)과 출처 칩을 표시
+# - 스트리밍: provider 실스트리밍 지원 시 콜백 경로, 미지원 시 문장 단위 의사-스트리밍
+from typing import Any, Dict, Iterator, Optional, Mapping
+import html
+import re
+
+import streamlit as st
+
+# RAG 라벨(출처 칩) 모듈 로딩(폴백 포함)
+try:
+    import importlib as _imp
+    try:
+        _label_mod = _imp.import_module("src.rag.label")
+    except Exception:
+        _label_mod = _imp.import_module("label")  # 루트의 label.py 폴백
+    _decide_label = getattr(_label_mod, "decide_label", None)
+    _search_hits = getattr(_label_mod, "search_hits", None)
+except Exception:
+    _decide_label = None
+    _search_hits = None
+
+# 답변 제너레이터(실제 스트리밍/의사-스트리밍)
+from src.agents.responder import answer_stream
+from src.agents.evaluator import evaluate_stream
+
+# 문장 버퍼 옵션
+from src.llm.streaming import BufferOptions, make_stream_handler
+
+
+def _render_chip(name: str, *, color: str = "#444") -> str:
+    # 이름 칩: 100% 크기(기존 대비 확대), 둥근 라벨
+    style = (
+        "display:inline-block;padding:4px 10px;border-radius:12px;"
+        f"background:{color};color:#fff;font-weight:600;"
+        "font-size:13px;line-height:1;"
+    )
+    return f'<span style="{style}">{html.escape(name)}</span>'
+
+
+def _render_source(label: str) -> str:
+    # 출처 칩: 색상은 기존 태그 색상과 동일 계열(파랑/보라 등은 상위 CSS에 맞춤)
+    style = (
+        "display:inline-block;margin-left:6px;padding:2px 8px;"
+        "border-radius:10px;background:#eef2ff;color:#3730a3;"
+        "font-size:12px;font-weight:600;line-height:1;"
+        "border:1px solid #c7d2fe;"
+    )
+    return f'<span style="{style}">{html.escape(label)}</span>'
+
+
+def _esc_text(t: str) -> str:
+    # 줄바꿈/공백 보존
+    s = html.escape(t or "").replace("\n", "<br/>")
+    return re.sub(r"  ", "&nbsp;&nbsp;", s)
+
+
+def _emit_bubble(placeholder: "st.delta_generator.DeltaGenerator",
+                 who: str,
+                 text: str,
+                 *,
+                 color: str,
+                 source: Optional[str] = None) -> None:
+    chips = _render_chip(who, color=color)
+    if source:
+        chips += _render_source(source)
+    placeholder.markdown(
+        '<div style="display:flex;justify-content:flex-start;margin:8px 0;">'
+        f'{chips}'
+        f'<div style="margin-left:8px;max-width:760px;">{_esc_text(text)}</div>'
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def _emit_user(placeholder: "st.delta_generator.DeltaGenerator",
+               text: str) -> None:
+    _emit_bubble(placeholder, "나", text, color="#059669")
+
+
+def _run_chat(question: str, *, system_prompt: str = "") -> None:
     ss = st.session_state
-    if "chat" not in ss:
-        ss["chat"] = []
 
-    _inject_chat_styles_once()
+    # 1) 사용자 질문 말풍선 먼저 출력
+    ph_user = st.empty()
+    _emit_user(ph_user, question)
 
-    # 상단: 질문 모드 pill (카톡형에서 입력창 바로 위)
-    cur_label = _render_mode_controls_pills()
-    MODE_TOKEN = {"문법": "문법설명", "문장": "문장구조분석", "지문": "지문분석"}[cur_label]
-
-    # ChatPane — 메시지 영역 OPEN
-    st.markdown('<div class="chatpane"><div class="messages">', unsafe_allow_html=True)
-
-    # 말풍선 렌더러 -------------------------------------------------------------
-    def _render_bubble(role: str, text: str):
-        import html as _html, re as _re
-        is_user = (role == "user")
-
-        # 정렬/버블 스타일
-        wrap = (
-            "display:flex;justify-content:flex-end;margin:8px 0;"
-            if is_user
-            else "display:flex;justify-content:flex-start;margin:8px 0;"
-        )
-        base = (
-            "max-width:88%;padding:10px 12px;border-radius:16px;line-height:1.6;"
-            "font-size:15px;box-shadow:0 1px 1px rgba(0,0,0,.05);white-space:pre-wrap;"
-            "position:relative;"
-        )
-        bubble = (
-            base
-            + "border-top-right-radius:8px;border:1px solid #F2E4A2;"
-            + "background:#FFF8CC;color:#333;"
-            if is_user
-            else base
-            + "border-top-left-radius:8px;border:1px solid #BEE3FF;"
-            + "background:#EAF6FF;color:#0a2540;"
-        )
-
-        # 칩 스타일
-        # 사용자 '나' 칩(노랑) — 22px
-        chip_role = (
-            "display:inline-block;margin:-2px 6px 6px 0;padding:2px 10px;border-radius:999px;"
-            "font-size:22px;font-weight:700;background:#FFF2B8;color:#6b5200;"
-            "border:1px solid #F2E4A2;"
-        )
-        # 출처 칩(회색)
-        chip_src = (
-            "display:inline-block;margin:-2px 0 6px 0;padding:1px 8px;border-radius:999px;"
-            "font-size:11px;font-weight:700;background:#eef2f6;color:#334155;"
-            "border:1px solid #cbd5e1;"
-        )
-        # 쌤 칩(답변 태그색: 연파랑) — 22px
-        chip_pers = (
-            "display:inline-block;margin:-2px 6px 6px 0;padding:2px 10px;border-radius:999px;"
-            "font-size:22px;font-weight:700;background:#DFF1FF;color:#0f5b86;"
-            "border:1px solid #BEE3FF;"
-        )
-
-        # 페르소나 이름 매핑
-        if role == "assistant":
-            persona = "피티쌤"
-        elif role == "evaluator":
-            persona = "미나쌤"
-        else:
-            persona = None
-
-        # 히스토리 텍스트에서 '출처:' 꼬리표 분리 → 칩으로 표시
-        t = str(text or "")
-        m = _re.search(r"^(.*?)(?:\n+|\s+)출처:\s*(.+)$", t, flags=_re.S)
-        src = None
-        if m:
-            body = m.group(1)
-            src = m.group(2).strip()
-        else:
-            body = t
-
-        body = _html.escape(body).replace("\n", "<br/>")
-        body = _re.sub(r"  ", "&nbsp;&nbsp;", body)
-
-        if is_user:
-            header = f'<span style="{chip_role}">나</span>'
-        else:
-            pers_html = (
-                f'<span style="{chip_pers}">{_html.escape(persona)}</span>'
-                if persona
-                else ""
-            )
-            src_html = (
-                f'<span style="{chip_src}">{_html.escape(src)}</span>'
-                if src
-                else ""
-            )
-            header = pers_html + src_html
-
-        st.markdown(
-            f'<div style="{wrap}"><div style="{bubble}">{header}<br/>' + body + "</div></div>",
-            unsafe_allow_html=True,
-        )
-
-    # 과거 메시지 렌더
-    prev_role = None
-    for m in ss["chat"]:
-        role = m.get("role", "assistant")
-        if prev_role is not None and prev_role != role:
-            st.markdown('<div class="turn-sep"></div>', unsafe_allow_html=True)
-        _render_bubble(role, m.get("text", ""))
-        prev_role = role
-
-    # 스트리밍/유저-즉시 자리(메시지 영역 내부에서 placeholder 확보)
-    ph_user = st.empty()   # 전송 직후 "내 말풍선" 즉시 표출용
-    ph_ans = st.empty()    # 주답변 스트리밍(피티쌤)
-    ph_eval = st.empty()   # 보완 스트리밍(미나쌤)
-
-    # 메시지 영역 CLOSE(폼/업로더는 같은 ChatPane 내부)
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # ＋ 입력 도우미: 카메라/앨범 → OCR → 입력칸 자동 주입
-    # ─────────────────────────────────────────────────────────────────────────
-    def _close_plus() -> None:
-        ss["__plus_open"] = False
-
-    cols = st.columns([1, 12])
-    with cols[0]:
-        if st.button("＋", key="plus_btn", help="카메라/앨범에서 이미지로 질문하기"):
-            ss["__plus_open"] = not ss.get("__plus_open", False)
-    with cols[1]:
-        st.caption(
-            "이미지로 질문하고 싶다면 ＋ 버튼을 눌러 촬영하거나 앨범에서 선택하세요."
-        )
-
-    if ss.get("__plus_open"):
-        with st.container():
-            st.markdown(
-                "**입력 도우미** · 이미지를 가져와 텍스트로 변환해 드려요."
-            )
-            tabs = st.tabs(["📷 카메라", "🖼️ 앨범(사진)"])
-
-            # 공통 OCR 함수
-            def _ocr_and_fill(bin_file, filename_hint: str) -> None:
-                try:
-                    tmp_dir = (PERSIST_DIR / "tmp_uploads")
-                    tmp_dir.mkdir(parents=True, exist_ok=True)
-                    ext = Path(filename_hint).suffix or ".png"
-                    fpath = tmp_dir / f"upl_{int(time.time() * 1000)}{ext}"
-                    with open(fpath, "wb") as fw:
-                        fw.write(bin_file.getbuffer())
-                    import importlib
-                    ocr_txt = ""
-                    try:
-                        _m = importlib.import_module("src.vision.ocr")
-                        _fn = getattr(_m, "extract_text", None)
-                        if callable(_fn):
-                            ocr_txt = str(_fn(str(fpath)) or "")
-                    except Exception:
-                        ocr_txt = ""
-                    if ocr_txt:
-                        ss["inpane_q"] = ocr_txt.strip()
-                        st.success(
-                            "✓ OCR 결과를 입력칸에 넣었어요. 필요하면 수정 후 전송하세요."
-                        )
-                        preview = (
-                            ocr_txt[:180] + "…" if len(ocr_txt) > 180 else ocr_txt
-                        )
-                        st.code(preview or "(빈 텍스트)")
-                        return
-                    st.warning(
-                        "텍스트를 찾지 못했어요. 명암·해상도를 확인하거나 "
-                        "다른 이미지를 시도해 주세요."
-                    )
-                except Exception as e:
-                    _errlog("OCR 처리 실패", where="[13]_ocr_plus", exc=e)
-                    st.error(
-                        "OCR 처리 중 오류가 발생했어요. 텍스트로 직접 입력해 주세요."
-                    )
-
-            with tabs[0]:
-                cam = st.camera_input("카메라로 촬영", key="camera_input")
-                if cam is not None:
-                    _ocr_and_fill(cam, "camera.png")
-
-            with tabs[1]:
-                up = st.file_uploader(
-                    "앨범에서 선택",
-                    type=["png", "jpg", "jpeg", "webp", "bmp"],
-                    accept_multiple_files=False,
-                    key="album_uploader",
-                )
-                if up is not None:
-                    _ocr_and_fill(up, up.name)
-
-            st.button("닫기", on_click=_close_plus)
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # 입력 폼 (전송 화살표를 입력칸 '안'에 배치)
-    # ─────────────────────────────────────────────────────────────────────────
-    with st.form("inpane_chat_form", clear_on_submit=True):
-        st.markdown('<div id="inpane_wrap">', unsafe_allow_html=True)
-        st.markdown(
-            """
-            <style>
-            #inpane_wrap { position: relative; }
-            #inpane_wrap [data-testid="stTextInput"] input {
-                padding-right: 48px;
-            }
-            #inpane_wrap .stButton > button {
-                position: absolute;
-                right: 8px;
-                top: 50%;
-                transform: translateY(-50%);
-                height: 36px;
-                min-height: 36px;
-                width: 36px;
-                padding: 0;
-                border-radius: 999px;
-                line-height: 36px;
-            }
-            @media (max-width: 480px) {
-                #inpane_wrap [data-testid="stTextInput"] input {
-                    padding-right: 56px;
-                }
-                #inpane_wrap .stButton > button { right: 6px; }
-            }
-            </style>
-            """,
-            unsafe_allow_html=True,
-        )
-
-        qtxt = st.text_input(
-            "질문 입력",
-            value=ss.get("inpane_q", ""),
-            placeholder="예) 분사구문이 뭐예요?  예) 이 문장 구조 분석해줘",
-            label_visibility="collapsed",
-            key="inpane_q",
-        )
-        submitted = st.form_submit_button("➤", type="secondary")
-        st.markdown("</div>", unsafe_allow_html=True)
-
-    # (A) 제출 처리 — 내 말풍선 즉시 표시 → 답변 스트리밍
-    if submitted and not ss.get("_sending", False):
-        question = (qtxt or "").strip()
-        if not question:
-            st.warning("질문을 입력해 주세요.")
-            return
-
-        ss["_sending"] = True
-        # 1) 히스토리 기록
-        ss["chat"].append(
-            {"id": f"u{int(time.time()*1000)}", "role": "user", "text": question}
-        )
-        # 2) 내 말풍선 즉시 표시
-        import html as _html, re as _re
-        _wrap = "display:flex;justify-content:flex-end;margin:8px 0;"
-        _bubble = (
-            "max-width:88%;padding:10px 12px;border-radius:16px;line-height:1.6;"
-            "font-size:15px;box-shadow:0 1px 1px rgba(0,0,0,.05);white-space:pre-wrap;"
-            "position:relative;border-top-right-radius:8px;border:1px solid #F2E4A2;"
-            "background:#FFF8CC;color:#333;"
-        )
-        # 사용자 '나' 칩 — 22px
-        _chip_user = (
-            "display:inline-block;margin:-2px 6px 6px 0;padding:2px 10px;border-radius:999px;"
-            "font-size:22px;font-weight:700;background:#FFF2B8;color:#6b5200;"
-            "border:1px solid #F2E4A2;"
-        )
-        _body = _html.escape(question).replace("\n", "<br/>")
-        _body = _re.sub(r"  ", "&nbsp;&nbsp;", _body)
-        ph_user.markdown(
-            f'<div style="{_wrap}"><div style="{_bubble}"><span style="{_chip_user}">'
-            "나</span><br/>" + _body + "</div></div>",
-            unsafe_allow_html=True,
-        )
-
-        # (참고) 증거/모드
-        ev_notes = ss.get("__evidence_class_notes", "")
-        ev_books = ss.get("__evidence_grammar_books", "")
-
-        # 프롬프트 해석
+    # 2) 출처 결정용 히트/라벨
+    src_label = "[AI지식]"
+    if callable(_search_hits) and callable(_decide_label):
         try:
-            from src.prompting.resolve import resolve_prompts
-            system_prompt, _resolved_user_prompt, source = resolve_prompts(
-                MODE_TOKEN, question, ev_notes, ev_books, cur_label, ss,
-            )
-            ss["__prompt_source"] = source
+            hits = _search_hits(question, top_k=5)
         except Exception:
-            system_prompt = ""
-            ss["__prompt_source"] = "fallback"
-
-        # RAG 라벨(출처 칩)
+            hits = []
         try:
-            import importlib as _imp
-            try:
-                _label_mod = _imp.import_module("src.rag.label")
-            except Exception:
-                _label_mod = _imp.import_module("label")  # 루트의 label.py 폴백
-            _decide_label = getattr(_label_mod, "decide_label", None)
-            _search_hits = getattr(_label_mod, "search_hits", None)
+            src_label = _decide_label(hits, default_if_none="[AI지식]")
         except Exception:
-            _decide_label = None
-            _search_hits = None
+            src_label = "[AI지식]"
 
+    # 3) 피티쌤(주답변) 스트리밍
+    ph_ans = st.empty()
+    acc_ans = ""
 
-        try:
-            hits = _search_hits(question) if callable(_search_hits) else None
-        except Exception:
-            hits = None
-        try:
-            source_label = (
-                _decide_label(hits, default_if_none="[AI지식]")
-                if callable(_decide_label)
-                else "[AI지식]"
-            )
-        except Exception:
-            source_label = "[AI지식]"
-        ss["__last_source_label"] = source_label
-
-        # (A-1) 주 답변 에이전트 스트리밍 (피티쌤) — 문장 버퍼 연결
-        from typing import Any as _AnyT, Dict as _DictT
-        acc_ans = ""
-
-        def _emit_ans(piece: str) -> None:
-            nonlocal acc_ans
-            import html, re
-            acc_ans += str(piece or "")
-
-            def esc(t: str) -> str:
-                t = html.escape(t or "").replace("\n", "<br/>")
-                return re.sub(r"  ", "&nbsp;&nbsp;", t)
-
-            # 피티쌤(연파랑 22px) + 출처
-            ph_ans.markdown(
-                '<div style="display:flex;justify-content:flex-start;margin:8px 0;">'
-                '  <div style="max-width:88%;padding:10px 12px;border-radius:16px;'
-                '              border-top-left-radius:8px; line-height:1.6;font-size:15px;'
-                '              box-shadow:0 1px 1px rgba(0,0,0,.05);white-space:pre-wrap; position:relative;'
-                '              border:1px solid #BEE3FF;background:#EAF6FF;color:#0a2540;">'
-                '    <span style="display:inline-block;margin:-2px 6px 6px 0;padding:2px 10px;border-radius:999px;'
-                '                 font-size:22px;font-weight:700;background:#DFF1FF;color:#0f5b86;'
-                '                 border:1px solid #BEE3FF;">피티쌤</span>'
-                '    <span style="display:inline-block;margin:-2px 0 6px 0;padding:1px 8px;border-radius:999px;'
-                '                 font-size:11px;font-weight:700;background:#eef2f6;color:#334155;'
-                '                 border:1px solid #cbd5e1;">'
-                + esc(str(ss.get("__last_source_label", "")))
-                + "</span><br/>"
-                + esc(acc_ans)
-                + "  </div></div>",
-                unsafe_allow_html=True,
-            )
-
-        # 문장 버퍼 핸들러 생성
-        try:
-            from src.llm.streaming import BufferOptions, make_stream_handler
-            emit_chunk_ans, close_stream_ans = make_stream_handler(
-                on_emit=_emit_ans,
-                opts=BufferOptions(
-                    min_emit_chars=28,
-                    soft_emit_chars=64,
-                    max_latency_ms=350,
-                    flush_on_strong_punct=True,
-                    flush_on_newline=True,
-                ),
-            )
-        except Exception:
-            def emit_chunk_ans(x: str) -> None:
-                _emit_ans(x)
-            def close_stream_ans() -> None:
-                pass
-
-        full_answer = ""
-        try:
-            import importlib as _imp2
-            _resp = _imp2.import_module("src.agents.responder")
-            _answer_stream = getattr(_resp, "answer_stream", None)
-        except Exception:
-            _answer_stream = None
-
-        if callable(_answer_stream):
-            try:
-                for ch in _answer_stream(
-                    question=question,
-                    mode=MODE_TOKEN,
-                    ctx={"hits": hits, "source_label": source_label},
-                ):
-                    emit_chunk_ans(ch)
-                close_stream_ans()
-                full_answer = acc_ans or "(응답이 비어있어요)"
-            except Exception as e:
-                full_answer = f"(오류) {type(e).__name__}: {e}"
-                _emit_ans(full_answer)
-        else:
-            try:
-                from src.llm import providers as _prov
-                call = getattr(_prov, "call_with_fallback", None)
-            except Exception:
-                call = None
-            if callable(call):
-                import inspect as _inspect
-                params = _inspect.signature(call).parameters.keys()
-                kwargs: _DictT[str, _AnyT] = {}
-                if "messages" in params:
-                    kwargs["messages"] = [
-                        {"role": "system", "content": system_prompt or ""},
-                        {"role": "user", "content": question},
-                    ]
-                else:
-                    if "prompt" in params:
-                        kwargs["prompt"] = question
-                    elif "user_prompt" in params:
-                        kwargs["user_prompt"] = question
-                    if "system_prompt" in params:
-                        kwargs["system_prompt"] = system_prompt or ""
-                    elif "system" in params:
-                        kwargs["system"] = system_prompt or ""
-                res = call(**kwargs)
-                full_answer = res.get("text") if isinstance(res, dict) else str(res)
-                if not full_answer:
-                    full_answer = "(응답이 비어있어요)"
-                _emit_ans(full_answer)
-            else:
-                full_answer = "(오류) LLM 어댑터를 사용할 수 없습니다."
-                _emit_ans(full_answer)
-
-        # 기록(본문+출처 꼬리표 → 히스토리 렌더 시 칩으로 분리)
-        ss["chat"].append(
-            {
-                "id": f"a{int(time.time()*1000)}",
-                "role": "assistant",
-                "text": f"{full_answer}\n\n출처: {source_label}",
-            }
+    def _on_emit_ans(chunk: str) -> None:
+        nonlocal acc_ans
+        acc_ans += str(chunk or "")
+        _emit_bubble(
+            ph_ans,
+            "피티쌤",
+            acc_ans,
+            color="#2563eb",  # 파랑
+            source=src_label,
         )
 
-        # (B) 보완(Co-teacher) 스트리밍 (미나쌤) — 문장 버퍼 연결
-        acc_eval = ""
+    emit_chunk_ans, close_stream_ans = make_stream_handler(
+        on_emit=_on_emit_ans,
+        opts=BufferOptions(
+            min_emit_chars=8,
+            soft_emit_chars=24,
+            max_latency_ms=150,
+            flush_on_strong_punct=True,
+            flush_on_newline=True,
+        ),
+    )
 
-        def _emit_eval(piece: str) -> None:
-            nonlocal acc_eval
-            import html, re
-            acc_eval += str(piece or "")
+    # 실제/의사 스트리밍 처리
+    for piece in answer_stream(question=question, mode=ss.get("__mode", "")):
+        emit_chunk_ans(str(piece or ""))
+    close_stream_ans()
 
-            def esc2(t: str) -> str:
-                t = html.escape(t or "").replace("\n", "<br/>")
-                return re.sub(r"  ", "&nbsp;&nbsp;", t)
+    full_answer = acc_ans.strip() or "(응답이 비어있어요)"
 
-            # 미나쌤(연파랑 22px) + 출처
-            ph_eval.markdown(
-                '<div style="display:flex;justify-content:flex-start;margin:8px 0;">'
-                '  <div style="max-width:88%;padding:10px 12px;border-radius:16px;'
-                '              border-top-left-radius:8px; line-height:1.6;font-size:13px;'
-                '              box-shadow:0 1px 1px rgba(0,0,0,.04);white-space:pre-wrap; position:relative;'
-                '              border:1px dashed #C7D2FE;background:#EEF2FF;color:#1e293b;">'
-                '    <span style="display:inline-block;margin:-2px 6px 6px 0;padding:2px 10px;border-radius:999px;'
-                '                 font-size:22px;font-weight:700;background:#DFF1FF;color:#0f5b86;'
-                '                 border:1px solid #BEE3FF;">미나쌤</span>'
-                '    <span style="display:inline-block;margin:-2px 0 6px 0;padding:1px 8px;border-radius:999px;'
-                '                 font-size:11px;font-weight:700;background:#eef2f6;color:#334155;'
-                '                 border:1px solid #cbd5e1;">'
-                + esc2(str(ss.get("__last_source_label", "")))
-                + "</span><br/>"
-                + esc2(acc_eval)
-                + "  </div></div>",
-                unsafe_allow_html=True,
-            )
+    # 4) 미나쌤(보완) 스트리밍
+    ph_eval = st.empty()
+    acc_eval = ""
 
-        try:
-            from src.llm.streaming import BufferOptions, make_stream_handler
-            emit_chunk_eval, close_stream_eval = make_stream_handler(
-                on_emit=_emit_eval,
-                opts=BufferOptions(
-                    min_emit_chars=28,
-                    soft_emit_chars=64,
-                    max_latency_ms=350,
-                    flush_on_strong_punct=True,
-                    flush_on_newline=True,
-                ),
-            )
-        except Exception:
-            def emit_chunk_eval(x: str) -> None:
-                _emit_eval(x)
-            def close_stream_eval() -> None:
-                pass
-
-        try:
-            import importlib as _imp3
-            _eval = _imp3.import_module("src.agents.evaluator")
-            _eval_stream = getattr(_eval, "evaluate_stream", None)
-        except Exception:
-            _eval_stream = None
-
-        if callable(_eval_stream):
-            try:
-                import inspect as _inspect2
-                params = _inspect2.signature(_eval_stream).parameters
-                _kwargs: dict = {"question": question, "mode": MODE_TOKEN}
-                if "answer" in params:
-                    _kwargs["answer"] = full_answer
-                if "ctx" in params:
-                    _kwargs["ctx"] = {"answer": full_answer}
-                for ch in _eval_stream(**_kwargs):
-                    emit_chunk_eval(ch)
-                close_stream_eval()
-                full_eval = acc_eval or " "
-                _emit_eval(full_eval)
-            except TypeError:
-                try:
-                    for ch in _eval_stream(
-                        question=question, mode=MODE_TOKEN, answer=full_answer
-                    ):
-                        emit_chunk_eval(ch)
-                    close_stream_eval()
-                    full_eval = acc_eval or " "
-                    _emit_eval(full_eval)
-                except Exception as e2:
-                    full_eval = f"(오류) {type(e2).__name__}: {e2}"
-                    _emit_eval(full_eval)
-            except Exception as e:
-                full_eval = f"(오류) {type(e).__name__}: {e}"
-                _emit_eval(full_eval)
-        else:
-            full_eval = "보완 에이전트를 사용할 수 없어서, 주 답변만 제공했어요."
-            _emit_eval(full_eval)
-
-        # 기록 — evaluator에도 출처 꼬리표 부여
-        ss["chat"].append(
-            {
-                "id": f"e{int(time.time()*1000)}",
-                "role": "evaluator",
-                "text": f"{full_eval}\n\n출처: {source_label}",
-            }
+    def _on_emit_eval(chunk: str) -> None:
+        nonlocal acc_eval
+        acc_eval += str(chunk or "")
+        _emit_bubble(
+            ph_eval,
+            "미나쌤",
+            acc_eval,
+            color="#7c3aed",  # 보라
+            source=src_label,  # 동일 질문 기반 출처 칩
         )
 
-        ss["_sending"] = False
-        st.rerun()
+    emit_chunk_eval, close_stream_eval = make_stream_handler(
+        on_emit=_on_emit_eval,
+        opts=BufferOptions(
+            min_emit_chars=8,
+            soft_emit_chars=24,
+            max_latency_ms=150,
+            flush_on_strong_punct=True,
+            flush_on_newline=True,
+        ),
+    )
+
+    for piece in evaluate_stream(
+        question=question,
+        mode=ss.get("__mode", ""),
+        answer=full_answer,
+        ctx={"answer": full_answer},
+    ):
+        emit_chunk_eval(str(piece or ""))
+    close_stream_eval()
+
+
+# ===== 실제 호출부(해당 섹션을 포함하는 상위 렌더링 로직에서 question/system_prompt 제공) ====
+# 상위에서 ss["inpane_q"] 또는 입력 위젯으로 질문을 수집했다고 가정
+try:
+    _q = st.session_state.get("inpane_q", "")
+    if isinstance(_q, str) and _q.strip():
+        _run_chat(_q.strip(), system_prompt=st.session_state.get("__system", ""))
+except Exception:
+    # 렌더 단계에서 입력이 없으면 패널을 건너뜀
+    pass
 # ============================= [13] 채팅 패널 — END =============================
-
-
 
 # ============================ [14] 본문 렌더 — START ============================
 def _render_body() -> None:
