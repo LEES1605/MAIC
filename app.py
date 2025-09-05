@@ -630,11 +630,9 @@ def _render_admin_panels() -> None:
 # ============ [11] 관리자 패널(지연 임포트 + 파일경로 폴백) — END ============
 # ===== [PATCH / app.py / [11] 관리자 패널(지연 임포트 + 파일경로 폴백) / L0643–L0738] — END =====
 
-
-
 # [12] 채팅 UI(스타일/모드/상단 상태 라벨=SSOT) ===============================
 def _inject_chat_styles_once():
-    """전역 CSS: ChatPane(대화틀) + 라디오 pill + 노란 입력창 + 인풋 내부 화살표 버튼 + 배지."""
+    """전역 CSS: ChatPane + 라디오 pill + 노란 입력창 + 인풋 내부 화살표 버튼 + 말풍선/칩."""
     if st is None:
         return
     if st.session_state.get("_chat_styles_injected"):
@@ -644,7 +642,7 @@ def _inject_chat_styles_once():
     st.markdown(
         """
     <style>
-      /* ChatPane */
+      /* ChatPane 컨테이너 */
       .chatpane{
         background:#EDF4FF; border:1px solid #D5E6FF; border-radius:18px;
         padding:10px; margin-top:12px;
@@ -663,23 +661,54 @@ def _inject_chat_styles_once():
       }
       .chatpane div[data-testid="stRadio"] svg{ display:none!important }
 
-      /* 인-카드 입력폼: 인풋 내부에 화살표 버튼(절대배치, 순수 CSS) */
+      /* 인-카드 입력폼: 인풋 내부 화살표 버튼(절대배치) */
       .chatpane form[data-testid="stForm"]{ position:relative; background:#EDF4FF; padding:8px 10px 10px 10px; margin:0; }
       .chatpane form[data-testid="stForm"] input[type="text"]{
         background:#FFF8CC !important; border:1px solid #F2E4A2 !important; border-radius:999px !important;
         color:#333 !important; height:46px; padding-right:56px;
       }
       .chatpane form[data-testid="stForm"] ::placeholder{ color:#8A7F4A !important; }
-      .chatpane form[data-testid="stForm"] button[type="submit"]{
+      /* Streamlit이 type="button"일 수 있으므로 type 지정 없이 버튼 전체를 타깃 */
+      .chatpane form[data-testid="stForm"] button{
         position:absolute; right:18px; top:50%; transform:translateY(-50%);
         width:38px; height:38px; border-radius:50%; border:0; background:#0a2540; color:#fff;
         font-size:18px; line-height:1; cursor:pointer; box-shadow:0 2px 6px rgba(0,0,0,.15);
       }
 
-      /* 턴 구분선 */
+      /* 말풍선 기본 */
+      .msg-row{ display:flex; margin:8px 0; }
+      .msg-row.left{ justify-content:flex-start; }
+      .msg-row.right{ justify-content:flex-end; }
+      .bubble{
+        max-width:88%; padding:10px 12px; border-radius:16px; line-height:1.6; font-size:15px;
+        box-shadow:0 1px 1px rgba(0,0,0,.05); white-space:pre-wrap; position:relative;
+      }
+      .bubble.user{ border-top-right-radius:8px; border:1px solid #F2E4A2; background:#FFF8CC; color:#333; }
+      .bubble.ai  { border-top-left-radius:8px;  border:1px solid #BEE3FF; background:#EAF6FF; color:#0a2540; }
+
+      /* 칩(이름) & 출처 */
+      .chip{
+        display:inline-block; margin:-2px 0 6px 0; padding:2px 10px; border-radius:999px; font-size:12px; font-weight:700;
+        color:#fff; line-height:1;
+      }
+      .chip.me{ background:#059669; }     /* 나 */
+      .chip.pt{ background:#2563eb; }     /* 피티쌤 */
+      .chip.mn{ background:#7c3aed; }     /* 미나쌤 */
+      .chip-src{
+        display:inline-block; margin-left:6px; padding:2px 8px; border-radius:10px;
+        background:#eef2ff; color:#3730a3; font-size:12px; font-weight:600; line-height:1;
+        border:1px solid #c7d2fe; max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+        vertical-align:middle;
+      }
+
+      /* 턴 구분선(옵션) */
       .turn-sep{height:0; border-top:1px dashed #E5EAF2; margin:14px 2px; position:relative;}
       .turn-sep::after{content:''; position:absolute; top:-4px; left:50%; transform:translateX(-50%);
                        width:8px; height:8px; border-radius:50%; background:#E5EAF2;}
+      @media (max-width:480px){
+        .bubble{ max-width:96%; }
+        .chip-src{ max-width:160px; }
+      }
     </style>
     """,
         unsafe_allow_html=True,
@@ -687,37 +716,15 @@ def _inject_chat_styles_once():
 
 
 def _render_bubble(role: str, text: str):
-    """질문=파스텔 노랑, 답변=파스텔 하늘. 칩은 인라인."""
-    import html
-    import re
-
+    """(참고용) 기본 말풍선 렌더러."""
+    import html, re
     is_user = role == "user"
-    wrap = (
-        "display:flex;justify-content:flex-end;margin:8px 0;"
-        if is_user
-        else "display:flex;justify-content:flex-start;margin:8px 0;"
-    )
-    base = (
-        "max-width:88%;padding:10px 12px;border-radius:16px;line-height:1.6;font-size:15px;"
-        "box-shadow:0 1px 1px rgba(0,0,0,.05);white-space:pre-wrap;position:relative;"
-    )
-    bubble = (
-        base + "border-top-right-radius:8px;border:1px solid #F2E4A2;background:#FFF8CC;color:#333;"
-        if is_user
-        else base + "border-top-left-radius:8px;border:1px solid #BEE3FF;background:#EAF6FF;color:#0a2540;"
-    )
-    label_chip = (
-        "display:inline-block;margin:-2px 0 6px 0;padding:1px 8px;border-radius:999px;font-size:11px;font-weight:700;"
-        "background:#FFF2B8;color:#6b5200;border:1px solid #F2E4A2;"
-        if is_user
-        else "display:inline-block;margin:-2px 0 6px 0;padding:1px 8px;border-radius:999px;font-size:11px;font-weight:700;"
-        "background:#DFF1FF;color:#0f5b86;border:1px solid #BEE3FF;"
-    )
+    side = "right" if is_user else "left"
+    klass = "user" if is_user else "ai"
     t = html.escape(text or "").replace("\n", "<br/>")
     t = re.sub(r"  ", "&nbsp;&nbsp;", t)
     st.markdown(
-        f'<div style="{wrap}"><div style="{bubble}"><span style="{label_chip}">'
-        f'{"질문" if is_user else "답변"}</span><br/>{t}</div></div>',
+        f'<div class="msg-row {side}"><div class="bubble {klass}">{t}</div></div>',
         unsafe_allow_html=True,
     )
 
