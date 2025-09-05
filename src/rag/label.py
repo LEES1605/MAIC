@@ -5,7 +5,7 @@ src.rag.label
 - search_hits: RAG(search.py) 인덱스를 캐시/지속화(get_or_build_index)로 확보하여 검색.
 - decide_label: 히트의 파일명/확장자 규칙으로 라벨을 결정.
   * 파일명이 '이유문법*' 또는 '[깨알문법]*' → [이유문법]
-  * 그 외 .pdf 파일 → [문법서적]
+  * 그 외 .pdf 파일 → [문법책]
   * 히트가 없을 때만 → [AI지식]
 """
 
