@@ -139,76 +139,89 @@ def _lazy_imports() -> Dict[str, Any]:
 # =========================== [01] lazy imports — END ==============================
 
 
-# ======================== [02] autoflow_boot_check — START =========================
-def _has_local_index(persist_dir: Path) -> bool:
-    return (persist_dir / "chunks.jsonl").exists() and (persist_dir / ".ready").exists()
+# ====================== [02] Index Orchestrator Panel — START ======================
+from __future__ import annotations
+
+import os
+from pathlib import Path
+from typing import Any, Dict, Optional
+
+import streamlit as st
 
 
-def autoflow_boot_check(*, interactive: bool) -> None:  # noqa: ARG001 (인터페이스 유지)
+def _persist_dir() -> Path:
     """
-    앱 부팅 시 단 한 번 실행되는 오토 플로우(FAST BOOT):
-      - 로컬 인덱스가 있으면 **즉시 READY 로 전환** (네트워크 호출 없음)
-      - 로컬 인덱스가 없을 때만 Releases 에서 복원 시도
-      - 변경 감지/재인덱싱/동기화는 **관리자 버튼(업데이트 점검)** 으로 수동 실행
+    app.py와 동일 규칙으로 퍼시스트 디렉터리를 해석한다.
+    1) src.rag.index_build.PERSIST_DIR
+    2) src.config.PERSIST_DIR
+    3) ~/.maic/persist (폴백)
     """
-    import streamlit as st
+    try:
+        from src.rag.index_build import PERSIST_DIR as IDX
+        return Path(str(IDX)).expanduser()
+    except Exception:
+        pass
+    try:
+        from src.config import PERSIST_DIR as CFG
+        return Path(str(CFG)).expanduser()
+    except Exception:
+        pass
+    return Path.home() / ".maic" / "persist"
 
-    ss = st.session_state
-    if ss.get("_boot_checked") is True:
-        return
 
-    # 진행 단계 기록(SSOT)
-    def PH(code: str, msg: str = "") -> None:
-        try:
-            ss["_boot_phase"] = code
-            if msg:
-                ss["_boot_msg"] = msg
-        except Exception:
-            pass
+def _is_ready(persist: Path) -> bool:
+    try:
+        ready = (persist / ".ready").exists()
+        chunks = persist / "chunks.jsonl"
+        return ready and chunks.exists() and chunks.stat().st_size > 0
+    except Exception:
+        return False
 
-    deps = _lazy_imports()
-    PERSIST_DIR = deps.get("PERSIST_DIR")
-    restore_latest = deps.get("restore_latest")
 
-    p = PERSIST_DIR if isinstance(PERSIST_DIR, Path) else Path(str(PERSIST_DIR))
+def render_index_orchestrator_panel() -> None:
+    """
+    (중복 제거 버전)
+    - 상단 오케스트레이터 패널에서는 레거시 인덱싱 버튼을 모두 제거한다.
+    - 실제 인덱싱(강제 인덱싱(HQ, 느림)+백업)은 app.py의 [15] 관리자 인덱싱 패널을 이용.
+    - 여기서는 인덱스 상태, 경로, 가이드만 노출한다.
+    """
+    st.markdown("### 🧭 인덱스 오케스트레이터")
+    persist = _persist_dir()
+    ok = _is_ready(persist)
 
-    # 0) FAST PATH — 로컬이 이미 있으면 바로 READY
-    PH("LOCAL_CHECK", "로컬 인덱스 확인 중…")
-    if _has_local_index(p):
-        PH("READY_MARK", "준비 완료 표식 생성…")
-        _ready_mark(p)
-        ss["_boot_checked"] = True
-        PH("READY", "준비완료")
-        return
+    c1, c2 = st.columns([2, 3])
+    with c1:
+        st.write("**Persist Dir**")
+        st.code(str(persist), language="text")
+        st.write("**상태**")
+        st.success("READY") if ok else st.warning("MISSING")
 
-    # 1) 로컬이 없을 때만 Releases 복원 시도
-    PH("RESTORE_FROM_RELEASE", "백업에서 로컬 복원 중…")
-    if callable(restore_latest):
-        with st.spinner("초기화: 백업에서 로컬 복원 중…"):
-            ok = False
-            try:
-                ok = bool(restore_latest(dest_dir=p))
-            except Exception as e:
-                _add_error(e)
-        if ok:
-            PH("READY_MARK", "준비 완료 표식 생성…")
-            _ready_mark(p)
-            ss["_boot_checked"] = True
-            PH("READY", "준비완료")
-            if hasattr(st, "toast"):
-                st.toast("✅ 백업에서 로컬 인덱스를 복원했습니다.", icon="✅")
-            else:
-                st.success("✅ 백업에서 로컬 인덱스를 복원했습니다.")
-            st.rerun()
+    with c2:
+        st.info(
+            "강제 인덱싱(HQ, 느림)+백업은 **관리자 인덱싱 패널([15])**에서 실행하세요.\n"
+            "- 관리자 모드 진입 → 하단의 *인덱싱(관리자)* 섹션으로 이동\n"
+            "- 인덱싱 완료 후 ‘업데이트 점검(Drive/Local)’을 눌러 신규파일 감지 여부를 확인하세요."
+        )
+
+    with st.expander("도움말 / 트러블슈팅", expanded=False):
+        st.markdown(
+            "- 인덱싱 후에도 *신규파일 감지*가 뜬다면, prepared **전체 목록**이 `seen` 처리되지 않은 것입니다.\n"
+            "  - app.py의 [15] 패널은 인덱싱 직후 `check_prepared_updates()`로 드라이버를 확인하고,\n"
+            "    드라이버별 **전체 목록**을 재조회해 `mark_prepared_consumed()`에 전달합니다.\n"
+            "- `chunks.jsonl`이 없거나 0B이면 READY가 되지 않습니다."
+        )
+
+    # (선택) 현재 인덱스 파일 존재만 간단 표시
+    try:
+        cj = persist / "chunks.jsonl"
+        if cj.exists():
+            st.caption(f"`chunks.jsonl` 존재: {cj.stat().st_size:,} bytes")
         else:
-            ss["_boot_checked"] = True
-            PH("ERROR", "복원 실패")
-    else:
-        _add_error(RuntimeError("restore_latest 가 없습니다."))
-        ss["_boot_checked"] = True
-        PH("ERROR", "복원 함수를 찾을 수 없습니다.")
+            st.caption("`chunks.jsonl`이 아직 없습니다.")
+    except Exception:
+        pass
+# ======================= [02] Index Orchestrator Panel — END =======================
 
-# ========================= [02] autoflow_boot_check — END ==========================
 # ================== [03] render_index_orchestrator_panel — START ==================
 def render_index_orchestrator_panel() -> None:
     """
