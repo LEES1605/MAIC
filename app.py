@@ -635,16 +635,20 @@ def _inject_chat_styles_once() -> None:
     """전역 CSS: 카톡형 입력(인풋 내부 우측 ➤), 말풍선/칩, 모드 pill."""
     if st is None:
         return
-    if st.session_state.get("_chat_styles_injected"):
+    # v2 키로 강제 재주입 (이전 키가 True여서 스킵되던 문제 방지)
+    if st.session_state.get("_chat_styles_injected_v2"):
         return
-    st.session_state["_chat_styles_injected"] = True
+    st.session_state["_chat_styles_injected_v2"] = True
 
     st.markdown(
         """
     <style>
       /* ChatPane */
-      .chatpane{ background:#EDF4FF; border:1px solid #D5E6FF; border-radius:18px;
-                 padding:10px; margin-top:12px; }
+      .chatpane{
+        position:relative;
+        background:#EDF4FF; border:1px solid #D5E6FF; border-radius:18px;
+        padding:10px; margin-top:12px;
+      }
       .chatpane .messages{ max-height:60vh; overflow-y:auto; padding:8px; }
 
       /* 모드 pill */
@@ -663,18 +667,21 @@ def _inject_chat_styles_once() -> None:
       .chatpane form[data-testid="stForm"]{
         position:relative; background:#EDF4FF; padding:8px 10px 10px 10px; margin:0;
       }
-      /* 인풋 패딩을 늘려 버튼 공간 확보 */
+      /* 인풋에 버튼 자리 확보 */
       .chatpane form[data-testid="stForm"] [data-testid="stTextInput"] input{
         background:#FFF8CC !important; border:1px solid #F2E4A2 !important; border-radius:999px !important;
         color:#333 !important; height:46px; padding-right:56px;
       }
       .chatpane ::placeholder{ color:#8A7F4A !important; }
-      /* 핵심: 제출 버튼(stButton) 컨테이너를 폼 기준으로 절대배치 */
-      .chatpane form[data-testid="stForm"] .stButton{
+
+      /* 핵심: submit 버튼 컨테이너를 폼 기준 absolute로 겹치기 (모든 변형 대응) */
+      .chatpane form[data-testid="stForm"] .stButton,
+      .chatpane form[data-testid="stForm"] .row-widget.stButton{
         position:absolute; right:14px; top:50%; transform:translateY(-50%);
-        z-index:2;
+        z-index:2; margin:0!important; padding:0!important;
       }
-      .chatpane form[data-testid="stForm"] .stButton > button{
+      .chatpane form[data-testid="stForm"] .stButton > button,
+      .chatpane form[data-testid="stForm"] .row-widget.stButton > button{
         width:38px; height:38px; border-radius:50%; border:0; background:#0a2540; color:#fff;
         font-size:18px; line-height:1; cursor:pointer; box-shadow:0 2px 6px rgba(0,0,0,.15);
         padding:0; min-height:0;
@@ -846,73 +853,25 @@ def _render_chat_panel() -> None:
     ss["inpane_q"] = ""
 # ============================= [13] 채팅 패널 — END =============================
 
-# ============================ [14] 본문 렌더 — START ============================
-def _render_body() -> None:
-    if st is None:
-        return
+# ========== [14] PATCH: 제출 직후는 rerun만 (동일 사이클 재그림 금지) — START ==========
+# 기존:
+# if submitted and isinstance(q, str) and q.strip():
+#     st.session_state["inpane_q"] = q.strip()
+#     with st.container():
+#         st.markdown('<div class="chatpane"><div class="messages">', unsafe_allow_html=True)
+#         _render_chat_panel()
+#         st.markdown('</div></div>', unsafe_allow_html=True)
+# else:
+#     st.session_state.setdefault("inpane_q", "")
 
-    # 1) 부팅 오토플로우 1회
-    if not st.session_state.get("_boot_checked"):
-        try:
-            _boot_autoflow_hook()
-        except Exception as e:
-            _errlog(f"boot check failed: {e}", where="[render_body.boot]", exc=e)
-        finally:
-            st.session_state["_boot_checked"] = True
+# 교체:
+if submitted and isinstance(q, str) and q.strip():
+    st.session_state["inpane_q"] = q.strip()
+    st.rerun()  # 다음 렌더 사이클에서 위(메시지) / 아래(입력창) 고정
+else:
+    st.session_state.setdefault("inpane_q", "")
+# ========== [14] PATCH: 제출 직후는 rerun만 (동일 사이클 재그림 금지) — END ==========
 
-    # 2) 배경
-    _mount_background(
-        theme="light", accent="#5B8CFF", density=3, interactive=True, animate=True,
-        gradient="radial", grid=True, grain=False, blur=0, seed=1234, readability_veil=True,
-    )
-
-    # 3) 헤더
-    _header()
-
-    # 4) 빠른 부팅
-    try:
-        _qlao = globals().get("_quick_local_attach_only")
-        if callable(_qlao):
-            _qlao()
-    except Exception as e:
-        _errlog(f"quick attach failed: {e}", where="[render_body]", exc=e)
-
-    # 5) 관리자 패널
-    if _is_admin_view():
-        _render_admin_panels()
-        try:
-            _render_admin_index_panel()
-        except Exception as e:
-            _errlog(f"admin index panel failed: {e}", where="[admin-index]", exc=e)
-        st.caption("ⓘ 복구/재인덱싱은 상단 ‘🛠 진단 도구’ 또는 아래 인덱싱 패널에서 수행할 수 있어요.")
-
-    # 6) 자동 시작
-    _auto_start_once()
-
-    # 7) 채팅(위): 말풍선 영역
-    _inject_chat_styles_once()
-    with st.container():
-        st.markdown('<div class="chatpane"><div class="messages">', unsafe_allow_html=True)
-        _render_chat_panel()
-        st.markdown('</div></div>', unsafe_allow_html=True)
-
-    # 8) 입력 폼(아래): 인풋 내부 우측 ➤ (CSS로 stButton 겹치기)
-    with st.container(border=True, key="chatpane_container"):
-        st.markdown('<div class="chatpane">', unsafe_allow_html=True)
-        st.session_state["__mode"] = _render_mode_controls_pills() or st.session_state.get("__mode", "")
-        with st.form("chat_form", clear_on_submit=False):
-            # 주의: Streamlit 위젯은 마크업 래퍼에 실제로 감싸지지 않음. CSS는 [12]에서 stForm/stButton을 직접 타깃팅.
-            q = st.text_input("질문", placeholder="질문을 입력하세요…", key="q_text")
-            submitted = st.form_submit_button("➤")
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    if submitted and isinstance(q, str) and q.strip():
-        st.session_state["inpane_q"] = q.strip()
-        # 같은 렌더 사이클에서 바로 메시지를 그리지 않고, rerun으로 재배치 보장(위에 메시지, 아래에 입력창).
-        st.rerun()
-    else:
-        st.session_state.setdefault("inpane_q", "")
-# ============================= [14] 본문 렌더 — END =============================
 
 # [15] main ===================================================================
 def main():
