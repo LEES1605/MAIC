@@ -279,8 +279,9 @@ def rebuild_index(output_dir=None):
     files = list_files() if callable(list_files) else []
     # files: [{"id","name","modified_ts","size","mime"?}, ...]
 
-    lines = []
-    seen = set()
+    roots = [p for p in _iter_source_roots()]
+    lines: list[dict[str, Any]] = []
+    seen: set[str] = set()
 
     for f in files:
         fid = str(f.get("id") or "")
