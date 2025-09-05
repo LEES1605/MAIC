@@ -1072,3 +1072,179 @@ def _render_admin_index_panel() -> None:
                 _errlog(f"list docs failed: {e}", where="[admin-index.list]", exc=e)
                 st.error("문서 목록 표시 중 오류가 발생했어요.")
 # ========================= [16] ADMIN: Index Panel — END =========================
+# ======================== [17] Indexed Sources Panel — START =========================
+def _render_admin_indexed_sources_panel() -> None:
+    """
+    관리자용: 현재 인덱스(chunks.jsonl)를 읽어 문서(파일) 단위로 집계/표시한다.
+    - 열: 출처라벨 · 제목 · 문서ID · 경로 · 확장자 · 크기(bytes) · 수정시각 · 청크개수
+    - 필터(문자열 포함) · CSV 내보내기 · 대용량 방지(최대 5000행)
+    """
+    import json
+    from pathlib import Path
+    from typing import Any, Dict, List
+
+    if st is None or not _is_admin_view():
+        return
+
+    # --- PERSIST_DIR 결정 ---
+    def _persist_dir() -> Path:
+        try:
+            from src.rag.index_build import PERSIST_DIR as IDX_DIR  # type: ignore[import]
+            return Path(str(IDX_DIR)).expanduser()
+        except Exception:
+            pass
+        try:
+            from src.config import PERSIST_DIR as CFG_DIR  # type: ignore[import]
+            return Path(str(CFG_DIR)).expanduser()
+        except Exception:
+            pass
+        return Path.home() / ".maic" / "persist"
+
+    persist = _persist_dir()
+    chunks_path = persist / "chunks.jsonl"
+    manifest_path = persist / "manifest.json"
+
+    with st.container(border=True):
+        st.subheader("📄 인덱싱된 파일 목록 (읽기 전용)")
+        st.caption(f"경로: `{str(chunks_path)}`")
+
+        # 파일 존재 확인
+        if not chunks_path.exists():
+            st.info("아직 인덱스가 없습니다. 먼저 인덱싱을 수행해 주세요.")
+            return
+
+        # ---- manifest(optional) 읽기 ----
+        manifest_docs: Dict[str, Dict[str, str]] = {}
+        try:
+            if manifest_path.exists():
+                data = json.loads(manifest_path.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    manifest_docs = dict(data.get("docs") or {})
+        except Exception:
+            manifest_docs = {}
+
+        # ---- chunks.jsonl 집계(문서별) ----
+        # doc_id → 집계 row
+        docs: Dict[str, Dict[str, Any]] = {}
+        total_lines = 0
+        parse_errors = 0
+
+        def _src_label(title: str, source: str, ext: str) -> str:
+            # 출처 라벨 정책:
+            #  - 파일명 접두 '이유문법*' 또는 '[깨알문법*' → [이유문법]
+            #  - 확장자 .pdf → [문법책]
+            #  - 그 외 / 불명 → [AI지식]
+            name = (Path(source).name if source else "") or title
+            if name.startswith("이유문법") or name.startswith("[깨알문법"):
+                return "이유문법"
+            if (ext or "").lower() == ".pdf":
+                return "문법책"
+            return "AI지식"
+
+        # 대용량 보호
+        MAX_ROWS = 5000
+        try:
+            with chunks_path.open("r", encoding="utf-8") as rf:
+                for line in rf:
+                    total_lines += 1
+                    if total_lines > 200000:  # 안전 상한(청크가 매우 많은 경우)
+                        break
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = json.loads(line)
+                    except Exception:
+                        parse_errors += 1
+                        continue
+
+                    doc_id = str(obj.get("doc_id") or "")
+                    if not doc_id:
+                        continue
+                    title = str(obj.get("title") or "")
+                    source = str(obj.get("source") or "")
+                    ext = str(obj.get("ext") or "")
+                    mtime = str(obj.get("mtime") or "")
+                    bsize = int(obj.get("bytes") or 0)
+
+                    row = docs.get(doc_id)
+                    if row is None:
+                        # manifest의 보강 정보 우선 적용
+                        if doc_id in manifest_docs:
+                            man = manifest_docs[doc_id]
+                            title = str(man.get("title") or title or "")
+                            source = str(man.get("source") or source or "")
+                        row = {
+                            "출처": _src_label(title, source, ext),
+                            "제목": title or Path(source).stem,
+                            "문서ID": doc_id,
+                            "경로": source,
+                            "확장자": ext,
+                            "크기(bytes)": bsize,
+                            "수정시각": mtime,
+                            "청크개수": 0,
+                        }
+                        docs[doc_id] = row
+                    # 집계 업데이트
+                    row["청크개수"] = int(row.get("청크개수", 0)) + 1
+                    # 크기/수정시각은 더 최신값으로 갱신 시도
+                    if bsize and bsize != row.get("크기(bytes)", 0):
+                        row["크기(bytes)"] = bsize
+                    if mtime and mtime > (row.get("수정시각") or ""):
+                        row["수정시각"] = mtime
+        except Exception as e:
+            _errlog(f"read chunks.jsonl failed: {e}", where="[indexed-sources.read]", exc=e)
+            st.error("인덱스 파일을 읽는 중 오류가 발생했어요.")
+            return
+
+        # ---- 리스트화 & 정렬 ----
+        rows: List[Dict[str, Any]] = list(docs.values())
+        rows.sort(key=lambda r: (r.get("출처") or "", r.get("제목") or ""))
+
+        st.markdown(
+            f"- 총 청크 라인: **{total_lines:,}** · 파싱오류: **{parse_errors:,}** · 문서 수: **{len(rows):,}**"
+        )
+
+        # ---- 필터 & 샘플링 ----
+        c1, c2 = st.columns([2, 1])
+        with c1:
+            q = st.text_input("필터(제목/경로/문서ID 포함 검색)", value="")
+        with c2:
+            st.caption("행 개수 제한: 최대 5000")
+        if q:
+            ql = q.strip().lower()
+            rows = [
+                r
+                for r in rows
+                if ql in str(r.get("제목", "")).lower()
+                or ql in str(r.get("경로", "")).lower()
+                or ql in str(r.get("문서ID", "")).lower()
+            ]
+
+        limited = False
+        if len(rows) > MAX_ROWS:
+            rows = rows[:MAX_ROWS]
+            limited = True
+
+        # ---- 표 렌더 ----
+        st.dataframe(rows, hide_index=True, use_container_width=True)
+        if limited:
+            st.caption("※ 행이 많아 상위 5,000개만 표시 중입니다. 필터를 이용해 범위를 좁혀주세요.")
+
+        # ---- CSV 내보내기 ----
+        import io, csv
+        buf = io.StringIO()
+        writer = csv.DictWriter(
+            buf,
+            fieldnames=["출처", "제목", "문서ID", "경로", "확장자", "크기(bytes)", "수정시각", "청크개수"],
+        )
+        writer.writeheader()
+        for r in rows:
+            writer.writerow(r)
+        st.download_button(
+            "CSV 다운로드",
+            data=buf.getvalue().encode("utf-8-sig"),
+            file_name="indexed_sources.csv",
+            mime="text/csv",
+        )
+# ========================= [17] Indexed Sources Panel — END ==========================
