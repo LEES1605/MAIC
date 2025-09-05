@@ -142,7 +142,7 @@ def decide_label(
     """
     라벨 규칙:
       - 파일명이 '이유문법*' 또는 '[깨알문법]*' → [이유문법]
-      - 그 외 .pdf → [문법서적]
+      - 그 외 .pdf → [문법책]
       - 히트가 없으면 → [AI지식]
     """
     items = list(hits or [])
@@ -163,10 +163,10 @@ def decide_label(
     if name_lower.startswith("iyu") or name_lower.startswith("reason-grammar"):
         return "[이유문법]"
 
-    # 2) PDF → 문법서적
+    # 2) PDF → 문법책
     if Path(path).suffix.lower() == ".pdf" or name_lower.endswith(".pdf"):
-        return "[문법서적]"
+        return "[문법책]"
 
     # 3) 나머지(히트가 존재하는 경우)는 문법 자료로 간주
-    return "[문법서적]"
+    return "[문법책]"
 # =============================== [01] RAG LABELER — END ===============================
