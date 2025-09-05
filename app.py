@@ -1000,8 +1000,9 @@ def render_index_orchestrator_panel() -> None:
 def _render_admin_indexed_sources_panel() -> None:
     """
     현재 인덱스(chunks.jsonl)를 읽어 문서 단위로 요약/표시.
-    - 고유 doc_id(또는 source) 기준으로 문서 수 집계
-    - 전체 청크 라인 수와 함께 간단한 표 제공(최대 400행)
+    - 고유 doc_id(또는 source) 기준 문서 수
+    - 전체 청크 라인 수
+    - 표는 최대 400행
     """
     import json
     from pathlib import Path
@@ -1010,7 +1011,6 @@ def _render_admin_indexed_sources_panel() -> None:
     if st is None or not _is_admin_view():
         return
 
-    # PERSIST_DIR 결정(전역 또는 인덱서 공개값 우선)
     try:
         from src.rag.index_build import PERSIST_DIR as _PERSIST
         persist = Path(str(_PERSIST)).expanduser()
@@ -1020,14 +1020,14 @@ def _render_admin_indexed_sources_panel() -> None:
     cj = persist / "chunks.jsonl"
     docs_table: List[Dict[str, str]] = []
     if not cj.exists():
-        st.info("인덱스 결과(chunks.jsonl)가 아직 없습니다.")
+        st.info("`chunks.jsonl`이 아직 없어 결과를 표시할 수 없습니다.")
         return
 
     seen = set()
     total_lines = 0
     try:
-        with cj.open("r", encoding="utf-8") as r:
-            for line in r:
+        with cj.open("r", encoding="utf-8") as rf:
+            for line in rf:
                 line = line.strip()
                 if not line:
                     continue
@@ -1045,19 +1045,15 @@ def _render_admin_indexed_sources_panel() -> None:
                 if len(docs_table) >= 400:
                     break
     except Exception as e:
-        _errlog(f"chunks.jsonl 파싱 실패: {e}", where="[indexed-sources]")
+        _errlog(f"list docs failed: {e}", where="[indexed-sources]", exc=e)
 
-    st.caption(
-        f"인덱싱 청크 수(표본 아님): **{total_lines}** · "
-        f"문서 수(고유 doc_id 기준): **{len(docs_table)}**"
-    )
+    st.subheader("📄 인덱싱된 파일(요약)")
+    st.caption(f"인덱싱 청크 수: **{total_lines}** · 문서 수(고유 doc_id): **{len(docs_table)}**")
     if docs_table:
         st.dataframe(docs_table, hide_index=True, use_container_width=True)
-        if total_lines > len(docs_table):
-            st.caption("※ 표는 고유 문서 기준으로 최대 400건까지만 표시합니다.")
     else:
         st.info("인덱스 결과가 비어 있습니다.")
-# ========================== [16] Indexed Sources Panel — END ==========================
+# ========================== [16] Indexed Sources Panel — END =========================
 
 
 # [17] main ===================================================================
