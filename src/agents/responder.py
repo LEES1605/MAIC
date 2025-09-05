@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Iterator, Dict, Any, Optional, List, Callable, Mapping
 import inspect
+import re
 from queue import Queue, Empty
 from threading import Thread
 
@@ -17,6 +18,14 @@ def _system_prompt(mode: str) -> str:
         "당신은 학생을 돕는 영어 선생님입니다. 불필요한 말은 줄이고, "
         "짧은 문장과 단계적 설명을 사용하세요. " + hint
     )
+
+
+def _split_sentences(text: str) -> List[str]:
+    if not text:
+        return []
+    # 마침표/느낌표/물음표(영/한) 기준으로 자연스런 분할
+    parts = re.split(r"(?<=[\.!\?。！？])\s+", text.strip())
+    return [p for p in parts if p]
 
 
 def _build_io_kwargs(
@@ -50,7 +59,7 @@ def _iter_provider_stream(
     """
     가능한 경우 실제 스트리밍으로 토막을 yield.
     - 우선순위: providers.stream_text → call_with_fallback(stream+callbacks)
-    - 전부 불가하면 최종 텍스트 한 번만 yield(폴백)
+    - 전부 불가하면 문장 단위로 분할하여 의사-스트리밍
     """
     try:
         from src.llm import providers as prov
@@ -93,7 +102,7 @@ def _iter_provider_stream(
         if "stream" in params:
             kwargs["stream"] = True
 
-        # 콜백이 전혀 없으면 스트리밍 불가 → 폴백으로 처리
+        # 콜백이 있으면 진짜 스트리밍
         if used_cb:
             def _runner() -> None:
                 try:
@@ -118,11 +127,12 @@ def _iter_provider_stream(
                 yield str(item or "")
             return
 
-        # 콜백 미지원이면 아래 폴백으로
+        # 콜백 미지원 → 최종 텍스트를 문장 단위로 쪼개어 의사-스트리밍
         try:
             res = call(**kwargs)
             txt = res.get("text") if isinstance(res, dict) else str(res)
-            yield str(txt or "")
+            for chunk in _split_sentences(str(txt or "")):
+                yield chunk
             return
         except Exception as e:  # pragma: no cover
             yield f"(오류) {type(e).__name__}: {e}"
