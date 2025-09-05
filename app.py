@@ -930,6 +930,19 @@ def _render_admin_index_panel() -> None:
     if st is None or not _is_admin_view():
         return
 
+    # ---- prepared API 로더(런타임 동적 임포트; mypy missing-import 회피) ----
+    def _load_prepared_api():
+        chk = mark = None
+        # 우선순위: src.prepared → prepared (루트) → src.services.prepared(과거명)
+        for modname in ("src.prepared", "prepared", "src.services.prepared"):
+            try:
+                m = importlib.import_module(modname)
+                chk = getattr(m, "check_prepared_updates", None) if chk is None else chk
+                mark = getattr(m, "mark_prepared_consumed", None) if mark is None else mark
+            except Exception:
+                continue
+        return chk, mark
+
     with st.container(border=True):
         st.subheader("📚 인덱싱(관리자)")
 
@@ -956,20 +969,18 @@ def _render_admin_index_panel() -> None:
 
         # 사전 스캔
         files: list[Path] = []
-        rag = None
         try:
             rag = importlib.import_module("src.rag.search")
             SUP = getattr(rag, "SUPPORTED_EXTS", {".md", ".txt", ".pdf"})
-            for p in sorted(ds.rglob("*")):
-                if p.is_file() and p.suffix.lower() in SUP:
-                    files.append(p)
         except Exception:
             SUP = {".md", ".txt", ".pdf"}
-
+        for p in sorted(ds.rglob("*")):
+            if p.is_file() and p.suffix.lower() in SUP:
+                files.append(p)
         st.caption(f"사전 스캔: {len(files)}개 파일 후보")
 
         # 인덱싱 버튼
-        c1, c2, c3 = st.columns([1,1,2])
+        c1, c2, _ = st.columns([1, 1, 2])
         with c1:
             do_rebuild = st.button("강제 인덱싱(HQ, 느림)+백업", type="primary")
         with c2:
@@ -977,42 +988,38 @@ def _render_admin_index_panel() -> None:
 
         # 업데이트 점검(Drive→Local 폴백)
         if do_check:
-            try:
-                from src.services.prepared import check_prepared_updates as chk  # Drive우선
-            except Exception:
-                from src.prepared import check_prepared_updates as chk          # Local 폴백
-            try:
-                info = chk(PERSIST_DIR)
-                st.write(info)
-            except Exception as e:
-                _errlog(f"check prepared failed: {e}", where="[admin-index.check]", exc=e)
-                st.error("업데이트 점검 중 오류가 발생했어요.")
+            chk, _mark = _load_prepared_api()
+            if callable(chk):
+                try:
+                    info = chk(PERSIST_DIR)
+                    st.write(info)
+                except Exception as e:
+                    _errlog(f"check prepared failed: {e}", where="[admin-index.check]", exc=e)
+                    st.error("업데이트 점검 중 오류가 발생했어요.")
+            else:
+                st.warning("prepared 모듈(check_prepared_updates)을 찾지 못했습니다.")
 
         # 강제 인덱싱(HQ)
         if do_rebuild:
-            prog = st.progress(0.0, text="인덱싱 중…")
+            prog = st.progress(0.0, text="HQ 인덱싱 중…")
             try:
                 from src.rag import index_build as _idx
-                os.environ["MAIC_INDEX_MODE"] = "HQ"
-                _idx.rebuild_index()  # .ready / chunks.jsonl 생성
+                os.environ["MAIC_INDEX_MODE"] = "HQ"   # ← HQ 모드 강제
+                _idx.rebuild_index()                   # .ready / chunks.jsonl 생성
                 prog.progress(1.0, text="인덱싱 완료")
                 st.success("강제 재인덱싱 완료 (HQ)")
 
                 # (중요) Drive/Local 신규파일 '소비(seen)' 마킹
-                try:
-                    from src.services.prepared import check_prepared_updates as chk, mark_prepared_consumed as mark
-                except Exception:
-                    from src.prepared import check_prepared_updates as chk, mark_prepared_consumed as mark
-                try:
-                    info = chk(PERSIST_DIR)
-                    files_list = info.get("files") or []
-                    if files_list:
-                        mark(PERSIST_DIR, files_list)
-                        st.caption("✓ prepared 신규 파일을 소비(seen) 처리했습니다.")
-                except Exception:
-                    # 소비 마킹 실패는 치명적 아님 — 조용히 무시
-                    pass
-
+                chk, mark = _load_prepared_api()
+                if callable(chk) and callable(mark):
+                    try:
+                        info = chk(PERSIST_DIR)
+                        files_list = (info or {}).get("files") or []
+                        if files_list:
+                            mark(PERSIST_DIR, files_list)
+                            st.caption("✓ prepared 신규 파일을 소비(seen) 처리했습니다.")
+                    except Exception:
+                        pass  # 소비 마킹 실패는 치명적 아님
             except Exception as e:
                 prog.progress(0.0)
                 _errlog(f"reindex failed: {e}", where="[admin-index.rebuild]", exc=e)
@@ -1020,7 +1027,6 @@ def _render_admin_index_panel() -> None:
 
         # (선택) 인덱싱 후 요약 미리보기
         try:
-            from pathlib import Path
             import json
             try:
                 from src.rag.index_build import PERSIST_DIR as _PERSIST
@@ -1033,8 +1039,8 @@ def _render_admin_index_panel() -> None:
             if cj.exists():
                 seen = set()
                 total_lines = 0
-                with cj.open("r", encoding="utf-8") as r:
-                    for line in r:
+                with cj.open("r", encoding="utf-8") as rf:   # ← 파일핸들 이름 rf로
+                    for line in rf:
                         line = line.strip()
                         if not line:
                             continue
@@ -1060,7 +1066,6 @@ def _render_admin_index_panel() -> None:
             _errlog(f"list docs failed: {e}", where="[admin-index.list]", exc=e)
             st.error("문서 목록 표시 중 오류가 발생했어요.")
 # ========================= [15] ADMIN: Index Panel — END =========================
-
 
 # ========================= [16] Indexed Sources Panel — START ==========================
 def _render_admin_indexed_sources_panel() -> None:
@@ -1147,9 +1152,9 @@ def _render_admin_indexed_sources_panel() -> None:
             return "Unknown"
 
         try:
-            with chunks_path.open("r", encoding="utf-8") as r:
-                for line in r:
-                    line = line.strip()
+            with chunks_path.open("r", encoding="utf-8") as rf:  # ← 파일핸들 이름 rf
+                for raw in rf:
+                    line = raw.strip()
                     if not line:
                         continue
                     total_lines += 1
@@ -1163,7 +1168,7 @@ def _render_admin_indexed_sources_panel() -> None:
                     source = str(obj.get("source") or "")
                     title = str(obj.get("title") or "")
                     ext = str(obj.get("ext") or "")
-                    bsize = int(obj.get("size") or 0)
+                    bsize = int(obj.get("size") or obj.get("bytes") or 0)
                     mtime = _to_kst(str(obj.get("mtime") or ""))
 
                     row = docs.get(doc_id)
@@ -1221,8 +1226,8 @@ def _render_admin_indexed_sources_panel() -> None:
         buf = io.StringIO()
         writer = csv.DictWriter(buf, fieldnames=["출처","제목","문서ID","경로","확장자","크기(bytes)","수정시각","청크개수"])
         writer.writeheader()
-        for r in rows:
-            writer.writerow(r)
+        for row in rows:                  # ← 행 변수명 row
+            writer.writerow(row)          # ← Mapping[str, Any]로 명확
         st.download_button("CSV 다운로드", data=buf.getvalue().encode("utf-8-sig"), file_name="indexed_sources.csv", mime="text/csv")
 # ========================= [16] Indexed Sources Panel — END ==========================
 
