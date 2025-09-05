@@ -740,85 +740,77 @@ def _render_mode_controls_pills() -> str:
 # - 질문(나) → 피티쌤(주답변, 스트리밍) → 미나쌤(보완, 스트리밍) 순서로 출력
 # - 각 말풍선에 이름 칩(나/피티쌤/미나쌤)과 출처 칩을 표시
 # - 스트리밍: provider 실스트리밍 지원 시 콜백 경로, 미지원 시 문장 단위 의사-스트리밍
-from typing import Any, Dict, Iterator, Optional, Mapping
-import html
-import re
-
-import streamlit as st
-
-# RAG 라벨(출처 칩) 모듈 로딩(폴백 포함)
-try:
+def _render_chat_panel() -> None:
+    # 지역 임포트로 E402 회피
     import importlib as _imp
+    import html
+    import re
+    from typing import Optional
+    import streamlit as st
+
+    # 라벨러(출처 칩) 모듈 로딩(폴백 포함)
     try:
-        _label_mod = _imp.import_module("src.rag.label")
+        try:
+            _label_mod = _imp.import_module("src.rag.label")
+        except Exception:
+            _label_mod = _imp.import_module("label")  # 루트의 label.py 폴백
+        _decide_label = getattr(_label_mod, "decide_label", None)
+        _search_hits = getattr(_label_mod, "search_hits", None)
     except Exception:
-        _label_mod = _imp.import_module("label")  # 루트의 label.py 폴백
-    _decide_label = getattr(_label_mod, "decide_label", None)
-    _search_hits = getattr(_label_mod, "search_hits", None)
-except Exception:
-    _decide_label = None
-    _search_hits = None
+        _decide_label = None
+        _search_hits = None
 
-# 답변 제너레이터(실제 스트리밍/의사-스트리밍)
-from src.agents.responder import answer_stream
-from src.agents.evaluator import evaluate_stream
+    # 답변 제너레이터 & 버퍼 헬퍼(지역 임포트)
+    from src.agents.responder import answer_stream
+    from src.agents.evaluator import evaluate_stream
+    from src.llm.streaming import BufferOptions, make_stream_handler
 
-# 문장 버퍼 옵션
-from src.llm.streaming import BufferOptions, make_stream_handler
+    # ----- 뷰 유틸 -----
+    def _render_chip(name: str, *, color: str = "#444") -> str:
+        # 이름 칩: 100% 크기, 둥근 라벨
+        style = (
+            "display:inline-block;padding:4px 10px;border-radius:12px;"
+            f"background:{color};color:#fff;font-weight:600;"
+            "font-size:13px;line-height:1;"
+        )
+        return f'<span style="{style}">{html.escape(name)}</span>'
 
+    def _render_source(label: str) -> str:
+        # 출처 칩
+        style = (
+            "display:inline-block;margin-left:6px;padding:2px 8px;"
+            "border-radius:10px;background:#eef2ff;color:#3730a3;"
+            "font-size:12px;font-weight:600;line-height:1;"
+            "border:1px solid #c7d2fe;"
+        )
+        return f'<span style="{style}">{html.escape(label)}</span>'
 
-def _render_chip(name: str, *, color: str = "#444") -> str:
-    # 이름 칩: 100% 크기(기존 대비 확대), 둥근 라벨
-    style = (
-        "display:inline-block;padding:4px 10px;border-radius:12px;"
-        f"background:{color};color:#fff;font-weight:600;"
-        "font-size:13px;line-height:1;"
-    )
-    return f'<span style="{style}">{html.escape(name)}</span>'
+    def _esc_text(t: str) -> str:
+        # 줄바꿈/공백 보존
+        s = html.escape(t or "").replace("\n", "<br/>")
+        return re.sub(r"  ", "&nbsp;&nbsp;", s)
 
+    def _emit_bubble(placeholder, who: str, text: str, *,
+                     color: str, source: Optional[str] = None) -> None:
+        chips = _render_chip(who, color=color)
+        if source:
+            chips += _render_source(source)
+        placeholder.markdown(
+            '<div style="display:flex;justify-content:flex-start;margin:8px 0;">'
+            f'{chips}'
+            f'<div style="margin-left:8px;max-width:760px;">{_esc_text(text)}</div>'
+            "</div>",
+            unsafe_allow_html=True,
+        )
 
-def _render_source(label: str) -> str:
-    # 출처 칩: 색상은 기존 태그 색상과 동일 계열(파랑/보라 등은 상위 CSS에 맞춤)
-    style = (
-        "display:inline-block;margin-left:6px;padding:2px 8px;"
-        "border-radius:10px;background:#eef2ff;color:#3730a3;"
-        "font-size:12px;font-weight:600;line-height:1;"
-        "border:1px solid #c7d2fe;"
-    )
-    return f'<span style="{style}">{html.escape(label)}</span>'
+    def _emit_user(placeholder, text: str) -> None:
+        _emit_bubble(placeholder, "나", text, color="#059669")
 
-
-def _esc_text(t: str) -> str:
-    # 줄바꿈/공백 보존
-    s = html.escape(t or "").replace("\n", "<br/>")
-    return re.sub(r"  ", "&nbsp;&nbsp;", s)
-
-
-def _emit_bubble(placeholder: "st.delta_generator.DeltaGenerator",
-                 who: str,
-                 text: str,
-                 *,
-                 color: str,
-                 source: Optional[str] = None) -> None:
-    chips = _render_chip(who, color=color)
-    if source:
-        chips += _render_source(source)
-    placeholder.markdown(
-        '<div style="display:flex;justify-content:flex-start;margin:8px 0;">'
-        f'{chips}'
-        f'<div style="margin-left:8px;max-width:760px;">{_esc_text(text)}</div>'
-        "</div>",
-        unsafe_allow_html=True,
-    )
-
-
-def _emit_user(placeholder: "st.delta_generator.DeltaGenerator",
-               text: str) -> None:
-    _emit_bubble(placeholder, "나", text, color="#059669")
-
-
-def _run_chat(question: str, *, system_prompt: str = "") -> None:
+    # ----- 본 패널 로직 -----
     ss = st.session_state
+    question = str(ss.get("inpane_q", "") or "").strip()
+    if not question:
+        return  # 입력 없으면 패널 미표시
 
     # 1) 사용자 질문 말풍선 먼저 출력
     ph_user = st.empty()
@@ -854,15 +846,14 @@ def _run_chat(question: str, *, system_prompt: str = "") -> None:
     emit_chunk_ans, close_stream_ans = make_stream_handler(
         on_emit=_on_emit_ans,
         opts=BufferOptions(
-            min_emit_chars=8,
+            min_emit_chars=8,       # 초기 토막 빨리 출력
             soft_emit_chars=24,
-            max_latency_ms=150,
+            max_latency_ms=150,     # 지연 상한 단축
             flush_on_strong_punct=True,
             flush_on_newline=True,
         ),
     )
 
-    # 실제/의사 스트리밍 처리
     for piece in answer_stream(question=question, mode=ss.get("__mode", "")):
         emit_chunk_ans(str(piece or ""))
     close_stream_ans()
@@ -903,17 +894,6 @@ def _run_chat(question: str, *, system_prompt: str = "") -> None:
     ):
         emit_chunk_eval(str(piece or ""))
     close_stream_eval()
-
-
-# ===== 실제 호출부(해당 섹션을 포함하는 상위 렌더링 로직에서 question/system_prompt 제공) ====
-# 상위에서 ss["inpane_q"] 또는 입력 위젯으로 질문을 수집했다고 가정
-try:
-    _q = st.session_state.get("inpane_q", "")
-    if isinstance(_q, str) and _q.strip():
-        _run_chat(_q.strip(), system_prompt=st.session_state.get("__system", ""))
-except Exception:
-    # 렌더 단계에서 입력이 없으면 패널을 건너뜀
-    pass
 # ============================= [13] 채팅 패널 — END =============================
 
 # ============================ [14] 본문 렌더 — START ============================
