@@ -953,7 +953,7 @@ def _render_body() -> None:
     _inject_chat_styles_once()
     with st.container(border=True, key="chatpane_container"):
         st.markdown('<div class="chatpane">', unsafe_allow_html=True)
-        mode = _render_mode_controls_pills()
+        st.session_state["__mode"] = _render_mode_controls_pills() or st.session_state.get("__mode", "")
         with st.form("chat_form", clear_on_submit=False):
             q = st.text_input("질문", placeholder="질문을 입력하세요…", key="q_text")
             # 엔터 화살표 버튼(절대배치 CSS로 인풋 내부처럼 보임)
