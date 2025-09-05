@@ -1008,7 +1008,7 @@ def _render_admin_index_panel() -> None:
         do_rebuild = col1.button("🔁 강제 재인덱싱(HQ)", help="캐시를 무시하고 인덱스를 새로 만듭니다.")
         show_after = col2.toggle("인덱싱 결과 표시", value=True)
 
-        idx_result = None
+        _ = None
         if do_rebuild:
             prog = st.progress(0.0, text="인덱싱 중…")
             try:
