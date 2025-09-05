@@ -743,144 +743,105 @@ def _render_mode_controls_pills() -> str:
     return ss.get("qa_mode_radio", sel)
 
 # ============================ [13] 채팅 패널 — START ============================
-# 주 역할:
-# - 질문(나) → 피티쌤(주답변, 스트리밍) → 미나쌤(보완, 스트리밍) 순서로 출력
-# - 각 말풍선에 이름 칩(나/피티쌤/미나쌤)과 출처 칩을 표시
-# - 스트리밍: provider 실스트리밍 지원 시 콜백 경로, 미지원 시 문장 단위 의사-스트리밍
+# 질문(나=오른쪽) → 피티쌤(왼쪽, 스트리밍) → 미나쌤(왼쪽, 스트리밍)
 def _render_chat_panel() -> None:
-    # 지역 임포트로 E402 회피
     import importlib as _imp
-    import html
-    import re
+    import html, re
     from typing import Optional
     import streamlit as st
 
-    # 라벨러(출처 칩) 모듈 로딩(폴백 포함)
+    # 라벨러(출처 칩)
     try:
         try:
             _label_mod = _imp.import_module("src.rag.label")
         except Exception:
-            _label_mod = _imp.import_module("label")  # 루트의 label.py 폴백
+            _label_mod = _imp.import_module("label")
         _decide_label = getattr(_label_mod, "decide_label", None)
         _search_hits = getattr(_label_mod, "search_hits", None)
     except Exception:
         _decide_label = None
         _search_hits = None
 
-    # 답변 제너레이터 & 버퍼 헬퍼(지역 임포트)
+    # 제너레이터 & 버퍼
     from src.agents.responder import answer_stream
     from src.agents.evaluator import evaluate_stream
     from src.llm.streaming import BufferOptions, make_stream_handler
 
-    # ----- 뷰 유틸 -----
-    def _render_chip(name: str, *, color: str = "#444") -> str:
-        # 이름 칩: 100% 크기, 둥근 라벨
-        style = (
-            "display:inline-block;padding:4px 10px;border-radius:12px;"
-            f"background:{color};color:#fff;font-weight:600;"
-            "font-size:13px;line-height:1;"
-        )
-        return f'<span style="{style}">{html.escape(name)}</span>'
-
-    def _render_source(label: str) -> str:
-        # 출처 칩
-        style = (
-            "display:inline-block;margin-left:6px;padding:2px 8px;"
-            "border-radius:10px;background:#eef2ff;color:#3730a3;"
-            "font-size:12px;font-weight:600;line-height:1;"
-            "border:1px solid #c7d2fe;"
-        )
-        return f'<span style="{style}">{html.escape(label)}</span>'
-
-    def _esc_text(t: str) -> str:
-        # 줄바꿈/공백 보존
+    def _esc(t: str) -> str:
         s = html.escape(t or "").replace("\n", "<br/>")
         return re.sub(r"  ", "&nbsp;&nbsp;", s)
 
-    def _emit_bubble(placeholder, who: str, text: str, *,
-                     color: str, source: Optional[str] = None) -> None:
-        chips = _render_chip(who, color=color)
-        if source:
-            chips += _render_source(source)
-        placeholder.markdown(
-            '<div style="display:flex;justify-content:flex-start;margin:8px 0;">'
-            f'{chips}'
-            f'<div style="margin-left:8px;max-width:760px;">{_esc_text(text)}</div>'
-            "</div>",
-            unsafe_allow_html=True,
+    def _chip_html(who: str) -> str:
+        klass = {"나": "me", "피티쌤": "pt", "미나쌤": "mn"}.get(who, "pt")
+        return f'<span class="chip {klass}">{html.escape(who)}</span>'
+
+    def _src_html(label: Optional[str]) -> str:
+        if not label:
+            return ""
+        return f'<span class="chip-src">{html.escape(label)}</span>'
+
+    def _emit_bubble(placeholder, who: str, acc_text: str, *, source: Optional[str], align_right: bool) -> None:
+        side_cls = "right" if align_right else "left"
+        klass = "user" if align_right else "ai"
+        chips = _chip_html(who) + (_src_html(source) if not align_right else "")
+        html_block = (
+            f'<div class="msg-row {side_cls}">'
+            f'  <div class="bubble {klass}">{chips}<br/>{_esc(acc_text)}</div>'
+            f'</div>'
         )
+        placeholder.markdown(html_block, unsafe_allow_html=True)
 
-    def _emit_user(placeholder, text: str) -> None:
-        _emit_bubble(placeholder, "나", text, color="#059669")
-
-    # ----- 본 패널 로직 -----
+    # 상태
     ss = st.session_state
     question = str(ss.get("inpane_q", "") or "").strip()
     if not question:
-        return  # 입력 없으면 패널 미표시
+        return
 
-    # 1) 사용자 질문 말풍선 먼저 출력
-    ph_user = st.empty()
-    _emit_user(ph_user, question)
-
-    # 2) 출처 결정용 히트/라벨
+    # 출처 라벨
     src_label = "[AI지식]"
     if callable(_search_hits) and callable(_decide_label):
         try:
             hits = _search_hits(question, top_k=5)
-        except Exception:
-            hits = []
-        try:
             src_label = _decide_label(hits, default_if_none="[AI지식]")
         except Exception:
             src_label = "[AI지식]"
 
-    # 3) 피티쌤(주답변) 스트리밍
+    # 1) 사용자 말풍선(오른쪽)
+    ph_user = st.empty()
+    _emit_bubble(ph_user, "나", question, source=None, align_right=True)
+
+    # 2) 피티쌤(왼쪽, 스트리밍)
     ph_ans = st.empty()
     acc_ans = ""
 
     def _on_emit_ans(chunk: str) -> None:
         nonlocal acc_ans
         acc_ans += str(chunk or "")
-        _emit_bubble(
-            ph_ans,
-            "피티쌤",
-            acc_ans,
-            color="#2563eb",  # 파랑
-            source=src_label,
-        )
+        _emit_bubble(ph_ans, "피티쌤", acc_ans, source=src_label, align_right=False)
 
     emit_chunk_ans, close_stream_ans = make_stream_handler(
         on_emit=_on_emit_ans,
         opts=BufferOptions(
-            min_emit_chars=8,       # 초기 토막 빨리 출력
+            min_emit_chars=8,
             soft_emit_chars=24,
-            max_latency_ms=150,     # 지연 상한 단축
+            max_latency_ms=150,
             flush_on_strong_punct=True,
             flush_on_newline=True,
         ),
     )
-
     for piece in answer_stream(question=question, mode=ss.get("__mode", "")):
         emit_chunk_ans(str(piece or ""))
     close_stream_ans()
-
     full_answer = acc_ans.strip() or "(응답이 비어있어요)"
 
-    # 4) 미나쌤(보완) 스트리밍
+    # 3) 미나쌤(왼쪽, 스트리밍)
     ph_eval = st.empty()
     acc_eval = ""
 
     def _on_emit_eval(chunk: str) -> None:
         nonlocal acc_eval
         acc_eval += str(chunk or "")
-        _emit_bubble(
-            ph_eval,
-            "미나쌤",
-            acc_eval,
-            color="#7c3aed",  # 보라
-            source=src_label,  # 동일 질문 기반 출처 칩
-        )
+        _emit_bubble(ph_eval, "미나쌤", acc_eval, source=src_label, align_right=False)
 
     emit_chunk_eval, close_stream_eval = make_stream_handler(
         on_emit=_on_emit_eval,
@@ -892,7 +853,6 @@ def _render_chat_panel() -> None:
             flush_on_newline=True,
         ),
     )
-
     for piece in evaluate_stream(
         question=question,
         mode=ss.get("__mode", ""),
@@ -946,36 +906,38 @@ def _render_body() -> None:
     # 5) 관리자 패널
     if _is_admin_view():
         _render_admin_panels()
-        # 인덱싱 관리자 패널(신규) 호출
         try:
             _render_admin_index_panel()
         except Exception as e:
             _errlog(f"admin index panel failed: {e}", where="[admin-index]", exc=e)
         st.caption("ⓘ 복구/재인덱싱은 상단 ‘🛠 진단 도구’ 또는 아래 인덱싱 패널에서 수행할 수 있어요.")
 
-    # 6) (선택) 자동 시작
+    # 6) 자동 시작
     _auto_start_once()
 
-    # 7) 질문 입력(모드 pill + 입력 폼)
+    # 7) 채팅 메시지(상단)
     _inject_chat_styles_once()
+    _render_chat_panel()
+
+    # 8) 입력 폼(항상 맨 아래에 위치)
     with st.container(border=True, key="chatpane_container"):
         st.markdown('<div class="chatpane">', unsafe_allow_html=True)
+        # 모드 pill → 세션 반영
         st.session_state["__mode"] = _render_mode_controls_pills() or st.session_state.get("__mode", "")
+        # 입력폼(화살표는 CSS로 인풋 내부 우측에 고정)
         with st.form("chat_form", clear_on_submit=False):
             q = st.text_input("질문", placeholder="질문을 입력하세요…", key="q_text")
-            # 엔터 화살표 버튼(절대배치 CSS로 인풋 내부처럼 보임)
             submitted = st.form_submit_button("➤")
         st.markdown('</div>', unsafe_allow_html=True)
 
     if submitted and isinstance(q, str) and q.strip():
         st.session_state["inpane_q"] = q.strip()
+        # 입력 직후 한 번 더 렌더하여 곧바로 대화 표시(허용 rerun 1회)
+        _safe_rerun("chat:submit", ttl=1)
     else:
-        # 이전 질문이 남아있으면 그대로 사용
         st.session_state.setdefault("inpane_q", "")
-
-    # 8) 본문: 챗
-    _render_chat_panel()
 # ============================= [14] 본문 렌더 — END =============================
+
 
 # [15] main ===================================================================
 def main():
@@ -990,7 +952,7 @@ if __name__ == "__main__":
 # =============================== [END] =======================================
 # ======================== [16] ADMIN: Index Panel — START ========================
 def _render_admin_index_panel() -> None:
-    """관리자용 인덱싱 패널: 강제 재인덱싱(HQ) + 파일 목록 확인."""
+    """관리자용 인덱싱 패널: 강제 재인덱싱(HQ) + 인덱싱 전/후 파일 목록 확인."""
     import importlib
     from pathlib import Path
 
@@ -1009,7 +971,6 @@ def _render_admin_index_panel() -> None:
                     return fn(None)
             except Exception:
                 pass
-            # 폴백: ENV → <repo>/prepared → <repo>/knowledge
             env = os.getenv("MAIC_DATASET_DIR") or os.getenv("RAG_DATASET_DIR")
             if env:
                 return Path(env).expanduser()
@@ -1022,50 +983,68 @@ def _render_admin_index_panel() -> None:
         ds = _resolve_dataset_dir_for_ui()
         st.write(f"**Dataset Dir:** `{str(ds)}`")
 
-        # 강제 재인덱싱(HQ): 캐시 우회 빌드
+        # 사전 스캔: 이번에 인덱싱 대상 파일 예비목록
+        files: list[Path] = []
+        try:
+            rag = importlib.import_module("src.rag.search")
+            SUP = getattr(rag, "SUPPORTED_EXTS", {".md", ".txt", ".pdf"})
+            for p in sorted(ds.rglob("*")):
+                if p.is_file() and p.suffix.lower() in SUP:
+                    files.append(p)
+        except Exception:
+            pass
+
+        with st.expander("이번에 인덱싱할 파일(예상)", expanded=bool(files)):
+            if files:
+                data = [{"title": p.stem, "path": str(p)} for p in files[:200]]
+                st.dataframe(data, hide_index=True, use_container_width=True)
+                if len(files) > 200:
+                    st.caption(f"… 외 {len(files) - 200}개")
+            else:
+                st.info("대상 파일이 없거나 스캔에 실패했습니다.")
+
         col1, col2 = st.columns([1, 3])
         do_rebuild = col1.button("🔁 강제 재인덱싱(HQ)", help="캐시를 무시하고 인덱스를 새로 만듭니다.")
-        show_last = col2.toggle("인덱싱 결과 표시", value=True)
+        show_after = col2.toggle("인덱싱 결과 표시", value=True)
 
         idx = None
         if do_rebuild:
+            # 진행률 바(사전 스캔 개수 기준 가시화)
+            total = max(1, len(files))
+            prog = st.progress(0.0, text="인덱싱 중…")
             try:
-                mod = importlib.import_module("src.rag.search")
-                rebuild = getattr(mod, "rebuild_and_cache", None)
+                # 실제 재인덱싱(HQ)
+                rebuild = getattr(rag, "rebuild_and_cache", None)
                 if callable(rebuild):
                     idx = rebuild(str(ds))
                 else:
-                    # 폴백: build_index만이라도
-                    build = getattr(mod, "build_index", None)
+                    build = getattr(rag, "build_index", None)
                     if callable(build):
                         idx = build(str(ds))
-                if idx is None:
-                    st.error("인덱싱 함수를 찾지 못했어요.")
-                else:
-                    st.success("강제 재인덱싱 완료 (HQ)")
+                # 진행률 완료 표시
+                prog.progress(1.0, text="인덱싱 완료")
+                st.success("강제 재인덱싱 완료 (HQ)")
             except Exception as e:
+                prog.progress(0.0)
                 _errlog(f"reindex failed: {e}", where="[admin-index.rebuild]", exc=e)
                 st.error("강제 재인덱싱 중 오류가 발생했어요.")
 
-        # 파일 목록 표시
-        if show_last:
+        if show_after:
             try:
                 if idx is None:
-                    # 최신 캐시 로드 시도(있으면)
-                    mod = importlib.import_module("src.rag.search")
-                    get_or = getattr(mod, "get_or_build_index", None)
+                    get_or = getattr(rag, "get_or_build_index", None)
                     if callable(get_or):
                         idx = get_or(str(ds), use_cache=True)
                 docs = (idx or {}).get("docs", [])
                 st.caption(f"인덱싱 문서 수: **{len(docs)}**")
                 if docs:
-                    # 상위 50개만 간단히 보기
-                    data = [{"title": d.get("title"), "path": d.get("path")} for d in docs[:50]]
+                    data = [{"title": d.get("title"), "path": d.get("path")} for d in docs[:200]]
                     st.dataframe(data, hide_index=True, use_container_width=True)
+                    if len(docs) > 200:
+                        st.caption(f"… 외 {len(docs) - 200}개")
                 else:
                     st.info("표시할 문서가 없어요.")
             except Exception as e:
                 _errlog(f"list docs failed: {e}", where="[admin-index.list]", exc=e)
                 st.error("문서 목록 표시 중 오류가 발생했어요.")
 # ========================= [16] ADMIN: Index Panel — END =========================
-
