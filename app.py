@@ -628,7 +628,7 @@ def _render_admin_panels() -> None:
 
 
 # ============ [11] 관리자 패널(지연 임포트 + 파일경로 폴백) — END ============
-# ===== [PATCH / app.py / [11] 관리자 패널(지연 임포트 + 파일경로 폴백) / L0643–L0738] — END =====
+
 
 # ========================== [12] 채팅 UI(스타일/모드/상단) — START ==========================
 def _inject_chat_styles_once() -> None:
@@ -659,24 +659,22 @@ def _inject_chat_styles_once() -> None:
       }
       .chatpane div[data-testid="stRadio"] svg{ display:none!important }
 
-      /* --- 카톡형 입력: 인풋 내부 우측에 ➤ 버튼을 '시각적으로' 겹치기 --- */
+      /* --- 카톡형 입력: 인풋 내부 우측에 ➤ 버튼 겹치기 (Streamlit 실제 DOM 기준) --- */
       .chatpane form[data-testid="stForm"]{
         position:relative; background:#EDF4FF; padding:8px 10px 10px 10px; margin:0;
       }
-      .chatpane form[data-testid="stForm"] .input-wrap{ position:relative; }
-      /* Streamlit이 위젯을 별도 블록에 렌더하므로, 실제 래퍼는 stTextInput/stButton */
+      /* 인풋 패딩을 늘려 버튼 공간 확보 */
       .chatpane form[data-testid="stForm"] [data-testid="stTextInput"] input{
         background:#FFF8CC !important; border:1px solid #F2E4A2 !important; border-radius:999px !important;
         color:#333 !important; height:46px; padding-right:56px;
       }
       .chatpane ::placeholder{ color:#8A7F4A !important; }
-
-      /* 핵심: stButton 래퍼를 절대배치로 '입력창 안쪽'에 겹치기 */
-      .chatpane form[data-testid="stForm"] .arrow-btn .stButton{
+      /* 핵심: 제출 버튼(stButton) 컨테이너를 폼 기준으로 절대배치 */
+      .chatpane form[data-testid="stForm"] .stButton{
         position:absolute; right:14px; top:50%; transform:translateY(-50%);
-        z-index:2;  /* 인풋 위로 */
+        z-index:2;
       }
-      .chatpane form[data-testid="stForm"] .arrow-btn .stButton > button{
+      .chatpane form[data-testid="stForm"] .stButton > button{
         width:38px; height:38px; border-radius:50%; border:0; background:#0a2540; color:#fff;
         font-size:18px; line-height:1; cursor:pointer; box-shadow:0 2px 6px rgba(0,0,0,.15);
         padding:0; min-height:0;
@@ -848,7 +846,6 @@ def _render_chat_panel() -> None:
     ss["inpane_q"] = ""
 # ============================= [13] 채팅 패널 — END =============================
 
-
 # ============================ [14] 본문 렌더 — START ============================
 def _render_body() -> None:
     if st is None:
@@ -899,32 +896,23 @@ def _render_body() -> None:
         _render_chat_panel()
         st.markdown('</div></div>', unsafe_allow_html=True)
 
-    # 8) 입력 폼(항상 아래): 인풋 내부 우측 ➤ (CSS로 stButton 겹치기)
+    # 8) 입력 폼(아래): 인풋 내부 우측 ➤ (CSS로 stButton 겹치기)
     with st.container(border=True, key="chatpane_container"):
         st.markdown('<div class="chatpane">', unsafe_allow_html=True)
-        # 모드 pill → 세션 반영
         st.session_state["__mode"] = _render_mode_controls_pills() or st.session_state.get("__mode", "")
         with st.form("chat_form", clear_on_submit=False):
-            # 주의: Streamlit 위젯은 markdown <div>로 실제로 감싸지지 않으므로, CSS에서 stTextInput/stButton을 타깃으로 겹칩니다.
-            st.markdown('<div class="input-wrap">', unsafe_allow_html=True)
+            # 주의: Streamlit 위젯은 마크업 래퍼에 실제로 감싸지지 않음. CSS는 [12]에서 stForm/stButton을 직접 타깃팅.
             q = st.text_input("질문", placeholder="질문을 입력하세요…", key="q_text")
-            st.markdown('<div class="arrow-btn">', unsafe_allow_html=True)
             submitted = st.form_submit_button("➤")
-            st.markdown('</div>', unsafe_allow_html=True)  # .arrow-btn
-            st.markdown('</div>', unsafe_allow_html=True)  # .input-wrap
         st.markdown('</div>', unsafe_allow_html=True)
 
     if submitted and isinstance(q, str) and q.strip():
         st.session_state["inpane_q"] = q.strip()
-        # 같은 렌더 사이클에서 즉시 챗 생성 → 초기화 느낌 제거
-        with st.container():
-            st.markdown('<div class="chatpane"><div class="messages">', unsafe_allow_html=True)
-            _render_chat_panel()
-            st.markdown('</div></div>', unsafe_allow_html=True)
+        # 같은 렌더 사이클에서 바로 메시지를 그리지 않고, rerun으로 재배치 보장(위에 메시지, 아래에 입력창).
+        st.rerun()
     else:
         st.session_state.setdefault("inpane_q", "")
 # ============================= [14] 본문 렌더 — END =============================
-
 
 # [15] main ===================================================================
 def main():
