@@ -951,6 +951,7 @@ if __name__ == "__main__":
 def _render_admin_index_panel() -> None:
     """관리자용 인덱싱 패널: 강제 재인덱싱(HQ) + 인덱싱 전/후 파일 목록 확인."""
     import importlib
+    import json
     from pathlib import Path
 
     if st is None or not _is_admin_view():
@@ -980,17 +981,19 @@ def _render_admin_index_panel() -> None:
         ds = _resolve_dataset_dir_for_ui()
         st.write(f"**Dataset Dir:** `{str(ds)}`")
 
-        # 사전 스캔
+        # 사전 스캔(예상 대상)
         files: list[Path] = []
-        rag = None
+        SUP = {".md", ".txt", ".pdf"}
         try:
+            # 가능하면 검색 모듈의 확장자 규칙 사용
             rag = importlib.import_module("src.rag.search")
-            SUP = getattr(rag, "SUPPORTED_EXTS", {".md", ".txt", ".pdf"})
-            for p in sorted(ds.rglob("*")):
-                if p.is_file() and p.suffix.lower() in SUP:
-                    files.append(p)
+            SUP = getattr(rag, "SUPPORTED_EXTS", SUP)
         except Exception:
-            SUP = {".md", ".txt", ".pdf"}
+            pass
+
+        for p in sorted(ds.rglob("*")):
+            if p.is_file() and p.suffix.lower() in SUP:
+                files.append(p)
 
         with st.expander("이번에 인덱싱할 파일(예상)", expanded=bool(files)):
             if files:
@@ -1005,19 +1008,13 @@ def _render_admin_index_panel() -> None:
         do_rebuild = col1.button("🔁 강제 재인덱싱(HQ)", help="캐시를 무시하고 인덱스를 새로 만듭니다.")
         show_after = col2.toggle("인덱싱 결과 표시", value=True)
 
-        idx = None
+        idx_result = None
         if do_rebuild:
             prog = st.progress(0.0, text="인덱싱 중…")
             try:
-                if rag is None:
-                    rag = importlib.import_module("src.rag.search")
-                rebuild = getattr(rag, "rebuild_and_cache", None)
-                if callable(rebuild):
-                    idx = rebuild(str(ds))
-                else:
-                    build = getattr(rag, "build_index", None)
-                    if callable(build):
-                        idx = build(str(ds))
+                from src.rag import index_build as _idx
+                os.environ["MAIC_INDEX_MODE"] = "HQ"
+                idx_result = _idx.rebuild_index()  # .ready / chunks.jsonl 생성
                 prog.progress(1.0, text="인덱싱 완료")
                 st.success("강제 재인덱싱 완료 (HQ)")
             except Exception as e:
@@ -1027,22 +1024,46 @@ def _render_admin_index_panel() -> None:
 
         if show_after:
             try:
-                if idx is None:
-                    if rag is None:
-                        rag = importlib.import_module("src.rag.search")
-                    get_or = getattr(rag, "get_or_build_index", None)
-                    if callable(get_or):
-                        idx = get_or(str(ds), use_cache=True)
-                docs = (idx or {}).get("docs", [])
-                st.caption(f"인덱싱 문서 수: **{len(docs)}**")
-                if docs:
-                    data = [{"title": d.get("title"), "path": d.get("path")} for d in docs[:400]]
-                    st.dataframe(data, hide_index=True, use_container_width=True)
-                    if len(docs) > 400:
-                        st.caption(f"… 외 {len(docs) - 400}개")
+                # chunks.jsonl 기반으로 실제 반영 결과를 요약 표시
+                try:
+                    from src.rag.index_build import PERSIST_DIR as _PERSIST
+                    persist = Path(str(_PERSIST)).expanduser()
+                except Exception:
+                    persist = Path.home() / ".maic" / "persist"
+
+                cj = persist / "chunks.jsonl"
+                docs_table = []
+                if cj.exists():
+                    seen = set()
+                    total_lines = 0
+                    with cj.open("r", encoding="utf-8") as r:
+                        for line in r:
+                            line = line.strip()
+                            if not line:
+                                continue
+                            total_lines += 1
+                            try:
+                                obj = json.loads(line)
+                            except Exception:
+                                continue
+                            doc_id = obj.get("doc_id") or obj.get("source") or ""
+                            title = obj.get("title") or ""
+                            source = obj.get("source") or ""
+                            if doc_id and doc_id not in seen:
+                                seen.add(doc_id)
+                                docs_table.append({"title": title, "path": source})
+                            if len(docs_table) >= 400:
+                                break
+                    st.caption(f"인덱싱 청크 수(표본 아님): **{total_lines}** · 문서 수(고유 doc_id 기준): **{len(docs_table)}**")
+                    if docs_table:
+                        st.dataframe(docs_table, hide_index=True, use_container_width=True)
+                        if total_lines > len(docs_table):
+                            st.caption("※ 표는 고유 문서 기준으로 최대 400건까지만 표시합니다.")
+                    else:
+                        st.info("인덱스 결과가 비어 있습니다.")
                 else:
                     if files:
-                        st.info("인덱스 결과가 비어 있어 사전 스캔 목록을 대신 표시합니다.")
+                        st.info("`chunks.jsonl`이 없어 사전 스캔 목록을 대신 표시합니다.")
                         data = [{"title": p.stem, "path": str(p)} for p in files[:400]]
                         st.dataframe(data, hide_index=True, use_container_width=True)
                     else:
