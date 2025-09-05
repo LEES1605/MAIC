@@ -877,12 +877,18 @@ def _render_body() -> None:
     # 5) 관리자 패널(존재할 때만 호출; 경고 오탐 방지)
     if _is_admin_view():
         _render_admin_panels()
+
         _idx_panel = globals().get("_render_admin_index_panel")
         if callable(_idx_panel):
             _idx_panel()
+        else:
+            # 섹션 번호가 [15]로 확정되었음을 메시지에도 반영
+            st.info("관리자 인덱싱 패널이 비활성화되어 있습니다. [15] 구획이 없거나 주입되지 않았습니다.")
+
         _idx_sources = globals().get("_render_admin_indexed_sources_panel")
         if callable(_idx_sources):
             _idx_sources()
+
         st.caption("ⓘ 복구/재인덱싱은 ‘🛠 진단 도구’ 또는 인덱싱 패널에서 수행할 수 있어요.")
 
     # 6) 자동 시작
@@ -915,12 +921,10 @@ def _render_body() -> None:
         st.session_state.setdefault("inpane_q", "")
 # ============================= [14] 본문 렌더 — END =============================
 
-
-# ======================== [15] ADMIN: Index Panel — START ========================
+# ========================= [15] ADMIN: Index Panel — START =========================
 def _render_admin_index_panel() -> None:
-    """관리자용 인덱싱 패널: 강제 재인덱싱(HQ) + 결과 요약 + prepared 신규 파일 소비 마킹."""
+    """관리자용 인덱싱 패널: 강제 재인덱싱(HQ) + 인덱싱 전/후 파일 목록 확인."""
     import importlib
-    import json
     from pathlib import Path
 
     if st is None or not _is_admin_view():
@@ -950,63 +954,61 @@ def _render_admin_index_panel() -> None:
         ds = _resolve_dataset_dir_for_ui()
         st.write(f"**Dataset Dir:** `{str(ds)}`")
 
-        # 사전 스캔(예상 대상)
+        # 사전 스캔
         files: list[Path] = []
-        SUP = {".md", ".txt", ".pdf"}
+        rag = None
         try:
             rag = importlib.import_module("src.rag.search")
-            SUP = getattr(rag, "SUPPORTED_EXTS", SUP)
+            SUP = getattr(rag, "SUPPORTED_EXTS", {".md", ".txt", ".pdf"})
+            for p in sorted(ds.rglob("*")):
+                if p.is_file() and p.suffix.lower() in SUP:
+                    files.append(p)
         except Exception:
-            pass
-        for p in sorted(ds.rglob("*")):
-            if p.is_file() and p.suffix.lower() in SUP:
-                files.append(p)
+            SUP = {".md", ".txt", ".pdf"}
 
-        with st.expander("이번에 인덱싱할 파일(예상)", expanded=bool(files)):
-            if files:
-                data = [{"title": p.stem, "path": str(p)} for p in files[:300]]
-                st.dataframe(data, hide_index=True, use_container_width=True)
-                if len(files) > 300:
-                    st.caption(f"… 외 {len(files) - 300}개")
-            else:
-                st.info("대상 파일이 없거나 스캔에 실패했습니다.")
+        st.caption(f"사전 스캔: {len(files)}개 파일 후보")
 
-        col1, col2 = st.columns([1, 3])
-        do_rebuild = col1.button("🔁 강제 재인덱싱(HQ)", help="캐시를 무시하고 HQ 모드로 인덱스를 새로 만듭니다.")
-        show_after = col2.toggle("인덱싱 결과 표시", value=True)
+        # 인덱싱 버튼
+        c1, c2, c3 = st.columns([1,1,2])
+        with c1:
+            do_rebuild = st.button("강제 인덱싱(HQ, 느림)+백업", type="primary")
+        with c2:
+            do_check = st.button("업데이트 점검(Drive/Local)")
 
+        # 업데이트 점검(Drive→Local 폴백)
+        if do_check:
+            try:
+                from src.services.prepared import check_prepared_updates as chk  # Drive우선
+            except Exception:
+                from src.prepared import check_prepared_updates as chk          # Local 폴백
+            try:
+                info = chk(PERSIST_DIR)
+                st.write(info)
+            except Exception as e:
+                _errlog(f"check prepared failed: {e}", where="[admin-index.check]", exc=e)
+                st.error("업데이트 점검 중 오류가 발생했어요.")
+
+        # 강제 인덱싱(HQ)
         if do_rebuild:
-            prog = st.progress(0.0, text="HQ 인덱싱 중…")
+            prog = st.progress(0.0, text="인덱싱 중…")
             try:
                 from src.rag import index_build as _idx
-                os.environ["MAIC_INDEX_MODE"] = "HQ"   # ← HQ 모드 강제
-                _idx.rebuild_index()                   # .ready / chunks.jsonl 생성
+                os.environ["MAIC_INDEX_MODE"] = "HQ"
+                _idx.rebuild_index()  # .ready / chunks.jsonl 생성
                 prog.progress(1.0, text="인덱싱 완료")
                 st.success("강제 재인덱싱 완료 (HQ)")
 
-                # ✅ prepared 신규 파일 감지 → 소비(seen) 마킹
+                # (중요) Drive/Local 신규파일 '소비(seen)' 마킹
                 try:
-                    # prepared 관리 모듈 우선(루트: prepared → 폴백: src.prepared)
-                    try:
-                        prep = importlib.import_module("prepared")
-                    except Exception:
-                        prep = importlib.import_module("src.prepared")
-
-                    chk = getattr(prep, "check_prepared_updates", None)
-                    mark = getattr(prep, "mark_prepared_consumed", None)
-                    if callable(chk) and callable(mark):
-                        try:
-                            from src.rag.index_build import PERSIST_DIR as _PERSIST
-                            persist = Path(str(_PERSIST)).expanduser()
-                        except Exception:
-                            from src.config import PERSIST_DIR as CFG
-                            persist = Path(str(CFG)).expanduser()
-
-                        info = chk(persist)
-                        files_list = info.get("files") or []
-                        if files_list:
-                            mark(persist, files_list)
-                            st.caption("✓ prepared 신규 파일을 소비(seen) 처리했습니다.")
+                    from src.services.prepared import check_prepared_updates as chk, mark_prepared_consumed as mark
+                except Exception:
+                    from src.prepared import check_prepared_updates as chk, mark_prepared_consumed as mark
+                try:
+                    info = chk(PERSIST_DIR)
+                    files_list = info.get("files") or []
+                    if files_list:
+                        mark(PERSIST_DIR, files_list)
+                        st.caption("✓ prepared 신규 파일을 소비(seen) 처리했습니다.")
                 except Exception:
                     # 소비 마킹 실패는 치명적 아님 — 조용히 무시
                     pass
@@ -1016,49 +1018,51 @@ def _render_admin_index_panel() -> None:
                 _errlog(f"reindex failed: {e}", where="[admin-index.rebuild]", exc=e)
                 st.error("강제 재인덱싱 중 오류가 발생했어요.")
 
-        if show_after:
+        # (선택) 인덱싱 후 요약 미리보기
+        try:
+            from pathlib import Path
+            import json
             try:
-                # chunks.jsonl 기반 요약
-                try:
-                    from src.rag.index_build import PERSIST_DIR as _PERSIST
-                    persist = Path(str(_PERSIST)).expanduser()
-                except Exception:
-                    persist = Path.home() / ".maic" / "persist"
+                from src.rag.index_build import PERSIST_DIR as _PERSIST
+                persist = Path(str(_PERSIST)).expanduser()
+            except Exception:
+                persist = Path.home() / ".maic" / "persist"
 
-                cj = persist / "chunks.jsonl"
-                docs_table = []
-                if cj.exists():
-                    seen = set()
-                    total_lines = 0
-                    with cj.open("r", encoding="utf-8") as r:
-                        for line in r:
-                            line = line.strip()
-                            if not line:
-                                continue
-                            total_lines += 1
-                            try:
-                                obj = json.loads(line)
-                            except Exception:
-                                continue
-                            doc_id = obj.get("doc_id") or obj.get("source") or ""
-                            title = obj.get("title") or ""
-                            source = obj.get("source") or ""
-                            if doc_id and doc_id not in seen:
-                                seen.add(doc_id)
-                                docs_table.append({"title": title, "path": source})
-                            if len(docs_table) >= 400:
-                                break
-                    st.caption(f"인덱싱 청크 수: **{total_lines}** · 문서 수(고유 doc_id): **{len(docs_table)}**")
-                    if docs_table:
-                        st.dataframe(docs_table, hide_index=True, use_container_width=True)
-                else:
-                    st.info("`chunks.jsonl`이 아직 없어 결과를 표시할 수 없습니다.")
-            except Exception as e:
-                _errlog(f"list docs failed: {e}", where="[admin-index.list]", exc=e)
-                st.error("문서 목록 표시 중 오류가 발생했어요.")
+            cj = persist / "chunks.jsonl"
+            docs_table = []
+            if cj.exists():
+                seen = set()
+                total_lines = 0
+                with cj.open("r", encoding="utf-8") as r:
+                    for line in r:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        total_lines += 1
+                        try:
+                            obj = json.loads(line)
+                        except Exception:
+                            continue
+                        doc_id = obj.get("doc_id") or obj.get("source") or ""
+                        title = obj.get("title") or ""
+                        source = obj.get("source") or ""
+                        if doc_id and doc_id not in seen:
+                            seen.add(doc_id)
+                            docs_table.append({"title": title, "path": source})
+                        if len(docs_table) >= 400:
+                            break
+                st.caption(f"인덱싱 청크 수: **{total_lines}** · 문서 수(고유 doc_id): **{len(docs_table)}**")
+                if docs_table:
+                    st.dataframe(docs_table, hide_index=True, use_container_width=True)
+            else:
+                st.info("`chunks.jsonl`이 아직 없어 결과를 표시할 수 없습니다.")
+        except Exception as e:
+            _errlog(f"list docs failed: {e}", where="[admin-index.list]", exc=e)
+            st.error("문서 목록 표시 중 오류가 발생했어요.")
 # ========================= [15] ADMIN: Index Panel — END =========================
 
-# ======================== [16] Indexed Sources Panel — START =========================
+
+# ========================= [16] Indexed Sources Panel — START ==========================
 def _render_admin_indexed_sources_panel() -> None:
     """
     현재 인덱스(chunks.jsonl)를 읽어 문서 단위로 집계/표시.
@@ -1109,6 +1113,8 @@ def _render_admin_indexed_sources_panel() -> None:
     chunks_path = persist / "chunks.jsonl"
     manifest_path = persist / "manifest.json"
 
+    MAX_ROWS = 5000
+
     with st.container(border=True):
         st.subheader("📄 인덱싱된 파일 목록 (읽기 전용)")
         st.caption(f"경로: `{str(chunks_path)}`")
@@ -1117,6 +1123,7 @@ def _render_admin_indexed_sources_panel() -> None:
             st.info("아직 인덱스가 없습니다. 먼저 인덱싱을 수행해 주세요.")
             return
 
+        # manifest(optional)
         manifest_docs: Dict[str, Dict[str, str]] = {}
         try:
             if manifest_path.exists():
@@ -1124,31 +1131,28 @@ def _render_admin_indexed_sources_panel() -> None:
                 if isinstance(data, dict):
                     manifest_docs = dict(data.get("docs") or {})
         except Exception:
-            pass
+            manifest_docs = {}
 
+        # 집계
         docs: Dict[str, Dict[str, Any]] = {}
         total_lines = 0
         parse_errors = 0
 
         def _src_label(title: str, source: str, ext: str) -> str:
-            from pathlib import Path as _P
-            name = (_P(source).name if source else "") or title
-            if name.startswith("이유문법") or name.startswith("[깨알문법"):
-                return "이유문법"
-            if (ext or "").lower() == ".pdf":
-                return "문법책"
-            return "AI지식"
+            # 간단 라벨러(필요시 보강)
+            if source.startswith("drive:"):
+                return "Drive"
+            if source.startswith("local:"):
+                return "Local"
+            return "Unknown"
 
-        MAX_ROWS = 5000
         try:
-            with chunks_path.open("r", encoding="utf-8") as rf:
-                for line in rf:
-                    total_lines += 1
-                    if total_lines > 200000:
-                        break
+            with chunks_path.open("r", encoding="utf-8") as r:
+                for line in r:
                     line = line.strip()
                     if not line:
                         continue
+                    total_lines += 1
                     try:
                         obj = json.loads(line)
                     except Exception:
@@ -1156,20 +1160,19 @@ def _render_admin_indexed_sources_panel() -> None:
                         continue
 
                     doc_id = str(obj.get("doc_id") or "")
-                    if not doc_id:
-                        continue
-                    title = str(obj.get("title") or "")
                     source = str(obj.get("source") or "")
+                    title = str(obj.get("title") or "")
                     ext = str(obj.get("ext") or "")
+                    bsize = int(obj.get("size") or 0)
                     mtime = _to_kst(str(obj.get("mtime") or ""))
-                    bsize = int(obj.get("bytes") or 0)
 
                     row = docs.get(doc_id)
                     if row is None:
-                        if doc_id in manifest_docs:
-                            man = manifest_docs[doc_id]
-                            title = str(man.get("title") or title or "")
-                            source = str(man.get("source") or source or "")
+                        man = manifest_docs.get(doc_id) or {}
+                        if not title:
+                            title = str(obj.get("title") or man.get("title") or "")
+                        if not source:
+                            source = str(obj.get("source") or man.get("source") or "")
                         row = {
                             "출처": _src_label(title, source, ext),
                             "제목": title or Path(source).stem,
@@ -1223,6 +1226,7 @@ def _render_admin_indexed_sources_panel() -> None:
         st.download_button("CSV 다운로드", data=buf.getvalue().encode("utf-8-sig"), file_name="indexed_sources.csv", mime="text/csv")
 # ========================= [16] Indexed Sources Panel — END ==========================
 
+
 # [17] main ===================================================================
 def main():
     if st is None:
@@ -1233,6 +1237,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
