@@ -630,9 +630,9 @@ def _render_admin_panels() -> None:
 # ============ [11] 관리자 패널(지연 임포트 + 파일경로 폴백) — END ============
 # ===== [PATCH / app.py / [11] 관리자 패널(지연 임포트 + 파일경로 폴백) / L0643–L0738] — END =====
 
-# [12] 채팅 UI(스타일/모드/상단 상태 라벨=SSOT) ===============================
-def _inject_chat_styles_once():
-    """전역 CSS: ChatPane + 라디오 pill + 노란 입력창 + 인풋 내부 화살표 버튼 + 말풍선/칩."""
+# ========================== [12] 채팅 UI(스타일/모드/상단) — START ==========================
+def _inject_chat_styles_once() -> None:
+    """전역 CSS: ChatPane + 라디오 pill + 입력창 우측 화살표 + 말풍선/칩/정렬."""
     if st is None:
         return
     if st.session_state.get("_chat_styles_injected"):
@@ -643,13 +643,11 @@ def _inject_chat_styles_once():
         """
     <style>
       /* ChatPane 컨테이너 */
-      .chatpane{
-        background:#EDF4FF; border:1px solid #D5E6FF; border-radius:18px;
-        padding:10px; margin-top:12px;
-      }
+      .chatpane{ background:#EDF4FF; border:1px solid #D5E6FF; border-radius:18px;
+                 padding:10px; margin-top:12px; }
       .chatpane .messages{ max-height:60vh; overflow-y:auto; padding:8px; }
 
-      /* 라디오 pill */
+      /* 라디오 pill (모드 선택) */
       .chatpane div[data-testid="stRadio"]{ background:#EDF4FF; padding:8px 10px 0 10px; margin:0; }
       .chatpane div[data-testid="stRadio"] > div[role="radiogroup"]{ display:flex; gap:10px; flex-wrap:wrap; }
       .chatpane div[data-testid="stRadio"] [role="radio"]{
@@ -661,21 +659,20 @@ def _inject_chat_styles_once():
       }
       .chatpane div[data-testid="stRadio"] svg{ display:none!important }
 
-      /* 인-카드 입력폼: 인풋 내부 화살표 버튼(절대배치) */
-      .chatpane form[data-testid="stForm"]{ position:relative; background:#EDF4FF; padding:8px 10px 10px 10px; margin:0; }
-      .chatpane form[data-testid="stForm"] input[type="text"]{
-        background:#FFF8CC !important; border:1px solid #F2E4A2 !important; border-radius:999px !important;
-        color:#333 !important; height:46px; padding-right:56px;
-      }
-      .chatpane form[data-testid="stForm"] ::placeholder{ color:#8A7F4A !important; }
-      /* Streamlit이 type="button"일 수 있으므로 type 지정 없이 버튼 전체를 타깃 */
-      .chatpane form[data-testid="stForm"] button{
-        position:absolute; right:18px; top:50%; transform:translateY(-50%);
-        width:38px; height:38px; border-radius:50%; border:0; background:#0a2540; color:#fff;
+      /* 입력폼: 같은 줄(컬럼) + 화살표 버튼을 시각적으로 인풋 우측에 밀착 */
+      .chatpane .input-row{ display:flex; align-items:center; gap:8px; }
+      .chatpane .input-row .arrow-btn button{
+        width:42px; height:42px; border-radius:50%; border:0; background:#0a2540; color:#fff;
         font-size:18px; line-height:1; cursor:pointer; box-shadow:0 2px 6px rgba(0,0,0,.15);
+        margin-top:6px;  /* 버튼이 인풋 수직 중앙과 맞도록 미세조정 */
       }
+      .chatpane .input-row input[type="text"]{
+        background:#FFF8CC !important; border:1px solid #F2E4A2 !important; border-radius:999px !important;
+        color:#333 !important; height:46px;
+      }
+      .chatpane ::placeholder{ color:#8A7F4A !important; }
 
-      /* 말풍선 기본 */
+      /* 말풍선 */
       .msg-row{ display:flex; margin:8px 0; }
       .msg-row.left{ justify-content:flex-start; }
       .msg-row.right{ justify-content:flex-end; }
@@ -686,14 +683,14 @@ def _inject_chat_styles_once():
       .bubble.user{ border-top-right-radius:8px; border:1px solid #F2E4A2; background:#FFF8CC; color:#333; }
       .bubble.ai  { border-top-left-radius:8px;  border:1px solid #BEE3FF; background:#EAF6FF; color:#0a2540; }
 
-      /* 칩(이름) & 출처 */
+      /* 칩(이름) + 출처 */
       .chip{
-        display:inline-block; margin:-2px 0 6px 0; padding:2px 10px; border-radius:999px; font-size:12px; font-weight:700;
-        color:#fff; line-height:1;
+        display:inline-block; margin:-2px 0 6px 0; padding:2px 10px; border-radius:999px;
+        font-size:12px; font-weight:700; color:#fff; line-height:1;
       }
-      .chip.me{ background:#059669; }     /* 나 */
-      .chip.pt{ background:#2563eb; }     /* 피티쌤 */
-      .chip.mn{ background:#7c3aed; }     /* 미나쌤 */
+      .chip.me{ background:#059669; }   /* 나 */
+      .chip.pt{ background:#2563eb; }   /* 피티쌤 */
+      .chip.mn{ background:#7c3aed; }   /* 미나쌤 */
       .chip-src{
         display:inline-block; margin-left:6px; padding:2px 8px; border-radius:10px;
         background:#eef2ff; color:#3730a3; font-size:12px; font-weight:600; line-height:1;
@@ -701,10 +698,6 @@ def _inject_chat_styles_once():
         vertical-align:middle;
       }
 
-      /* 턴 구분선(옵션) */
-      .turn-sep{height:0; border-top:1px dashed #E5EAF2; margin:14px 2px; position:relative;}
-      .turn-sep::after{content:''; position:absolute; top:-4px; left:50%; transform:translateX(-50%);
-                       width:8px; height:8px; border-radius:50%; background:#E5EAF2;}
       @media (max-width:480px){
         .bubble{ max-width:96%; }
         .chip-src{ max-width:160px; }
@@ -715,35 +708,21 @@ def _inject_chat_styles_once():
     )
 
 
-def _render_bubble(role: str, text: str):
-    """(참고용) 기본 말풍선 렌더러."""
-    import html, re
-    is_user = role == "user"
-    side = "right" if is_user else "left"
-    klass = "user" if is_user else "ai"
-    t = html.escape(text or "").replace("\n", "<br/>")
-    t = re.sub(r"  ", "&nbsp;&nbsp;", t)
-    st.markdown(
-        f'<div class="msg-row {side}"><div class="bubble {klass}">{t}</div></div>',
-        unsafe_allow_html=True,
-    )
-
-
 def _render_mode_controls_pills() -> str:
-    """질문 모드 pill (ChatPane 상단에 배치). 반환: '문법'|'문장'|'지문'"""
+    """질문 모드 pill (ChatPane 상단). 반환: '문법'|'문장'|'지문'"""
     _inject_chat_styles_once()
     ss = st.session_state
-    cur = ss.get("qa_mode_radio") or "문법"
     labels = ["문법", "문장", "지문"]
+    cur = ss.get("qa_mode_radio") or "문법"
     idx = labels.index(cur) if cur in labels else 0
     sel = st.radio("질문 모드", options=labels, index=idx, horizontal=True, label_visibility="collapsed")
-    if sel != cur:
-        ss["qa_mode_radio"] = sel
-        st.rerun()
-    return ss.get("qa_mode_radio", sel)
+    ss["qa_mode_radio"] = sel
+    return sel
+# =========================== [12] 채팅 UI(스타일/모드/상단) — END ===========================
+
 
 # ============================ [13] 채팅 패널 — START ============================
-# 질문(나=오른쪽) → 피티쌤(왼쪽, 스트리밍) → 미나쌤(왼쪽, 스트리밍)
+# 질문(오른쪽, 연노랑) → 피티쌤(왼쪽, 연하늘, 스트리밍) → 미나쌤(왼쪽, 연하늘, 스트리밍)
 def _render_chat_panel() -> None:
     import importlib as _imp
     import html, re
@@ -780,7 +759,8 @@ def _render_chat_panel() -> None:
             return ""
         return f'<span class="chip-src">{html.escape(label)}</span>'
 
-    def _emit_bubble(placeholder, who: str, acc_text: str, *, source: Optional[str], align_right: bool) -> None:
+    def _emit_bubble(placeholder, who: str, acc_text: str,
+                     *, source: Optional[str], align_right: bool) -> None:
         side_cls = "right" if align_right else "left"
         klass = "user" if align_right else "ai"
         chips = _chip_html(who) + (_src_html(source) if not align_right else "")
@@ -791,7 +771,6 @@ def _render_chat_panel() -> None:
         )
         placeholder.markdown(html_block, unsafe_allow_html=True)
 
-    # 상태
     ss = st.session_state
     question = str(ss.get("inpane_q", "") or "").strip()
     if not question:
@@ -822,11 +801,8 @@ def _render_chat_panel() -> None:
     emit_chunk_ans, close_stream_ans = make_stream_handler(
         on_emit=_on_emit_ans,
         opts=BufferOptions(
-            min_emit_chars=8,
-            soft_emit_chars=24,
-            max_latency_ms=150,
-            flush_on_strong_punct=True,
-            flush_on_newline=True,
+            min_emit_chars=8, soft_emit_chars=24, max_latency_ms=150,
+            flush_on_strong_punct=True, flush_on_newline=True,
         ),
     )
     for piece in answer_stream(question=question, mode=ss.get("__mode", "")):
@@ -846,21 +822,20 @@ def _render_chat_panel() -> None:
     emit_chunk_eval, close_stream_eval = make_stream_handler(
         on_emit=_on_emit_eval,
         opts=BufferOptions(
-            min_emit_chars=8,
-            soft_emit_chars=24,
-            max_latency_ms=150,
-            flush_on_strong_punct=True,
-            flush_on_newline=True,
+            min_emit_chars=8, soft_emit_chars=24, max_latency_ms=150,
+            flush_on_strong_punct=True, flush_on_newline=True,
         ),
     )
     for piece in evaluate_stream(
-        question=question,
-        mode=ss.get("__mode", ""),
-        answer=full_answer,
-        ctx={"answer": full_answer},
+        question=question, mode=ss.get("__mode", ""),
+        answer=full_answer, ctx={"answer": full_answer},
     ):
         emit_chunk_eval(str(piece or ""))
     close_stream_eval()
+
+    # 재렌더시 중복 생성 방지
+    ss["last_q"] = question
+    ss["inpane_q"] = ""
 # ============================= [13] 채팅 패널 — END =============================
 
 # ============================ [14] 본문 렌더 — START ============================
@@ -879,17 +854,8 @@ def _render_body() -> None:
 
     # 2) 배경(비활성)
     _mount_background(
-        theme="light",
-        accent="#5B8CFF",
-        density=3,
-        interactive=True,
-        animate=True,
-        gradient="radial",
-        grid=True,
-        grain=False,
-        blur=0,
-        seed=1234,
-        readability_veil=True,
+        theme="light", accent="#5B8CFF", density=3, interactive=True, animate=True,
+        gradient="radial", grid=True, grain=False, blur=0, seed=1234, readability_veil=True,
     )
 
     # 3) 헤더
@@ -917,23 +883,33 @@ def _render_body() -> None:
 
     # 7) 채팅 메시지(상단)
     _inject_chat_styles_once()
-    _render_chat_panel()
+    with st.container():
+        st.markdown('<div class="chatpane"><div class="messages">', unsafe_allow_html=True)
+        _render_chat_panel()
+        st.markdown('</div></div>', unsafe_allow_html=True)
 
-    # 8) 입력 폼(항상 맨 아래에 위치)
+    # 8) 입력 폼(항상 맨 아래, 같은 줄: 인풋 + 화살표 버튼)
     with st.container(border=True, key="chatpane_container"):
         st.markdown('<div class="chatpane">', unsafe_allow_html=True)
         # 모드 pill → 세션 반영
         st.session_state["__mode"] = _render_mode_controls_pills() or st.session_state.get("__mode", "")
-        # 입력폼(화살표는 CSS로 인풋 내부 우측에 고정)
         with st.form("chat_form", clear_on_submit=False):
-            q = st.text_input("질문", placeholder="질문을 입력하세요…", key="q_text")
-            submitted = st.form_submit_button("➤")
+            c1, c2 = st.columns([8, 1], vertical_alignment="center")
+            with c1:
+                q = st.text_input("질문", placeholder="질문을 입력하세요…", key="q_text")
+            with c2:
+                st.markdown('<div class="arrow-btn">', unsafe_allow_html=True)
+                submitted = st.form_submit_button("➤")
+                st.markdown('</div>', unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
     if submitted and isinstance(q, str) and q.strip():
         st.session_state["inpane_q"] = q.strip()
-        # 입력 직후 한 번 더 렌더하여 곧바로 대화 표시(허용 rerun 1회)
-        _safe_rerun("chat:submit", ttl=1)
+        # 같은 렌더 사이클에서 즉시 챗을 생성 → 초기화 느낌 제거
+        with st.container():
+            st.markdown('<div class="chatpane"><div class="messages">', unsafe_allow_html=True)
+            _render_chat_panel()
+            st.markdown('</div></div>', unsafe_allow_html=True)
     else:
         st.session_state.setdefault("inpane_q", "")
 # ============================= [14] 본문 렌더 — END =============================
@@ -949,7 +925,7 @@ def main():
 
 if __name__ == "__main__":
     main()
-# =============================== [END] =======================================
+
 # ======================== [16] ADMIN: Index Panel — START ========================
 def _render_admin_index_panel() -> None:
     """관리자용 인덱싱 패널: 강제 재인덱싱(HQ) + 인덱싱 전/후 파일 목록 확인."""
@@ -962,7 +938,7 @@ def _render_admin_index_panel() -> None:
     with st.container(border=True):
         st.subheader("📚 인덱싱(관리자)")
 
-        # dataset_dir 해석: label._resolve_dataset_dir(None) 우선
+        # dataset_dir 해석
         def _resolve_dataset_dir_for_ui() -> Path:
             try:
                 mod = importlib.import_module("src.rag.label")
@@ -985,6 +961,7 @@ def _render_admin_index_panel() -> None:
 
         # 사전 스캔: 이번에 인덱싱 대상 파일 예비목록
         files: list[Path] = []
+        rag = None
         try:
             rag = importlib.import_module("src.rag.search")
             SUP = getattr(rag, "SUPPORTED_EXTS", {".md", ".txt", ".pdf"})
@@ -992,14 +969,14 @@ def _render_admin_index_panel() -> None:
                 if p.is_file() and p.suffix.lower() in SUP:
                     files.append(p)
         except Exception:
-            pass
+            SUP = {".md", ".txt", ".pdf"}
 
         with st.expander("이번에 인덱싱할 파일(예상)", expanded=bool(files)):
             if files:
-                data = [{"title": p.stem, "path": str(p)} for p in files[:200]]
+                data = [{"title": p.stem, "path": str(p)} for p in files[:300]]
                 st.dataframe(data, hide_index=True, use_container_width=True)
-                if len(files) > 200:
-                    st.caption(f"… 외 {len(files) - 200}개")
+                if len(files) > 300:
+                    st.caption(f"… 외 {len(files) - 300}개")
             else:
                 st.info("대상 파일이 없거나 스캔에 실패했습니다.")
 
@@ -1009,10 +986,11 @@ def _render_admin_index_panel() -> None:
 
         idx = None
         if do_rebuild:
-            # 진행률 바(사전 스캔 개수 기준 가시화)
             prog = st.progress(0.0, text="인덱싱 중…")
             try:
                 # 실제 재인덱싱(HQ)
+                if rag is None:
+                    rag = importlib.import_module("src.rag.search")
                 rebuild = getattr(rag, "rebuild_and_cache", None)
                 if callable(rebuild):
                     idx = rebuild(str(ds))
@@ -1020,7 +998,6 @@ def _render_admin_index_panel() -> None:
                     build = getattr(rag, "build_index", None)
                     if callable(build):
                         idx = build(str(ds))
-                # 진행률 완료 표시
                 prog.progress(1.0, text="인덱싱 완료")
                 st.success("강제 재인덱싱 완료 (HQ)")
             except Exception as e:
@@ -1031,18 +1008,27 @@ def _render_admin_index_panel() -> None:
         if show_after:
             try:
                 if idx is None:
+                    if rag is None:
+                        rag = importlib.import_module("src.rag.search")
                     get_or = getattr(rag, "get_or_build_index", None)
                     if callable(get_or):
                         idx = get_or(str(ds), use_cache=True)
+                # 결과 문서 목록 표시
                 docs = (idx or {}).get("docs", [])
                 st.caption(f"인덱싱 문서 수: **{len(docs)}**")
                 if docs:
-                    data = [{"title": d.get("title"), "path": d.get("path")} for d in docs[:200]]
+                    data = [{"title": d.get("title"), "path": d.get("path")} for d in docs[:400]]
                     st.dataframe(data, hide_index=True, use_container_width=True)
-                    if len(docs) > 200:
-                        st.caption(f"… 외 {len(docs) - 200}개")
+                    if len(docs) > 400:
+                        st.caption(f"… 외 {len(docs) - 400}개")
                 else:
-                    st.info("표시할 문서가 없어요.")
+                    # 혹시 인덱스가 비어있으면, 사전 스캔 목록이라도 보여줌
+                    if files:
+                        st.info("인덱스 결과가 비어 있어 사전 스캔 목록을 대신 표시합니다.")
+                        data = [{"title": p.stem, "path": str(p)} for p in files[:400]]
+                        st.dataframe(data, hide_index=True, use_container_width=True)
+                    else:
+                        st.info("표시할 문서가 없어요.")
             except Exception as e:
                 _errlog(f"list docs failed: {e}", where="[admin-index.list]", exc=e)
                 st.error("문서 목록 표시 중 오류가 발생했어요.")
