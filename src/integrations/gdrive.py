@@ -16,7 +16,7 @@ Google Drive 'prepared' 폴더 파일 목록 드라이버 (동적 임포트로 �
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 from pathlib import Path
 import importlib
 import os
@@ -266,9 +266,8 @@ def list_prepared_files() -> List[Dict[str, Any]]:
     except Exception:
         return _list_via_rest(creds, folder_id)
 # ============================= [01] GOOGLE DRIVE PREPARED — END =============================
-# ============================ [02] DOWNLOAD API — START ============================
-from typing import Optional, Tuple
 
+# ============================ [02] DOWNLOAD API — START ============================
 def _drive_service():
     """googleapiclient discovery client 생성"""
     creds = _build_credentials()
@@ -297,8 +296,6 @@ def download_bytes(file_id: str, *, mime_hint: Optional[str] = None) -> Tuple[by
     files = svc.files()
     meta = files.get(fileId=file_id, fields="id,name,mimeType").execute()
     mime = (meta.get("mimeType") or "").strip()
-    name = meta.get("name") or file_id
-
     exp = _export_mime(mime)
     if exp:
         req = files.export_media(fileId=file_id, mimeType=exp)
