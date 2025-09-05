@@ -933,7 +933,11 @@ def _render_admin_index_panel() -> None:
         return
 
     # ---- prepared API 로더(루트 prepared 우선 + 파일경로 폴백) ----
-    def _load_prepared_api() -> Tuple[Optional[Callable[..., Dict[str, Any]]], Optional[Callable[..., Any]], List[str]]:
+    def _load_prepared_api() -> Tuple[
+        Optional[Callable[..., Dict[str, Any]]],
+        Optional[Callable[..., Any]],
+        List[str],
+    ]:
         """
         반환: (chk, mark, debug_msgs)
           - chk: check_prepared_updates 함수 또는 None
@@ -967,7 +971,7 @@ def _render_admin_index_panel() -> None:
                 spec = importlib.util.spec_from_file_location("prepared_fallback", str(p))
                 if spec and spec.loader:
                     mod = importlib.util.module_from_spec(spec)
-                    spec.loader.exec_module(mod)
+                    spec.loader.exec_module(mod)  # type: ignore[attr-defined]
                     tried.append(f"file-load {candidate} OK")
                     chk = getattr(mod, "check_prepared_updates", None)
                     mark = getattr(mod, "mark_prepared_consumed", None)
@@ -1032,7 +1036,7 @@ def _render_admin_index_panel() -> None:
     with st.container(border=True):
         st.subheader("📚 인덱싱(관리자)")
 
-        # dataset_dir 해석 (env → prepared → knowledge)
+        # dataset_dir 해석 (env → prepared → knowledge) — 반드시 Path 반환
         def _resolve_dataset_dir_for_ui() -> Path:
             try:
                 mod = importlib.import_module("src.rag.label")
@@ -1048,8 +1052,11 @@ def _render_admin_index_panel() -> None:
             prepared_dir = (repo_root / "prepared").resolve()
             if prepared_dir.exists():
                 return prepared_dir
-    # knowledge 폴더가 없더라도 fallback 제공
-    return (repo_root / "knowledge").resolve()
+            # knowledge 폴더가 없더라도 fallback 제공(반드시 Path 반환)
+            return (repo_root / "knowledge").resolve()
+
+        # ← 여기서 함수 정의가 끝났으니 반드시 '들여쓰기 해제' 상태여야 함!
+        ds = _resolve_dataset_dir_for_ui()
         st.write(f"**Dataset Dir:** `{str(ds)}`")
 
         # 사전 스캔
@@ -1163,7 +1170,6 @@ def _render_admin_index_panel() -> None:
             _errlog(f"list docs failed: {e}", where="[admin-index.list]", exc=e)
             st.error("문서 목록 표시 중 오류가 발생했어요.")
 # ========================= [15] ADMIN: Index Panel — END =========================
-
 
 # ========================= [16] Indexed Sources Panel — START ==========================
 def _render_admin_indexed_sources_panel() -> None:
