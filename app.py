@@ -986,7 +986,7 @@ def _render_admin_index_panel() -> None:
                     spec = importlib.util.spec_from_file_location(f"_dyn_{fname[:-3]}", str(path))
                     if spec and spec.loader:
                         mod = importlib.util.module_from_spec(spec)
-                        spec.loader.exec_module(mod)  # type: ignore[attr-defined]
+                        spec.loader.exec_module(mod)
                         chk = getattr(mod, "check_prepared_updates", None)
                         mark = getattr(mod, "mark_prepared_consumed", None)
                         if callable(chk) and callable(mark):
@@ -1083,7 +1083,7 @@ def _render_admin_index_panel() -> None:
                         from src.rag.index_build import PERSIST_DIR as _P
                         persist = Path(str(_P)).expanduser()
                     except Exception:
-                        from src.config import PERSIST_DIR as _PC  # type: ignore[no-redef]
+                        from src.config import PERSIST_DIR as _PC
                         persist = Path(str(_PC)).expanduser()
 
                     chk, mark, dbg = _load_prepared_api()
