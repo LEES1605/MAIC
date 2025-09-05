@@ -95,16 +95,32 @@ def _read_text_pdf(path: Path) -> str:
     return ""
 
 
-def _read_text(path: Path) -> str:
-    suf = path.suffix.lower()
-    if suf == ".pdf":
-        return _read_text_pdf(path)
-    for enc in ("utf-8", "utf-8-sig", "cp949", "euc-kr", "latin1"):
+# ====================== [01] PATCH: _read_text_pdf — START ======================
+def _read_text_pdf(path: Path) -> str:
+    """
+    PDF 텍스트 추출(가능하면). 실패 시 빈 문자열 반환.
+    외부 라이브러리가 없을 수 있으므로 예외를 모두 잡아 폴백합니다.
+    """
+    try:
         try:
-            return path.read_text(encoding=enc)
+            from PyPDF2 import PdfReader  # 외부 라이브러리 사용 가능 시
         except Exception:
-            continue
+            PdfReader = None
+        if PdfReader is not None:
+            txt_parts: List[str] = []
+            reader = PdfReader(str(path))
+            for page in reader.pages:
+                try:
+                    t = page.extract_text() or ""
+                except Exception:
+                    t = ""
+                if t:
+                    txt_parts.append(t)
+            return "\n".join(txt_parts).strip()
+    except Exception:
+        pass
     return ""
+# ======================= [01] PATCH: _read_text_pdf — END =======================
 
 
 def _normalize_token(tok: str) -> str:
