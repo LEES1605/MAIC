@@ -987,7 +987,7 @@ def _render_admin_index_panel() -> None:
         Drive면 gdrive.list_prepared_files(), Local이면 prepared._list_from_local()로 '전량' 조회.
         mypy 대응을 위해 명시 타입 주석을 사용한다.
         """
-        files: List[Dict[str, Any]] = []  # ← (mypy) 명시 타입 주석
+        files: List[Dict[str, Any]] = []  # ← 명시 타입
 
         # 1) 힌트가 drive면 드라이브 우선
         if (driver_hint or "").lower() == "drive":
@@ -1041,16 +1041,14 @@ def _render_admin_index_panel() -> None:
                     return fn(None)
             except Exception:
                 pass
-            env = os.getenv("MAIC_DATASET_DIR") or os.getenv("RAG_DATASET_DIR")
-            if env:
-                return Path(env).expanduser()
+        env = os.getenv("MAIC_DATASET_DIR") or os.getenv("RAG_DATASET_DIR")
+        if env:
+            ds = Path(env).expanduser()
+        else:
             repo_root = Path(__file__).resolve().parent
             prepared_dir = (repo_root / "prepared").resolve()
-            if prepared_dir.exists():
-                return prepared_dir
-            return (repo_root / "knowledge").resolve()
+            ds = prepared_dir if prepared_dir.exists() else (repo_root / "knowledge").resolve()
 
-        ds = _resolve_dataset_dir_for_ui()
         st.write(f"**Dataset Dir:** `{str(ds)}`")
 
         # 사전 스캔
@@ -1077,8 +1075,8 @@ def _render_admin_index_panel() -> None:
             chk, _mark, dbg = _load_prepared_api()
             if callable(chk):
                 try:
-                    info = chk(PERSIST_DIR)
-                    st.write(info)
+                    check_info: Dict[str, Any] = chk(PERSIST_DIR) or {}   # ← 변수명 분리
+                    st.write(check_info)
                 except Exception as e:
                     _errlog(f"check prepared failed: {e}", where="[admin-index.check]", exc=e)
                     st.error("업데이트 점검 중 오류가 발생했어요.")
@@ -1102,8 +1100,8 @@ def _render_admin_index_panel() -> None:
                 chk, mark, dbg = _load_prepared_api()
                 if callable(chk) and callable(mark):
                     try:
-                        info: Dict[str, Any] = chk(PERSIST_DIR) or {}
-                        driver = str(info.get("driver") or "").lower()
+                        post_info: Dict[str, Any] = chk(PERSIST_DIR) or {}  # ← 변수명 분리
+                        driver = str(post_info.get("driver") or "").lower()
                         full_list = _list_all_prepared_files(driver_hint=driver)
                         if full_list:
                             mark(PERSIST_DIR, full_list)
