@@ -242,7 +242,7 @@ def search(
 
 # ========================= [02] PERSISTENT CACHE LAYER — START =========================
 # RAG 인덱스 캐시/지속화 레이어:
-# - 데이터셋 파일 목록·크기·mtime을 해시(sha1)로 요약해 '시그니처' 생성
+# - 데이터셋 파일들의 (상대경로, 크기, 내용 샘플 해시)로 '시그니처' 생성
 # - 동일 시그니처면 디스크에 저장된 인덱스를 재사용
 # - 다르면 재빌드 후 저장
 # - 캐시 경로: ~/.maic/persist/rag_cache/<sha1(absdir)>__<sig>.json
@@ -260,16 +260,36 @@ def _cache_dir() -> Path:
     return p
 
 
+def _file_sample_hash(p: Path, sample_bytes: int = 4096) -> str:
+    """파일 내용 샘플(앞쪽)을 해시. 실패 시 크기 기반 해시로 폴백."""
+    h = hashlib.sha1()
+    try:
+        with open(p, "rb") as f:
+            chunk = f.read(sample_bytes)
+        h.update(chunk)
+    except Exception:
+        # 폴백: 파일 크기만 반영
+        try:
+            h.update(str(p.stat().st_size).encode("utf-8"))
+        except Exception:
+            h.update(b"0")
+    return h.hexdigest()
+
+
 def _dataset_signature(dataset_dir: str) -> str:
     base = Path(dataset_dir)
     h = hashlib.sha1()
     try:
-        items: List[Tuple[str, int, int]] = []
+        items: List[Tuple[str, int, str]] = []
         for p in sorted(base.rglob("*")):
             if p.is_file() and p.suffix.lower() in SUPPORTED_EXTS:
-                stat = p.stat()
                 rel = str(p.relative_to(base)).replace(os.sep, "/")
-                items.append((rel, int(stat.st_size), int(stat.st_mtime)))
+                try:
+                    size = int(p.stat().st_size)
+                except Exception:
+                    size = 0
+                sig = _file_sample_hash(p)
+                items.append((rel, size, sig))
         payload = json.dumps(items, ensure_ascii=False, separators=(",", ":")).encode(
             "utf-8"
         )
