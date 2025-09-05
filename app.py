@@ -971,7 +971,7 @@ def _render_admin_index_panel() -> None:
                 spec = importlib.util.spec_from_file_location("prepared_fallback", str(p))
                 if spec and spec.loader:
                     mod = importlib.util.module_from_spec(spec)
-                    spec.loader.exec_module(mod)  # type: ignore[attr-defined]
+                    spec.loader.exec_module(mod)
                     tried.append(f"file-load {candidate} OK")
                     chk = getattr(mod, "check_prepared_updates", None)
                     mark = getattr(mod, "mark_prepared_consumed", None)
