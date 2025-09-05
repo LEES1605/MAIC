@@ -143,7 +143,7 @@ def _lazy_imports() -> Dict[str, Any]:
 def render_index_orchestrator_panel() -> None:
     """
     (중복 제거 버전)
-    - 상단 오케스트레이터 패널에서는 레거시 인덱싱 버튼을 모두 제거.
+    - 레거시 인덱싱 버튼(로컬/백업)을 모두 제거.
     - 실제 강제 인덱싱(HQ, 느림)+백업은 app.py의 [15] 관리자 인덱싱 패널을 사용.
     - 여기서는 인덱스 상태, 경로, 가이드만 노출.
     """
@@ -157,7 +157,7 @@ def render_index_orchestrator_panel() -> None:
     except Exception:
         return
 
-    # ── 내부 헬퍼들(모두 이 함수 스코프 내에 정의) ─────────────────────────
+    # ── 내부 헬퍼들(함수 스코프 내 정의) ────────────────────────────────────
     def _persist_dir() -> Path:
         """app.py와 동일 규칙:
         1) src.rag.index_build.PERSIST_DIR → 2) src.config.PERSIST_DIR → 3) ~/.maic/persist
