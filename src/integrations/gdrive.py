@@ -266,3 +266,56 @@ def list_prepared_files() -> List[Dict[str, Any]]:
     except Exception:
         return _list_via_rest(creds, folder_id)
 # ============================= [01] GOOGLE DRIVE PREPARED — END =============================
+# ============================ [02] DOWNLOAD API — START ============================
+from typing import Optional, Tuple
+
+def _drive_service():
+    """googleapiclient discovery client 생성"""
+    creds = _build_credentials()
+    disc = importlib.import_module("googleapiclient.discovery")
+    return disc.build("drive", "v3", credentials=creds, cache_discovery=False)
+
+def _export_mime(mime: str) -> Optional[str]:
+    """Google Docs류는 export로 평문을 받는다."""
+    maps = {
+        "application/vnd.google-apps.document": "text/plain",
+        "application/vnd.google-apps.spreadsheet": "text/csv",
+        "application/vnd.google-apps.presentation": "text/plain",
+    }
+    for k, v in maps.items():
+        if mime.startswith(k):
+            return v
+    return None
+
+def download_bytes(file_id: str, *, mime_hint: Optional[str] = None) -> Tuple[bytes, str]:
+    """
+    파일 바이트와 최종 MIME을 반환.
+    - Google Docs류는 export로 평문/CSV
+    - 일반 파일은 media download
+    """
+    svc = _drive_service()
+    files = svc.files()
+    meta = files.get(fileId=file_id, fields="id,name,mimeType").execute()
+    mime = (meta.get("mimeType") or "").strip()
+    name = meta.get("name") or file_id
+
+    exp = _export_mime(mime)
+    if exp:
+        req = files.export_media(fileId=file_id, mimeType=exp)
+        data = req.execute()
+        return data or b"", exp
+
+    # 일반 바이너리 다운로드
+    req = files.get_media(fileId=file_id)
+    # MediaIoBaseDownload 동적 import (정적 검사 무시)
+    io_mod = importlib.import_module("io")
+    buf = io_mod.BytesIO()
+    http = importlib.import_module("googleapiclient.http")
+    downloader = http.MediaIoBaseDownload(buf, req)
+    done = False
+    while not done:
+        _, done = downloader.next_chunk()
+    return buf.getvalue(), (mime or (mime_hint or "application/octet-stream"))
+# ============================= [02] DOWNLOAD API — END =============================
+
+
