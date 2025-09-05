@@ -9,8 +9,8 @@
 - 한국어 토큰 정규화: 대표 조사(예: 은/는/이/가/을/를/과/와/로/의/도/만/
   에게/한테/에서/부터/까지 등)를 제거
 - PDF 처리:
-  * PyPDF2 등이 설치되어 있으면 본문을 추출
-  * 미설치/추출 실패 시, 파일명(제목)만으로 최소 인덱싱
+  * PyPDF2가 있으면 본문 추출
+  * 미설치/추출 실패 시 파일명(제목)만으로 최소 인덱싱
 """
 
 from __future__ import annotations
@@ -71,28 +71,33 @@ class Doc:
 
 def _read_text_pdf(path: Path) -> str:
     """
-    PDF 텍스트 추출(가능하면). 실패 시 빈 문자열 반환.
-    외부 라이브러리가 없을 수 있으므로 예외를 모두 잡아 폴백합니다.
+    PDF 텍스트 추출(가능하면). 실패 시 빈 문자열.
+    정적 import 대신 importlib 런타임 로딩으로 mypy 의존 제거.
     """
     try:
+        import importlib
+
         try:
-            from PyPDF2 import PdfReader  # 외부 라이브러리 사용 가능 시
+            mod = importlib.import_module("PyPDF2")
+            PdfReader = getattr(mod, "PdfReader", None)
         except Exception:
             PdfReader = None
-        if PdfReader is not None:
-            txt_parts: List[str] = []
-            reader = PdfReader(str(path))
-            for page in reader.pages:
-                try:
-                    t = page.extract_text() or ""
-                except Exception:
-                    t = ""
-                if t:
-                    txt_parts.append(t)
-            return "\n".join(txt_parts).strip()
+
+        if PdfReader is None:
+            return ""
+
+        txt_parts: List[str] = []
+        reader = PdfReader(str(path))
+        for page in getattr(reader, "pages", []):
+            try:
+                t = page.extract_text() or ""
+            except Exception:
+                t = ""
+            if t:
+                txt_parts.append(t)
+        return "\n".join(txt_parts).strip()
     except Exception:
-        pass
-    return ""
+        return ""
 
 
 def _normalize_token(tok: str) -> str:
@@ -117,12 +122,13 @@ def _title_from_path(p: Path) -> str:
 def build_index(dataset_dir: str) -> Dict:
     """
     dataset_dir를 순회하여 간단한 역색인을 구성해 dict로 반환.
-    - PDF는 텍스트 추출 실패 시 파일명(제목)만으로 최소 인덱싱합니다.
+    - PDF 추출 실패 시 파일명(제목)만으로 최소 인덱싱.
     """
     base = Path(dataset_dir)
     docs: List[Doc] = []
     for p in base.rglob("*"):
         if p.is_file() and p.suffix.lower() in SUPPORTED_EXTS:
+            # _read_text는 [04] READ HELPERS 구획에서 제공
             raw = _read_text(p)
             title = _title_from_path(p)
             if not raw and p.suffix.lower() == ".pdf":
@@ -223,6 +229,7 @@ def search(
         path = docs[doc_id]["path"]
         title = docs[doc_id]["title"]
         try:
+            # _read_text는 [04] READ HELPERS 구획에서 제공
             text = _read_text(Path(path))
         except Exception:
             text = ""
