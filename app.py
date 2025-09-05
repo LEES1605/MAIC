@@ -1089,12 +1089,12 @@ def _render_admin_indexed_sources_panel() -> None:
     # --- PERSIST_DIR 결정 ---
     def _persist_dir() -> Path:
         try:
-            from src.rag.index_build import PERSIST_DIR as IDX_DIR  # type: ignore[import]
+            from src.rag.index_build import PERSIST_DIR as IDX_DIR
             return Path(str(IDX_DIR)).expanduser()
         except Exception:
             pass
         try:
-            from src.config import PERSIST_DIR as CFG_DIR  # type: ignore[import]
+            from src.config import PERSIST_DIR as CFG_DIR
             return Path(str(CFG_DIR)).expanduser()
         except Exception:
             pass
