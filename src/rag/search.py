@@ -1,13 +1,14 @@
 # ============================ [01] SIMPLE RAG SEARCH — START ============================
 """
-표준 라이브러리만으로 동작하는 경량 RAG 검색기.
-- 지원 확장자: .md, .txt (그 외는 건너뜀)
+경량 RAG 검색기.
+- 지원 확장자: .md, .txt, .pdf
 - 인덱스 저장: JSON(선택). 저장하지 않아도 메모리에서 즉시 검색 가능.
 - 토크나이즈: 영문/숫자/한글을 단어로 인식 (정규식)
 - 스코어: 간단한 TF-IDF
-- 한국어 토큰 정규화:
-  대표 조사(은/는/이/가/을/를/과/와/로/으로/의/도/만/에게/한테/에서/부터/까지 등)를
-  말단에서 제거
+- 한국어 토큰 정규화: 대표 조사(은/는/이/가/을/를/과/와/로/으로/의/도/만/에게/한테/에서/부터/까지 등) 제거
+- PDF 처리:
+  * PyPDF2 등이 설치되어 있으면 본문을 추출
+  * 미설치/추출 실패 시, 파일명(제목)만으로 최소 인덱싱
 """
 
 from __future__ import annotations
@@ -19,19 +20,40 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
 
-SUPPORTED_EXTS = {".md", ".txt"}
+SUPPORTED_EXTS = {".md", ".txt", ".pdf"}
 TOKEN_RE = re.compile(r"[A-Za-z0-9가-힣]+")
 
-# 말단 조사(길이 긴 것 → 짧은 것 순서) — 과도 절단 방지용으로 토큰 길이가 충분할 때만 제거
+# 말단 조사(길이 긴 것 → 짧은 것 순서) — 과도 절단 방지(토큰 길이 체크)
 _KR_SUFFIXES = [
-    "으로써", "으로서",
-    "에게서", "한테서",
-    "로부터", "부터", "까지",
-    "이라고", "라고", "이며", "이고",
-    "에게", "한테", "에서",
-    "으로", "처럼", "보다",
-    "과", "와", "로", "의", "도", "만",
-    "은", "는", "이", "가", "을", "를",
+    "으로써",
+    "으로서",
+    "에게서",
+    "한테서",
+    "로부터",
+    "부터",
+    "까지",
+    "이라고",
+    "라고",
+    "이며",
+    "이고",
+    "에게",
+    "한테",
+    "에서",
+    "으로",
+    "처럼",
+    "보다",
+    "과",
+    "와",
+    "로",
+    "의",
+    "도",
+    "만",
+    "은",
+    "는",
+    "이",
+    "가",
+    "을",
+    "를",
 ]
 
 
@@ -43,8 +65,39 @@ class Doc:
     text: str
 
 
+def _read_text_pdf(path: Path) -> str:
+    """
+    PDF 텍스트 추출(가능하면). 실패 시 빈 문자열 반환.
+    외부 라이브러리가 없을 수 있으므로 예외를 모두 잡아 폴백합니다.
+    """
+    try:
+        # PyPDF2 우선 시도
+        try:
+            from PyPDF2 import PdfReader  # type: ignore
+        except Exception:
+            PdfReader = None  # type: ignore
+        if PdfReader is not None:
+            txt_parts: List[str] = []
+            reader = PdfReader(str(path))
+            for page in reader.pages:
+                try:
+                    t = page.extract_text() or ""
+                except Exception:
+                    t = ""
+                if t:
+                    txt_parts.append(t)
+            return "\n".join(txt_parts).strip()
+    except Exception:
+        pass
+    return ""
+
+
 def _read_text(path: Path) -> str:
-    # 인코딩 추정(실패하면 공백 반환)
+    suf = path.suffix.lower()
+    if suf == ".pdf":
+        return _read_text_pdf(path)
+
+    # 텍스트 파일 인코딩 추정(실패하면 공백 반환)
     for enc in ("utf-8", "utf-8-sig", "cp949", "euc-kr", "latin1"):
         try:
             return path.read_text(encoding=enc)
@@ -65,7 +118,6 @@ def _normalize_token(tok: str) -> str:
 def _tokenize_norm(text: str) -> List[str]:
     toks = [m.group(0) for m in TOKEN_RE.finditer(text)]
     norm = [_normalize_token(t) for t in toks]
-    # 빈 문자열 제거
     return [t for t in norm if t]
 
 
@@ -74,19 +126,20 @@ def _title_from_path(p: Path) -> str:
 
 
 def build_index(dataset_dir: str) -> Dict:
-    """dataset_dir를 순회하여 간단한 역색인을 구성해 dict로 반환."""
+    """
+    dataset_dir를 순회하여 간단한 역색인을 구성해 dict로 반환.
+    - PDF는 텍스트 추출 실패 시 파일명(제목)만으로 최소 인덱싱합니다.
+    """
     base = Path(dataset_dir)
     docs: List[Doc] = []
     for p in base.rglob("*"):
         if p.is_file() and p.suffix.lower() in SUPPORTED_EXTS:
-            docs.append(
-                Doc(
-                    id=len(docs),
-                    path=str(p),
-                    title=_title_from_path(p),
-                    text=_read_text(p),
-                )
-            )
+            raw = _read_text(p)
+            title = _title_from_path(p)
+            # PDF 추출 실패 → 파일명으로 최소 인덱싱
+            if not raw and p.suffix.lower() == ".pdf":
+                raw = title
+            docs.append(Doc(id=len(docs), path=str(p), title=title, text=raw))
 
     # 역색인과 df 계산 (정규화된 토큰 사용)
     postings: Dict[str, Dict[int, int]] = {}
@@ -188,7 +241,6 @@ def search(
             text = _read_text(Path(path))
         except Exception:
             text = ""
-        # 첫 쿼리 토큰으로 스니펫
         needle = q_toks[0]
         snippet = _make_snippet(text, needle) if text else ""
         results.append({"path": path, "title": title, "score": sc, "snippet": snippet})
