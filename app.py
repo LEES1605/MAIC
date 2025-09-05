@@ -921,136 +921,80 @@ def _render_body() -> None:
         st.session_state.setdefault("inpane_q", "")
 # ============================= [14] 본문 렌더 — END =============================
 
-# ========================= [15] ADMIN: Index Panel — START =========================
-def _render_admin_index_panel() -> None:
+# ====================== [02] Index Orchestrator Panel — START ======================
+def render_index_orchestrator_panel() -> None:
     """
-    관리자용 인덱싱 패널(중복 정리 버전):
-      - 강제 인덱싱 버튼은 제거(오케스트레이터에서만 수행).
-      - '업데이트 점검(Drive/Local)'과 데이터셋 경로/사전 스캔만 제공.
-      - prepared 로더는 디버그 메시지(expander)로 왜 실패했는지 보여줌.
+    (미니멀 버전)
+    - 여기서는 상태/경로/가이드만 노출 + '관리자 인덱싱 패널([15]) 열기' 버튼만 제공.
+    - 실제 강제 인덱싱(HQ)+백업/파일 미리보기는 app.py의 [15]/[16]에서 수행.
     """
-    import importlib
-    import importlib.util
-    import os
+    # ── 지역 import (ruff E402 회피) ─────────────────────────────────────────
     from pathlib import Path
-    from typing import Any, Callable, Dict, List, Optional, Tuple
+    import importlib
 
-    if st is None or not _is_admin_view():
+    try:
+        import streamlit as st
+    except Exception:
         return
 
-    # ---- prepared API 로더(루트 prepared 우선 + 파일경로 폴백) ----
-    def _load_prepared_api() -> Tuple[
-        Optional[Callable[..., Dict[str, Any]]],
-        Optional[Callable[..., Any]],
-        List[str],
-    ]:
-        """
-        반환: (chk, mark, debug_msgs)
-          - chk: check_prepared_updates 함수 또는 None
-          - mark: mark_prepared_consumed 함수 또는 None
-          - debug_msgs: 시도 결과 로그
-        """
-        tried: List[str] = []
-        chk: Optional[Callable[..., Dict[str, Any]]] = None
-        mark: Optional[Callable[..., Any]] = None
+    # 내부 헬퍼
+    def _persist_dir() -> Path:
+        try:
+            from src.rag.index_build import PERSIST_DIR as IDX
+            return Path(str(IDX)).expanduser()
+        except Exception:
+            pass
+        try:
+            from src.config import PERSIST_DIR as CFG
+            return Path(str(CFG)).expanduser()
+        except Exception:
+            pass
+        return Path.home() / ".maic" / "persist"
 
-        # 1) 모듈명 임포트 (루트 prepared 우선)
-        for modname in ("prepared", "src.prepared", "src.services.prepared"):
+    def _is_ready(persist: Path) -> bool:
+        try:
+            ready = (persist / ".ready").exists()
+            cj = persist / "chunks.jsonl"
+            return ready and cj.exists() and cj.stat().st_size > 0
+        except Exception:
+            return False
+
+    # 본문
+    st.markdown("### 🧭 인덱스 오케스트레이터")
+    persist = _persist_dir()
+    ok = _is_ready(persist)
+
+    c1, c2, c3 = st.columns([2, 3, 2])
+    with c1:
+        st.write("**Persist Dir**")
+        st.code(str(persist), language="text")
+        st.write("**상태**")
+        st.success("READY") if ok else st.warning("MISSING")
+
+    with c2:
+        st.info(
+            "강제 인덱싱(HQ, 느림)+백업과 인덱싱 파일 미리보기는 **관리자 인덱싱 패널([15])**에서 합니다.\n"
+            "- 관리자 모드 진입 → 하단의 *인덱싱(관리자)* 섹션으로 이동"
+        )
+
+    with c3:
+        st.write(" ")
+        if st.button("⚡ 인덱싱 패널([15]) 열기", type="primary", help="관리자 인덱싱 패널로 바로 이동"):
             try:
-                m = importlib.import_module(modname)
-                tried.append(f"import {modname} OK")
-                chk = getattr(m, "check_prepared_updates", None)
-                mark = getattr(m, "mark_prepared_consumed", None)
-                if callable(chk) and callable(mark):
-                    return chk, mark, tried
-                tried.append(f"{modname}: 함수 누락(check/mark)")
-            except Exception as e:
-                tried.append(f"import {modname} FAIL: {e}")
-
-        # 2) 파일경로 폴백 로드
-        for candidate in ("prepared.py", "src/prepared.py"):
-            try:
-                p = Path(candidate)
-                if not p.exists():
-                    tried.append(f"{candidate} 없음")
-                    continue
-                spec = importlib.util.spec_from_file_location("prepared_fallback", str(p))
-                if spec and spec.loader:
-                    mod = importlib.util.module_from_spec(spec)
-                    spec.loader.exec_module(mod)
-                    tried.append(f"file-load {candidate} OK")
-                    chk = getattr(mod, "check_prepared_updates", None)
-                    mark = getattr(mod, "mark_prepared_consumed", None)
-                    if callable(chk) and callable(mark):
-                        return chk, mark, tried
-                    tried.append(f"{candidate}: 함수 누락(check/mark)")
-                else:
-                    tried.append(f"file-load {candidate} spec/loader 없음")
-            except Exception as e:
-                tried.append(f"file-load {candidate} FAIL: {e}")
-
-        return None, None, tried
-
-    with st.container(border=True):
-        st.subheader("📚 인덱싱(관리자)")
-
-        # dataset_dir 해석 (env → prepared → knowledge) — 반드시 Path 반환
-        def _resolve_dataset_dir_for_ui() -> Path:
-            try:
-                mod = importlib.import_module("src.rag.label")
-                fn = getattr(mod, "_resolve_dataset_dir", None)
-                if callable(fn):
-                    return fn(None)
+                st.session_state["_admin_diag_open"] = True
+                st.session_state["_force_focus_admin_index"] = True  # [15] 패널 쪽에서 감지
+                st.rerun()
             except Exception:
                 pass
-            env = os.getenv("MAIC_DATASET_DIR") or os.getenv("RAG_DATASET_DIR")
-            if env:
-                return Path(env).expanduser()
-            repo_root = Path(__file__).resolve().parent
-            prepared_dir = (repo_root / "prepared").resolve()
-            if prepared_dir.exists():
-                return prepared_dir
-            # knowledge 폴더가 없더라도 fallback 제공(반드시 Path 반환)
-            return (repo_root / "knowledge").resolve()
 
-        ds = _resolve_dataset_dir_for_ui()
-        st.write(f"**Dataset Dir:** `{str(ds)}`")
+    with st.expander("도움말 / 트러블슈팅", expanded=False):
+        st.markdown(
+            "- 인덱싱 후에도 *신규파일 감지*가 뜨면, prepared **전체 목록**이 `seen` 처리되지 않은 것입니다.\n"
+            "  - app.py의 [15] 패널은 인덱싱 직후 드라이버를 확인하고, 전체 목록을 조회해 `mark_prepared_consumed()`에 전달합니다.\n"
+            "- `chunks.jsonl`이 없거나 0B이면 READY가 되지 않습니다."
+        )
+# ======================= [02] Index Orchestrator Panel — END =======================
 
-        # 사전 스캔
-        files_preview: List[Path] = []
-        try:
-            rag = importlib.import_module("src.rag.search")
-            SUP = getattr(rag, "SUPPORTED_EXTS", {".md", ".txt", ".pdf"})
-        except Exception:
-            SUP = {".md", ".txt", ".pdf"}
-        for p in sorted(ds.rglob("*")):
-            if p.is_file() and p.suffix.lower() in SUP:
-                files_preview.append(p)
-        st.caption(f"사전 스캔: {len(files_preview)}개 파일 후보")
-
-        # 작업 버튼(중복 제거 정책: 여기서는 '업데이트 점검'만 제공)
-        c1, _ = st.columns([1, 3])
-        with c1:
-            do_check = st.button("업데이트 점검(Drive/Local)")
-
-        # 업데이트 점검
-        if do_check:
-            chk, _mark, dbg = _load_prepared_api()
-            if callable(chk):
-                try:
-                    check_info: Dict[str, Any] = chk(PERSIST_DIR) or {}
-                    st.write(check_info)
-                except Exception as e:
-                    _errlog(f"check prepared failed: {e}", where="[admin-index.check]", exc=e)
-                    st.error("업데이트 점검 중 오류가 발생했어요.")
-            else:
-                st.warning("prepared 모듈(check_prepared_updates)을 찾지 못했습니다.")
-                with st.expander("왜 못 찾았나요? (진단)"):
-                    for m in dbg:
-                        st.write("• " + m)
-
-        st.caption("ⓘ 강제 인덱싱(로컬/백업/HQ)은 ‘🛠 진단 도구(오케스트레이터)’에서만 수행하도록 단일화했습니다.")
-# ========================== [15] ADMIN: Index Panel — END ==========================
 
 # ========================= [16] Indexed Sources Panel — START =========================
 def _render_admin_indexed_sources_panel() -> None:
