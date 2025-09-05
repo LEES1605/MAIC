@@ -330,6 +330,7 @@ def _header():
     - 상단 상태 배지 + 브랜드 타이틀 + 관리자 영역(⚙️/로그아웃)을 한 줄 구성.
     - 관리자 로그인은 st.form으로 처리하여 불필요한 재실행(리렌더)을 최소화.
     - 로그인/로그아웃/닫기 시에는 _safe_rerun(tag, ttl=1)으로 '최대 1회'만 새로고침.
+    - 로그인 입력창은 중앙의 좁은 컬럼에 배치하여 화면을 과점유하지 않도록 조정.
     """
     st_mod = globals().get("st", None)
     if st_mod is None:
@@ -367,6 +368,11 @@ def _header():
           .status-btn.yellow{ background:#fff6e5; color:#8a5b00; }
           .status-btn.red   { background:#ffeaea; color:#a40000; }
           .brand-title { font-weight:800; letter-spacing:.2px; }
+          /* 관리자 로그인 입력의 시각 폭 제어 (중앙 컬럼 폭으로 제한) */
+          .admin-login-narrow [data-testid="stTextInput"] input{
+            height:42px; border-radius:10px;
+          }
+          .admin-login-narrow .stButton>button{ width:100%; height:42px; }
         </style>
         """,
         unsafe_allow_html=True,
@@ -395,7 +401,7 @@ def _header():
             if st.button("⚙️", key="open_admin_login", help="관리자 로그인"):
                 ss["_show_admin_login"] = not ss.get("_show_admin_login", False)
 
-    # 2) 관리자 로그인 폼(폼 전송 시에만 재실행 발생 → 불필요 리렌더 감소)
+    # 2) 관리자 로그인 폼(중앙 좁은 컬럼)
     if not ss.get("admin_mode") and ss.get("_show_admin_login"):
         with st.container(border=True):
             st.write("🔐 관리자 로그인")
@@ -412,39 +418,42 @@ def _header():
             except Exception:
                 pwd_set = None
 
-            with st.form("admin_login_form", clear_on_submit=False):
-                pw = st.text_input("비밀번호", type="password")
-                col_a, col_b = st.columns([1, 1])
-                submit = col_a.form_submit_button("로그인")
-                cancel = col_b.form_submit_button("닫기")
+            left, mid, right = st.columns([2, 1, 2], gap="small")
+            with mid:
+                with st.container():  # 폭 제한 컨테이너
+                    with st.form("admin_login_form", clear_on_submit=False):
+                        with st.container():
+                            st.markdown('<div class="admin-login-narrow">', unsafe_allow_html=True)
+                            pw = st.text_input("비밀번호", type="password", key="admin_pw_input")
+                            col_a, col_b = st.columns([1, 1], gap="small")
+                            submit = col_a.form_submit_button("로그인")
+                            cancel = col_b.form_submit_button("닫기")
+                            st.markdown('</div>', unsafe_allow_html=True)
 
-            if cancel:
-                ss["_show_admin_login"] = False
-                _safe_rerun("admin:close", ttl=1)
-
-            if submit:
-                if not pwd_set:
-                    st.error("서버에 관리자 비밀번호가 설정되어 있지 않습니다.")
-                elif pw and str(pw) == str(pwd_set):
-                    ss["admin_mode"] = True
+                if cancel:
                     ss["_show_admin_login"] = False
-                    if hasattr(st, "toast"):
-                        st.toast("로그인 성공", icon="✅")
+                    _safe_rerun("admin:close", ttl=1)
+
+                if submit:
+                    if not pwd_set:
+                        st.error("서버에 관리자 비밀번호가 설정되어 있지 않습니다.")
+                    elif pw and str(pw) == str(pwd_set):
+                        ss["admin_mode"] = True
+                        ss["_show_admin_login"] = False
+                        if hasattr(st, "toast"):
+                            st.toast("로그인 성공", icon="✅")
+                        else:
+                            st.success("로그인 성공")
+                        _safe_rerun("admin:login", ttl=1)  # Enter 제출 포함 즉시 닫힘
                     else:
-                        st.success("로그인 성공")
-                    _safe_rerun("admin:login", ttl=1)
-                else:
-                    st.error("비밀번호가 올바르지 않습니다.")
+                        st.error("비밀번호가 올바르지 않습니다.")
 
     # 3) 진행선(부팅/복원 상태 시각화)
     try:
         _render_boot_progress_line()
     except Exception:
-        # 진행선 렌더 실패는 UX만 영향 → 조용히 무시
         pass
 # ============================= [07] 헤더(배지·타이틀·⚙️) — END =============================
-
-
 
 # [08] 배경(완전 비활성) =======================================================
 def _inject_modern_bg_lib():
@@ -949,7 +958,7 @@ if __name__ == "__main__":
 
 # ======================== [16] ADMIN: Index Panel — START ========================
 def _render_admin_index_panel() -> None:
-    """관리자용 인덱싱 패널: 강제 재인덱싱(HQ) + 인덱싱 전/후 파일 목록 확인."""
+    """관리자용 인덱싱 패널: 강제 재인덱싱(HQ) + 인덱싱 전/후 파일 목록 확인 + prepared 소비 처리."""
     import importlib
     import json
     from pathlib import Path
@@ -985,12 +994,10 @@ def _render_admin_index_panel() -> None:
         files: list[Path] = []
         SUP = {".md", ".txt", ".pdf"}
         try:
-            # 가능하면 검색 모듈의 확장자 규칙 사용
             rag = importlib.import_module("src.rag.search")
             SUP = getattr(rag, "SUPPORTED_EXTS", SUP)
         except Exception:
             pass
-
         for p in sorted(ds.rglob("*")):
             if p.is_file() and p.suffix.lower() in SUP:
                 files.append(p)
@@ -1008,7 +1015,6 @@ def _render_admin_index_panel() -> None:
         do_rebuild = col1.button("🔁 강제 재인덱싱(HQ)", help="캐시를 무시하고 인덱스를 새로 만듭니다.")
         show_after = col2.toggle("인덱싱 결과 표시", value=True)
 
-        _ = None
         if do_rebuild:
             prog = st.progress(0.0, text="인덱싱 중…")
             try:
@@ -1017,6 +1023,48 @@ def _render_admin_index_panel() -> None:
                 _idx.rebuild_index()  # .ready / chunks.jsonl 생성
                 prog.progress(1.0, text="인덱싱 완료")
                 st.success("강제 재인덱싱 완료 (HQ)")
+
+                # ✅ prepared 신규파일 감지 플래그/메모리 소비(있을 때만 시도)
+                consumed = False
+                try:
+                    # 1) src.drive.prepared 스타일
+                    dprep = importlib.import_module("src.drive.prepared")
+                    check_prepared = getattr(dprep, "check_prepared_updates", None)
+                    mark_consumed = getattr(dprep, "mark_prepared_consumed", None)
+                    if callable(check_prepared) and callable(mark_consumed):
+                        try:
+                            from src.rag.index_build import PERSIST_DIR as _PERSIST
+                            persist = Path(str(_PERSIST)).expanduser()
+                        except Exception:
+                            from src.config import PERSIST_DIR as CFG
+                            persist = Path(str(CFG)).expanduser()
+                        updates = check_prepared(persist)
+                        files_list = updates.get("files") or []
+                        if files_list:
+                            try:
+                                mark_consumed(persist, files_list)
+                                consumed = True
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+
+                if not consumed:
+                    # 2) src.integrations.gdrive 스타일
+                    try:
+                        gdrv = importlib.import_module("src.integrations.gdrive")
+                        list_prepared = getattr(gdrv, "list_prepared_files", None)
+                        mark_files = getattr(gdrv, "mark_prepared_consumed", None)
+                        if callable(list_prepared) and callable(mark_files):
+                            gfiles = list_prepared() or []
+                            if gfiles:
+                                try:
+                                    mark_files(gfiles)
+                                except Exception:
+                                    pass
+                    except Exception:
+                        pass
+
             except Exception as e:
                 prog.progress(0.0)
                 _errlog(f"reindex failed: {e}", where="[admin-index.rebuild]", exc=e)
@@ -1072,16 +1120,44 @@ def _render_admin_index_panel() -> None:
                 _errlog(f"list docs failed: {e}", where="[admin-index.list]", exc=e)
                 st.error("문서 목록 표시 중 오류가 발생했어요.")
 # ========================= [16] ADMIN: Index Panel — END =========================
+
 # ======================== [17] Indexed Sources Panel — START =========================
 def _render_admin_indexed_sources_panel() -> None:
     """
     관리자용: 현재 인덱스(chunks.jsonl)를 읽어 문서(파일) 단위로 집계/표시한다.
-    - 열: 출처라벨 · 제목 · 문서ID · 경로 · 확장자 · 크기(bytes) · 수정시각 · 청크개수
+    - 열: 출처라벨 · 제목 · 문서ID · 경로 · 확장자 · 크기(bytes) · 수정시각(KST) · 청크개수
     - 필터(문자열 포함) · CSV 내보내기 · 대용량 방지(최대 5000행)
     """
     import json
     from pathlib import Path
     from typing import Any, Dict, List
+    from datetime import datetime, timezone
+    try:
+        from zoneinfo import ZoneInfo  # py>=3.9
+        _KST = ZoneInfo("Asia/Seoul")
+    except Exception:
+        _KST = None
+
+    def _to_kst_iso(s: str) -> str:
+        """ISO/epoch 형태의 mtime을 Asia/Seoul 로 변환해 문자열로 반환."""
+        if not s:
+            return ""
+        try:
+            if s.isdigit():
+                ts = datetime.fromtimestamp(int(s), tz=timezone.utc)
+                return ts.astimezone(_KST).strftime("%Y-%m-%d %H:%M:%S %Z") if _KST else ts.isoformat()
+        except Exception:
+            pass
+        try:
+            if s.endswith("Z"):
+                ts = datetime.fromisoformat(s.replace("Z", "+00:00"))
+            else:
+                ts = datetime.fromisoformat(s)
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            return ts.astimezone(_KST).strftime("%Y-%m-%d %H:%M:%S %Z") if _KST else ts.isoformat()
+        except Exception:
+            return s
 
     if st is None or not _is_admin_view():
         return
@@ -1108,7 +1184,6 @@ def _render_admin_indexed_sources_panel() -> None:
         st.subheader("📄 인덱싱된 파일 목록 (읽기 전용)")
         st.caption(f"경로: `{str(chunks_path)}`")
 
-        # 파일 존재 확인
         if not chunks_path.exists():
             st.info("아직 인덱스가 없습니다. 먼저 인덱싱을 수행해 주세요.")
             return
@@ -1124,7 +1199,6 @@ def _render_admin_indexed_sources_panel() -> None:
             manifest_docs = {}
 
         # ---- chunks.jsonl 집계(문서별) ----
-        # doc_id → 집계 row
         docs: Dict[str, Dict[str, Any]] = {}
         total_lines = 0
         parse_errors = 0
@@ -1141,13 +1215,12 @@ def _render_admin_indexed_sources_panel() -> None:
                 return "문법책"
             return "AI지식"
 
-        # 대용량 보호
         MAX_ROWS = 5000
         try:
             with chunks_path.open("r", encoding="utf-8") as rf:
                 for line in rf:
                     total_lines += 1
-                    if total_lines > 200000:  # 안전 상한(청크가 매우 많은 경우)
+                    if total_lines > 200000:
                         break
                     line = line.strip()
                     if not line:
@@ -1164,12 +1237,11 @@ def _render_admin_indexed_sources_panel() -> None:
                     title = str(obj.get("title") or "")
                     source = str(obj.get("source") or "")
                     ext = str(obj.get("ext") or "")
-                    mtime = str(obj.get("mtime") or "")
+                    mtime = _to_kst_iso(str(obj.get("mtime") or ""))  # ← KST 변환
                     bsize = int(obj.get("bytes") or 0)
 
                     row = docs.get(doc_id)
                     if row is None:
-                        # manifest의 보강 정보 우선 적용
                         if doc_id in manifest_docs:
                             man = manifest_docs[doc_id]
                             title = str(man.get("title") or title or "")
@@ -1185,9 +1257,7 @@ def _render_admin_indexed_sources_panel() -> None:
                             "청크개수": 0,
                         }
                         docs[doc_id] = row
-                    # 집계 업데이트
                     row["청크개수"] = int(row.get("청크개수", 0)) + 1
-                    # 크기/수정시각은 더 최신값으로 갱신 시도
                     if bsize and bsize != row.get("크기(bytes)", 0):
                         row["크기(bytes)"] = bsize
                     if mtime and mtime > (row.get("수정시각") or ""):
@@ -1197,7 +1267,6 @@ def _render_admin_indexed_sources_panel() -> None:
             st.error("인덱스 파일을 읽는 중 오류가 발생했어요.")
             return
 
-        # ---- 리스트화 & 정렬 ----
         rows: List[Dict[str, Any]] = list(docs.values())
         rows.sort(key=lambda r: (r.get("출처") or "", r.get("제목") or ""))
 
@@ -1205,7 +1274,6 @@ def _render_admin_indexed_sources_panel() -> None:
             f"- 총 청크 라인: **{total_lines:,}** · 파싱오류: **{parse_errors:,}** · 문서 수: **{len(rows):,}**"
         )
 
-        # ---- 필터 & 샘플링 ----
         c1, c2 = st.columns([2, 1])
         with c1:
             q = st.text_input("필터(제목/경로/문서ID 포함 검색)", value="")
@@ -1226,12 +1294,10 @@ def _render_admin_indexed_sources_panel() -> None:
             rows = rows[:MAX_ROWS]
             limited = True
 
-        # ---- 표 렌더 ----
         st.dataframe(rows, hide_index=True, use_container_width=True)
         if limited:
             st.caption("※ 행이 많아 상위 5,000개만 표시 중입니다. 필터를 이용해 범위를 좁혀주세요.")
 
-        # ---- CSV 내보내기 ----
         import io, csv
         buf = io.StringIO()
         writer = csv.DictWriter(
