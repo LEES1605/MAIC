@@ -853,24 +853,77 @@ def _render_chat_panel() -> None:
     ss["inpane_q"] = ""
 # ============================= [13] 채팅 패널 — END =============================
 
-# ========== [14] PATCH: 제출 직후는 rerun만 (동일 사이클 재그림 금지) — START ==========
-# 기존:
-# if submitted and isinstance(q, str) and q.strip():
-#     st.session_state["inpane_q"] = q.strip()
-#     with st.container():
-#         st.markdown('<div class="chatpane"><div class="messages">', unsafe_allow_html=True)
-#         _render_chat_panel()
-#         st.markdown('</div></div>', unsafe_allow_html=True)
-# else:
-#     st.session_state.setdefault("inpane_q", "")
+# ============================ [14] 본문 렌더 — START ============================
+def _render_body() -> None:
+    if st is None:
+        return
 
-# 교체:
-if submitted and isinstance(q, str) and q.strip():
-    st.session_state["inpane_q"] = q.strip()
-    st.rerun()  # 다음 렌더 사이클에서 위(메시지) / 아래(입력창) 고정
-else:
-    st.session_state.setdefault("inpane_q", "")
-# ========== [14] PATCH: 제출 직후는 rerun만 (동일 사이클 재그림 금지) — END ==========
+    # 1) 부팅 오토플로우 1회
+    if not st.session_state.get("_boot_checked"):
+        try:
+            _boot_autoflow_hook()
+        except Exception as e:
+            _errlog(f"boot check failed: {e}", where="[render_body.boot]", exc=e)
+        finally:
+            st.session_state["_boot_checked"] = True
+
+    # 2) 배경
+    _mount_background(
+        theme="light", accent="#5B8CFF", density=3, interactive=True, animate=True,
+        gradient="radial", grid=True, grain=False, blur=0, seed=1234, readability_veil=True,
+    )
+
+    # 3) 헤더
+    _header()
+
+    # 4) 빠른 부팅
+    try:
+        _qlao = globals().get("_quick_local_attach_only")
+        if callable(_qlao):
+            _qlao()
+    except Exception as e:
+        _errlog(f"quick attach failed: {e}", where="[render_body]", exc=e)
+
+    # 5) 관리자 패널
+    if _is_admin_view():
+        _render_admin_panels()
+        try:
+            _render_admin_index_panel()
+        except Exception as e:
+            _errlog(f"admin index panel failed: {e}", where="[admin-index]", exc=e)
+        st.caption("ⓘ 복구/재인덱싱은 상단 ‘🛠 진단 도구’ 또는 아래 인덱싱 패널에서 수행할 수 있어요.")
+
+    # 6) 자동 시작
+    _auto_start_once()
+
+    # 7) 채팅(위): 말풍선 영역
+    _inject_chat_styles_once()
+    with st.container():
+        st.markdown('<div class="chatpane"><div class="messages">', unsafe_allow_html=True)
+        try:
+            _render_chat_panel()
+        except Exception as e:
+            _errlog(f"chat panel failed: {e}", where="[render_body.chat]", exc=e)
+        st.markdown('</div></div>', unsafe_allow_html=True)
+
+    # 8) 입력 폼(항상 아래): 인풋 내부 우측 ➤ (CSS로 stButton 겹치기)
+    with st.container(border=True, key="chatpane_container"):
+        st.markdown('<div class="chatpane">', unsafe_allow_html=True)
+        # 모드 pill → 세션 반영
+        st.session_state["__mode"] = _render_mode_controls_pills() or st.session_state.get("__mode", "")
+        with st.form("chat_form", clear_on_submit=False):
+            q: str = st.text_input("질문", placeholder="질문을 입력하세요…", key="q_text")
+            submitted: bool = st.form_submit_button("➤")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    # 9) 제출 처리: 같은 렌더 사이클에서 메시지를 다시 그리지 말고, 다음 사이클에서 그리기
+    if submitted and isinstance(q, str) and q.strip():
+        st.session_state["inpane_q"] = q.strip()
+        st.rerun()
+    else:
+        st.session_state.setdefault("inpane_q", "")
+# ============================= [14] 본문 렌더 — END =============================
+
 
 
 # [15] main ===================================================================
