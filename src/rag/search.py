@@ -346,3 +346,20 @@ def rebuild_and_cache(dataset_dir: str) -> Dict:
         pass
     return idx
 # ========================== [03] REBUILD API — END ==========================
+# ========================= [04] READ HELPERS — START =========================
+def _read_text(path: Path) -> str:
+    """
+    일반 텍스트/마크다운/한글 인코딩까지 안전하게 읽기.
+    PDF면 _read_text_pdf로 위임하고, 실패하면 빈 문자열을 반환합니다.
+    """
+    suf = path.suffix.lower()
+    if suf == ".pdf":
+        return _read_text_pdf(path)
+
+    for enc in ("utf-8", "utf-8-sig", "cp949", "euc-kr", "latin1"):
+        try:
+            return path.read_text(encoding=enc)
+        except Exception:
+            continue
+    return ""
+# ========================== [04] READ HELPERS — END ==========================
