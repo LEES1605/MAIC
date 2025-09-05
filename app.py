@@ -1010,7 +1010,6 @@ def _render_admin_index_panel() -> None:
         idx = None
         if do_rebuild:
             # 진행률 바(사전 스캔 개수 기준 가시화)
-            total = max(1, len(files))
             prog = st.progress(0.0, text="인덱싱 중…")
             try:
                 # 실제 재인덱싱(HQ)
