@@ -1014,7 +1014,7 @@ def _render_admin_index_panel() -> None:
             try:
                 from src.rag import index_build as _idx
                 os.environ["MAIC_INDEX_MODE"] = "HQ"
-                idx_result = _idx.rebuild_index()  # .ready / chunks.jsonl 생성
+                _idx.rebuild_index()  # .ready / chunks.jsonl 생성
                 prog.progress(1.0, text="인덱싱 완료")
                 st.success("강제 재인덱싱 완료 (HQ)")
             except Exception as e:
