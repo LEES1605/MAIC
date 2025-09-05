@@ -939,15 +939,34 @@ def _render_body() -> None:
     # 5) 관리자 패널
     if _is_admin_view():
         _render_admin_panels()
-        # ❌ 레거시 중복 버튼 삭제:
-        #    여기서 추가로 '업데이트 점검' 버튼을 렌더하지 않는다.
-        #    모든 복구/점검/재인덱싱은 상단 '🛠 진단 도구' 패널에서만 수행.
-        st.caption("ⓘ 복구/재인덱싱은 상단 ‘🛠 진단 도구’ 패널에서만 수행됩니다.")
+        # 인덱싱 관리자 패널(신규) 호출
+        try:
+            _render_admin_index_panel()
+        except Exception as e:
+            _errlog(f"admin index panel failed: {e}", where="[admin-index]", exc=e)
+        st.caption("ⓘ 복구/재인덱싱은 상단 ‘🛠 진단 도구’ 또는 아래 인덱싱 패널에서 수행할 수 있어요.")
 
     # 6) (선택) 자동 시작
     _auto_start_once()
 
-    # 7) 본문: 챗
+    # 7) 질문 입력(모드 pill + 입력 폼)
+    _inject_chat_styles_once()
+    with st.container(border=True, key="chatpane_container"):
+        st.markdown('<div class="chatpane">', unsafe_allow_html=True)
+        mode = _render_mode_controls_pills()
+        with st.form("chat_form", clear_on_submit=False):
+            q = st.text_input("질문", placeholder="질문을 입력하세요…", key="q_text")
+            # 엔터 화살표 버튼(절대배치 CSS로 인풋 내부처럼 보임)
+            submitted = st.form_submit_button("➤")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    if submitted and isinstance(q, str) and q.strip():
+        st.session_state["inpane_q"] = q.strip()
+    else:
+        # 이전 질문이 남아있으면 그대로 사용
+        st.session_state.setdefault("inpane_q", "")
+
+    # 8) 본문: 챗
     _render_chat_panel()
 # ============================= [14] 본문 렌더 — END =============================
 
@@ -962,3 +981,84 @@ def main():
 if __name__ == "__main__":
     main()
 # =============================== [END] =======================================
+# ======================== [16] ADMIN: Index Panel — START ========================
+def _render_admin_index_panel() -> None:
+    """관리자용 인덱싱 패널: 강제 재인덱싱(HQ) + 파일 목록 확인."""
+    import importlib
+    from pathlib import Path
+
+    if st is None or not _is_admin_view():
+        return
+
+    with st.container(border=True):
+        st.subheader("📚 인덱싱(관리자)")
+
+        # dataset_dir 해석: label._resolve_dataset_dir(None) 우선
+        def _resolve_dataset_dir_for_ui() -> Path:
+            try:
+                mod = importlib.import_module("src.rag.label")
+                fn = getattr(mod, "_resolve_dataset_dir", None)
+                if callable(fn):
+                    return fn(None)
+            except Exception:
+                pass
+            # 폴백: ENV → <repo>/prepared → <repo>/knowledge
+            env = os.getenv("MAIC_DATASET_DIR") or os.getenv("RAG_DATASET_DIR")
+            if env:
+                return Path(env).expanduser()
+            repo_root = Path(__file__).resolve().parent
+            prepared = (repo_root / "prepared").resolve()
+            if prepared.exists():
+                return prepared
+            return (repo_root / "knowledge").resolve()
+
+        ds = _resolve_dataset_dir_for_ui()
+        st.write(f"**Dataset Dir:** `{str(ds)}`")
+
+        # 강제 재인덱싱(HQ): 캐시 우회 빌드
+        col1, col2 = st.columns([1, 3])
+        do_rebuild = col1.button("🔁 강제 재인덱싱(HQ)", help="캐시를 무시하고 인덱스를 새로 만듭니다.")
+        show_last = col2.toggle("인덱싱 결과 표시", value=True)
+
+        idx = None
+        if do_rebuild:
+            try:
+                mod = importlib.import_module("src.rag.search")
+                rebuild = getattr(mod, "rebuild_and_cache", None)
+                if callable(rebuild):
+                    idx = rebuild(str(ds))
+                else:
+                    # 폴백: build_index만이라도
+                    build = getattr(mod, "build_index", None)
+                    if callable(build):
+                        idx = build(str(ds))
+                if idx is None:
+                    st.error("인덱싱 함수를 찾지 못했어요.")
+                else:
+                    st.success("강제 재인덱싱 완료 (HQ)")
+            except Exception as e:
+                _errlog(f"reindex failed: {e}", where="[admin-index.rebuild]", exc=e)
+                st.error("강제 재인덱싱 중 오류가 발생했어요.")
+
+        # 파일 목록 표시
+        if show_last:
+            try:
+                if idx is None:
+                    # 최신 캐시 로드 시도(있으면)
+                    mod = importlib.import_module("src.rag.search")
+                    get_or = getattr(mod, "get_or_build_index", None)
+                    if callable(get_or):
+                        idx = get_or(str(ds), use_cache=True)
+                docs = (idx or {}).get("docs", [])
+                st.caption(f"인덱싱 문서 수: **{len(docs)}**")
+                if docs:
+                    # 상위 50개만 간단히 보기
+                    data = [{"title": d.get("title"), "path": d.get("path")} for d in docs[:50]]
+                    st.dataframe(data, hide_index=True, use_container_width=True)
+                else:
+                    st.info("표시할 문서가 없어요.")
+            except Exception as e:
+                _errlog(f"list docs failed: {e}", where="[admin-index.list]", exc=e)
+                st.error("문서 목록 표시 중 오류가 발생했어요.")
+# ========================= [16] ADMIN: Index Panel — END =========================
+
