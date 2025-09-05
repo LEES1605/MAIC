@@ -659,19 +659,27 @@ def _inject_chat_styles_once() -> None:
       }
       .chatpane div[data-testid="stRadio"] svg{ display:none!important }
 
-      /* --- 카톡형 입력: 인풋 내부 우측에 ➤ 버튼 고정 --- */
-      .chatpane form[data-testid="stForm"]{ position:relative; background:#EDF4FF; padding:8px 10px 10px 10px; margin:0; }
+      /* --- 카톡형 입력: 인풋 내부 우측에 ➤ 버튼을 '시각적으로' 겹치기 --- */
+      .chatpane form[data-testid="stForm"]{
+        position:relative; background:#EDF4FF; padding:8px 10px 10px 10px; margin:0;
+      }
       .chatpane form[data-testid="stForm"] .input-wrap{ position:relative; }
-      .chatpane form[data-testid="stForm"] input[type="text"]{
+      /* Streamlit이 위젯을 별도 블록에 렌더하므로, 실제 래퍼는 stTextInput/stButton */
+      .chatpane form[data-testid="stForm"] [data-testid="stTextInput"] input{
         background:#FFF8CC !important; border:1px solid #F2E4A2 !important; border-radius:999px !important;
-        color:#333 !important; height:46px;
-        padding-right:56px;  /* 버튼과 겹침 방지 */
+        color:#333 !important; height:46px; padding-right:56px;
       }
       .chatpane ::placeholder{ color:#8A7F4A !important; }
-      .chatpane form[data-testid="stForm"] .arrow-btn button{
+
+      /* 핵심: stButton 래퍼를 절대배치로 '입력창 안쪽'에 겹치기 */
+      .chatpane form[data-testid="stForm"] .arrow-btn .stButton{
         position:absolute; right:14px; top:50%; transform:translateY(-50%);
+        z-index:2;  /* 인풋 위로 */
+      }
+      .chatpane form[data-testid="stForm"] .arrow-btn .stButton > button{
         width:38px; height:38px; border-radius:50%; border:0; background:#0a2540; color:#fff;
         font-size:18px; line-height:1; cursor:pointer; box-shadow:0 2px 6px rgba(0,0,0,.15);
+        padding:0; min-height:0;
       }
 
       /* 말풍선 */
@@ -891,12 +899,13 @@ def _render_body() -> None:
         _render_chat_panel()
         st.markdown('</div></div>', unsafe_allow_html=True)
 
-    # 8) 입력 폼(항상 아래): 카톡형 인풋 내부 우측 ➤ 버튼
+    # 8) 입력 폼(항상 아래): 인풋 내부 우측 ➤ (CSS로 stButton 겹치기)
     with st.container(border=True, key="chatpane_container"):
         st.markdown('<div class="chatpane">', unsafe_allow_html=True)
         # 모드 pill → 세션 반영
         st.session_state["__mode"] = _render_mode_controls_pills() or st.session_state.get("__mode", "")
         with st.form("chat_form", clear_on_submit=False):
+            # 주의: Streamlit 위젯은 markdown <div>로 실제로 감싸지지 않으므로, CSS에서 stTextInput/stButton을 타깃으로 겹칩니다.
             st.markdown('<div class="input-wrap">', unsafe_allow_html=True)
             q = st.text_input("질문", placeholder="질문을 입력하세요…", key="q_text")
             st.markdown('<div class="arrow-btn">', unsafe_allow_html=True)
