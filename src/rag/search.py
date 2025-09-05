@@ -246,3 +246,111 @@ def search(
         results.append({"path": path, "title": title, "score": sc, "snippet": snippet})
     return results
 # ============================= [01] SIMPLE RAG SEARCH — END =============================
+# ========================= [02] PERSISTENT CACHE LAYER — START =========================
+"""
+RAG 인덱스 캐시/지속화 레이어.
+
+- 데이터셋 폴더의 파일 목록·크기·mtime을 해시(sha1)로 요약해 '시그니처' 생성
+- 시그니처가 같으면 디스크에 저장된 인덱스를 재사용
+- 시그니처가 다르면 자동으로 재빌드 후 저장
+- 기본 캐시 경로: ~/.maic/persist/rag_cache/<hash>.json
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple
+from pathlib import Path
+import hashlib
+import json
+import os
+
+# ---- 캐시 루트 경로 ---------------------------------------------------------------
+def _default_persist_dir() -> Path:
+    # 홈 디렉터리 하위 고정(프로세스/런타임에 독립)
+    return Path("~/.maic/persist").expanduser()
+
+
+def _cache_dir() -> Path:
+    p = _default_persist_dir() / "rag_cache"
+    try:
+        p.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    return p
+
+
+# ---- 데이터셋 시그니처(변경 감지) --------------------------------------------------
+def _dataset_signature(dataset_dir: str) -> str:
+    base = Path(dataset_dir)
+    h = hashlib.sha1()
+    try:
+        items: List[Tuple[str, int, int]] = []
+        for p in sorted(base.rglob("*")):
+            if p.is_file() and p.suffix.lower() in SUPPORTED_EXTS:
+                stat = p.stat()
+                rel = str(p.relative_to(base)).replace(os.sep, "/")
+                items.append((rel, int(stat.st_size), int(stat.st_mtime)))
+        payload = json.dumps(items, ensure_ascii=False, separators=(",", ":")).encode(
+            "utf-8"
+        )
+        h.update(payload)
+    except Exception:
+        h.update(b"fallback")
+    return h.hexdigest()
+
+
+def _cache_path_for(dataset_dir: str) -> Path:
+    abs_dir = str(Path(dataset_dir).expanduser().resolve())
+    head = hashlib.sha1(abs_dir.encode("utf-8")).hexdigest()
+    sig = _dataset_signature(dataset_dir)
+    name = f"{head}__{sig}.json"
+    return _cache_dir() / name
+
+
+# ---- public API -----------------------------------------------------------------------
+def get_or_build_index(
+    dataset_dir: str,
+    *,
+    use_cache: bool = True,
+) -> Dict:
+    """
+    캐시 사용 시:
+      1) 시그니처 기반 파일명을 계산
+      2) 동일 파일이 있으면 load → 반환
+      3) 없으면 build_index → 저장 → 반환
+    """
+    if not use_cache:
+        return build_index(dataset_dir)
+
+    cpath = _cache_path_for(dataset_dir)
+    if cpath.exists():
+        try:
+            return load_index(str(cpath))
+        except Exception:
+            pass  # 손상된 캐시는 무시하고 재빌드
+
+    idx = build_index(dataset_dir)
+    try:
+        save_index(idx, str(cpath))
+    except Exception:
+        pass
+    return idx
+# ========================== [02] PERSISTENT CACHE LAYER — END ==========================
+# ========================= [03] REBUILD API — START =========================
+from typing import Dict
+
+def rebuild_and_cache(dataset_dir: str) -> Dict:
+    """
+    데이터셋을 '항상' 새로 인덱싱하고, 디스크 캐시에 저장 후 인덱스를 반환합니다.
+    관리자 모드에서 강제 재인덱싱이 필요할 때 사용하세요.
+    """
+    idx = build_index(dataset_dir)
+    try:
+        cpath = _cache_path_for(dataset_dir)
+        save_index(idx, str(cpath))
+    except Exception:
+        pass
+    return idx
+# ========================== [03] REBUILD API — END ==========================
+
+
