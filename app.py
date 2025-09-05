@@ -632,7 +632,7 @@ def _render_admin_panels() -> None:
 
 # ========================== [12] 채팅 UI(스타일/모드/상단) — START ==========================
 def _inject_chat_styles_once() -> None:
-    """전역 CSS: ChatPane + 라디오 pill + 입력창 우측 화살표 + 말풍선/칩/정렬."""
+    """전역 CSS: 카톡형 입력(인풋 내부 우측 ➤), 말풍선/칩, 모드 pill."""
     if st is None:
         return
     if st.session_state.get("_chat_styles_injected"):
@@ -642,12 +642,12 @@ def _inject_chat_styles_once() -> None:
     st.markdown(
         """
     <style>
-      /* ChatPane 컨테이너 */
+      /* ChatPane */
       .chatpane{ background:#EDF4FF; border:1px solid #D5E6FF; border-radius:18px;
                  padding:10px; margin-top:12px; }
       .chatpane .messages{ max-height:60vh; overflow-y:auto; padding:8px; }
 
-      /* 라디오 pill (모드 선택) */
+      /* 모드 pill */
       .chatpane div[data-testid="stRadio"]{ background:#EDF4FF; padding:8px 10px 0 10px; margin:0; }
       .chatpane div[data-testid="stRadio"] > div[role="radiogroup"]{ display:flex; gap:10px; flex-wrap:wrap; }
       .chatpane div[data-testid="stRadio"] [role="radio"]{
@@ -659,18 +659,20 @@ def _inject_chat_styles_once() -> None:
       }
       .chatpane div[data-testid="stRadio"] svg{ display:none!important }
 
-      /* 입력폼: 같은 줄(컬럼) + 화살표 버튼을 시각적으로 인풋 우측에 밀착 */
-      .chatpane .input-row{ display:flex; align-items:center; gap:8px; }
-      .chatpane .input-row .arrow-btn button{
-        width:42px; height:42px; border-radius:50%; border:0; background:#0a2540; color:#fff;
-        font-size:18px; line-height:1; cursor:pointer; box-shadow:0 2px 6px rgba(0,0,0,.15);
-        margin-top:6px;  /* 버튼이 인풋 수직 중앙과 맞도록 미세조정 */
-      }
-      .chatpane .input-row input[type="text"]{
+      /* --- 카톡형 입력: 인풋 내부 우측에 ➤ 버튼 고정 --- */
+      .chatpane form[data-testid="stForm"]{ position:relative; background:#EDF4FF; padding:8px 10px 10px 10px; margin:0; }
+      .chatpane form[data-testid="stForm"] .input-wrap{ position:relative; }
+      .chatpane form[data-testid="stForm"] input[type="text"]{
         background:#FFF8CC !important; border:1px solid #F2E4A2 !important; border-radius:999px !important;
         color:#333 !important; height:46px;
+        padding-right:56px;  /* 버튼과 겹침 방지 */
       }
       .chatpane ::placeholder{ color:#8A7F4A !important; }
+      .chatpane form[data-testid="stForm"] .arrow-btn button{
+        position:absolute; right:14px; top:50%; transform:translateY(-50%);
+        width:38px; height:38px; border-radius:50%; border:0; background:#0a2540; color:#fff;
+        font-size:18px; line-height:1; cursor:pointer; box-shadow:0 2px 6px rgba(0,0,0,.15);
+      }
 
       /* 말풍선 */
       .msg-row{ display:flex; margin:8px 0; }
@@ -729,7 +731,7 @@ def _render_chat_panel() -> None:
     from typing import Optional
     import streamlit as st
 
-    # 라벨러(출처 칩)
+    # 출처 라벨러
     try:
         try:
             _label_mod = _imp.import_module("src.rag.label")
@@ -785,11 +787,11 @@ def _render_chat_panel() -> None:
         except Exception:
             src_label = "[AI지식]"
 
-    # 1) 사용자 말풍선(오른쪽)
+    # 1) 사용자 말풍선(오른쪽, 연노랑)
     ph_user = st.empty()
     _emit_bubble(ph_user, "나", question, source=None, align_right=True)
 
-    # 2) 피티쌤(왼쪽, 스트리밍)
+    # 2) 피티쌤(왼쪽, 연하늘, 스트리밍)
     ph_ans = st.empty()
     acc_ans = ""
 
@@ -810,7 +812,7 @@ def _render_chat_panel() -> None:
     close_stream_ans()
     full_answer = acc_ans.strip() or "(응답이 비어있어요)"
 
-    # 3) 미나쌤(왼쪽, 스트리밍)
+    # 3) 미나쌤(왼쪽, 연하늘, 스트리밍)
     ph_eval = st.empty()
     acc_eval = ""
 
@@ -833,17 +835,18 @@ def _render_chat_panel() -> None:
         emit_chunk_eval(str(piece or ""))
     close_stream_eval()
 
-    # 재렌더시 중복 생성 방지
+    # 중복 방지
     ss["last_q"] = question
     ss["inpane_q"] = ""
 # ============================= [13] 채팅 패널 — END =============================
+
 
 # ============================ [14] 본문 렌더 — START ============================
 def _render_body() -> None:
     if st is None:
         return
 
-    # 1) 부팅 오토플로우 1회 실행
+    # 1) 부팅 오토플로우 1회
     if not st.session_state.get("_boot_checked"):
         try:
             _boot_autoflow_hook()
@@ -852,7 +855,7 @@ def _render_body() -> None:
         finally:
             st.session_state["_boot_checked"] = True
 
-    # 2) 배경(비활성)
+    # 2) 배경
     _mount_background(
         theme="light", accent="#5B8CFF", density=3, interactive=True, animate=True,
         gradient="radial", grid=True, grain=False, blur=0, seed=1234, readability_veil=True,
@@ -861,7 +864,7 @@ def _render_body() -> None:
     # 3) 헤더
     _header()
 
-    # 4) 빠른 부팅(로컬만 확인)
+    # 4) 빠른 부팅
     try:
         _qlao = globals().get("_quick_local_attach_only")
         if callable(_qlao):
@@ -881,31 +884,30 @@ def _render_body() -> None:
     # 6) 자동 시작
     _auto_start_once()
 
-    # 7) 채팅 메시지(상단)
+    # 7) 채팅(위): 말풍선 영역
     _inject_chat_styles_once()
     with st.container():
         st.markdown('<div class="chatpane"><div class="messages">', unsafe_allow_html=True)
         _render_chat_panel()
         st.markdown('</div></div>', unsafe_allow_html=True)
 
-    # 8) 입력 폼(항상 맨 아래, 같은 줄: 인풋 + 화살표 버튼)
+    # 8) 입력 폼(항상 아래): 카톡형 인풋 내부 우측 ➤ 버튼
     with st.container(border=True, key="chatpane_container"):
         st.markdown('<div class="chatpane">', unsafe_allow_html=True)
         # 모드 pill → 세션 반영
         st.session_state["__mode"] = _render_mode_controls_pills() or st.session_state.get("__mode", "")
         with st.form("chat_form", clear_on_submit=False):
-            c1, c2 = st.columns([8, 1], vertical_alignment="center")
-            with c1:
-                q = st.text_input("질문", placeholder="질문을 입력하세요…", key="q_text")
-            with c2:
-                st.markdown('<div class="arrow-btn">', unsafe_allow_html=True)
-                submitted = st.form_submit_button("➤")
-                st.markdown('</div>', unsafe_allow_html=True)
+            st.markdown('<div class="input-wrap">', unsafe_allow_html=True)
+            q = st.text_input("질문", placeholder="질문을 입력하세요…", key="q_text")
+            st.markdown('<div class="arrow-btn">', unsafe_allow_html=True)
+            submitted = st.form_submit_button("➤")
+            st.markdown('</div>', unsafe_allow_html=True)  # .arrow-btn
+            st.markdown('</div>', unsafe_allow_html=True)  # .input-wrap
         st.markdown('</div>', unsafe_allow_html=True)
 
     if submitted and isinstance(q, str) and q.strip():
         st.session_state["inpane_q"] = q.strip()
-        # 같은 렌더 사이클에서 즉시 챗을 생성 → 초기화 느낌 제거
+        # 같은 렌더 사이클에서 즉시 챗 생성 → 초기화 느낌 제거
         with st.container():
             st.markdown('<div class="chatpane"><div class="messages">', unsafe_allow_html=True)
             _render_chat_panel()
