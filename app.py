@@ -643,7 +643,7 @@ def _inject_chat_styles_once() -> None:
     st.markdown(
         """
     <style>
-      /* ChatPane */
+      /* ChatPane(메시지 영역) */
       .chatpane{
         position:relative;
         background:#EDF4FF; border:1px solid #D5E6FF; border-radius:18px;
@@ -663,25 +663,31 @@ def _inject_chat_styles_once() -> None:
       }
       .chatpane div[data-testid="stRadio"] svg{ display:none!important }
 
-      /* --- 카톡형 입력: 인풋 내부 우측에 ➤ 버튼 겹치기 (Streamlit 실제 DOM 기준) --- */
-      .chatpane form[data-testid="stForm"]{
+      /* ─────────────────────────────────────────────────────────────────────
+         카톡형 입력(핵심):
+         - Streamlit의 마크다운 래퍼(<div class="chatpane">)는 실제로 폼의 부모가 아닙니다.
+         - 따라서 .chatpane form[...] 선택자는 먹지 않았습니다.
+         - 실 DOM 기준으로 '질문 인풋을 가진 폼'만 정확히 타깃팅합니다.
+         - 최신 크롬에서 지원하는 :has() 사용. (관리자 로그인 폼 등에는 영향 없음)
+         ───────────────────────────────────────────────────────────────────── */
+      form[data-testid="stForm"]:has(input[placeholder='질문을 입력하세요…']) {
         position:relative; background:#EDF4FF; padding:8px 10px 10px 10px; margin:0;
       }
       /* 인풋에 버튼 자리 확보 */
-      .chatpane form[data-testid="stForm"] [data-testid="stTextInput"] input{
+      form[data-testid="stForm"]:has(input[placeholder='질문을 입력하세요…']) [data-testid="stTextInput"] input{
         background:#FFF8CC !important; border:1px solid #F2E4A2 !important; border-radius:999px !important;
         color:#333 !important; height:46px; padding-right:56px;
       }
-      .chatpane ::placeholder{ color:#8A7F4A !important; }
+      form[data-testid="stForm"]:has(input[placeholder='질문을 입력하세요…']) ::placeholder{ color:#8A7F4A !important; }
 
-      /* 핵심: submit 버튼 컨테이너를 폼 기준 absolute로 겹치기 (모든 변형 대응) */
-      .chatpane form[data-testid="stForm"] .stButton,
-      .chatpane form[data-testid="stForm"] .row-widget.stButton{
+      /* 제출 버튼 컨테이너(stButton)를 폼 기준으로 절대배치(다양한 DOM 변형 대응) */
+      form[data-testid="stForm"]:has(input[placeholder='질문을 입력하세요…']) .stButton,
+      form[data-testid="stForm"]:has(input[placeholder='질문을 입력하세요…']) .row-widget.stButton{
         position:absolute; right:14px; top:50%; transform:translateY(-50%);
         z-index:2; margin:0!important; padding:0!important;
       }
-      .chatpane form[data-testid="stForm"] .stButton > button,
-      .chatpane form[data-testid="stForm"] .row-widget.stButton > button{
+      form[data-testid="stForm"]:has(input[placeholder='질문을 입력하세요…']) .stButton > button,
+      form[data-testid="stForm"]:has(input[placeholder='질문을 입력하세요…']) .row-widget.stButton > button{
         width:38px; height:38px; border-radius:50%; border:0; background:#0a2540; color:#fff;
         font-size:18px; line-height:1; cursor:pointer; box-shadow:0 2px 6px rgba(0,0,0,.15);
         padding:0; min-height:0;
