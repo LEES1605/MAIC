@@ -926,10 +926,10 @@ def _render_body() -> None:
 
 # ========================= [15] ADMIN: Index Panel — START =========================
 def _render_admin_index_panel() -> None:
-    """관리자 인덱싱 패널
-    - 데이터셋 예상 스캔
-    - 🔁 강제 재인덱싱(HQ)
-    - 인덱싱 후 prepared 신규파일 소비(seen)
+    """관리자 인덱싱 패널 (prepared 전용)
+    - prepared(Drive) 목록 미리보기
+    - 🔁 강제 재인덱싱(HQ, prepared only)
+    - prepared 신규파일 소비(seen)
     - 인덱스 요약 및 경로 불일치 진단
     - 로컬 ZIP 백업 / GitHub Releases 업로드 (자동/수동)
     """
@@ -947,11 +947,12 @@ def _render_admin_index_panel() -> None:
         return
 
     st.markdown(
-        "<div style='margin-top:0.5rem'></div><h3>🧭 인덱싱(관리자)</h3>",
+        "<div style='margin-top:0.5rem'></div>"
+        "<h3>🧭 인덱싱(관리자: prepared 전용)</h3>",
         unsafe_allow_html=True,
     )
 
-    # ── GH 업로드/백업 헬퍼(패널 전역에서 재사용) ─────────────────────────────
+    # ── GH 업로드/백업 헬퍼 ────────────────────────────────────────────────
     def _secret(name: str, default: str = "") -> str:
         try:
             v = st.secrets.get(name)
@@ -961,8 +962,26 @@ def _render_admin_index_panel() -> None:
             pass
         return os.getenv(name, default)
 
+    def _resolve_owner_repo() -> Tuple[str, str]:
+        # 1) GH_* 우선
+        owner = _secret("GH_OWNER")
+        repo = _secret("GH_REPO")
+        if owner and repo:
+            return owner, repo
+        # 2) GITHUB_REPO="owner/repo" 지원
+        combo = _secret("GITHUB_REPO")
+        if combo and "/" in combo:
+            o, r = combo.split("/", 1)
+            return o.strip(), r.strip()
+        # 3) 마지막 폴백: 개별 시크릿 조합
+        owner = owner or _secret("GITHUB_OWNER")
+        repo = repo or _secret("GITHUB_REPO_NAME")
+        return owner or "", repo or ""
+
     def _all_gh_secrets() -> bool:
-        return bool(_secret("GH_OWNER") and _secret("GH_REPO") and _secret("GH_TOKEN"))
+        tok = _secret("GH_TOKEN") or _secret("GITHUB_TOKEN")
+        ow, rp = _resolve_owner_repo()
+        return bool(tok and ow and rp)
 
     def _zip_index_dir(idx_dir: Path, out_dir: Path) -> Path:
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -996,7 +1015,7 @@ def _render_admin_index_panel() -> None:
                     return {"_raw": txt}
         except error.HTTPError as e:
             return {"_error": f"HTTP {e.code}", "detail": e.read().decode()}
-        except Exception as e:  # noqa: F841
+        except Exception:
             return {"_error": "network_error"}
 
     def _upload_release_zip(owner: str, repo: str, token: str, tag: str,
@@ -1045,10 +1064,10 @@ def _render_admin_index_panel() -> None:
                     return {"_raw": txt}
         except error.HTTPError as e:
             return {"_error": f"HTTP {e.code}", "detail": e.read().decode()}
-        except Exception as e:  # noqa: F841
+        except Exception:
             return {"_error": "network_error"}
 
-    # ── prepared API 동적 로더 ────────────────────────────────────────────────
+    # ── prepared API / 목록 로더 ────────────────────────────────────────────
     def _load_prepared_api() -> Tuple[
         Optional[Callable[..., Dict[str, Any]]],
         Optional[Callable[..., None]],
@@ -1099,64 +1118,55 @@ def _render_admin_index_panel() -> None:
                             tried.append(f"ok: {path}")
                             return chk, mark, tried
                         tried.append(f"miss attrs: {path}")
-                except Exception as e:  # noqa: F841
+                except Exception as e:
                     tried.append(f"fail: {path} ({e})")
         return None, None, tried
 
-    # ── Dataset 디렉터리 해석 ────────────────────────────────────────────────
-    def _resolve_dataset_dir_for_ui() -> Path:
+    def _load_prepared_lister() -> Tuple[Optional[Callable[[], List[Dict[str, Any]]]],
+                                         List[str]]:
+        tried: List[str] = []
+        def _try(modname: str) -> Optional[Callable[[], List[Dict[str, Any]]]]:
+            try:
+                m = importlib.import_module(modname)
+                fn = getattr(m, "list_prepared_files", None)
+                if callable(fn):
+                    tried.append(f"ok: {modname}")
+                    return fn
+                tried.append(f"miss func: {modname}")
+                return None
+            except Exception as e:
+                tried.append(f"fail: {modname} ({e})")
+                return None
+
+        for name in ("src.integrations.gdrive", "gdrive"):
+            fn = _try(name)
+            if fn:
+                return fn, tried
+        return None, tried
+
+    # ── prepared 목록 미리보기 ─────────────────────────────────────────────
+    st.caption("※ 이 패널은 Drive의 prepared만을 입력원으로 사용합니다.")
+    files_list: List[Dict[str, Any]] = []
+    lister, dbg1 = _load_prepared_lister()
+    if lister:
         try:
-            from src.config import DATASET_DIR as DD  # type: ignore[attr-defined]
-            dp = Path(DD).expanduser()
-            if dp.exists():
-                return dp
-        except Exception:
-            pass
+            files_list = lister() or []
+        except Exception as e:
+            _errlog(f"prepared list failed: {e}", where="[admin-index.list]")
+    else:
+        st.warning("prepared 목록 함수를 찾지 못했습니다.")
+        with st.expander("왜 못 찾았나요? (진단)"):
+            for m in dbg1:
+                st.write("• " + m)
 
-        try:
-            mod = importlib.import_module("src.rag.label")
-            fn = getattr(mod, "_resolve_dataset_dir", None)
-            if callable(fn):
-                ds = fn(None)
-                if isinstance(ds, Path):
-                    return ds
-        except Exception:
-            pass
-
-        repo_root = Path(__file__).resolve().parent
-        prepared = (repo_root / "prepared").resolve()
-        if prepared.exists():
-            return prepared
-
-        return (repo_root / "knowledge").resolve()
-
-    ds = _resolve_dataset_dir_for_ui()
-    st.write(f"**Dataset Dir:** `{str(ds)}`")
-
-    # ── 사전 스캔(예상 대상) ───────────────────────────────────────────────
-    files: List[Path] = []
-    sup: set[str] = {".md", ".txt", ".pdf"}
-    try:
-        rag = importlib.import_module("src.rag.search")
-        sup = set(getattr(rag, "SUPPORTED_EXTS", sup))
-    except Exception:
-        pass
-
-    try:
-        for root, _dirs, _files in os.walk(str(ds)):
-            for name in _files:
-                if Path(name).suffix.lower() in sup:
-                    files.append(Path(root) / name)
-                if len(files) >= 1000:
-                    break
-    except Exception as e:
-        _errlog("dataset scan failed: {e}", where="[admin-index.scan]", exc=e)
-        st.warning("데이터셋 스캔 중 오류가 발생했어요.")
-
-    with st.expander("이번에 인덱싱할 파일(예상)", expanded=False):
-        st.write(f"총 {len(files)}건 (표시는 최대 400건)")
-        if files:
-            rows = [{"path": str(p)} for p in files[:400]]
+    with st.expander("이번에 인덱싱할 prepared 파일(예상)", expanded=False):
+        st.write(f"총 {len(files_list)}건 (표시는 최대 400건)")
+        if files_list:
+            rows = []
+            for rec in files_list[:400]:
+                name = str(rec.get("name") or rec.get("path") or rec.get("file") or "")
+                fid = str(rec.get("id") or rec.get("fileId") or "")
+                rows.append({"name": name, "id": fid})
             st.dataframe(rows, hide_index=True, use_container_width=True)
         else:
             st.caption("일치하는 파일이 없습니다.")
@@ -1164,24 +1174,26 @@ def _render_admin_index_panel() -> None:
     # ── 실행 컨트롤 ────────────────────────────────────────────────────────
     c1, c2, c3 = st.columns([1, 2, 2])
     do_rebuild = c1.button(
-        "🔁 강제 재인덱싱(HQ)",
-        help="캐시 무시, 고품질(HQ)로 인덱스를 새로 만듭니다.",
+        "🔁 강제 재인덱싱(HQ, prepared)",
+        help="Drive prepared만 사용하여 인덱스를 새로 만듭니다.",
     )
     show_after = c2.toggle("인덱싱 결과 표시", value=True)
     auto_up = c3.toggle(
         "인덱싱 후 자동 ZIP 업로드",
         value=_all_gh_secrets(),
-        help="GH 시크릿이 모두 있으면 기본 켜짐",
+        help="GH/GITHUB 시크릿이 모두 있으면 기본 켜짐",
     )
 
-    # ── 강제 인덱싱(HQ) ───────────────────────────────────────────────────
+    # ── 강제 인덱싱(HQ: prepared only) ────────────────────────────────────
     used_persist: Optional[Path] = None
     if do_rebuild:
         prog = st.progress(0.0, text="인덱싱 중…")
         try:
             from src.rag import index_build as _idx
+            # prepared만 사용하도록 힌트(인덱서가 지원 시 강제)
             os.environ["MAIC_INDEX_MODE"] = "HQ"
-            _idx.rebuild_index()  # 일부 구현은 .ready 미생성 가능
+            os.environ["MAIC_USE_PREPARED_ONLY"] = "1"
+            _idx.rebuild_index()
 
             try:
                 from src.rag.index_build import PERSIST_DIR as _PP
@@ -1200,42 +1212,42 @@ def _render_admin_index_panel() -> None:
                         pass
 
             prog.progress(1.0, text="인덱싱 완료")
-            st.success("강제 재인덱싱 완료 (HQ)")
+            st.success("강제 재인덱싱 완료 (prepared 전용)")
         except Exception as e:
             prog.progress(0.0)
-            _errlog(f"reindex failed: {e}", where="[admin-index.rebuild]", exc=e)
+            _errlog(f"reindex failed: {e}", where="[admin-index.rebuild]")
             st.error("강제 재인덱싱 중 오류가 발생했어요.")
         else:
             # prepared 신규파일 소비(seen)
             try:
                 persist_for_seen = used_persist or _persist_dir()
-                chk, mark, dbg = _load_prepared_api()
-                if callable(chk) and callable(mark):
-                    info: Dict[str, Any] = {}
+                chk, mark, dbg2 = _load_prepared_api()
+                # check_prepared_updates는 files 리스트를 전달하는 구현도 있음
+                info: Dict[str, Any] = {}
+                files_arg: Any = files_list or []
+                try:
+                    info = chk(persist_for_seen, files_arg) or {}
+                except TypeError:
                     try:
                         info = chk(persist_for_seen) or {}
+                    except Exception:
+                        info = {}
+                new_files: List[str] = list(info.get("files") or [])
+                if new_files and callable(mark):
+                    try:
+                        mark(persist_for_seen, new_files)
                     except TypeError:
-                        info = chk() or {}
-                    files_list: List[str] = list(info.get("files") or [])
-                    if files_list:
-                        try:
-                            mark(persist_for_seen, files_list)
-                        except TypeError:
-                            mark(files_list)
-                        st.caption("✓ prepared 신규 파일 소비(seen) 완료")
-                else:
-                    st.warning("prepared 모듈을 불러오지 못해 소비 마킹을 건너뜁니다.")
-                    with st.expander("왜 못 찾았나요? (진단)"):
-                        for m in dbg:
-                            st.write("• " + m)
+                        mark(new_files)
+                    st.caption("✓ prepared 신규 파일 소비(seen) 완료")
+                elif not callable(mark):
+                    st.warning("prepared 모듈의 mark 함수를 찾지 못했습니다.")
             except Exception:
                 pass
 
-            # 인덱싱 후 자동 ZIP 업로드(토글/시크릿이 유효할 때)
+            # 인덱싱 후 자동 ZIP 업로드(토글/시크릿 유효 시)
             if auto_up:
-                owner = _secret("GH_OWNER")
-                repo_name = _secret("GH_REPO")
-                token = _secret("GH_TOKEN")
+                owner, repo_name = _resolve_owner_repo()
+                token = _secret("GH_TOKEN") or _secret("GITHUB_TOKEN")
                 if owner and repo_name and token:
                     idx_dir = used_persist or _persist_dir()
                     backup_dir = idx_dir / "backups"
@@ -1256,7 +1268,7 @@ def _render_admin_index_panel() -> None:
                         if url:
                             st.write(f"다운로드: {url}")
                 else:
-                    st.info("GH 시크릿이 없어 자동 업로드를 건너뜁니다.")
+                    st.info("GH/GITHUB 시크릿이 없어 자동 업로드를 건너뜁니다.")
 
         try:
             if used_persist is not None and st is not None:
@@ -1307,9 +1319,11 @@ def _render_admin_index_panel() -> None:
 
     # ── 수동 백업/업로드 UI ────────────────────────────────────────────────
     with st.expander("백업 / 업로드(Zip)", expanded=False):
-        owner = st.text_input("GitHub Owner", _secret("GH_OWNER"))
-        repo_name = st.text_input("GitHub Repo", _secret("GH_REPO"))
-        token = st.text_input("GH Token(secrets/GITHUB_TOKEN)", _secret("GH_TOKEN"))
+        ow_r, rp_r = _resolve_owner_repo()
+        token_r = _secret("GH_TOKEN") or _secret("GITHUB_TOKEN")
+        owner = st.text_input("GitHub Owner", ow_r)
+        repo_name = st.text_input("GitHub Repo", rp_r)
+        token = st.text_input("GitHub Token", token_r)
         default_tag = f"index-{int(time.time())}"
         tag = st.text_input("Release Tag", default_tag)
         try:
