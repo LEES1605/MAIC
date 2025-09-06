@@ -314,130 +314,14 @@ def download_bytes(file_id: str, *, mime_hint: Optional[str] = None) -> Tuple[by
         _, done = downloader.next_chunk()
     return buf.getvalue(), (mime or (mime_hint or "application/octet-stream"))
 # ============================= [02] DOWNLOAD API — END =============================
-# ======================= [03] PREPARED API ADAPTER — START ========================
-"""
-준수 인터페이스:
-- check_prepared_updates(persist_dir) -> dict
-- mark_prepared_consumed(persist_dir, files: list[dict] | list[str]) -> None
+# ===== [03] PREPARED ADAPTER START =====
+# NOTE:
+# 이 구획은 의도적으로 비워 두었습니다.
+# SSOT(단일 진실 소스)는 src/drive/prepared.py 입니다.
+# - check_prepared_updates()
+# - mark_prepared_consumed()
+# 등 prepared 관련 로직은 src/drive/prepared.py만 유지합니다.
+# 여기에는 어떤 import나 함수 구현도 두지 않습니다.
+# ===== [03] PREPARED ADAPTER END =====
 
-설명:
-- Google Drive의 prepared 폴더를 단일 소스로 가정.
-- '신규 파일 감지'는 persist_dir 아래의 prepared.seen.json 에 저장/조회.
-- gdrive 통합의 list_prepared_files()가 존재하면 이용하고, 없으면 안전 폴백(빈 목록).
-"""
-
-from __future__ import annotations
-
-
-def _seen_store_path(persist_dir) -> "Path":
-    from pathlib import Path
-
-    return Path(persist_dir).expanduser() / "prepared.seen.json"
-
-
-def _load_seen(persist_dir) -> "set[str]":
-    import json
-    from pathlib import Path
-
-    p = _seen_store_path(persist_dir)
-    if not p.exists():
-        return set()
-    try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-        if isinstance(data, list):
-            return set(str(x) for x in data)
-    except Exception:
-        pass
-    return set()
-
-
-def _save_seen(persist_dir, seen: "set[str]") -> None:
-    import json
-
-    p = _seen_store_path(persist_dir)
-    try:
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps(sorted(seen), ensure_ascii=False, indent=2), encoding="utf-8")
-    except Exception:
-        # 저장 실패는 기능 치명상이 아님(다음 번에 다시 감지될 뿐)
-        pass
-
-
-def _extract_id(rec) -> str:
-    """
-    files 항목에서 식별자 우선순위:
-    - id → fileId → name → path → ''(미상)
-    dict/str 혼용 입력을 모두 수용.
-    """
-    if isinstance(rec, str):
-        return rec.strip()
-    if isinstance(rec, dict):
-        for k in ("id", "fileId", "name", "path"):
-            v = rec.get(k)
-            if isinstance(v, str) and v.strip():
-                return v.strip()
-    return ""
-
-
-def _list_prepared_files_safe() -> "list[dict]":
-    """
-    src.integrations.gdrive.list_prepared_files() 가 있으면 호출,
-    없으면 빈 목록 반환(폴백).
-    """
-    try:
-        import importlib
-
-        mod = importlib.import_module("src.integrations.gdrive")
-        lf = getattr(mod, "list_prepared_files", None)
-        if callable(lf):
-            out = lf() or []
-            return out if isinstance(out, list) else []
-    except Exception:
-        pass
-    return []
-
-
-def check_prepared_updates(persist_dir) -> "dict[str, object]":
-    """
-    반환 스키마(최소):
-    {
-      "driver": "drive",
-      "total": <전체 파일 수>,
-      "new":   <신규 파일 수>,
-      "files": [<신규 식별자(str)>...]
-    }
-    """
-    files: list[dict] = _list_prepared_files_safe()
-    seen: set[str] = _load_seen(persist_dir)
-
-    new_ids: list[str] = []
-    for rec in files:
-        fid = _extract_id(rec)
-        if fid and fid not in seen:
-            new_ids.append(fid)
-
-    return {
-        "driver": "drive",
-        "total": len(files),
-        "new": len(new_ids),
-        "files": new_ids,
-    }
-
-
-def mark_prepared_consumed(persist_dir, files) -> None:
-    """
-    files: list[dict] | list[str]
-    - dict/str 혼용을 모두 허용하며, _extract_id()로 식별자를 추출하여 seen에 추가
-    """
-    seen: set[str] = _load_seen(persist_dir)
-
-    # list[str] / list[dict] 모두 수용
-    if isinstance(files, list):
-        for rec in files:
-            fid = _extract_id(rec)
-            if fid:
-                seen.add(fid)
-
-    _save_seen(persist_dir, seen)
-# ======================== [03] PREPARED API ADAPTER — END =========================
 
