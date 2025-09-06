@@ -12,12 +12,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 try:
-    import streamlit as st  # type: ignore[assignment]
-except Exception:  # Streamlit 없는 환경에서도 안전
-    st = None  # type: ignore[assignment]
+    import streamlit as st
+except Exception:
+    st = None  # Streamlit이 없는 실행 환경에서도 안전하게 동작
 
 if st:
-    # 페이지 메타(초기 렌더 이전에 설정)
     try:
         st.set_page_config(page_title="LEES AI Teacher", layout="wide")
     except Exception:
@@ -30,7 +29,7 @@ def _from_secrets(name: str, default: Optional[str] = None) -> Optional[str]:
     try:
         if st is None or not hasattr(st, "secrets"):
             return os.getenv(name, default)
-        val = st.secrets.get(name, None)  # type: ignore[attr-defined]
+        val = st.secrets.get(name, None)
         if val is None:
             return os.getenv(name, default)
         if isinstance(val, str):
@@ -68,7 +67,9 @@ def _bootstrap_env() -> None:
     os.environ.setdefault("STREAMLIT_SERVER_FILE_WATCHER_TYPE", "none")
     os.environ.setdefault("STREAMLIT_RUN_ON_SAVE", "false")
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
-    os.environ.setdefault("STREAMLIT_SERVER_ENABLE_WEBSOCKET_COMPRESSION", "false")
+    os.environ.setdefault(
+        "STREAMLIT_SERVER_ENABLE_WEBSOCKET_COMPRESSION", "false"
+    )
 
 
 _bootstrap_env()
@@ -79,19 +80,16 @@ def _persist_dir() -> Path:
     """인덱스 퍼시스트 경로를 결정.
     우선순위: 1) src.rag.index_build.PERSIST_DIR → 2) src.config.PERSIST_DIR → 3) ~/.maic/persist
     """
-    # 1) 인덱서가 노출하는 경로 우선
     try:
-        from src.rag.index_build import PERSIST_DIR as IDX  # type: ignore
+        from src.rag.index_build import PERSIST_DIR as IDX
         return Path(IDX).expanduser()
     except Exception:
         pass
-    # 2) 전역 설정 경로
     try:
-        from src.config import PERSIST_DIR as CFG  # type: ignore
+        from src.config import PERSIST_DIR as CFG
         return Path(CFG).expanduser()
     except Exception:
         pass
-    # 3) 최종 폴백
     return Path.home() / ".maic" / "persist"
 
 
@@ -174,7 +172,9 @@ def _errlog(msg: str, where: str = "", exc: Exception | None = None) -> None:
                     if exc:
                         try:
                             detail = "".join(
-                                traceback.format_exception(type(exc), exc, exc.__traceback__)
+                                traceback.format_exception(
+                                    type(exc), exc, exc.__traceback__
+                                )
                             )
                         except Exception:
                             detail = "traceback 사용 불가"
@@ -207,12 +207,12 @@ def _is_admin_view() -> bool:
             except Exception:
                 pass
             try:
-                if str(st.secrets.get("ADMIN_MODE", "")).strip() == "1":  # type: ignore[attr-defined]
+                if str(st.secrets.get("ADMIN_MODE", "")).strip() == "1":
                     return True
             except Exception:
                 pass
             try:
-                if str(st.secrets.get("APP_MODE", "")).strip().lower() == "admin":  # type: ignore[attr-defined]
+                if str(st.secrets.get("APP_MODE", "")).strip().lower() == "admin":
                     return True
             except Exception:
                 pass
@@ -255,8 +255,8 @@ def _header() -> None:
     st_mod = globals().get("st", None)
     if st_mod is None:
         return
-    st = st_mod
-    ss = st.session_state
+    st_local = st_mod
+    ss = st_local.session_state
     ss.setdefault("admin_mode", False)
     ss.setdefault("_show_admin_login", False)
 
@@ -275,7 +275,7 @@ def _header() -> None:
         "MISSING": ("🔴 미준비", "red"),
     }.get(code, ("🔴 미준비", "red"))
 
-    st.markdown(
+    st_local.markdown(
         """
         <style>
           .status-btn { padding: 4px 8px; border-radius: 8px; font-weight: 600; }
@@ -292,34 +292,34 @@ def _header() -> None:
         unsafe_allow_html=True,
     )
 
-    c1, c2, c3 = st.columns([1, 3, 1], gap="small")
+    c1, c2, c3 = st_local.columns([1, 3, 1], gap="small")
     with c1:
-        st.markdown(
+        st_local.markdown(
             f'<span class="status-btn {badge_class}">{badge_txt}</span>',
             unsafe_allow_html=True,
         )
     with c2:
-        st.markdown(
+        st_local.markdown(
             '<span class="brand-title">LEES AI Teacher</span>',
             unsafe_allow_html=True,
         )
     with c3:
         if ss.get("admin_mode"):
-            if st.button("🚪 로그아웃", key="logout_now", help="관리자 로그아웃"):
+            if st_local.button("🚪 로그아웃", key="logout_now", help="관리자 로그아웃"):
                 ss["admin_mode"] = False
                 ss["_show_admin_login"] = False
                 try:
-                    (st.toast("로그아웃 완료", icon="👋"))  # type: ignore[attr-defined]
+                    st_local.toast("로그아웃 완료", icon="👋")
                 except Exception:
-                    st.success("로그아웃 완료")
-                st.rerun()
+                    st_local.success("로그아웃 완료")
+                st_local.rerun()
         else:
-            if st.button("⚙️", key="open_admin_login", help="관리자 로그인"):
+            if st_local.button("⚙️", key="open_admin_login", help="관리자 로그인"):
                 ss["_show_admin_login"] = not ss.get("_show_admin_login", False)
 
     if not ss.get("admin_mode") and ss.get("_show_admin_login"):
-        with st.container(border=True):
-            st.write("🔐 관리자 로그인")
+        with st_local.container(border=True):
+            st_local.write("🔐 관리자 로그인")
             try:
                 pwd_set = (
                     _from_secrets("ADMIN_PASSWORD", None)
@@ -333,35 +333,40 @@ def _header() -> None:
             except Exception:
                 pwd_set = None
 
-            left, mid, right = st.columns([2, 1, 2])
+            left, mid, right = st_local.columns([2, 1, 2])
             with mid:
-                with st.form("admin_login_form", clear_on_submit=False):
-                    st.markdown('<div class="admin-login-narrow">', unsafe_allow_html=True)
-                    pw = st.text_input(
-                        "비밀번호", type="password", key="admin_pw_input", help="Enter로 로그인"
+                with st_local.form("admin_login_form", clear_on_submit=False):
+                    st_local.markdown(
+                        '<div class="admin-login-narrow">', unsafe_allow_html=True
                     )
-                    col_a, col_b = st.columns([1, 1])
+                    pw = st_local.text_input(
+                        "비밀번호",
+                        type="password",
+                        key="admin_pw_input",
+                        help="Enter로 로그인",
+                    )
+                    col_a, col_b = st_local.columns([1, 1])
                     submit = col_a.form_submit_button("로그인")
                     cancel = col_b.form_submit_button("닫기")
-                    st.markdown("</div>", unsafe_allow_html=True)
+                    st_local.markdown("</div>", unsafe_allow_html=True)
 
                 if cancel:
                     ss["_show_admin_login"] = False
-                    st.rerun()
+                    st_local.rerun()
 
                 if submit:
                     if not pwd_set:
-                        st.error("서버에 관리자 비밀번호가 설정되어 있지 않습니다.")
+                        st_local.error("서버에 관리자 비밀번호가 설정되어 있지 않습니다.")
                     elif pw and str(pw) == str(pwd_set):
                         ss["admin_mode"] = True
                         ss["_show_admin_login"] = False
                         try:
-                            (st.toast("로그인 성공", icon="✅"))  # type: ignore[attr-defined]
+                            st_local.toast("로그인 성공", icon="✅")
                         except Exception:
-                            st.success("로그인 성공")
-                        st.rerun()
+                            st_local.success("로그인 성공")
+                        st_local.rerun()
                     else:
-                        st.error("비밀번호가 올바르지 않습니다.")
+                        st_local.error("비밀번호가 올바르지 않습니다.")
 
 
 # ======================= [08] 배경(비활성: No-Op) ===========================
@@ -411,7 +416,9 @@ def _boot_autoflow_hook() -> None:
 
 
 # =================== [10] 인덱스 준비/자동 복원 ==========================
-def _set_brain_status(code: str, msg: str, source: str = "", attached: bool = False) -> None:
+def _set_brain_status(
+    code: str, msg: str, source: str = "", attached: bool = False
+) -> None:
     if st is None:
         return
     ss = st.session_state
@@ -453,10 +460,10 @@ def _auto_start_once() -> None:
         return
 
     try:
-        if fn(dest_dir=PERSIST_DIR):  # type: ignore[misc]
+        if fn(dest_dir=PERSIST_DIR):
             _mark_ready()
             if hasattr(st, "toast"):
-                st.toast("자동 복원 완료", icon="✅")  # type: ignore[attr-defined]
+                st.toast("자동 복원 완료", icon="✅")
             else:
                 st.success("자동 복원 완료")
             _set_brain_status("READY", "자동 복원 완료", "release", attached=True)
@@ -476,11 +483,15 @@ def _render_admin_panels() -> None:
 
     try:
         open_panel = st.toggle(
-            "🛠 진단 도구", value=st.session_state[toggle_key], help="필요할 때만 로드합니다."
+            "🛠 진단 도구",
+            value=st.session_state[toggle_key],
+            help="필요할 때만 로드합니다.",
         )
     except Exception:
         open_panel = st.checkbox(
-            "🛠 진단 도구", value=st.session_state[toggle_key], help="필요할 때만 로드합니다."
+            "🛠 진단 도구",
+            value=st.session_state[toggle_key],
+            help="필요할 때만 로드합니다.",
         )
     st.session_state[toggle_key] = bool(open_panel)
     if not open_panel:
@@ -496,10 +507,12 @@ def _render_admin_panels() -> None:
                 tried_msgs.append(f"{module_name} 실패: {e}")
         for candidate in ("src/ui_orchestrator.py", "ui_orchestrator.py"):
             try:
-                spec = importlib.util.spec_from_file_location("ui_orchestrator", candidate)
+                spec = importlib.util.spec_from_file_location(
+                    "ui_orchestrator", candidate
+                )
                 if spec and spec.loader:
                     mod = importlib.util.module_from_spec(spec)
-                    spec.loader.exec_module(mod)  # type: ignore[assignment]
+                    spec.loader.exec_module(mod)
                     return mod
             except Exception as e:
                 tried_msgs.append(f"{candidate} 로드 실패: {e}")
@@ -548,20 +561,20 @@ def _render_admin_index_panel() -> None:
     # --- 안전 래퍼(외부 훅 없을 때 NameError 방지) -------------------------
     def _errlog_safe(msg: str, where: str = "") -> None:
         try:
-            _errlog(msg, where=where)  # type: ignore[name-defined]
+            _errlog(msg, where=where)
         except Exception:
             pass
 
     def _persist_dir_safe() -> Path:
         try:
-            p = _persist_dir()  # type: ignore[name-defined]
+            p = _persist_dir()
             return Path(str(p)).expanduser()
         except Exception:
             return Path.home() / ".maic" / "persist"
 
     def _mark_ready_safe() -> None:
         try:
-            _mark_ready()  # type: ignore[name-defined]
+            _mark_ready()
         except Exception:
             pass
 
@@ -576,7 +589,14 @@ def _render_admin_index_panel() -> None:
         st.session_state["_IDX_PH_LOG"] = st.empty()
 
     # --- 스텝/로그 헬퍼 ----------------------------------------------------
-    step_names: List[str] = ["스캔", "Persist확정", "인덱싱", "prepared소비", "요약/배지", "ZIP/Release"]
+    step_names: List[str] = [
+        "스캔",
+        "Persist확정",
+        "인덱싱",
+        "prepared소비",
+        "요약/배지",
+        "ZIP/Release",
+    ]
     stall_threshold_sec = 60  # 마지막 업데이트 이후 60초 이상이면 STALLED
 
     def _step_reset(names: List[str]) -> None:
@@ -609,7 +629,9 @@ def _render_admin_index_panel() -> None:
             _update_progress()
 
     def _icon(state: str) -> str:
-        return {"idle": "⚪", "run": "🔵", "ok": "🟢", "fail": "🔴", "skip": "⚪"}.get(state, "⚪")
+        return {"idle": "⚪", "run": "🔵", "ok": "🟢", "fail": "🔴", "skip": "⚪"}.get(
+            state, "⚪"
+        )
 
     def _render_stepper() -> None:
         steps = _steps()
@@ -617,7 +639,9 @@ def _render_admin_index_panel() -> None:
         for i, s in enumerate(steps, start=1):
             note = f" — {s.get('note','')}" if s.get("note") else ""
             lines.append(f"{_icon(s['state'])} {i}. {s['name']}{note}")
-        st.session_state["_IDX_PH_STEPS"].markdown("\n".join([f"- {ln}" for ln in lines]))
+        st.session_state["_IDX_PH_STEPS"].markdown(
+            "\n".join([f"- {ln}" for ln in lines])
+        )
 
     def _is_running() -> bool:
         return any(s["state"] == "run" for s in _steps())
@@ -635,7 +659,9 @@ def _render_admin_index_panel() -> None:
                 f"🟥 **STALLED** · 마지막 업데이트 {since_last}s 전 · 총 경과 {since_start}s"
             )
         elif running:
-            text = f"🟦 RUNNING · 마지막 업데이트 {since_last}s 전 · 총 경과 {since_start}s"
+            text = (
+                f"🟦 RUNNING · 마지막 업데이트 {since_last}s 전 · 총 경과 {since_start}s"
+            )
         else:
             text = f"🟩 IDLE/COMPLETE · 총 경과 {since_start}s"
         st.session_state["_IDX_PH_STATUS"].markdown(text)
@@ -647,12 +673,16 @@ def _render_admin_index_panel() -> None:
         st.session_state["_IDX_PROG"] = prog
         bar = st.session_state.get("_IDX_BAR")
         if bar is None:
-            st.session_state["_IDX_BAR"] = st.session_state["_IDX_PH_BAR"].progress(prog, text="진행률")
+            st.session_state["_IDX_BAR"] = st.session_state["_IDX_PH_BAR"].progress(
+                prog, text="진행률"
+            )
         else:
             try:
                 bar.progress(prog)
             except Exception:
-                st.session_state["_IDX_BAR"] = st.session_state["_IDX_PH_BAR"].progress(prog, text="진행률")
+                st.session_state["_IDX_BAR"] = (
+                    st.session_state["_IDX_PH_BAR"].progress(prog, text="진행률")
+                )
 
     def _log(msg: str, level: str = "info") -> None:
         buf: List[str] = st.session_state.get("_IDX_LOG", [])
@@ -674,7 +704,7 @@ def _render_admin_index_panel() -> None:
     # --- GH 업로드/백업 헬퍼 ----------------------------------------------
     def _secret(name: str, default: str = "") -> str:
         try:
-            v = st.secrets.get(name)  # type: ignore[attr-defined]
+            v = st.secrets.get(name)
             if isinstance(v, str) and v:
                 return v
         except Exception:
@@ -716,7 +746,9 @@ def _render_admin_index_panel() -> None:
                         pass
         return zpath
 
-    def _gh_api(url: str, token: str, data: Optional[bytes], method: str, ctype: str) -> Dict[str, Any]:
+    def _gh_api(
+        url: str, token: str, data: Optional[bytes], method: str, ctype: str
+    ) -> Dict[str, Any]:
         """GitHub REST API 호출 헬퍼."""
         from urllib import request as _rq, error as _er
         req = _rq.Request(url, data=data, method=method)
@@ -737,15 +769,29 @@ def _render_admin_index_panel() -> None:
             return {"_error": "network_error"}
 
     def _upload_release_zip(
-        owner: str, repo: str, token: str, tag: str, zip_path: Path, name: Optional[str] = None, body: str = ""
+        owner: str,
+        repo: str,
+        token: str,
+        tag: str,
+        zip_path: Path,
+        name: Optional[str] = None,
+        body: str = "",
     ) -> Dict[str, Any]:
         from urllib import parse as _ps
         api = "https://api.github.com"
         get_url = f"{api}/repos/{owner}/{repo}/releases/tags/{_ps.quote(tag)}"
         rel = _gh_api(get_url, token, None, "GET", "")
         if "_error" in rel:
-            payload = json.dumps({"tag_name": tag, "name": name or tag, "body": body}).encode("utf-8")
-            rel = _gh_api(f"{api}/repos/{owner}/{repo}/releases", token, payload, "POST", "application/json")
+            payload = json.dumps(
+                {"tag_name": tag, "name": name or tag, "body": body}
+            ).encode("utf-8")
+            rel = _gh_api(
+                f"{api}/repos/{owner}/{repo}/releases",
+                token,
+                payload,
+                "POST",
+                "application/json",
+            )
             if "_error" in rel:
                 return rel
 
@@ -782,9 +828,7 @@ def _render_admin_index_panel() -> None:
     # --- prepared 목록 미리보기 -------------------------------------------
     st.caption("※ 이 패널은 Drive의 prepared만을 입력원으로 사용합니다.")
 
-    def _load_prepared_api() -> Tuple[
-        Optional[Any], Optional[Any], List[str]
-    ]:
+    def _load_prepared_api() -> Tuple[Optional[Any], Optional[Any], List[str]]:
         tried: List[str] = []
 
         def _try(modname: str) -> Tuple[Optional[Any], Optional[Any]]:
@@ -814,10 +858,12 @@ def _render_admin_index_panel() -> None:
             path = repo_dir / fname
             if path.exists():
                 try:
-                    spec = importlib.util.spec_from_file_location(f"_dyn_{fname[:-3]}", str(path))
+                    spec = importlib.util.spec_from_file_location(
+                        f"_dyn_{fname[:-3]}", str(path)
+                    )
                     if spec and spec.loader:
                         mod = importlib.util.module_from_spec(spec)
-                        spec.loader.exec_module(mod)  # type: ignore[assignment]
+                        spec.loader.exec_module(mod)
                         chk = getattr(mod, "check_prepared_updates", None)
                         mark = getattr(mod, "mark_prepared_consumed", None)
                         if callable(chk) and callable(mark):
@@ -873,7 +919,9 @@ def _render_admin_index_panel() -> None:
         if files_list:
             rows = []
             for rec in files_list[:400]:
-                name = str(rec.get("name") or rec.get("path") or rec.get("file") or "")
+                name = str(
+                    rec.get("name") or rec.get("path") or rec.get("file") or ""
+                )
                 fid = str(rec.get("id") or rec.get("fileId") or "")
                 rows.append({"name": name, "id": fid})
             st.dataframe(rows, hide_index=True, use_container_width=True)
@@ -882,10 +930,14 @@ def _render_admin_index_panel() -> None:
 
     # --- 실행 컨트롤 -------------------------------------------------------
     c1, c2, c3, c4 = st.columns([1, 2, 2, 1])
-    do_rebuild = c1.button("🔁 강제 재인덱싱(HQ, prepared)", help="Drive prepared만 사용")
+    do_rebuild = c1.button(
+        "🔁 강제 재인덱싱(HQ, prepared)", help="Drive prepared만 사용"
+    )
     show_after = c2.toggle("인덱싱 결과 표시", value=True)
     auto_up = c3.toggle(
-        "인덱싱 후 자동 ZIP 업로드", value=_all_gh_secrets(), help="GH/GITHUB 시크릿이 모두 있으면 켜짐"
+        "인덱싱 후 자동 ZIP 업로드",
+        value=_all_gh_secrets(),
+        help="GH/GITHUB 시크릿이 모두 있으면 켜짐",
     )
     reset_view = c4.button("🧹 화면 초기화")
 
@@ -909,11 +961,11 @@ def _render_admin_index_panel() -> None:
         st.session_state["_IDX_PH_LOG"].empty()
         _log("인덱싱 시작")
         try:
-            from src.rag import index_build as _idx  # type: ignore[import-not-found]
+            from src.rag import index_build as _idx
 
             _step_set(1, "run", "persist 확인 중")
             try:
-                from src.rag.index_build import PERSIST_DIR as _pp  # type: ignore[assignment]
+                from src.rag.index_build import PERSIST_DIR as _pp
                 used_persist = Path(str(_pp)).expanduser()
             except Exception:
                 used_persist = Path.home() / ".maic" / "persist"
@@ -923,7 +975,7 @@ def _render_admin_index_panel() -> None:
             _step_set(2, "run", "HQ 인덱싱 중")
             os.environ["MAIC_INDEX_MODE"] = "HQ"
             os.environ["MAIC_USE_PREPARED_ONLY"] = "1"
-            _idx.rebuild_index()  # type: ignore[attr-defined]
+            _idx.rebuild_index()
             _step_set(2, "ok", "완료")
             _log("인덱싱 완료")
 
@@ -972,9 +1024,11 @@ def _render_admin_index_panel() -> None:
 
             _step_set(4, "run", "요약 계산")
             try:
-                from src.rag.index_status import get_index_summary  # type: ignore[import-not-found]
+                from src.rag.index_status import get_index_summary
                 summary2 = get_index_summary(used_persist)
-                note = f"files={summary2.total_files}, chunks={summary2.total_chunks}"
+                note = (
+                    f"files={summary2.total_files}, chunks={summary2.total_chunks}"
+                )
                 _step_set(4, "ok", note)
                 _log(f"요약 {note}")
             except Exception:
@@ -990,7 +1044,9 @@ def _render_admin_index_panel() -> None:
                     backup_dir = idx_dir / "backups"
                     z = _zip_index_dir(idx_dir, backup_dir)
                     tag = f"index-{int(time.time())}"
-                    res = _upload_release_zip(owner, repo_name, token, tag, z, name=tag, body="MAIC index")
+                    res = _upload_release_zip(
+                        owner, repo_name, token, tag, z, name=tag, body="MAIC index"
+                    )
                     if "_error" in res:
                         _step_set(5, "fail", res.get("_error", "error"))
                         if "detail" in res:
@@ -1026,7 +1082,7 @@ def _render_admin_index_panel() -> None:
     # --- 인덱싱 후 요약 & 경로 불일치 진단 --------------------------------
     if show_after:
         try:
-            from src.rag.index_build import PERSIST_DIR as _px  # type: ignore[assignment]
+            from src.rag.index_build import PERSIST_DIR as _px
             idx_persist = Path(str(_px)).expanduser()
         except Exception:
             idx_persist = Path.home() / ".maic" / "persist"
@@ -1037,9 +1093,9 @@ def _render_admin_index_panel() -> None:
         if str(idx_persist) != str(glb_persist):
             st.warning("Persist 경로가 서로 다릅니다. 설정/부팅 훅을 점검하세요.")
 
-        summary: Optional["_IndexSummary"] = None  # type: ignore[name-defined]
+        summary: Optional["_IndexSummary"] = None
         try:
-            from src.rag.index_status import get_index_summary  # type: ignore[import-not-found]
+            from src.rag.index_status import get_index_summary
             summary = get_index_summary(idx_persist)
         except Exception:
             summary = None
@@ -1047,7 +1103,8 @@ def _render_admin_index_panel() -> None:
         if summary:
             ready_txt = "Yes" if summary.ready else "No"
             st.caption(
-                f"요약: ready={ready_txt} · files={summary.total_files} · chunks={summary.total_chunks}"
+                f"요약: ready={ready_txt} · files={summary.total_files} "
+                f"· chunks={summary.total_chunks}"
             )
             if summary.sample_files:
                 with st.expander("샘플 파일(최대 3개)", expanded=False):
@@ -1081,11 +1138,13 @@ def _render_admin_index_panel() -> None:
         default_tag = f"index-{int(time.time())}"
         tag = st.text_input("Release Tag", default_tag)
         try:
-            from src.rag.index_build import PERSIST_DIR as _px  # type: ignore[assignment]
+            from src.rag.index_build import PERSIST_DIR as _px
             idx_persist2 = Path(str(_px)).expanduser()
         except Exception:
             idx_persist2 = Path.home() / ".maic" / "persist"
-        local_dir = st.text_input("Local Backup Dir", str((idx_persist2 / "backups").resolve()))
+        local_dir = st.text_input(
+            "Local Backup Dir", str((idx_persist2 / "backups").resolve())
+        )
 
         c1, c2 = st.columns([1, 1])
         act_zip = c1.button("📦 로컬 ZIP 백업 만들기")
@@ -1104,7 +1163,9 @@ def _render_admin_index_panel() -> None:
             else:
                 z = _zip_index_dir(idx_persist2, Path(local_dir))
                 st.caption(f"업로드 대상 ZIP: `{z.name}`")
-                res = _upload_release_zip(owner, repo_name, token, tag, z, name=tag, body="MAIC index")
+                res = _upload_release_zip(
+                    owner, repo_name, token, tag, z, name=tag, body="MAIC index"
+                )
                 if "_error" in res:
                     st.error(f"업로드 실패: {res.get('_error')}")
                     if "detail" in res:
@@ -1159,14 +1220,26 @@ def _render_admin_indexed_sources_panel() -> None:
                     )
                     row["chunks"] += 1
         except Exception as e:
-            _errlog(f"read chunks.jsonl failed: {e}", where="[indexed-sources.read]", exc=e)
+            _errlog(
+                f"read chunks.jsonl failed: {e}",
+                where="[indexed-sources.read]",
+                exc=e,
+            )
             st.error("인덱스 파일을 읽는 중 오류가 발생했어요.")
             return
 
         table: List[Dict[str, Any]] = list(docs.values())
-        st.caption(f"총 청크 수: **{total_lines}** · 문서 수: **{len(table)}** (파싱오류 {parse_errors}건)")
+        st.caption(
+            f"총 청크 수: **{total_lines}** · 문서 수: **{len(table)}** "
+            f"(파싱오류 {parse_errors}건)"
+        )
         rows2 = [
-            {"title": r["title"], "path": r["source"], "doc_id": r["doc_id"], "chunks": r["chunks"]}
+            {
+                "title": r["title"],
+                "path": r["source"],
+                "doc_id": r["doc_id"],
+                "chunks": r["chunks"],
+            }
             for r in table
         ]
         st.dataframe(rows2, hide_index=True, use_container_width=True)
@@ -1263,7 +1336,13 @@ def _render_mode_controls_pills() -> str:
     labels = ["문법", "문장", "지문"]
     cur = ss.get("qa_mode_radio") or "문법"
     idx = labels.index(cur) if cur in labels else 0
-    sel = st.radio("질문 모드", options=labels, index=idx, horizontal=True, label_visibility="collapsed")
+    sel = st.radio(
+        "질문 모드",
+        options=labels,
+        index=idx,
+        horizontal=True,
+        label_visibility="collapsed",
+    )
     ss["qa_mode_radio"] = sel
     return sel
 
@@ -1274,11 +1353,10 @@ def _render_chat_panel() -> None:
     import importlib as _imp
     import html
     import re
-    from src.agents.responder import answer_stream  # type: ignore[import-not-found]
-    from src.agents.evaluator import evaluate_stream  # type: ignore[import-not-found]
-    from src.llm.streaming import BufferOptions, make_stream_handler  # type: ignore[import-not-found]
+    from src.agents.responder import answer_stream
+    from src.agents.evaluator import evaluate_stream
+    from src.llm.streaming import BufferOptions, make_stream_handler
 
-    # 출처 라벨러
     try:
         try:
             _label_mod = _imp.import_module("src.rag.label")
@@ -1303,7 +1381,14 @@ def _render_chat_panel() -> None:
             return ""
         return f'<span class="chip-src">{html.escape(label)}</span>'
 
-    def _emit_bubble(placeholder, who: str, acc_text: str, *, source: Optional[str], align_right: bool) -> None:
+    def _emit_bubble(
+        placeholder,
+        who: str,
+        acc_text: str,
+        *,
+        source: Optional[str],
+        align_right: bool,
+    ) -> None:
         side_cls = "right" if align_right else "left"
         klass = "user" if align_right else "ai"
         chips = _chip_html(who) + (_src_html(source) if not align_right else "")
@@ -1327,11 +1412,9 @@ def _render_chat_panel() -> None:
         except Exception:
             src_label = "[AI지식]"
 
-    # 사용자 말풍선
     ph_user = st.empty()
     _emit_bubble(ph_user, "나", question, source=None, align_right=True)
 
-    # 피티쌤
     ph_ans = st.empty()
     acc_ans = ""
 
@@ -1355,7 +1438,6 @@ def _render_chat_panel() -> None:
     close_stream_ans()
     full_answer = acc_ans.strip() or "(응답이 비어있어요)"
 
-    # 미나쌤
     ph_eval = st.empty()
     acc_eval = ""
 
@@ -1389,7 +1471,6 @@ def _render_body() -> None:
     if st is None:
         return
 
-    # 1) 부팅 오토 플로우(1회)
     if not st.session_state.get("_boot_checked"):
         try:
             _boot_autoflow_hook()
@@ -1398,7 +1479,6 @@ def _render_body() -> None:
         finally:
             st.session_state["_boot_checked"] = True
 
-    # 2) 배경
     _mount_background(
         theme="light",
         accent="#5B8CFF",
@@ -1413,10 +1493,8 @@ def _render_body() -> None:
         readability_veil=True,
     )
 
-    # 3) 헤더
     _header()
 
-    # 4) 빠른 부팅 훅(선택)
     try:
         _qlao = globals().get("_quick_local_attach_only")
         if callable(_qlao):
@@ -1424,28 +1502,25 @@ def _render_body() -> None:
     except Exception as e:
         _errlog(f"quick attach failed: {e}", where="[render_body]", exc=e)
 
-    # 5) 관리자 패널
     if _is_admin_view():
-        _render_admin_panels()               # 🛠 진단 도구(오케스트레이터)
-        _render_admin_index_panel()          # 🧭 인덱싱(중복 없는 단일 자리 렌더)
-        _render_admin_indexed_sources_panel()  # 📄 인덱싱된 파일 목록
-
+        _render_admin_panels()
+        _render_admin_index_panel()
+        _render_admin_indexed_sources_panel()
         st.caption("ⓘ 복구/재인덱싱은 ‘🛠 진단 도구’ 또는 인덱싱 패널에서 수행할 수 있어요.")
 
-    # 6) 자동 시작(Release 복원)
     _auto_start_once()
 
-    # 7) 채팅 상단(메시지 영역)
     _inject_chat_styles_once()
     with st.container():
-        st.markdown('<div class="chatpane"><div class="messages">', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="chatpane"><div class="messages">', unsafe_allow_html=True
+        )
         try:
             _render_chat_panel()
         except Exception as e:
             _errlog(f"chat panel failed: {e}", where="[render_body.chat]", exc=e)
         st.markdown("</div></div>", unsafe_allow_html=True)
 
-    # 8) 입력 폼
     with st.container(border=True, key="chatpane_container"):
         st.markdown('<div class="chatpane">', unsafe_allow_html=True)
         st.session_state["__mode"] = (
@@ -1456,7 +1531,6 @@ def _render_body() -> None:
             submitted: bool = st.form_submit_button("➤")
         st.markdown("</div>", unsafe_allow_html=True)
 
-    # 9) 제출 처리
     if submitted and isinstance(q, str) and q.strip():
         st.session_state["inpane_q"] = q.strip()
         st.rerun()
