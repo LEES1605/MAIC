@@ -995,7 +995,7 @@ def _render_admin_index_panel() -> None:
                     )
                     if spec and spec.loader:
                         mod = importlib.util.module_from_spec(spec)
-                        spec.loader.exec_module(mod)  # type: ignore[attr-defined]
+                        spec.loader.exec_module(mod)
                         chk = getattr(mod, "check_prepared_updates", None)
                         mark = getattr(mod, "mark_prepared_consumed", None)
                         if callable(chk) and callable(mark):
@@ -1179,7 +1179,7 @@ def _render_admin_index_panel() -> None:
         with st.expander("백업 / 업로드(Zip)", expanded=False):
             def _secret(name: str, default: str = "") -> str:
                 try:
-                    v = st.secrets.get(name)  # type: ignore[attr-defined]
+                    v = st.secrets.get(name)
                     if isinstance(v, str) and v:
                         return v
                 except Exception:
