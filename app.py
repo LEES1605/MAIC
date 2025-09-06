@@ -924,13 +924,13 @@ def _render_body() -> None:
 # ============================= [14] 본문 렌더 — END =============================
 # ========================= [15] ADMIN: Index Panel — START =========================
 def _render_admin_index_panel() -> None:
-    """관리자 인덱싱 패널 (prepared 전용 + 스텝/진행바/로그)
+    """관리자 인덱싱 패널 (prepared 전용 + 스텝/진행바/로그/스톨표시)
     - prepared(Drive) 목록 미리보기
     - 🔁 강제 재인덱싱(HQ, prepared only)
     - prepared 신규파일 소비(seen)
     - 인덱스 요약 및 경로 불일치 진단
     - 로컬 ZIP 백업 / GitHub Releases 업로드 (자동/수동)
-    - 스텝 라이트 + 단계형 진행바 + 라이브 로그
+    - 스텝 라이트 + 단계형 진행바 + 라이브 로그 + STALLED 표시
     """
     import importlib
     import importlib.util
@@ -943,7 +943,6 @@ def _render_admin_index_panel() -> None:
     from urllib import request, error, parse
 
     if TYPE_CHECKING:
-        # 런타임 의존성 없이 타입만 확인
         from src.rag.index_status import IndexSummary as _IndexSummary
 
     if st is None or not _is_admin_view():
@@ -955,10 +954,21 @@ def _render_admin_index_panel() -> None:
         unsafe_allow_html=True,
     )
 
+    # ── UI 플레이스홀더(중복 렌더 제거용: 항상 같은 자리를 덮어씀) ────────────
+    if "_IDX_PH_STEPS" not in st.session_state:
+        st.session_state["_IDX_PH_STEPS"] = st.empty()
+    if "_IDX_PH_STATUS" not in st.session_state:
+        st.session_state["_IDX_PH_STATUS"] = st.empty()
+    if "_IDX_PH_BAR" not in st.session_state:
+        st.session_state["_IDX_PH_BAR"] = st.empty()
+    if "_IDX_PH_LOG" not in st.session_state:
+        st.session_state["_IDX_PH_LOG"] = st.empty()
+
     # ── 스텝/로그 헬퍼 ─────────────────────────────────────────────────────
     step_names: List[str] = [
         "스캔", "Persist확정", "인덱싱", "prepared소비", "요약/배지", "ZIP/Release"
     ]
+    STALL_THRESHOLD_SEC = 60  # 마지막 업데이트로부터 60초 넘으면 STALLED 경고
 
     def _step_reset(names: List[str]) -> None:
         st.session_state["_IDX_STEPS"] = [
@@ -966,11 +976,17 @@ def _render_admin_index_panel() -> None:
         ]
         st.session_state["_IDX_LOG"] = []
         st.session_state["_IDX_PROG"] = 0.0
+        st.session_state["_IDX_START_TS"] = time.time()
+        st.session_state["_IDX_LAST_TS"] = time.time()
 
     def _steps() -> List[Dict[str, str]]:
         if "_IDX_STEPS" not in st.session_state:
             _step_reset(step_names)
         return list(st.session_state["_IDX_STEPS"])
+
+    def _touch() -> None:
+        st.session_state["_IDX_LAST_TS"] = time.time()
+        _render_status()  # 상태줄 즉시 갱신
 
     def _step_set(idx: int, state: str, note: str = "") -> None:
         steps = _steps()
@@ -979,6 +995,7 @@ def _render_admin_index_panel() -> None:
             if note:
                 steps[idx]["note"] = note
             st.session_state["_IDX_STEPS"] = steps
+            _touch()
             _render_stepper()
             _update_progress()
 
@@ -993,17 +1010,48 @@ def _render_admin_index_panel() -> None:
         for i, s in enumerate(steps, start=1):
             note = f" — {s.get('note','')}" if s.get("note") else ""
             lines.append(f"{_icon(s['state'])} {i}. {s['name']}{note}")
-        st.markdown("\n".join([f"- {ln}" for ln in lines]))
+        st.session_state["_IDX_PH_STEPS"].markdown("\n".join([f"- {ln}" for ln in lines]))
+
+    def _is_running() -> bool:
+        return any(s["state"] == "run" for s in _steps())
+
+    def _render_status() -> None:
+        now = time.time()
+        last = float(st.session_state.get("_IDX_LAST_TS", now))
+        start = float(st.session_state.get("_IDX_START_TS", now))
+        since_last = int(now - last)
+        since_start = int(now - start)
+        running = _is_running()
+        stalled = running and since_last >= STALL_THRESHOLD_SEC
+        if stalled:
+            text = (
+                f"🟥 **STALLED** · 마지막 업데이트 {since_last}s 전 · 총 경과 {since_start}s"
+            )
+        elif running:
+            text = (
+                f"🟦 RUNNING · 마지막 업데이트 {since_last}s 전 · 총 경과 {since_start}s"
+            )
+        else:
+            text = f"🟩 IDLE/COMPLETE · 총 경과 {since_start}s"
+        st.session_state["_IDX_PH_STATUS"].markdown(text)
 
     def _update_progress() -> None:
         steps = _steps()
         done = sum(1 for s in steps if s["state"] in ("ok", "skip"))
         prog = done / len(steps)
         st.session_state["_IDX_PROG"] = prog
-        try:
-            st.session_state["_IDX_BAR"].progress(prog)
-        except Exception:
-            pass
+        bar = st.session_state.get("_IDX_BAR")
+        if bar is None:
+            st.session_state["_IDX_BAR"] = st.session_state["_IDX_PH_BAR"].progress(
+                prog, text="진행률"
+            )
+        else:
+            try:
+                bar.progress(prog)
+            except Exception:
+                st.session_state["_IDX_BAR"] = st.session_state["_IDX_PH_BAR"].progress(
+                    prog, text="진행률"
+                )
 
     def _log(msg: str, level: str = "info") -> None:
         buf: List[str] = st.session_state.get("_IDX_LOG", [])
@@ -1014,13 +1062,13 @@ def _render_admin_index_panel() -> None:
         if len(buf) > 200:
             buf = buf[-200:]
         st.session_state["_IDX_LOG"] = buf
+        st.session_state["_IDX_PH_LOG"].text("\n".join(buf))
+        _touch()
 
-    # 초기 렌더
+    # 초기 렌더(중복 출력 방지: 플레이스홀더만 사용)
     _render_stepper()
-    if "_IDX_BAR" not in st.session_state:
-        st.session_state["_IDX_BAR"] = st.progress(
-            st.session_state.get("_IDX_PROG", 0.0), text="진행률"
-        )
+    _render_status()
+    _update_progress()
 
     # ── GH 업로드/백업 헬퍼 ────────────────────────────────────────────────
     def _secret(name: str, default: str = "") -> str:
@@ -1081,7 +1129,7 @@ def _render_admin_index_panel() -> None:
                 except Exception:
                     return {"_raw": txt}
         except error.HTTPError as e:
-            return {"_error": f"HTTP {e.code}", "detail": e.read().decode()}
+            return {"_error": f"HTTP {e.code}", "detail": e.read().decode())
         except Exception:
             return {"_error": "network_error"}
 
@@ -1227,9 +1275,8 @@ def _render_admin_index_panel() -> None:
             _log(f"prepared list failed: {e}", "err")
     else:
         st.warning("prepared 목록 함수를 찾지 못했습니다.")
-        with st.expander("왜 못 찾았나요? (진단)"):
-            for m in dbg1:
-                st.write("• " + m)
+        for m in dbg1:
+            st.write("• " + m)
         _step_set(0, "fail", "목록 함수 없음")
         _log("prepared 목록 함수를 찾지 못했습니다.", "warn")
 
@@ -1246,7 +1293,7 @@ def _render_admin_index_panel() -> None:
             st.caption("일치하는 파일이 없습니다.")
 
     # ── 실행 컨트롤 ────────────────────────────────────────────────────────
-    c1, c2, c3 = st.columns([1, 2, 2])
+    c1, c2, c3, c4 = st.columns([1, 2, 2, 1])
     do_rebuild = c1.button(
         "🔁 강제 재인덱싱(HQ, prepared)",
         help="Drive prepared만 사용하여 인덱스를 새로 만듭니다.",
@@ -1257,18 +1304,30 @@ def _render_admin_index_panel() -> None:
         value=_all_gh_secrets(),
         help="GH/GITHUB 시크릿이 모두 있으면 기본 켜짐",
     )
+    reset_view = c4.button("🧹 화면 초기화")
+
+    if reset_view:
+        _step_reset(step_names)
+        _render_stepper()
+        _render_status()
+        st.session_state["_IDX_BAR"] = None
+        st.session_state["_IDX_PH_BAR"].empty()
+        st.session_state["_IDX_PH_LOG"].empty()
+        _log("화면 상태를 초기화했습니다.")
 
     # ── 강제 인덱싱(HQ: prepared only) ────────────────────────────────────
     used_persist: Optional[Path] = None
     if do_rebuild:
         _step_reset(step_names)
         _render_stepper()
-        st.session_state["_IDX_BAR"] = st.progress(0.0, text="진행률")
+        _render_status()
+        st.session_state["_IDX_BAR"] = None
+        st.session_state["_IDX_PH_BAR"].empty()
+        st.session_state["_IDX_PH_LOG"].empty()
         _log("인덱싱 시작")
         try:
             from src.rag import index_build as _idx
 
-            # Persist 확정
             _step_set(1, "run", "persist 확인 중")
             try:
                 from src.rag.index_build import PERSIST_DIR as _PP
@@ -1278,7 +1337,6 @@ def _render_admin_index_panel() -> None:
             _step_set(1, "ok", str(used_persist))
             _log(f"persist={used_persist}")
 
-            # 인덱싱
             _step_set(2, "run", "HQ 인덱싱 중")
             os.environ["MAIC_INDEX_MODE"] = "HQ"
             os.environ["MAIC_USE_PREPARED_ONLY"] = "1"
@@ -1286,7 +1344,6 @@ def _render_admin_index_panel() -> None:
             _step_set(2, "ok", "완료")
             _log("인덱싱 완료")
 
-            # .ready 보강
             cj = used_persist / "chunks.jsonl"
             if cj.exists() and cj.stat().st_size > 0:
                 try:
@@ -1297,7 +1354,6 @@ def _render_admin_index_panel() -> None:
                     except Exception:
                         pass
 
-            # prepared 소비
             _step_set(3, "run", "prepared 소비 중")
             try:
                 persist_for_seen = used_persist or _persist_dir()
@@ -1318,9 +1374,8 @@ def _render_admin_index_panel() -> None:
                     except Exception:
                         new_files = []
                 else:
-                    with st.expander("왜 못 찾았나요? (진단: check)"):
-                        for m in dbg2:
-                            st.write("• " + m)
+                    for m in dbg2:
+                        _log("• " + m, "warn")
                 if new_files and callable(mark):
                     try:
                         mark(persist_for_seen, new_files)
@@ -1332,7 +1387,6 @@ def _render_admin_index_panel() -> None:
                 _step_set(3, "fail", "소비 실패")
                 _log(f"prepared 소비 실패: {e}", "err")
 
-            # 요약/배지
             _step_set(4, "run", "요약 계산")
             try:
                 from src.rag.index_status import get_index_summary
@@ -1346,7 +1400,6 @@ def _render_admin_index_panel() -> None:
                 _step_set(4, "ok", "요약 모듈 없음")
                 _log("요약 모듈 없음", "warn")
 
-            # ZIP/Release
             if auto_up and _all_gh_secrets():
                 _step_set(5, "run", "ZIP/Release 업로드")
                 owner, repo_name = _resolve_owner_repo()
