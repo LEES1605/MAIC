@@ -1129,7 +1129,7 @@ def _render_admin_index_panel() -> None:
                 except Exception:
                     return {"_raw": txt}
         except error.HTTPError as e:
-            return {"_error": f"HTTP {e.code}", "detail": e.read().decode())
+            return {"_error": f"HTTP {e.code}", "detail": e.read().decode()}
         except Exception:
             return {"_error": "network_error"}
 
