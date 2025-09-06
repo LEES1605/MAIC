@@ -922,8 +922,6 @@ def _render_body() -> None:
     else:
         st.session_state.setdefault("inpane_q", "")
 # ============================= [14] 본문 렌더 — END =============================
-
-
 # ========================= [15] ADMIN: Index Panel — START =========================
 def _render_admin_index_panel() -> None:
     """관리자 인덱싱 패널 (prepared 전용)
@@ -1190,7 +1188,6 @@ def _render_admin_index_panel() -> None:
         prog = st.progress(0.0, text="인덱싱 중…")
         try:
             from src.rag import index_build as _idx
-            # prepared만 사용하도록 힌트(인덱서가 지원 시 강제)
             os.environ["MAIC_INDEX_MODE"] = "HQ"
             os.environ["MAIC_USE_PREPARED_ONLY"] = "1"
             _idx.rebuild_index()
@@ -1218,28 +1215,40 @@ def _render_admin_index_panel() -> None:
             _errlog(f"reindex failed: {e}", where="[admin-index.rebuild]")
             st.error("강제 재인덱싱 중 오류가 발생했어요.")
         else:
-            # prepared 신규파일 소비(seen)
+            # prepared 신규파일 소비(seen) — mypy용 안전 가드 추가
             try:
                 persist_for_seen = used_persist or _persist_dir()
                 chk, mark, dbg2 = _load_prepared_api()
-                # check_prepared_updates는 files 리스트를 전달하는 구현도 있음
                 info: Dict[str, Any] = {}
+                new_files: List[str] = []
                 files_arg: Any = files_list or []
-                try:
-                    info = chk(persist_for_seen, files_arg) or {}
-                except TypeError:
+
+                if callable(chk):
+                    # 구현에 따라 (persist, files) 또는 (persist)만 받음
                     try:
-                        info = chk(persist_for_seen) or {}
+                        info = chk(persist_for_seen, files_arg) or {}
+                    except TypeError:
+                        try:
+                            info = chk(persist_for_seen) or {}
+                        except Exception:
+                            info = {}
+                    try:
+                        new_files = list(info.get("files") or [])
                     except Exception:
-                        info = {}
-                new_files: List[str] = list(info.get("files") or [])
+                        new_files = []
+                else:
+                    st.warning("prepared 모듈의 check 함수를 찾지 못했습니다.")
+                    with st.expander("왜 못 찾았나요? (진단: check)"):
+                        for m in dbg2:
+                            st.write("• " + m)
+
                 if new_files and callable(mark):
                     try:
                         mark(persist_for_seen, new_files)
                     except TypeError:
                         mark(new_files)
                     st.caption("✓ prepared 신규 파일 소비(seen) 완료")
-                elif not callable(mark):
+                elif new_files and not callable(mark):
                     st.warning("prepared 모듈의 mark 함수를 찾지 못했습니다.")
             except Exception:
                 pass
