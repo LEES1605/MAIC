@@ -1332,7 +1332,9 @@ def _inject_chat_styles_once() -> None:
 def _render_mode_controls_pills() -> str:
     """질문 모드 pill (ChatPane 상단). 반환: '문법'|'문장'|'지문'"""
     _inject_chat_styles_once()
-    ss = st.session_state  # type: ignore[assignment]
+    if st is None:
+        return "문법"
+    ss = st.session_state
     labels = ["문법", "문장", "지문"]
     cur = ss.get("qa_mode_radio") or "문법"
     idx = labels.index(cur) if cur in labels else 0
@@ -1399,7 +1401,9 @@ def _render_chat_panel() -> None:
         )
         placeholder.markdown(html_block, unsafe_allow_html=True)
 
-    ss = st.session_state  # type: ignore[assignment]
+    if st is None:
+        return
+    ss = st.session_state
     question = str(ss.get("inpane_q", "") or "").strip()
     if not question:
         return
