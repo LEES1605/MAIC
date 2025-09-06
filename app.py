@@ -931,7 +931,7 @@ def _render_admin_index_panel() -> None:
     - 🔁 강제 재인덱싱(HQ)
     - 인덱싱 후 prepared 신규파일 소비(seen)
     - 인덱스 요약 및 경로 불일치 진단
-    - 로컬 ZIP 백업 / GitHub Releases 업로드
+    - 로컬 ZIP 백업 / GitHub Releases 업로드 (자동/수동)
     """
     import importlib
     import importlib.util
@@ -950,6 +950,103 @@ def _render_admin_index_panel() -> None:
         "<div style='margin-top:0.5rem'></div><h3>🧭 인덱싱(관리자)</h3>",
         unsafe_allow_html=True,
     )
+
+    # ── GH 업로드/백업 헬퍼(패널 전역에서 재사용) ─────────────────────────────
+    def _secret(name: str, default: str = "") -> str:
+        try:
+            v = st.secrets.get(name)
+            if isinstance(v, str) and v:
+                return v
+        except Exception:
+            pass
+        return os.getenv(name, default)
+
+    def _all_gh_secrets() -> bool:
+        return bool(_secret("GH_OWNER") and _secret("GH_REPO") and _secret("GH_TOKEN"))
+
+    def _zip_index_dir(idx_dir: Path, out_dir: Path) -> Path:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        ts = int(time.time())
+        zname = f"index_{ts}.zip"
+        zpath = out_dir / zname
+        with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as zf:
+            for root, _d, _f in os.walk(str(idx_dir)):
+                for fn in _f:
+                    p = Path(root) / fn
+                    arc = str(p.relative_to(idx_dir))
+                    try:
+                        zf.write(str(p), arcname=arc)
+                    except Exception:
+                        pass
+        return zpath
+
+    def _gh_api(url: str, token: str, data: Optional[bytes], method: str,
+                ctype: str) -> Dict[str, Any]:
+        req = request.Request(url, data=data, method=method)
+        req.add_header("Authorization", f"token {token}")
+        req.add_header("Accept", "application/vnd.github+json")
+        if ctype:
+            req.add_header("Content-Type", ctype)
+        try:
+            with request.urlopen(req, timeout=30) as resp:
+                txt = resp.read().decode("utf-8", "ignore")
+                try:
+                    return json.loads(txt)
+                except Exception:
+                    return {"_raw": txt}
+        except error.HTTPError as e:
+            return {"_error": f"HTTP {e.code}", "detail": e.read().decode()}
+        except Exception as e:  # noqa: F841
+            return {"_error": "network_error"}
+
+    def _upload_release_zip(owner: str, repo: str, token: str, tag: str,
+                            zip_path: Path, name: Optional[str] = None,
+                            body: str = "") -> Dict[str, Any]:
+        api = "https://api.github.com"
+        get_url = f"{api}/repos/{owner}/{repo}/releases/tags/{parse.quote(tag)}"
+        rel = _gh_api(get_url, token, None, "GET", "")
+        if "_error" in rel:
+            payload = json.dumps(
+                {"tag_name": tag, "name": name or tag, "body": body}
+            ).encode("utf-8")
+            rel = _gh_api(
+                f"{api}/repos/{owner}/{repo}/releases",
+                token,
+                payload,
+                "POST",
+                "application/json",
+            )
+            if "_error" in rel:
+                return rel
+
+        rid = rel.get("id")
+        if not rid:
+            return {"_error": "no_release_id"}
+
+        up_url = (
+            f"https://uploads.github.com/repos/{owner}/{repo}/releases/{rid}/assets"
+            f"?name={parse.quote(zip_path.name)}"
+        )
+        try:
+            data = zip_path.read_bytes()
+        except Exception:
+            return {"_error": "zip_read_failed"}
+
+        req = request.Request(up_url, data=data, method="POST")
+        req.add_header("Authorization", f"token {token}")
+        req.add_header("Content-Type", "application/zip")
+        req.add_header("Accept", "application/vnd.github+json")
+        try:
+            with request.urlopen(req, timeout=60) as resp:
+                txt = resp.read().decode("utf-8", "ignore")
+                try:
+                    return json.loads(txt)
+                except Exception:
+                    return {"_raw": txt}
+        except error.HTTPError as e:
+            return {"_error": f"HTTP {e.code}", "detail": e.read().decode()}
+        except Exception as e:  # noqa: F841
+            return {"_error": "network_error"}
 
     # ── prepared API 동적 로더 ────────────────────────────────────────────────
     def _load_prepared_api() -> Tuple[
@@ -1065,12 +1162,17 @@ def _render_admin_index_panel() -> None:
             st.caption("일치하는 파일이 없습니다.")
 
     # ── 실행 컨트롤 ────────────────────────────────────────────────────────
-    col1, col2 = st.columns([1, 3])
-    do_rebuild = col1.button(
+    c1, c2, c3 = st.columns([1, 2, 2])
+    do_rebuild = c1.button(
         "🔁 강제 재인덱싱(HQ)",
         help="캐시 무시, 고품질(HQ)로 인덱스를 새로 만듭니다.",
     )
-    show_after = col2.toggle("인덱싱 결과 표시", value=True)
+    show_after = c2.toggle("인덱싱 결과 표시", value=True)
+    auto_up = c3.toggle(
+        "인덱싱 후 자동 ZIP 업로드",
+        value=_all_gh_secrets(),
+        help="GH 시크릿이 모두 있으면 기본 켜짐",
+    )
 
     # ── 강제 인덱싱(HQ) ───────────────────────────────────────────────────
     used_persist: Optional[Path] = None
@@ -1104,6 +1206,7 @@ def _render_admin_index_panel() -> None:
             _errlog(f"reindex failed: {e}", where="[admin-index.rebuild]", exc=e)
             st.error("강제 재인덱싱 중 오류가 발생했어요.")
         else:
+            # prepared 신규파일 소비(seen)
             try:
                 persist_for_seen = used_persist or _persist_dir()
                 chk, mark, dbg = _load_prepared_api()
@@ -1127,6 +1230,33 @@ def _render_admin_index_panel() -> None:
                             st.write("• " + m)
             except Exception:
                 pass
+
+            # 인덱싱 후 자동 ZIP 업로드(토글/시크릿이 유효할 때)
+            if auto_up:
+                owner = _secret("GH_OWNER")
+                repo_name = _secret("GH_REPO")
+                token = _secret("GH_TOKEN")
+                if owner and repo_name and token:
+                    idx_dir = used_persist or _persist_dir()
+                    backup_dir = idx_dir / "backups"
+                    z = _zip_index_dir(idx_dir, backup_dir)
+                    st.caption(f"자동 ZIP 생성: `{z.name}`")
+                    tag = f"index-{int(time.time())}"
+                    res = _upload_release_zip(
+                        owner, repo_name, token, tag, z, name=tag, body="MAIC index"
+                    )
+                    if "_error" in res:
+                        st.error(f"자동 업로드 실패: {res.get('_error')}")
+                        if "detail" in res:
+                            with st.expander("상세 오류"):
+                                st.code(res["detail"])
+                    else:
+                        st.success("자동 업로드 성공")
+                        url = res.get("browser_download_url")
+                        if url:
+                            st.write(f"다운로드: {url}")
+                else:
+                    st.info("GH 시크릿이 없어 자동 업로드를 건너뜁니다.")
 
         try:
             if used_persist is not None and st is not None:
@@ -1175,149 +1305,52 @@ def _render_admin_index_panel() -> None:
             else:
                 st.info("`chunks.jsonl`이 아직 없어 결과를 표시할 수 없습니다.")
 
-        # ── 백업/업로드(Zip) ────────────────────────────────────────────────
-        with st.expander("백업 / 업로드(Zip)", expanded=False):
-            def _secret(name: str, default: str = "") -> str:
-                try:
-                    v = st.secrets.get(name)
-                    if isinstance(v, str) and v:
-                        return v
-                except Exception:
-                    pass
-                return os.getenv(name, default)
+    # ── 수동 백업/업로드 UI ────────────────────────────────────────────────
+    with st.expander("백업 / 업로드(Zip)", expanded=False):
+        owner = st.text_input("GitHub Owner", _secret("GH_OWNER"))
+        repo_name = st.text_input("GitHub Repo", _secret("GH_REPO"))
+        token = st.text_input("GH Token(secrets/GITHUB_TOKEN)", _secret("GH_TOKEN"))
+        default_tag = f"index-{int(time.time())}"
+        tag = st.text_input("Release Tag", default_tag)
+        try:
+            from src.rag.index_build import PERSIST_DIR as _PX
+            idx_persist2 = Path(str(_PX)).expanduser()
+        except Exception:
+            idx_persist2 = Path.home() / ".maic" / "persist"
+        local_dir = st.text_input(
+            "Local Backup Dir", str((idx_persist2 / "backups").resolve())
+        )
 
-            def _zip_index_dir(idx_dir: Path, out_dir: Path) -> Path:
-                out_dir.mkdir(parents=True, exist_ok=True)
-                ts = int(time.time())
-                zname = f"index_{ts}.zip"
-                zpath = out_dir / zname
-                with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as zf:
-                    for root, _d, _f in os.walk(str(idx_dir)):
-                        for fn in _f:
-                            p = Path(root) / fn
-                            arc = str(p.relative_to(idx_dir))
-                            try:
-                                zf.write(str(p), arcname=arc)
-                            except Exception:
-                                pass
-                return zpath
+        c1, c2 = st.columns([1, 1])
+        act_zip = c1.button("📦 로컬 ZIP 백업 만들기")
+        act_up = c2.button("⬆ Releases에 업로드(Zip)")
 
-            def _gh_api(
-                url: str, token: str, data: Optional[bytes], method: str, ctype: str
-            ) -> Dict[str, Any]:
-                req = request.Request(url, data=data, method=method)
-                req.add_header("Authorization", f"token {token}")
-                req.add_header("Accept", "application/vnd.github+json")
-                if ctype:
-                    req.add_header("Content-Type", ctype)
-                try:
-                    with request.urlopen(req, timeout=30) as resp:
-                        txt = resp.read().decode("utf-8", "ignore")
-                        try:
-                            return json.loads(txt)
-                        except Exception:
-                            return {"_raw": txt}
-                except error.HTTPError as e:
-                    return {"_error": f"HTTP {e.code}", "detail": e.read().decode()}
-                except Exception as e:  # noqa: F841
-                    return {"_error": "network_error"}
+        if act_zip:
+            z = _zip_index_dir(idx_persist2, Path(local_dir))
+            if z.exists() and z.stat().st_size > 0:
+                st.success(f"ZIP 생성 완료: `{str(z)}`")
+            else:
+                st.error("ZIP 생성에 실패했습니다.")
 
-            def _upload_release_zip(
-                owner: str,
-                repo: str,
-                token: str,
-                tag: str,
-                zip_path: Path,
-                name: Optional[str] = None,
-                body: str = "",
-            ) -> Dict[str, Any]:
-                api = "https://api.github.com"
-                get_url = f"{api}/repos/{owner}/{repo}/releases/tags/{parse.quote(tag)}"
-                rel = _gh_api(get_url, token, None, "GET", "")
-                if "_error" in rel:
-                    payload = json.dumps(
-                        {"tag_name": tag, "name": name or tag, "body": body}
-                    ).encode("utf-8")
-                    rel = _gh_api(
-                        f"{api}/repos/{owner}/{repo}/releases",
-                        token,
-                        payload,
-                        "POST",
-                        "application/json",
-                    )
-                    if "_error" in rel:
-                        return rel
-
-                rid = rel.get("id")
-                if not rid:
-                    return {"_error": "no_release_id"}
-
-                up_url = (
-                    f"https://uploads.github.com/repos/{owner}/{repo}/releases/"
-                    f"{rid}/assets?name={parse.quote(zip_path.name)}"
+        if act_up:
+            if not owner or not repo_name or not token:
+                st.error("Owner/Repo/Token을 입력해 주세요.")
+            else:
+                z = _zip_index_dir(idx_persist2, Path(local_dir))
+                st.caption(f"업로드 대상 ZIP: `{z.name}`")
+                res = _upload_release_zip(
+                    owner, repo_name, token, tag, z, name=tag, body="MAIC index"
                 )
-                try:
-                    data = zip_path.read_bytes()
-                except Exception:
-                    return {"_error": "zip_read_failed"}
-
-                req = request.Request(up_url, data=data, method="POST")
-                req.add_header("Authorization", f"token {token}")
-                req.add_header("Content-Type", "application/zip")
-                req.add_header("Accept", "application/vnd.github+json")
-                try:
-                    with request.urlopen(req, timeout=60) as resp:
-                        txt = resp.read().decode("utf-8", "ignore")
-                        try:
-                            return json.loads(txt)
-                        except Exception:
-                            return {"_raw": txt}
-                except error.HTTPError as e:
-                    return {"_error": f"HTTP {e.code}", "detail": e.read().decode()}
-                except Exception as e:  # noqa: F841
-                    return {"_error": "network_error"}
-
-            # 입력값
-            owner = st.text_input("GitHub Owner", _secret("GH_OWNER"))
-            repo_name = st.text_input("GitHub Repo", _secret("GH_REPO"))
-            token = st.text_input("GH Token(secrets/GITHUB_TOKEN)", _secret("GH_TOKEN"))
-            default_tag = f"index-{int(time.time())}"
-            tag = st.text_input("Release Tag", default_tag)
-            local_dir = st.text_input(
-                "Local Backup Dir", str((idx_persist / "backups").resolve())
-            )
-
-            c1, c2 = st.columns([1, 1])
-            act_zip = c1.button("📦 로컬 ZIP 백업 만들기")
-            act_up = c2.button("⬆ Releases에 업로드(Zip)")
-
-            if act_zip:
-                z = _zip_index_dir(idx_persist, Path(local_dir))
-                if z.exists() and z.stat().st_size > 0:
-                    st.success(f"ZIP 생성 완료: `{str(z)}`")
+                if "_error" in res:
+                    st.error(f"업로드 실패: {res.get('_error')}")
+                    if "detail" in res:
+                        with st.expander("상세 오류"):
+                            st.code(res["detail"])
                 else:
-                    st.error("ZIP 생성에 실패했습니다.")
-
-            if act_up:
-                if not owner or not repo_name or not token:
-                    st.error("Owner/Repo/Token을 입력해 주세요.")
-                else:
-                    z = _zip_index_dir(idx_persist, Path(local_dir))
-                    st.caption(f"업로드 대상 ZIP: `{z.name}`")
-                    res = _upload_release_zip(
-                        owner, repo_name, token, tag, z, name=tag, body="MAIC index"
-                    )
-                    if "_error" in res:
-                        st.error(f"업로드 실패: {res.get('_error')}")
-                        if "detail" in res:
-                            with st.expander("상세 오류"):
-                                st.code(res["detail"])
-                    else:
-                        st.success("업로드 성공")
-                        browser = res.get("browser_download_url")
-                        if browser:
-                            st.write(f"다운로드: {browser}")
-
+                    st.success("업로드 성공")
+                    browser = res.get("browser_download_url")
+                    if browser:
+                        st.write(f"다운로드: {browser}")
 # ========================= [15] ADMIN: Index Panel — END =========================
 
 # ========================= [16] Indexed Sources Panel — START ==========================
