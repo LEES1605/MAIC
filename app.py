@@ -1,45 +1,5 @@
-# ========================= [00] HOOK: Admin Panel Launcher — START =========================
-_render_admin_index_launcher()
-# ========================= [00] HOOK: Admin Panel Launcher — END =========================
-
 # [01] future import ==========================================================
 from __future__ import annotations
-
-# ========================= [02] ACCESS: Admin Gate — START =========================
-def _is_admin_view() -> bool:
-    """관리자 패널 표시 여부를 결정한다.
-    - st.session_state['_diag'] 토글이 켜져 있으면 True
-    - st.secrets.ADMIN_MODE == "1" 또는 ENV ADMIN_MODE == "1"이면 True
-    - 그 외 False
-    """
-    import os
-
-    try:
-        # 세션 토글 우선
-        if "st" in globals() and st is not None:
-            try:
-                if bool(st.session_state.get("_diag", False)):
-                    return True
-            except Exception:
-                pass
-
-            # 시크릿(배포 환경)
-            try:
-                val = str(st.secrets.get("ADMIN_MODE", "")).strip()
-                if val == "1":
-                    return True
-            except Exception:
-                pass
-
-        # 환경변수(로컬/Actions)
-        if os.getenv("ADMIN_MODE", "") == "1":
-            return True
-    except Exception:
-        pass
-
-    return False
-# ========================= [02] ACCESS: Admin Gate — END =========================
-
 
 # [03] secrets → env 승격 & 서버 안정 옵션 ====================================
 def _from_secrets(name: str, default: Optional[str] = None) -> Optional[str]:
@@ -1530,6 +1490,9 @@ def _render_admin_index_panel() -> None:
                         st.write(f"다운로드: {browser}")
 # ========================= [15] ADMIN: Index Panel — END =========================
 
+# ========================= [00] HOOK: Admin Panel Launcher — START =========================
+_render_admin_index_launcher()
+# ========================= [00] HOOK: Admin Panel Launcher — END =========================
 
 # ========================= [16] Indexed Sources Panel — START ==========================
 def _render_admin_indexed_sources_panel() -> None:
