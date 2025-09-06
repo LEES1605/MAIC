@@ -939,8 +939,12 @@ def _render_admin_index_panel() -> None:
     import time
     import zipfile
     from pathlib import Path
-    from typing import Any, Callable, Dict, List, Optional, Tuple
+    from typing import Any, Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
     from urllib import request, error, parse
+
+    if TYPE_CHECKING:
+        # 런타임 의존성 없이 타입만 확인
+        from src.rag.index_status import IndexSummary as _IndexSummary
 
     if st is None or not _is_admin_view():
         return
@@ -1332,8 +1336,10 @@ def _render_admin_index_panel() -> None:
             _step_set(4, "run", "요약 계산")
             try:
                 from src.rag.index_status import get_index_summary
-                summary = get_index_summary(used_persist)
-                note = f"files={summary.total_files}, chunks={summary.total_chunks}"
+                summary2 = get_index_summary(used_persist)
+                note = (
+                    f"files={summary2.total_files}, chunks={summary2.total_chunks}"
+                )
                 _step_set(4, "ok", note)
                 _log(f"요약 {note}")
             except Exception:
@@ -1399,7 +1405,7 @@ def _render_admin_index_panel() -> None:
         if str(idx_persist) != str(glb_persist):
             st.warning("Persist 경로가 서로 다릅니다. 설정/부팅 훅을 점검하세요.")
 
-        summary = None
+        summary: Optional["_IndexSummary"] = None
         try:
             from src.rag.index_status import get_index_summary
             summary = get_index_summary(idx_persist)
