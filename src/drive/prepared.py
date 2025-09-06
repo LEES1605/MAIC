@@ -1,3 +1,4 @@
+# =============================== [FILE: src/drive/prepared.py] — START ===============================
 # src/drive/prepared.py
 # -----------------------------------------------------------------------------
 # Google Drive의 prepared 폴더만을 **단일 소스**로 가정한 어댑터.
@@ -14,96 +15,77 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
+import json
+import re
 
+# -----------------------------------------------------------------------------
+# 내부 유틸
+# -----------------------------------------------------------------------------
 
-__all__ = [
-    "check_prepared_updates",
-    "mark_prepared_consumed",
-]
-
-
-# ------------------------------- 내부 유틸 -------------------------------
-
-def _seen_store_path(persist_dir: str | Path) -> Path:
-    return Path(persist_dir).expanduser() / "prepared.seen.json"
+def _persist_path(persist_dir: str | Path) -> Path:
+    """
+    prepared.seen.json 저장 위치를 반환
+    """
+    p = Path(persist_dir)
+    p.mkdir(parents=True, exist_ok=True)
+    return p / "prepared.seen.json"
 
 
 def _load_seen(persist_dir: str | Path) -> Set[str]:
-    import json
-
-    p = _seen_store_path(persist_dir)
-    if not p.exists():
+    """
+    이미 소비한 prepared 파일의 식별자 집합을 로드
+    """
+    fp = _persist_path(persist_dir)
+    if not fp.exists():
         return set()
     try:
-        data = json.loads(p.read_text(encoding="utf-8"))
+        data = json.loads(fp.read_text(encoding="utf-8") or "[]")
         if isinstance(data, list):
-            return set(str(x) for x in data)
+            return set(map(str, data))
     except Exception:
-        pass
+        # 손상되었거나 포맷이 바뀐 경우 초기화
+        return set()
     return set()
 
 
 def _save_seen(persist_dir: str | Path, seen: Set[str]) -> None:
-    import json
-
-    p = _seen_store_path(persist_dir)
-    try:
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps(sorted(seen), ensure_ascii=False, indent=2), encoding="utf-8")
-    except Exception:
-        # 저장 실패는 치명적이지 않음(다음 점검에서 다시 신규로 잡힐 뿐)
-        pass
-
-
-def _extract_id(rec: Dict[str, Any] | str) -> str:
     """
-    files 항목에서 식별자 추출:
-    - dict: id → fileId → name → path
-    - str : 자체가 식별자
-    - 그 외: 빈 문자열
+    소비한 식별자 집합을 저장
     """
+    fp = _persist_path(persist_dir)
+    fp.write_text(json.dumps(sorted(seen)), encoding="utf-8")
+
+
+def _extract_id(rec: Any) -> Optional[str]:
+    """
+    dict/str 혼용 입력에서 식별자(id/fileId/name/path) 하나를 문자열로 추출
+    우선순위: id → fileId → name → path
+    """
+    if rec is None:
+        return None
     if isinstance(rec, str):
-        return rec.strip()
+        # 경로나 파일명일 수 있음
+        s = rec.strip()
+        return s or None
     if isinstance(rec, dict):
         for k in ("id", "fileId", "name", "path"):
-            v = rec.get(k)
-            if isinstance(v, str) and v.strip():
-                return v.strip()
-    return ""
+            if k in rec and rec[k]:
+                v = str(rec[k]).strip()
+                if v:
+                    return v
+    return None
 
 
-def _list_prepared_files_safe() -> List[Dict[str, Any]]:
+# -----------------------------------------------------------------------------
+# 공개 API: check_prepared_updates / mark_prepared_consumed
+# -----------------------------------------------------------------------------
+
+def check_prepared_updates(persist_dir: str | Path, files: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
-    src.integrations.gdrive.list_prepared_files() 가 있으면 호출,
-    없으면 빈 목록 반환(안전 폴백).
+    prepared 폴더 목록(files)과 persist_dir 상태를 비교하여,
+    새로 유입된 항목 리스트를 반환한다.
     """
-    try:
-        import importlib
-
-        mod = importlib.import_module("src.integrations.gdrive")
-        lf = getattr(mod, "list_prepared_files", None)
-        if callable(lf):
-            out = lf() or []
-            return out if isinstance(out, list) else []
-    except Exception:
-        pass
-    return []
-
-
-# ----------------------------- 공개 API ------------------------------
-
-def check_prepared_updates(persist_dir: str | Path) -> Dict[str, Any]:
-    """
-    반환 스키마:
-    {
-      "driver": "drive",
-      "total": <전체 파일 수>,
-      "new":   <신규 파일 수>,
-      "files": [<신규 식별자(str)>...]
-    }
-    """
-    files: List[Dict[str, Any]] = _list_prepared_files_safe()
     seen: Set[str] = _load_seen(persist_dir)
 
     new_ids: List[str] = []
@@ -120,7 +102,10 @@ def check_prepared_updates(persist_dir: str | Path) -> Dict[str, Any]:
     }
 
 
-def mark_prepared_consumed(persist_dir: str | Path, files: List[Dict[str, Any]] | List[str]) -> None:
+def mark_prepared_consumed(
+    persist_dir: str | Path,
+    files: List[Dict[str, Any]] | List[str],
+) -> None:
     """
     files: list[dict] | list[str]
     dict/str 혼용 입력을 모두 수용하며, _extract_id()로 식별자를 추출하여 seen에 추가한다.
@@ -134,3 +119,4 @@ def mark_prepared_consumed(persist_dir: str | Path, files: List[Dict[str, Any]] 
                 seen.add(fid)
 
     _save_seen(persist_dir, seen)
+# =============================== [FILE: src/drive/prepared.py] — END ===============================
