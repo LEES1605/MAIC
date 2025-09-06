@@ -38,8 +38,8 @@ def _count_lines(path: Path, limit: Optional[int] = None) -> int:
 
 def get_index_summary(index_dir: str | Path, sample_n: int = 3) -> IndexSummary:
     """
-    인덱스 디렉터리를 스캔하여 요약 정보를 생성한다.
-    - 지원 파일: chunks.jsonl, manifest.json/files.json/filelist.json, index.meta.json
+    Scan index_dir and return a summary.
+    Supports: chunks.jsonl, manifest.json/files.json/filelist.json, index.meta.json
     """
     p = Path(index_dir)
     if not p.exists():
@@ -57,13 +57,11 @@ def get_index_summary(index_dir: str | Path, sample_n: int = 3) -> IndexSummary:
 
     # 1) manifest 후보 탐색
     manifest = None
-    manifest_name = None
     for name in ("manifest.json", "files.json", "filelist.json"):
         fp = p / name
         if fp.exists():
             manifest = _read_json(fp)
             if manifest is not None:
-                manifest_name = name
                 details["manifest_file"] = name
                 break
 
