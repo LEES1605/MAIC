@@ -1,26 +1,45 @@
+# ========================= [00] HOOK: Admin Panel Launcher — START =========================
+_render_admin_index_launcher()
+# ========================= [00] HOOK: Admin Panel Launcher — END =========================
+
 # [01] future import ==========================================================
 from __future__ import annotations
 
-# ============================ [02] imports & bootstrap — START ============================
-import importlib
-import importlib.util
-import json
-import os
-import sys
-import time
-import traceback
-from pathlib import Path
-from typing import Any, Dict, List, Optional
-from typing import Any as _AnyForSt  # mypy: 전역 st를 Any로 고정
+# ========================= [02] ACCESS: Admin Gate — START =========================
+def _is_admin_view() -> bool:
+    """관리자 패널 표시 여부를 결정한다.
+    - st.session_state['_diag'] 토글이 켜져 있으면 True
+    - st.secrets.ADMIN_MODE == "1" 또는 ENV ADMIN_MODE == "1"이면 True
+    - 그 외 False
+    """
+    import os
 
-# streamlit: 정적 타입은 Any로(경고 회피), 런타임은 모듈 또는 None
-st: _AnyForSt
-try:
-    import streamlit as _st_mod
-    st = _st_mod
-except Exception:
-    st = None  # mypy에서 Any로 간주되므로 추가 ignore 불필요
-# ============================= [02] imports & bootstrap — END =============================
+    try:
+        # 세션 토글 우선
+        if "st" in globals() and st is not None:
+            try:
+                if bool(st.session_state.get("_diag", False)):
+                    return True
+            except Exception:
+                pass
+
+            # 시크릿(배포 환경)
+            try:
+                val = str(st.secrets.get("ADMIN_MODE", "")).strip()
+                if val == "1":
+                    return True
+            except Exception:
+                pass
+
+        # 환경변수(로컬/Actions)
+        if os.getenv("ADMIN_MODE", "") == "1":
+            return True
+    except Exception:
+        pass
+
+    return False
+# ========================= [02] ACCESS: Admin Gate — END =========================
+
 
 # [03] secrets → env 승격 & 서버 안정 옵션 ====================================
 def _from_secrets(name: str, default: Optional[str] = None) -> Optional[str]:
@@ -204,91 +223,35 @@ def _errlog(msg: str, where: str = "", exc: Exception | None = None) -> None:
         pass
 # ===== [PATCH / app.py / [04] 경로/상태 & 에러로그 / L0071–L0208] — END =====
 
-# [05] 모드/LLM/임포트 헬퍼 =====================================================
-def _is_admin_view() -> bool:
-    env = (os.getenv("APP_MODE") or _from_secrets("APP_MODE", "student") or "student").lower()
-    return bool(env == "admin" or (st and (st.session_state.get("is_admin") or st.session_state.get("admin_mode"))))
-
-
-def _llm_health_badge() -> tuple[str, str]:
-    """시작 속도를 위해 '키 존재'만으로 최소 상태 표시."""
-    has_g = bool(os.getenv("GEMINI_API_KEY") or _from_secrets("GEMINI_API_KEY"))
-    has_o = bool(os.getenv("OPENAI_API_KEY") or _from_secrets("OPENAI_API_KEY"))
-
-    if not (has_g or has_o):
-        return ("키없음", "⚠️")
-
-    if has_g and has_o:
-        return ("Gemini/OpenAI", "✅")
-
-    if has_g:
-        return ("Gemini", "✅")
-
-    return ("OpenAI", "✅")
-
-
-def _try_import(mod: str, attrs: List[str]) -> Dict[str, Any]:
-    out: Dict[str, Any] = {}
-    try:
-        m = importlib.import_module(mod)
-    except Exception:
-        return out
-    for a in attrs:
-        try:
-            out[a] = getattr(m, a)
-        except Exception:
-            pass
-    return out
-
-
-def _render_boot_progress_line():
-    """지하철 노선 스타일 진행 표시 — 완료여도 항상 보임, 가로 래핑."""
-    if st is None:
+# ==================== [05] UI: Index Panel Launcher — START =====================
+def _render_admin_index_launcher() -> None:
+    """상단 '진단 도구' 토글과 '인덱싱 패널([15]) 열기' 버튼.
+    - 토글 켜짐 + 버튼 누름 → [15] 패널 렌더
+    - 중복 렌더를 피하기 위해 session_state 키를 사용
+    """
+    if "st" not in globals() or st is None:
         return
-    ss = st.session_state
-    steps = [
-        ("LOCAL_CHECK", "로컬검사"),
-        ("RESTORE_FROM_RELEASE", "백업복원"),
-        ("DIFF_CHECK", "변경감지"),
-        ("DOWNLOAD", "다운로드"),
-        ("UNZIP", "복구/해제"),
-        ("BUILD_INDEX", "인덱싱"),
-        ("READY", "완료"),
-    ]
-    phase = ss.get("_boot_phase") or ("READY" if _is_brain_ready() else "LOCAL_CHECK")
-    has_error = phase == "ERROR"
-    idx = next((i for i, (k, _) in enumerate(steps) if k == phase), len(steps) - 1)
 
-    st.markdown(
-        """
-    <style>
-      .metro-flex{ display:flex; flex-wrap:wrap; align-items:center; gap:12px 22px; margin:10px 0 6px 0; }
-      .metro-node{ display:flex; flex-direction:column; align-items:center; min-width:80px; }
-      .metro-seg{ width:84px; height:10px; border-top:4px solid #9dc4ff; border-radius:8px; position:relative; }
-      .metro-seg.done{ border-color:#5aa1ff; }
-      .metro-seg.doing{ border-color:#ffd168; }
-      .metro-seg.todo{ border-top-style:dashed; border-color:#cdd6e1; }
-      .metro-seg.error{ border-color:#ef4444; }
-      .metro-dot{ position:absolute; top:-5px; right:-6px; width:14px; height:14px; border-radius:50%; background:#ffd168; }
-      .metro-lbl{ margin-top:4px; font-size:12px; color:#334155; font-weight:700; white-space:nowrap; }
-      @media (max-width:480px){ .metro-seg{ width:72px; } }
-    </style>
-    """,
-        unsafe_allow_html=True,
-    )
+    # 진단 도구 토글 (켜면 관리자 뷰 허용)
+    st.toggle("🔧 진단 도구", value=st.session_state.get("_diag", False), key="_diag")
 
-    html = ['<div class="metro-flex">']
-    for i, (_, label) in enumerate(steps):
-        if has_error:
-            klass = "error" if i == idx else "todo"
-        else:
-            klass = "done" if i < idx else ("doing" if i == idx else "todo")
-        dot = '<div class="metro-dot"></div>' if klass == "doing" else ""
-        html.append(
-            f'<div class="metro-node"><div class="metro-seg {klass}">{dot}</div><div class="metro-lbl">{label}</div></div>'
-        )
-    html.append("</div>")
-    st.markdown("".join(html), unsafe_allow_html=True)
+    c1, _c2 = st.columns([1, 6])
+    if c1.button("🧰 인덱싱 패널([15]) 열기"):
+        st.session_state["_open_admin_15"] = True
+
+    # 조건 만족 시 [15] 렌더
+    try:
+        do_open = bool(st.session_state.get("_open_admin_15", False))
+    except Exception:
+        do_open = False
+
+    if do_open and _is_admin_view():
+        try:
+            _render_admin_index_panel()
+        except NameError:
+            st.error("관리자 패널([15]) 함수를 찾을 수 없습니다.")
+# ===================== [05] UI: Index Panel Launcher — END ======================
+
 
 # ============================ [06] RERUN GUARD UTILS — START ============================
 def _safe_rerun(tag: str, ttl: int = 1) -> None:
@@ -945,7 +908,7 @@ def _render_admin_index_panel() -> None:
     if TYPE_CHECKING:
         from src.rag.index_status import IndexSummary as _IndexSummary
 
-    if st is None or not _is_admin_view():
+    if "st" not in globals() or st is None or not _is_admin_view():
         return
 
     st.markdown(
@@ -954,7 +917,27 @@ def _render_admin_index_panel() -> None:
         unsafe_allow_html=True,
     )
 
-    # ── UI 플레이스홀더(중복 렌더 제거용: 항상 같은 자리를 덮어씀) ────────────
+    # ── 안전 래퍼(앱 외부 훅이 없을 때 NameError 방지) ───────────────────────
+    def _errlog_safe(msg: str, where: str = "") -> None:
+        try:
+            _errlog(msg, where=where)  # type: ignore[name-defined]
+        except Exception:
+            pass
+
+    def _persist_dir_safe() -> Path:
+        try:
+            p = _persist_dir()  # type: ignore[name-defined]
+            return Path(str(p)).expanduser()
+        except Exception:
+            return Path.home() / ".maic" / "persist"
+
+    def _mark_ready_safe() -> None:
+        try:
+            _mark_ready()  # type: ignore[name-defined]
+        except Exception:
+            pass
+
+    # ── UI 플레이스홀더(항상 같은 자리 덮어쓰기 → 중복 렌더 제거) ─────────────
     if "_IDX_PH_STEPS" not in st.session_state:
         st.session_state["_IDX_PH_STEPS"] = st.empty()
     if "_IDX_PH_STATUS" not in st.session_state:
@@ -968,7 +951,7 @@ def _render_admin_index_panel() -> None:
     step_names: List[str] = [
         "스캔", "Persist확정", "인덱싱", "prepared소비", "요약/배지", "ZIP/Release"
     ]
-    STALL_THRESHOLD_SEC = 60  # 마지막 업데이트로부터 60초 넘으면 STALLED 경고
+    stall_threshold_sec = 60  # 마지막 업데이트 이후 60초 이상이면 STALLED
 
     def _step_reset(names: List[str]) -> None:
         st.session_state["_IDX_STEPS"] = [
@@ -986,7 +969,7 @@ def _render_admin_index_panel() -> None:
 
     def _touch() -> None:
         st.session_state["_IDX_LAST_TS"] = time.time()
-        _render_status()  # 상태줄 즉시 갱신
+        _render_status()
 
     def _step_set(idx: int, state: str, note: str = "") -> None:
         steps = _steps()
@@ -1010,7 +993,9 @@ def _render_admin_index_panel() -> None:
         for i, s in enumerate(steps, start=1):
             note = f" — {s.get('note','')}" if s.get("note") else ""
             lines.append(f"{_icon(s['state'])} {i}. {s['name']}{note}")
-        st.session_state["_IDX_PH_STEPS"].markdown("\n".join([f"- {ln}" for ln in lines]))
+        st.session_state["_IDX_PH_STEPS"].markdown(
+            "\n".join([f"- {ln}" for ln in lines])
+        )
 
     def _is_running() -> bool:
         return any(s["state"] == "run" for s in _steps())
@@ -1022,15 +1007,13 @@ def _render_admin_index_panel() -> None:
         since_last = int(now - last)
         since_start = int(now - start)
         running = _is_running()
-        stalled = running and since_last >= STALL_THRESHOLD_SEC
+        stalled = running and since_last >= stall_threshold_sec
         if stalled:
             text = (
                 f"🟥 **STALLED** · 마지막 업데이트 {since_last}s 전 · 총 경과 {since_start}s"
             )
         elif running:
-            text = (
-                f"🟦 RUNNING · 마지막 업데이트 {since_last}s 전 · 총 경과 {since_start}s"
-            )
+            text = f"🟦 RUNNING · 마지막 업데이트 {since_last}s 전 · 총 경과 {since_start}s"
         else:
             text = f"🟩 IDLE/COMPLETE · 총 경과 {since_start}s"
         st.session_state["_IDX_PH_STATUS"].markdown(text)
@@ -1049,8 +1032,8 @@ def _render_admin_index_panel() -> None:
             try:
                 bar.progress(prog)
             except Exception:
-                st.session_state["_IDX_BAR"] = st.session_state["_IDX_PH_BAR"].progress(
-                    prog, text="진행률"
+                st.session_state["_IDX_BAR"] = (
+                    st.session_state["_IDX_PH_BAR"].progress(prog, text="진행률")
                 )
 
     def _log(msg: str, level: str = "info") -> None:
@@ -1116,6 +1099,7 @@ def _render_admin_index_panel() -> None:
 
     def _gh_api(url: str, token: str, data: Optional[bytes], method: str,
                 ctype: str) -> Dict[str, Any]:
+        """GitHub REST API 호출 헬퍼."""
         req = request.Request(url, data=data, method=method)
         req.add_header("Authorization", f"token {token}")
         req.add_header("Accept", "application/vnd.github+json")
@@ -1129,13 +1113,15 @@ def _render_admin_index_panel() -> None:
                 except Exception:
                     return {"_raw": txt}
         except error.HTTPError as e:
+            # ✅ 여분의 ')' 제거된 문법 버그 픽스
             return {"_error": f"HTTP {e.code}", "detail": e.read().decode()}
         except Exception:
             return {"_error": "network_error"}
 
-    def _upload_release_zip(owner: str, repo: str, token: str, tag: str,
-                            zip_path: Path, name: Optional[str] = None,
-                            body: str = "") -> Dict[str, Any]:
+    def _upload_release_zip(
+        owner: str, repo: str, token: str, tag: str, zip_path: Path,
+        name: Optional[str] = None, body: str = ""
+    ) -> Dict[str, Any]:
         api = "https://api.github.com"
         get_url = f"{api}/repos/{owner}/{repo}/releases/tags/{parse.quote(tag)}"
         rel = _gh_api(get_url, token, None, "GET", "")
@@ -1237,8 +1223,9 @@ def _render_admin_index_panel() -> None:
                     tried.append(f"fail: {path} ({e})")
         return None, None, tried
 
-    def _load_prepared_lister() -> Tuple[Optional[Callable[[], List[Dict[str, Any]]]],
-                                         List[str]]:
+    def _load_prepared_lister() -> Tuple[
+        Optional[Callable[[], List[Dict[str, Any]]]], List[str]
+    ]:
         tried: List[str] = []
 
         def _try(modname: str) -> Optional[Callable[[], List[Dict[str, Any]]]]:
@@ -1330,8 +1317,8 @@ def _render_admin_index_panel() -> None:
 
             _step_set(1, "run", "persist 확인 중")
             try:
-                from src.rag.index_build import PERSIST_DIR as _PP
-                used_persist = Path(str(_PP)).expanduser()
+                from src.rag.index_build import PERSIST_DIR as _pp
+                used_persist = Path(str(_pp)).expanduser()
             except Exception:
                 used_persist = Path.home() / ".maic" / "persist"
             _step_set(1, "ok", str(used_persist))
@@ -1347,7 +1334,7 @@ def _render_admin_index_panel() -> None:
             cj = used_persist / "chunks.jsonl"
             if cj.exists() and cj.stat().st_size > 0:
                 try:
-                    _mark_ready()
+                    _mark_ready_safe()
                 except Exception:
                     try:
                         (used_persist / ".ready").write_text("ok", encoding="utf-8")
@@ -1356,7 +1343,7 @@ def _render_admin_index_panel() -> None:
 
             _step_set(3, "run", "prepared 소비 중")
             try:
-                persist_for_seen = used_persist or _persist_dir()
+                persist_for_seen = used_persist or _persist_dir_safe()
                 chk, mark, dbg2 = _load_prepared_api()
                 info: Dict[str, Any] = {}
                 new_files: List[str] = []
@@ -1405,7 +1392,7 @@ def _render_admin_index_panel() -> None:
                 owner, repo_name = _resolve_owner_repo()
                 token = _secret("GH_TOKEN") or _secret("GITHUB_TOKEN")
                 if owner and repo_name and token:
-                    idx_dir = used_persist or _persist_dir()
+                    idx_dir = used_persist or _persist_dir_safe()
                     backup_dir = idx_dir / "backups"
                     z = _zip_index_dir(idx_dir, backup_dir)
                     tag = f"index-{int(time.time())}"
@@ -1435,7 +1422,7 @@ def _render_admin_index_panel() -> None:
         except Exception as e:
             _step_set(2, "fail", "인덱싱 실패")
             _log(f"인덱싱 실패: {e}", "err")
-            _errlog(f"reindex failed: {e}", where="[admin-index.rebuild]")
+            _errlog_safe(f"reindex failed: {e}", where="[admin-index.rebuild]")
             st.error("강제 재인덱싱 중 오류가 발생했어요.")
         finally:
             try:
@@ -1447,11 +1434,11 @@ def _render_admin_index_panel() -> None:
     # ── 인덱싱 후 요약 & 경로 불일치 진단 ──────────────────────────────────
     if show_after:
         try:
-            from src.rag.index_build import PERSIST_DIR as _PX
-            idx_persist = Path(str(_PX)).expanduser()
+            from src.rag.index_build import PERSIST_DIR as _px
+            idx_persist = Path(str(_px)).expanduser()
         except Exception:
             idx_persist = Path.home() / ".maic" / "persist"
-        glb_persist = _persist_dir()
+        glb_persist = _persist_dir_safe()
 
         st.write(f"**Persist(Indexer):** `{str(idx_persist)}`")
         st.write(f"**Persist(Global):** `{str(glb_persist)}`")
@@ -1503,8 +1490,8 @@ def _render_admin_index_panel() -> None:
         default_tag = f"index-{int(time.time())}"
         tag = st.text_input("Release Tag", default_tag)
         try:
-            from src.rag.index_build import PERSIST_DIR as _PX
-            idx_persist2 = Path(str(_PX)).expanduser()
+            from src.rag.index_build import PERSIST_DIR as _px
+            idx_persist2 = Path(str(_px)).expanduser()
         except Exception:
             idx_persist2 = Path.home() / ".maic" / "persist"
         local_dir = st.text_input(
@@ -1542,6 +1529,7 @@ def _render_admin_index_panel() -> None:
                     if browser:
                         st.write(f"다운로드: {browser}")
 # ========================= [15] ADMIN: Index Panel — END =========================
+
 
 # ========================= [16] Indexed Sources Panel — START ==========================
 def _render_admin_indexed_sources_panel() -> None:
