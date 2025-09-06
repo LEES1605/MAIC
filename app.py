@@ -972,7 +972,7 @@ def _render_admin_index_panel() -> None:
                 return chk, mark, tried
 
         # 2) 패키지 경로들
-        for name in ("src.prepared", "src.services.prepared", "src.integrations.gdrive"):
+        for name in ("src.prepared", "src.drive.prepared", "src.integrations.gdrive"):
             chk, mark = _try(name)
             if chk and mark:
                 return chk, mark, tried
