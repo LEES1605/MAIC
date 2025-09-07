@@ -117,73 +117,11 @@ def _load_toml(path: Path) -> Dict:
         if not path.exists() or path.stat().st_size == 0:
             return {}
         with path.open("rb") as f:
-            return tomllib.load(f)  # type: ignore[misc]
+            return tomllib.load(f)
     except Exception:
         return {}
+# ... (이하 동일)
 
-
-def _norm_patterns(patts: Iterable[str]) -> Tuple[str, ...]:
-    """fnmatch에 맞도록 경로 구분자를 '/'로 통일."""
-    out: List[str] = []
-    for p in patts:
-        s = str(p).replace("\\", "/").strip()
-        if s:
-            out.append(s)
-    return tuple(out)
-
-
-def _depth_of(rel: Path) -> int:
-    """root 기준 상대경로의 디렉터리 깊이(루트=0)."""
-    return max(len(rel.parts) - 1, 0)
-
-
-def _match_any(rel_posix: str, patterns: Sequence[str]) -> bool:
-    """상대 경로(문자열)가 제외 패턴과 매칭되는지."""
-    s_file = rel_posix
-    s_dir = rel_posix.rstrip("/") + "/"
-    for pat in patterns:
-        if fnmatch.fnmatch(s_file, pat) or fnmatch.fnmatch(s_dir, pat):
-            return True
-    return False
-
-
-def _iter_files(root: Path, excludes: Sequence[str]) -> Iterator[FileInfo]:
-    """exclude 패턴을 적용해 파일을 순회하며 FileInfo를 생성."""
-    root = root.resolve()
-    exc = _norm_patterns(excludes)
-    for dirpath, dirnames, filenames in os.walk(root):
-        # 디렉터리 프루닝
-        rel_dir = Path(dirpath).resolve().relative_to(root)
-        pruned: List[str] = []
-        for d in list(dirnames):
-            d_rel = (rel_dir / d).as_posix()
-            if _match_any(d_rel, exc):
-                pruned.append(d)
-        if pruned:
-            dirnames[:] = [d for d in dirnames if d not in pruned]
-
-        # 파일 처리
-        for fn in filenames:
-            p = Path(dirpath) / fn
-            rel = p.resolve().relative_to(root).as_posix()
-            if _match_any(rel, exc):
-                continue
-            try:
-                st = p.stat()
-                yield FileInfo(path=p, size=int(st.st_size), mtime=float(st.st_mtime))
-            except Exception:
-                continue
-
-
-def _sort_key(fi: FileInfo, how: str):
-    """정렬 키 생성."""
-    name_key = str(fi.path).lower()
-    if how == "size":
-        return (-fi.size, name_key)
-    if how == "mtime":
-        return (-fi.mtime, name_key)
-    return (name_key,)
-# ======================= [04] loaders & walkers — END ==========================
 
 
 # ======================= [05] builders (inventory/tree) — START ================
