@@ -26,18 +26,15 @@ def _from_secrets(name: str, default: Optional[str] = None) -> Optional[str]:
         if st is not None and hasattr(st, "secrets"):
             val = st.secrets.get(name)
             if val is None:
-                return default
+                # secrets에 없으면 환경변수로 폴백
+                return os.getenv(name, default)
             return str(val)
     except Exception:
         pass
-    return default
+    return os.getenv(name, default)
 # ======================= [01] 헤더: 임포트/설정 — END =========================
 
-
 # ======================= [02] 상태 환산 — START ==============================
-# src/ui/header.py 의 _ready_level() 전체를 다음으로 교체
-from src.core.index_probe import probe_index_health, IndexHealth  # 상단 import에 IndexHealth 추가
-
 def _ready_level() -> str:
     """인덱스 상태를 HIGH/MID/LOW로 환산 (SSOT 기반)."""
     try:
@@ -56,7 +53,6 @@ def _ready_level() -> str:
         return "HIGH" if ok else ("MID" if (size_ok and json_ok) else "LOW")
     except Exception:
         return "LOW"
-
 # ======================= [02] 상태 환산 — END ================================
 
 
