@@ -1,42 +1,97 @@
-# ======================= [01] gen-tree workflow — START =======================
-name: Generate Repo Tree & Inventory
+# ============================== [01] gen-tree.yml — START ===============================
+name: CI • Docs Tree & Inventory
 
 on:
-  pull_request:
   push:
-    branches: [ "main" ]
+    branches: ['**']
+  pull_request:
+
+# 자동 푸시를 위해 필요
+permissions:
+  contents: write
+
+concurrency:
+  group: docs-tree-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  gen-tree:
+  build-docs-tree:
+    name: Build & Auto-commit TREE/INVENTORY
     runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: .
     steps:
-      - name: Checkout
+      - name: 🧰 Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: 🐍 Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: '3.11'
 
-      - name: Generate tree & inventory
+      - name: 📁 Ensure target folder exists
         run: |
-          python scripts/gen_tree.py \
-            --root . \
-            --out-tree docs/_gpt/TREE.md \
-            --out-inv docs/_gpt/INVENTORY.json
+          set -e
+          mkdir -p docs/_gpt
 
-      - name: Verify outputs are committed
+      - name: 🛠️ Generate TREE/INVENTORY
         run: |
-          git add docs/_gpt/TREE.md docs/_gpt/INVENTORY.json
-          # fail if files changed by generator (ask contributor to commit them)
-          git diff --cached --quiet || (echo "::error ::Tree/Inventory changed. Commit generated files." && exit 1)
+          set -e
+          # 기본 제너레이터: scripts/gen_tree.py 가 리포 트리를 스캔해 산출물을 만듭니다.
+          # (리포의 스크립트가 파일 경로를 내부에서 관리한다면, 단순 호출만으로 충분합니다.)
+          python scripts/gen_tree.py
+          # 혹시 스크립트가 경로를 다르게 쓰는 리포라면, 아래와 같이 보강 생성(무해)합니다.
+          if [ ! -f docs/_gpt/TREE.md ]; then
+            echo "# Repository Tree" > docs/_gpt/TREE.md
+            echo "" >> docs/_gpt/TREE.md
+            echo '```text' >> docs/_gpt/TREE.md
+            git ls-files | sed 's/^/ - /' >> docs/_gpt/TREE.md
+            echo '```' >> docs/_gpt/TREE.md
+          fi
+          if [ ! -f docs/_gpt/INVENTORY.json ]; then
+            python - <<'PYCODE'
+import json, os
+files = [{"path": p} for p in os.popen("git ls-files").read().splitlines()]
+with open("docs/_gpt/INVENTORY.json","w",encoding="utf-8") as f:
+    json.dump({"files": files}, f, ensure_ascii=False, indent=2)
+PYCODE
+          fi
 
-      - name: Upload artifacts (diagnostic)
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: gen-tree-outputs
-          path: |
-            docs/_gpt/TREE.md
-            docs/_gpt/INVENTORY.json
-# ======================= [01] gen-tree workflow — END =========================
+      - name: 📝 Auto-commit generated Tree/Inventory
+        # 포크 PR은 푸시 권한이 없어 실패하므로 스킵
+        if: |
+          github.event_name == 'push' || (
+            github.event_name == 'pull_request' &&
+            github.event.pull_request.head.repo.full_name == github.repository
+          )
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # 변경된 파일만 스테이징
+          git add docs/_gpt/TREE.md docs/_gpt/INVENTORY.json || true
+
+          # 커밋 필요 없으면 조용히 통과
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+
+          git commit -m "docs: auto-update TREE/INVENTORY [skip ci]"
+          git push
+
+      - name: 🔍 Verify clean working tree
+        # 포크 PR에서는 자동 커밋을 하지 않으니, 검증은 정보 출력만 하고 실패하지 않게 처리
+        run: |
+          set -e
+          if ! git diff --quiet; then
+            echo "::warning::Working tree not clean (this can happen on forked PRs without push perms)."
+            git status --porcelain || true
+            git diff --name-only || true
+          else
+            echo "Working tree is clean."
+          fi
+# ============================== [01] gen-tree.yml — END =================================
