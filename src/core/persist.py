@@ -1,105 +1,50 @@
-# ============================== [01] module header ==============================
-"""
-[core-persist.SSOT] Persist 경로 단일 진실 소스(SSOT)
-
-우선순위(높은 → 낮은):
-  1) st.session_state['_PERSIST_DIR']                    (세션 오버라이드)
-  2) Secrets/Env: MAIC_PERSIST_DIR                       (운영자 설정)
-  3) src.rag.index_build.PERSIST_DIR                     (인덱서 기본값)
-  4) ~/.maic/persist                                     (최종 기본값)
-
-다른 모듈은 이 모듈의 effective_persist_dir()만 참조하세요.
-"""
+# =============================== [01] imports ===============================
 from __future__ import annotations
 
-from pathlib import Path
 import os
+from pathlib import Path
 from typing import Optional
 
-# Streamlit이 없을 수도 있으므로 방어적 임포트
 try:
-    import streamlit as st  # noqa: F401
+    import streamlit as st
 except Exception:
-    st = None  # type: ignore[assignment]
-# ============================== [01] module header — END ========================
+    st = None
 
-
-# ============================== [02] helpers ====================================
-def _from_secrets(name: str, default: Optional[str] = None) -> Optional[str]:
-    """st.secrets → os.environ 순으로 조회. 실패 시 default."""
-    try:
-        secrets_obj = getattr(st, "secrets", None)
-        if secrets_obj is not None:
-            val = secrets_obj.get(name, None)  # type: ignore[call-arg]
-            if isinstance(val, str) and val:
-                return val
-    except Exception:
-        pass
-    return os.getenv(name, default)
-
-
-def _session_persist_dir() -> Optional[Path]:
-    """세션에 지정된 persist 경로 가져오기(없으면 None)."""
-    try:
-        ss = getattr(st, "session_state", None)
-        if isinstance(ss, dict):
-            p = ss.get("_PERSIST_DIR")
-            if p:
-                return Path(str(p)).expanduser()
-    except Exception:
-        pass
-    return None
-
-
-def _indexer_default_dir() -> Optional[Path]:
-    """내부 인덱서의 기본 PERSIST_DIR을 쓸 수 있으면 사용."""
-    try:
-        from src.rag.index_build import PERSIST_DIR as _IDX_DIR  # lazy import
-        return Path(str(_IDX_DIR)).expanduser()
-    except Exception:
-        return None
-# ============================== [02] helpers — END ===============================
-
-
-# ============================== [03] SSOT resolver ===============================
+# =========================== [02] effective dir =============================
 def effective_persist_dir() -> Path:
-    """Persist 디렉터리의 최종 결론(SSOT)."""
-    # 1) 세션 오버라이드
-    p = _session_persist_dir()
-    if p:
-        return p
+    """
+    Persist 경로의 단일 소스(SSOT).
+    우선순위: st.session_state['_PERSIST_DIR'] → src.rag.index_build.PERSIST_DIR
+            → env(MAIC_PERSIST_DIR) → ~/.maic/persist
+    """
+    # 세션 우선
+    try:
+        if st is not None and "_PERSIST_DIR" in st.session_state:
+            p = Path(str(st.session_state["_PERSIST_DIR"])).expanduser()
+            return p
+    except Exception:
+        pass
 
-    # 2) Secrets/Env
-    envp = _from_secrets("MAIC_PERSIST_DIR", None)
+    # 인덱서 기본값
+    try:
+        from src.rag.index_build import PERSIST_DIR as _pp  # lazy import
+        return Path(str(_pp)).expanduser()
+    except Exception:
+        pass
+
+    # 환경변수
+    envp = os.getenv("MAIC_PERSIST_DIR")
     if envp:
         return Path(envp).expanduser()
 
-    # 3) 인덱서 기본값
-    p = _indexer_default_dir()
-    if p:
-        return p
-
-    # 4) 최종 기본값
+    # 기본
     return Path.home() / ".maic" / "persist"
 
-
+# ===================== [03] share to session (optional) =====================
 def share_persist_dir_to_session(p: Path) -> None:
-    """결정된 경로를 세션에 반영(있을 때만). 실패 무해화."""
+    """세션과 persist 경로를 공유(있으면). 실패시 무해."""
     try:
-        ss = getattr(st, "session_state", None)
-        if isinstance(ss, dict):
-            ss["_PERSIST_DIR"] = Path(str(p)).expanduser()
+        if st is not None:
+            st.session_state["_PERSIST_DIR"] = Path(str(p)).expanduser()
     except Exception:
         pass
-# ============================== [03] SSOT resolver — END ========================
-
-
-# ============================== [04] module constants ============================
-PERSIST_DIR: Path = effective_persist_dir()
-try:
-    PERSIST_DIR.mkdir(parents=True, exist_ok=True)
-except Exception:
-    pass
-
-__all__ = ["effective_persist_dir", "share_persist_dir_to_session", "PERSIST_DIR"]
-# ============================== [04] module constants — END ======================
