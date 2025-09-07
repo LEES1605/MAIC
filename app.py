@@ -290,40 +290,63 @@ def _safe_rerun(tag: str, ttl: int = 1) -> None:
         pass
 
 
-# ================= [08] 헤더(배지·타이틀·로그인/아웃) ======================
+# ================= [08] 헤더(배지·타이틀·로그인/아웃) — START ==============
 def _header() -> None:
-    """상단 상태 배지 + 브랜드 타이틀 + 관리자 로그인/로그아웃."""
-    st_local = globals().get("st", None)
-    if st_local is None:
+    """상단 헤더.
+    - 학생: 제목 왼쪽에 상태라벨 + 펄스점만 표시(준비완료/준비중/문제발생)
+    - 관리자: 동일 + 우측에 로그인/로그아웃 버튼
+    """
+    if st is None:
         return
 
-    ss = st_local.session_state
+    ss = st.session_state
     ss.setdefault("admin_mode", False)
     ss.setdefault("_show_admin_login", False)
 
+    # ---- 상태 진단(간단) ----
     try:
-        status = _get_brain_status()
-        code = status.get("code", "MISSING")
+        info = _probe_index_health(_effective_persist_dir())
+        ok = bool(info.get("ok"))
+        size_ok = int(info.get("chunks_size") or 0) > 0
+        json_ok = bool(info.get("json_ok"))
+        level = "HIGH" if ok else ("MID" if (size_ok and json_ok) else "LOW")
     except Exception:
-        code = "MISSING"
+        level = "LOW"
 
-    badge_txt, badge_class = {
-        "READY": ("🟢 준비완료", "green"),
-        "SCANNING": ("🟡 준비중", "yellow"),
-        "RESTORING": ("🟡 복원중", "yellow"),
-        "WARN": ("🟡 주의", "yellow"),
-        "ERROR": ("🔴 오류", "red"),
-        "MISSING": ("🔴 미준비", "red"),
-    }.get(code, ("🔴 미준비", "red"))
+    label = {"HIGH": "준비완료", "MID": "준비중", "LOW": "문제발생"}[level]
+    dot_cls = {"HIGH": "rd-high", "MID": "rd-mid", "LOW": "rd-low"}[level]
 
-    st_local.markdown(
+    # ---- 최소 CSS (미니멀) ----
+    st.markdown(
         """
         <style>
-          .status-btn { padding: 4px 8px; border-radius: 8px; font-weight: 600; }
-          .status-btn.green { background:#e7f7ee; color:#117a38; }
-          .status-btn.yellow{ background:#fff6e5; color:#8a5b00; }
-          .status-btn.red   { background:#ffeaea; color:#a40000; }
-          .brand-title { font-weight:800; letter-spacing:.2px; }
+          .brand-wrap{ display:flex; align-items:center; gap:10px; }
+          .brand-title{
+            font-weight:900; letter-spacing:.2px;
+            font-size:250%; line-height:1.1;
+          }
+          .ready-chip{
+            display:inline-flex; align-items:center; gap:6px;
+            padding:2px 8px; border-radius:12px;
+            background:#f4f6fb; border:1px solid #e5e7eb;
+            font-weight:700; color:#111827; font-size:12px;
+          }
+          .rd{ width:10px; height:10px; border-radius:50%;
+               display:inline-block; }
+          .rd-high{ background:#16a34a;
+                    box-shadow:0 0 0 0 rgba(22,163,74,.55);
+                    animation:pulseDot 1.8s infinite; }
+          .rd-mid { background:#f59e0b;
+                    box-shadow:0 0 0 0 rgba(245,158,11,.55);
+                    animation:pulseDot 1.8s infinite; }
+          .rd-low { background:#ef4444;
+                    box-shadow:0 0 0 0 rgba(239,68,68,.55);
+                    animation:pulseDot 1.8s infinite; }
+          @keyframes pulseDot {
+            0%{ box-shadow:0 0 0 0 rgba(0,0,0,0.12); }
+            70%{ box-shadow:0 0 0 8px rgba(0,0,0,0); }
+            100%{ box-shadow:0 0 0 0 rgba(0,0,0,0); }
+          }
           .admin-login-narrow [data-testid="stTextInput"] input{
             height:42px; border-radius:10px;
           }
@@ -333,34 +356,36 @@ def _header() -> None:
         unsafe_allow_html=True,
     )
 
-    c1, c2, c3 = st_local.columns([1, 3, 1], gap="small")
-    with c1:
-        st_local.markdown(
-            f'<span class="status-btn {badge_class}">{badge_txt}</span>',
-            unsafe_allow_html=True,
-        )
+    # ---- 레이아웃: (빈칸) | [라벨+점 + 제목] | [관리자 버튼] ----
+    c1, c2, c3 = st.columns([1, 6, 2], gap="small")
     with c2:
-        st_local.markdown(
-            '<span class="brand-title">LEES AI Teacher</span>',
+        chip_html = (
+            f'<span class="ready-chip">{label}'
+            f'<span class="rd {dot_cls}"></span></span>'
+        )
+        st.markdown(
+            f'<div class="brand-wrap">{chip_html}'
+            f'<span class="brand-title">LEES AI Teacher</span></div>',
             unsafe_allow_html=True,
         )
     with c3:
         if ss.get("admin_mode"):
-            if st_local.button("🚪 로그아웃", key="logout_now", help="관리자 로그아웃"):
+            if st.button("🚪 로그아웃", key="logout_now", help="관리자 로그아웃"):
                 ss["admin_mode"] = False
                 ss["_show_admin_login"] = False
                 try:
-                    st_local.toast("로그아웃 완료", icon="👋")
+                    st.toast("로그아웃 완료", icon="👋")
                 except Exception:
-                    st_local.success("로그아웃 완료")
-                st_local.rerun()
+                    st.success("로그아웃 완료")
+                st.rerun()
         else:
-            if st_local.button("🔐 관리자", key="open_admin_login", help="관리자 로그인"):
+            if st.button("🔐 관리자", key="open_admin_login", help="관리자 로그인"):
                 ss["_show_admin_login"] = not ss.get("_show_admin_login", False)
 
+    # ---- 관리자 로그인 폼(필요 시) ----
     if not ss.get("admin_mode") and ss.get("_show_admin_login"):
-        with st_local.container(border=True):
-            st_local.write("🔐 관리자 로그인")
+        with st.container(border=True):
+            st.write("🔐 관리자 로그인")
             try:
                 pwd_set = (
                     _from_secrets("ADMIN_PASSWORD", None)
@@ -374,41 +399,38 @@ def _header() -> None:
             except Exception:
                 pwd_set = None
 
-            left, mid, right = st_local.columns([2, 1, 2])
+            left, mid, right = st.columns([2, 1, 2])
             with mid:
-                with st_local.form("admin_login_form", clear_on_submit=False):
-                    st_local.markdown(
+                with st.form("admin_login_form", clear_on_submit=False):
+                    st.markdown(
                         '<div class="admin-login-narrow">', unsafe_allow_html=True
                     )
-                    pw = st_local.text_input(
-                        "비밀번호",
-                        type="password",
-                        key="admin_pw_input",
-                        help="Enter로 로그인",
+                    pw = st.text_input(
+                        "비밀번호", type="password", key="admin_pw_input"
                     )
-                    col_a, col_b = st_local.columns([1, 1])
+                    col_a, col_b = st.columns([1, 1])
                     submit = col_a.form_submit_button("로그인")
                     cancel = col_b.form_submit_button("닫기")
-                    st_local.markdown("</div>", unsafe_allow_html=True)
+                    st.markdown("</div>", unsafe_allow_html=True)
 
                 if cancel:
                     ss["_show_admin_login"] = False
-                    st_local.rerun()
+                    st.rerun()
 
                 if submit:
                     if not pwd_set:
-                        st_local.error("서버에 관리자 비밀번호가 설정되어 있지 않습니다.")
+                        st.error("서버에 관리자 비밀번호가 설정되어 있지 않습니다.")
                     elif pw and str(pw) == str(pwd_set):
                         ss["admin_mode"] = True
                         ss["_show_admin_login"] = False
                         try:
-                            st_local.toast("로그인 성공", icon="✅")
+                            st.toast("로그인 성공", icon="✅")
                         except Exception:
-                            st_local.success("로그인 성공")
-                        st_local.rerun()
+                            st.success("로그인 성공")
+                        st.rerun()
                     else:
-                        st_local.error("비밀번호가 올바르지 않습니다.")
-
+                        st.error("비밀번호가 올바르지 않습니다.")
+# ================= [08] 헤더(배지·타이틀·로그인/아웃) — END ===============
 
 # ======================= [09] 배경(비활성: No-Op) ===========================
 def _inject_modern_bg_lib() -> None:
