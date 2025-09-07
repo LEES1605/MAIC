@@ -1,7 +1,7 @@
 # Repository Tree (generated)
 
 - root: `/home/runner/work/MAIC/MAIC`
-- generated: 2025-09-07T16:56:58
+- generated: 2025-09-07T17:07:59
 - rules: depth=4, sort=name, excludes=.DS_Store, *.zip, *.bin, */.git/*, */.github/*, */.mypy_cache/*, */.ruff_cache/*, */__pycache__/*, */.venv/*, */venv/*, */node_modules/*, */.pytest_cache/*, .git, .venv, node_modules, __pycache__, .mypy_cache, .ruff_cache, .pytest_cache, dist, build, .DS_Store, *.zip, *.bin
 
 ```text
@@ -68,6 +68,7 @@
     📄 __init__.py
     📄 index_probe.py
     📄 persist.py
+    📄 secret.py
   📁 drive
     📄 prepared.py
   📁 features

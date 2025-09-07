@@ -1,7 +1,7 @@
 {
-  "generated_at": "2025-09-07T16:56:58",
+  "generated_at": "2025-09-07T17:07:59",
   "root": "/home/runner/work/MAIC/MAIC",
-  "total_files": 86,
+  "total_files": 87,
   "total_dirs": 25,
   "counts_by_ext": {
     ".yml": 10,
@@ -9,7 +9,7 @@
     ".md": 13,
     ".yaml": 2,
     ".toml": 4,
-    ".py": 51,
+    ".py": 52,
     ".json": 1,
     ".ini": 1,
     ".txt": 1,
@@ -18,8 +18,8 @@
   "top_sizes": [
     {
       "path": "app.py",
-      "size": 64477,
-      "kb": 63.0
+      "size": 63855,
+      "kb": 62.4
     },
     {
       "path": "docs/_gpt/MAIC_refactor_report.md",
@@ -93,8 +93,8 @@
     },
     {
       "path": "src/ui/header.py",
-      "size": 7116,
-      "kb": 6.9
+      "size": 6881,
+      "kb": 6.7
     },
     {
       "path": "src/llm/streaming.py",
@@ -214,6 +214,7 @@
     "src/core/__init__.py",
     "src/core/index_probe.py",
     "src/core/persist.py",
+    "src/core/secret.py",
     "src/drive/prepared.py",
     "src/features/build_flow.py",
     "src/features/drive_card.py",
