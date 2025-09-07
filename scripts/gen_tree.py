@@ -6,6 +6,7 @@ import datetime as dt
 import fnmatch
 import json
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
@@ -44,7 +45,30 @@ DEFAULT_REPORTS: Tuple[str, ...] = ("stale", "sizes", "orphans")
 
 DOC_ROOTS: Tuple[str, ...] = ("docs", "docs/_gpt")
 # ======================= [01] imports & constants — END =========================
+# ======================= [02] CLI Compat Shim — START ==========================
+def _apply_out_dir_shim(argv: List[str]) -> List[str]:
+    """Translate '--out-dir D' to '--out-tree D/TREE.md --out-inv D/INVENTORY.json'."""
+    if "--out-dir" not in argv:
+        return argv
+    try:
+        i = argv.index("--out-dir")
+        out_dir = argv[i + 1]
+    except Exception:
+        # 인자가 비어있으면 원래대로 두고 argparse가 에러를 내게 둔다
+        return argv
+    # '--out-dir D' 두 토큰 제거
+    newv = argv[:i] + argv[i + 2 :]
+    base = Path(out_dir)
+    newv += ["--out-tree", str(base / "TREE.md")]
+    newv += ["--out-inv", str(base / "INVENTORY.json")]
+    return newv
 
+# argparse가 실행되기 전에 argv를 변환
+try:
+    sys.argv = _apply_out_dir_shim(list(sys.argv))
+except Exception:
+    pass
+# ======================= [02] CLI Compat Shim — END ============================
 
 # ======================= [02] data models — START ===============================
 @dataclass
@@ -78,6 +102,7 @@ class ScanConfig:
 
 # ======================= [02] data models — END =================================
 
+# ======================= [03A] TOML loader — START ===================
 def _load_toml(path: Path) -> Dict:
     """Load TOML on both 3.11+(tomllib) and 3.10(tomli). Return {} on failure."""
     try:
@@ -87,7 +112,7 @@ def _load_toml(path: Path) -> Dict:
             return tomllib.load(f)
     except Exception:
         return {}
-
+# ======================= [03A] TOML loader — END =====================
 
 # ======================= [04] inventory & tree builders — START =================
 def build_inventory(files: Sequence[FileInfo], cfg: ScanConfig) -> Dict:
