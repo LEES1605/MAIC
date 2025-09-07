@@ -28,7 +28,7 @@ def _ready_level() -> str:
         # 코어가 persist 경로를 자체 해석하므로 인자 생략
         from src.core.index_probe import probe_index_health
 
-        info: "IndexHealth" = probe_index_health()  # type: ignore[assignment]
+        info: "IndexHealth" = probe_index_health()
         size_ok = int(getattr(info, "chunks_size", 0) or 0) > 0
         json_ok = bool(
             (int(getattr(info, "json_sample", 0) or 0) > 0)
