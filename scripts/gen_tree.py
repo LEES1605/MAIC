@@ -80,7 +80,7 @@ def _load_toml(path: Path) -> Dict[str, Any]:
         if _TOML is None or not path.exists() or path.stat().st_size == 0:
             return {}
         with path.open("rb") as f:
-            return _TOML.load(f)  # type: ignore[attr-defined]
+            return _TOML.load(f)
     except Exception:
         return {}
 
