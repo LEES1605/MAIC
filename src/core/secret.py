@@ -7,7 +7,7 @@ from typing import Any, Optional, Sequence, Tuple, Union
 
 # streamlit은 실행 환경에 없을 수도 있으므로 동적 임포트 + Any로 안전 처리
 try:
-    _st: Any = importlib.import_module("streamlit")  # type: ignore[assignment]
+    _st: Any = importlib.import_module("streamlit")
 except Exception:
     _st = None  # 실행환경에 없으면 None
 
