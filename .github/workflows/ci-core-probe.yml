@@ -1,0 +1,33 @@
+# ============================== [01] ci-core-probe — START ===============================
+name: CI • core-probe
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  test-core-probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # src 네임스페이스 임포트를 위해 루트 디렉터리를 파이썬 경로에 추가
+      PYTHONPATH: .
+    steps:
+      - name: 🧰 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 📦 Install pytest only
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest
+
+      - name: ✅ Run tests (core-probe only)
+        run: |
+          pytest -q tests/test_core_index_probe.py
+# ============================== [01] ci-core-probe — END =================================
