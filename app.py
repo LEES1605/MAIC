@@ -564,6 +564,7 @@ def _render_ready_probe() -> None:
     """READY 여부를 미니멀 Pill로 시각화 + 상세는 expander.
     - SSOT: src.core.index_probe.probe_index_health(IndexHealth dataclass)
     - 로컬 구현체(_probe_index_health) 제거/중복 해소
+
     """
     if st is None:
         return
