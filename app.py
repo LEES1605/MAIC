@@ -663,6 +663,120 @@ def _render_index_orchestrator_header() -> None:
 
     st.markdown("<span id='idx-admin-panel'></span>", unsafe_allow_html=True)
 
+# =================== [12C] DIAG: Ready Probe — START ====================
+def _probe_index_health(p: Path) -> Dict[str, Any]:
+    """인덱스 준비상태를 경량 검증한다.
+    체크 항목:
+      - chunks.jsonl 존재/크기
+      - .ready 존재
+      - JSON 샘플 파싱(최대 200줄) 오류율
+    """
+    res: Dict[str, Any] = {"persist": str(p)}
+    try:
+        cj = p / "chunks.jsonl"
+        res["chunks_exists"] = cj.exists()
+        res["chunks_size"] = cj.stat().st_size if cj.exists() else 0
+        res["ready_exists"] = (p / ".ready").exists()
+        res["mtime"] = int(cj.stat().st_mtime) if cj.exists() else 0
+
+        # JSON 샘플 파싱(최대 200줄)
+        malformed = 0
+        sample = 0
+        if cj.exists():
+            with cj.open("r", encoding="utf-8") as rf:
+                for i, line in enumerate(rf):
+                    if i >= 200:
+                        break
+                    s = line.strip()
+                    if not s:
+                        continue
+                    sample += 1
+                    try:
+                        json.loads(s)
+                    except Exception:
+                        malformed += 1
+
+        res["json_sample"] = sample
+        res["json_malformed"] = malformed
+        json_ok = (malformed == 0) or (sample > 0 and malformed / sample <= 0.02)
+        res["json_ok"] = json_ok
+
+        res["ok"] = (
+            res["chunks_exists"]
+            and res["chunks_size"] > 0
+            and res["ready_exists"]
+            and json_ok
+        )
+    except Exception as e:
+        _errlog(f"probe failed: {e}", where="[ready-probe]", exc=e)
+        res["ok"] = False
+    return res
+
+
+def _render_ready_probe() -> None:
+    """READY 여부를 미니멀 Pill로 시각화 + 상세는 expander."""
+    if st is None:
+        return
+
+    p = _effective_persist_dir()
+    info = _probe_index_health(p)
+
+    ok = bool(info.get("ok"))
+    size = int(info.get("chunks_size") or 0)
+    ready = bool(info.get("ready_exists"))
+    json_ok = bool(info.get("json_ok"))
+
+    level = "HIGH" if ok else ("MID" if (size > 0 and json_ok) else "LOW")
+    badge = "🟢" if ok else ("🟡" if (size > 0 or ready or json_ok) else "🔴")
+
+    # CSS (펄스 점 포함) — 라인 길이 제한으로 일부 개행
+    st.markdown(
+        """
+        <style>
+          .probe-pill{
+            display:inline-flex; align-items:center; gap:8px;
+            padding:6px 10px; border-radius:14px;
+            border:1px solid #dbeafe; background:#eff6ff;
+            font-weight:700; color:#0a2540;
+          }
+          .dot{ width:8px; height:8px; border-radius:50%;
+                background:#16a34a; box-shadow:0 0 0 0 rgba(22,163,74,.7);
+                animation:pulse 1.5s infinite; }
+          .dot.warn{ background:#f59e0b; box-shadow:0 0 0 0 rgba(245,158,11,.6); }
+          .dot.err{ background:#ef4444; box-shadow:0 0 0 0 rgba(239,68,68,.6); }
+          @keyframes pulse{
+            0%{ box-shadow:0 0 0 0 rgba(22,163,74,.7); }
+            70%{ box-shadow:0 0 0 10px rgba(22,163,74,0); }
+            100%{ box-shadow:0 0 0 0 rgba(22,163,74,0); }
+          }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    dot_class = "dot" if level == "HIGH" else ("dot warn" if level == "MID" else "dot err")
+    pill_html = (
+        f'<span class="probe-pill">{badge} Ready Probe '
+        f'<span class="{dot_class}"></span><span>{level}</span></span>'
+    )
+    st.markdown(pill_html, unsafe_allow_html=True)
+
+    # 세부 상태
+    with st.expander("세부 상태 보기", expanded=False):
+        rows = [
+            ("Persist", info.get("persist", "")),
+            ("chunks.jsonl", "OK" if info.get("chunks_exists") else "Missing"),
+            ("size", f"{size:,} bytes"),
+            (".ready", "OK" if ready else "Missing"),
+            (
+                "JSON 샘플",
+                f'{int(info.get("json_sample",0))} lines · '
+                f'malformed {int(info.get("json_malformed",0))}',
+            ),
+        ]
+        data = [{"항목": k, "상태": v} for k, v in rows]
+        st.dataframe(data, hide_index=True, use_container_width=True)
+# =================== [12C] DIAG: Ready Probe — END ====================
 
 # =================== [13] ADMIN: Index Panel (prepared 전용) ==============
 def _render_admin_index_panel() -> None:
@@ -1584,7 +1698,7 @@ def _render_body() -> None:
 
     if not st.session_state.get("_boot_checked"):
         try:
-            _boot_auto_restore_index()  # 새 컨테이너에서도 즉시 복원 시도
+            _boot_auto_restore_index()
             _boot_autoflow_hook()
         except Exception as e:
             _errlog(f"boot check failed: {e}", where="[render_body.boot]", exc=e)
@@ -1608,6 +1722,9 @@ def _render_body() -> None:
     _header()
     _render_index_orchestrator_header()
 
+    # ▶ READY 프로브(미니멀 Pill + expander 디테일)
+    _render_ready_probe()
+
     try:
         _qlao = globals().get("_quick_local_attach_only")
         if callable(_qlao):
@@ -1616,14 +1733,13 @@ def _render_body() -> None:
         _errlog(f"quick attach failed: {e}", where="[render_body]", exc=e)
 
     if _is_admin_view():
-        _render_admin_panels()  # 호환 스텁
-        # ▶ 스캔만(인덱싱 없이 새 파일 확인)
-        _render_admin_prepared_scan_panel()
-        # ▶ 인덱싱 패널(필요 시 수동 실행)
-        _render_admin_index_panel()
-        # ▶ 인덱싱된 소스 읽기 전용 목록
-        _render_admin_indexed_sources_panel()
-        st.caption("ⓘ 복구/재인덱싱/스캔은 ‘🛠 진단 도구’ 또는 관리자 패널에서 수행할 수 있어요.")
+        _render_admin_panels()              # 호환 스텁
+        _render_admin_prepared_scan_panel() # 스캔(인덱싱 없이)
+        _render_admin_index_panel()         # 강제 인덱싱
+        _render_admin_indexed_sources_panel()  # 읽기 전용 목록
+        st.caption(
+            "ⓘ 복구/재인덱싱/스캔은 ‘🛠 진단 도구’ 또는 관리자 패널에서 수행할 수 있어요."
+        )
 
     _auto_start_once()
 
