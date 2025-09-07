@@ -1,6 +1,7 @@
 """
 src/ui/header.py
 - 상단 헤더(학생: 상태칩+펄스점만, 관리자: + 로그인/아웃)
+- ruff E501 대응: CSS 속성 행 길이 단축 및 줄바꿈 분리
 """
 from __future__ import annotations
 
@@ -12,12 +13,12 @@ try:
 except Exception:
     st = None  # type: ignore
 
-from pathlib import Path
 from src.core.persist import effective_persist_dir
 from src.core.index_probe import probe_index_health
 
 
 def _ready_level() -> str:
+    """인덱스 상태를 HIGH/MID/LOW로 환산."""
     try:
         info: Dict[str, object] = probe_index_health(effective_persist_dir())
         ok = bool(info.get("ok"))
@@ -28,7 +29,16 @@ def _ready_level() -> str:
         return "LOW"
 
 
+def _from_secrets(name: str, default: str | None = None) -> str | None:
+    """Streamlit secrets 안전 접근."""
+    try:
+        return str(st.secrets.get(name))  # type: ignore[attr-defined]
+    except Exception:
+        return default
+
+
 def render() -> None:
+    """헤더 렌더링(학생: 상태칩+펄스만, 관리자: + 로그인/아웃 버튼)."""
     if st is None:
         return
 
@@ -37,13 +47,18 @@ def render() -> None:
     ss.setdefault("_show_admin_login", False)
 
     level = _ready_level()
-    label = {"HIGH": "준비완료", "MID": "준비중", "LOW": "문제발생"}[level]
-    dot_cls = {"HIGH": "rd-high", "MID": "rd-mid", "LOW": "rd-low"}[level]
+    label_map = {"HIGH": "준비완료", "MID": "준비중", "LOW": "문제발생"}
+    dot_map = {"HIGH": "rd-high", "MID": "rd-mid", "LOW": "rd-low"}
+    label = label_map[level]
+    dot_cls = dot_map[level]
 
+    # CSS: 한 줄 길이 제한을 피하기 위해 속성을 줄단위로 분리
     st.markdown(
         """
         <style>
-          .brand-wrap{ display:flex; align-items:center; gap:10px; }
+          .brand-wrap{
+            display:flex; align-items:center; gap:10px;
+          }
           .brand-title{
             font-weight:900; letter-spacing:.2px;
             font-size:250%; line-height:1.1;
@@ -54,34 +69,52 @@ def render() -> None:
             background:#f4f6fb; border:1px solid #e5e7eb;
             font-weight:800; color:#111827; font-size:18px;
           }
-          .rd{ width:8px; height:8px; border-radius:50%; display:inline-block; }
-          .rd-high{ background:#16a34a; box-shadow:0 0 0 0 rgba(22,163,74,.55); animation:pulseDot 1.8s infinite; }
-          .rd-mid { background:#f59e0b; box-shadow:0 0 0 0 rgba(245,158,11,.55); animation:pulseDot 1.8s infinite; }
-          .rd-low { background:#ef4444; box-shadow:0 0 0 0 rgba(239,68,68,.55); animation:pulseDot 1.8s infinite; }
-          @keyframes pulseDot {
-            0%   { box-shadow:0 0 0 0   rgba(0,0,0,0.18); }
-            70%  { box-shadow:0 0 0 16px rgba(0,0,0,0); }
-            100% { box-shadow:0 0 0 0   rgba(0,0,0,0); }
+          .rd{
+            width:8px; height:8px; border-radius:50%;
+            display:inline-block;
+            animation:pulseDot 1.8s infinite;
+          }
+          .rd-high{
+            background:#16a34a;
+            box-shadow:0 0 0 0 rgba(22,163,74,.55);
+          }
+          .rd-mid{
+            background:#f59e0b;
+            box-shadow:0 0 0 0 rgba(245,158,11,.55);
+          }
+          .rd-low{
+            background:#ef4444;
+            box-shadow:0 0 0 0 rgba(239,68,68,.55);
+          }
+          @keyframes pulseDot{
+            0%{ box-shadow:0 0 0 0 rgba(0,0,0,0.18); }
+            70%{ box-shadow:0 0 0 16px rgba(0,0,0,0); }
+            100%{ box-shadow:0 0 0 0 rgba(0,0,0,0); }
           }
           .admin-login-narrow [data-testid="stTextInput"] input{
             height:42px; border-radius:10px;
           }
-          .admin-login-narrow .stButton>button{ width:100%; height:42px; }
+          .admin-login-narrow .stButton>button{
+            width:100%; height:42px;
+          }
         </style>
         """,
         unsafe_allow_html=True,
     )
 
+    # (빈칸) | [라벨+점 + 제목] | [관리자 버튼]
     _, c2, c3 = st.columns([1, 6, 2], gap="small")
     with c2:
         chip_html = (
-            f'<span class="ready-chip">{label}<span class="rd {dot_cls}"></span></span>'
+            f'<span class="ready-chip">{label}'
+            f'<span class="rd {dot_cls}"></span></span>'
         )
-        st.markdown(
-            f'<div class="brand-wrap">{chip_html}'
-            f'<span class="brand-title">LEES AI Teacher</span></div>',
-            unsafe_allow_html=True,
+        title_html = (
+            '<div class="brand-wrap">'
+            f'{chip_html}<span class="brand-title">LEES AI Teacher</span>'
+            '</div>'
         )
+        st.markdown(title_html, unsafe_allow_html=True)
 
     with c3:
         if ss.get("admin_mode"):
@@ -97,8 +130,9 @@ def render() -> None:
             if st.button("🔐 관리자", key="open_admin_login", help="관리자 로그인"):
                 ss["_show_admin_login"] = not ss.get("_show_admin_login", False)
 
-    # 로그인 폼
-    if (not ss.get("admin_mode")) and ss.get("_show_admin_login"):
+    # 관리자 로그인 폼
+    need_login = (not ss.get("admin_mode")) and ss.get("_show_admin_login")
+    if need_login:
         with st.container(border=True):
             st.write("🔐 관리자 로그인")
             try:
@@ -117,8 +151,12 @@ def render() -> None:
             left, mid, right = st.columns([2, 1, 2])
             with mid:
                 with st.form("admin_login_form", clear_on_submit=False):
-                    st.markdown('<div class="admin-login-narrow">', unsafe_allow_html=True)
-                    pw = st.text_input("비밀번호", type="password", key="admin_pw_input")
+                    st.markdown(
+                        '<div class="admin-login-narrow">', unsafe_allow_html=True
+                    )
+                    pw = st.text_input(
+                        "비밀번호", type="password", key="admin_pw_input"
+                    )
                     col_a, col_b = st.columns([1, 1])
                     submit = col_a.form_submit_button("로그인")
                     cancel = col_b.form_submit_button("닫기")
@@ -141,10 +179,3 @@ def render() -> None:
                         st.rerun()
                     else:
                         st.error("비밀번호가 올바르지 않습니다.")
-
-
-def _from_secrets(name: str, default: str | None = None) -> str | None:
-    try:
-        return str(st.secrets.get(name))  # type: ignore[attr-defined]
-    except Exception:
-        return default
