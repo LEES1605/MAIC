@@ -289,8 +289,10 @@ def _header() -> None:
     except Exception:
         level = "LOW"
 
-    label = {"HIGH": "준비완료", "MID": "준비중", "LOW": "문제발생"}[level]
-    dot_cls = {"HIGH": "rd-high", "MID": "rd-mid", "LOW": "rd-low"}[level]
+    label_map = {"HIGH": "준비완료", "MID": "준비중", "LOW": "문제발생"}
+    dot_map = {"HIGH": "rd-high", "MID": "rd-mid", "LOW": "rd-low"}
+    label = label_map[level]
+    dot_cls = dot_map[level]
 
     # ---- 최소 CSS (미니멀) ----
     st.markdown(
@@ -312,11 +314,13 @@ def _header() -> None:
           .rd-mid { background:#f59e0b; box-shadow:0 0 0 0 rgba(245,158,11,.55); animation:pulseDot 1.8s infinite; }
           .rd-low { background:#ef4444; box-shadow:0 0 0 0 rgba(239,68,68,.55); animation:pulseDot 1.8s infinite; }
           @keyframes pulseDot {
-            0%{   box-shadow:0 0 0 0   rgba(0,0,0,0.18); }
-            70%{  box-shadow:0 0 0 16px rgba(0,0,0,0); } /* 파장 더 크게 */
-            100%{ box-shadow:0 0 0 0   rgba(0,0,0,0); }
+            0%   { box-shadow:0 0 0 0   rgba(0,0,0,0.18); }
+            70%  { box-shadow:0 0 0 16px rgba(0,0,0,0); }  /* 파장 더 크게 */
+            100% { box-shadow:0 0 0 0   rgba(0,0,0,0); }
           }
-          .admin-login-narrow [data-testid="stTextInput"] input{ height:42px; border-radius:10px; }
+          .admin-login-narrow [data-testid="stTextInput"] input{
+            height:42px; border-radius:10px;
+          }
           .admin-login-narrow .stButton>button{ width:100%; height:42px; }
         </style>
         """,
@@ -326,26 +330,32 @@ def _header() -> None:
     # ---- 레이아웃: (빈칸) | [라벨+점 + 제목] | [관리자 버튼] ----
     _, c2, c3 = st.columns([1, 6, 2], gap="small")
     with c2:
-        chip_html = f'<span class="ready-chip">{label}<span class="rd {dot_cls}"></span></span>'
+        chip_html = (
+            f'<span class="ready-chip">{label}'
+            f'<span class="rd {dot_cls}"></span></span>'
+        )
         st.markdown(
             f'<div class="brand-wrap">{chip_html}'
             f'<span class="brand-title">LEES AI Teacher</span></div>',
             unsafe_allow_html=True,
         )
+
     with c3:
         if ss.get("admin_mode"):
             if st.button("🚪 로그아웃", key="logout_now", help="관리자 로그아웃"):
                 ss["admin_mode"] = False
                 ss["_show_admin_login"] = False
-                try: st.toast("로그아웃 완료", icon="👋")
-                except Exception: st.success("로그아웃 완료")
+                try:
+                    st.toast("로그아웃 완료", icon="👋")
+                except Exception:
+                    st.success("로그아웃 완료")
                 st.rerun()
         else:
             if st.button("🔐 관리자", key="open_admin_login", help="관리자 로그인"):
                 ss["_show_admin_login"] = not ss.get("_show_admin_login", False)
 
     # ---- 관리자 로그인 폼(필요 시) ----
-    if not ss.get("admin_mode") and ss.get("_show_admin_login"):
+    if (not ss.get("admin_mode")) and ss.get("_show_admin_login"):
         with st.container(border=True):
             st.write("🔐 관리자 로그인")
             try:
@@ -364,8 +374,12 @@ def _header() -> None:
             left, mid, right = st.columns([2, 1, 2])
             with mid:
                 with st.form("admin_login_form", clear_on_submit=False):
-                    st.markdown('<div class="admin-login-narrow">', unsafe_allow_html=True)
-                    pw = st.text_input("비밀번호", type="password", key="admin_pw_input")
+                    st.markdown(
+                        '<div class="admin-login-narrow">', unsafe_allow_html=True
+                    )
+                    pw = st.text_input(
+                        "비밀번호", type="password", key="admin_pw_input"
+                    )
                     col_a, col_b = st.columns([1, 1])
                     submit = col_a.form_submit_button("로그인")
                     cancel = col_b.form_submit_button("닫기")
@@ -381,12 +395,15 @@ def _header() -> None:
                     elif pw and str(pw) == str(pwd_set):
                         ss["admin_mode"] = True
                         ss["_show_admin_login"] = False
-                        try: st.toast("로그인 성공", icon="✅")
-                        except Exception: st.success("로그인 성공")
+                        try:
+                            st.toast("로그인 성공", icon="✅")
+                        except Exception:
+                            st.success("로그인 성공")
                         st.rerun()
                     else:
                         st.error("비밀번호가 올바르지 않습니다.")
 # ================= [08] 헤더(배지·타이틀·로그인/아웃) — END ===============
+
 
 # ======================= [09] 배경(비활성: No-Op) ===========================
 def _inject_modern_bg_lib() -> None:
