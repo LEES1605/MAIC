@@ -9,7 +9,7 @@ from typing import Dict
 import os
 
 try:
-    import streamlit as st  # type: ignore
+    import streamlit as st
 except Exception:
     st = None  # type: ignore
 
