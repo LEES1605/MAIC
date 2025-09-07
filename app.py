@@ -1126,6 +1126,163 @@ def _render_admin_index_panel() -> None:
 def _render_admin_panels() -> None:
     """과거 집계 렌더러 호환용(현재는 사용 안함)."""
     return None
+# =================== [13B] ADMIN: Prepared Scan — START ====================
+def _render_admin_prepared_scan_panel() -> None:
+    """prepared 폴더의 '새 파일 유무'만 확인하는 경량 스캐너.
+    - 인덱싱은 수행하지 않고, check_prepared_updates()만 호출
+    - 결과: 새 파일 개수, 샘플 목록, 디버그 경로
+    """
+    if st is None or not _is_admin_view():
+        return
+
+    import importlib as _imp
+    from typing import Any, Dict, List, Optional, Tuple
+
+    st.markdown("<h4>🔍 새 파일 스캔(인덱싱 없이)</h4>", unsafe_allow_html=True)
+
+    def _persist_dir_safe() -> Path:
+        try:
+            return _effective_persist_dir()
+        except Exception:
+            return Path.home() / ".maic" / "persist"
+
+    # prepared 파일 나열 함수 로드
+    def _load_prepared_lister():
+        tried = []
+
+        def _try(modname: str):
+            try:
+                m = _imp.import_module(modname)
+                fn = getattr(m, "list_prepared_files", None)
+                if callable(fn):
+                    tried.append(f"ok: {modname}")
+                    return fn
+                tried.append(f"miss func: {modname}")
+                return None
+            except Exception as e:
+                tried.append(f"fail: {modname} ({e})")
+                return None
+
+        for name in ("src.integrations.gdrive", "gdrive"):
+            fn = _try(name)
+            if fn:
+                return fn, tried
+        return None, tried
+
+    # prepared 소비 API 로드(check/mark)
+    def _load_prepared_api():
+        tried2 = []
+
+        def _try(modname: str):
+            try:
+                m = _imp.import_module(modname)
+                chk_fn = getattr(m, "check_prepared_updates", None)
+                mark_fn = getattr(m, "mark_prepared_consumed", None)
+                if callable(chk_fn) and callable(mark_fn):
+                    tried2.append(f"ok: {modname}")
+                    return chk_fn, mark_fn
+                tried2.append(f"miss attrs: {modname}")
+                return None, None
+            except Exception as e:
+                tried2.append(f"fail: {modname} ({e})")
+                return None, None
+
+        for name in ("prepared", "gdrive"):
+            chk, mark = _try(name)
+            if chk and mark:
+                return chk, mark, tried2
+        for name in ("src.prepared", "src.drive.prepared", "src.integrations.gdrive"):
+            chk, mark = _try(name)
+            if chk and mark:
+                return chk, mark, tried2
+        return None, None, tried2
+
+    # --- 실행 UI ---
+    c1, c2, c3 = st.columns([1, 1, 2])
+    act_scan = c1.button("🔍 스캔 실행", use_container_width=True)
+    act_clear = c2.button("🧹 화면 지우기", use_container_width=True)
+
+    if act_clear:
+        st.session_state.pop("_PR_SCAN_RESULT", None)
+        st.experimental_rerun()
+
+    # 이전 결과 있으면 보여주기
+    prev = st.session_state.get("_PR_SCAN_RESULT")
+    if isinstance(prev, dict) and not act_scan:
+        st.caption("이전에 실행한 스캔 결과:")
+        st.json(prev)
+
+    if not act_scan:
+        return
+
+    # --- 스캔 로직 ---
+    idx_persist = _persist_dir_safe()
+
+    lister, dbg1 = _load_prepared_lister()
+    files_list: List[Dict[str, Any]] = []
+    if lister:
+        try:
+            files_list = lister() or []
+        except Exception as e:
+            st.error(f"prepared 목록 조회 실패: {e}")
+    else:
+        with st.expander("디버그(파일 나열 함수 로드 경로)"):
+            st.write("\n".join(dbg1) or "(정보 없음)")
+
+    chk, _mark, dbg2 = _load_prepared_api()
+    info: Dict[str, Any] = {}
+    new_files: List[str] = []
+    if callable(chk):
+        try:
+            # 새로운 인터페이스(파일목록 전달) 시도
+            info = chk(idx_persist, files_list) or {}
+        except TypeError:
+            # 구버전(경로만 전달)
+            info = chk(idx_persist) or {}
+        except Exception as e:
+            st.error(f"스캔 실행 실패: {e}")
+            info = {}
+        try:
+            # 표준 키: 'files' (없으면 fallback)
+            new_files = list(info.get("files") or info.get("new") or [])
+        except Exception:
+            new_files = []
+    else:
+        with st.expander("디버그(소비 API 로드 경로)"):
+            st.write("\n".join(dbg2) or "(정보 없음)")
+
+    # --- 결과 표시 ---
+    total_prepared = len(files_list)
+    total_new = len(new_files)
+    st.success(f"스캔 완료 · prepared 총 {total_prepared}건 · **새 파일 {total_new}건**")
+
+    if total_new:
+        with st.expander("새 파일 미리보기(최대 50개)"):
+            rows = []
+            for rec in (new_files[:50] if isinstance(new_files, list) else []):
+                # 항목이 문자열(경로/이름)일 수도 있고 dict일 수도 있으므로 방어적 처리
+                if isinstance(rec, str):
+                    rows.append({"name": rec})
+                elif isinstance(rec, dict):
+                    nm = str(rec.get("name") or rec.get("path") or rec.get("file") or "")
+                    fid = str(rec.get("id") or rec.get("fileId") or "")
+                    rows.append({"name": nm, "id": fid})
+            if rows:
+                st.dataframe(rows, hide_index=True, use_container_width=True)
+            else:
+                st.write("(표시할 항목이 없습니다.)")
+    else:
+        st.info("새 파일이 없습니다. 재인덱싱을 수행할 필요가 없습니다.")
+
+    # 세션에 저장(새로고침해도 유지)
+    st.session_state["_PR_SCAN_RESULT"] = {
+        "persist": str(idx_persist),
+        "prepared_total": total_prepared,
+        "new_total": total_new,
+        "timestamp": int(time.time()),
+        "sample_new": new_files[:10] if isinstance(new_files, list) else [],
+    }
+# =================== [13B] ADMIN: Prepared Scan — END ====================
 
 
 # ============= [14] 인덱싱된 소스 목록(읽기 전용 대시보드) ==============
@@ -1459,10 +1616,14 @@ def _render_body() -> None:
         _errlog(f"quick attach failed: {e}", where="[render_body]", exc=e)
 
     if _is_admin_view():
-        _render_admin_panels()
+        _render_admin_panels()  # 호환 스텁
+        # ▶ 스캔만(인덱싱 없이 새 파일 확인)
+        _render_admin_prepared_scan_panel()
+        # ▶ 인덱싱 패널(필요 시 수동 실행)
         _render_admin_index_panel()
+        # ▶ 인덱싱된 소스 읽기 전용 목록
         _render_admin_indexed_sources_panel()
-        st.caption("ⓘ 복구/재인덱싱은 ‘🛠 진단 도구’ 또는 인덱싱 패널에서 수행할 수 있어요.")
+        st.caption("ⓘ 복구/재인덱싱/스캔은 ‘🛠 진단 도구’ 또는 관리자 패널에서 수행할 수 있어요.")
 
     _auto_start_once()
 
