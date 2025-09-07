@@ -1,0 +1,49 @@
+# ========================== [03] sha-helper.yml — START ==========================
+name: Tools • SHA Helper
+
+on:
+  workflow_dispatch:
+    inputs:
+      path:
+        description: "SHA를 구할 파일 경로 (예: src/ui/header.py)"
+        required: true
+        type: string
+      ref:
+        description: "기준 브랜치/리비전 (예: main)"
+        required: false
+        default: "main"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  compute-sha:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 🧰 Checkout (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 🔢 Compute SHA256
+        id: sha
+        env:
+          PATH_INPUT: ${{ inputs.path }}
+          REF_INPUT: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+          git fetch origin "${REF_INPUT}" || true
+          if ! git show "origin/${REF_INPUT}:${PATH_INPUT}" >/dev/null 2>&1; then
+            echo "::error::origin/${REF_INPUT} 에서 ${PATH_INPUT} 를 찾을 수 없습니다."
+            exit 1
+          fi
+          CONTENT="$(git show "origin/${REF_INPUT}:${PATH_INPUT}")"
+          SHA=$(printf "%s" "$CONTENT" | sha256sum | awk '{print $1}')
+          echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
+
+      - name: 📝 Summary
+        run: |
+          echo "### SHA256 for \`${{ inputs.path }}\` @ \`${{ inputs.ref }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "\`${{ steps.sha.outputs.sha256 }}\`" >> $GITHUB_STEP_SUMMARY
+# ========================== [03] sha-helper.yml — END ============================
