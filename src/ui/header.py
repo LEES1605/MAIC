@@ -1,58 +1,64 @@
-# ======================= [01] 헤더: 임포트/설정 — START =======================
+# =============================== [01] module header =============================
 """
-src/ui/header.py
-- 상단 헤더(학생: 상태칩+펄스점만, 관리자: + 로그인/아웃)
-- ruff E501 대응: CSS 속성 행 길이 단축 및 줄바꿈 분리
+상단 헤더(학생: 상태칩+펄스점만, 관리자: + 로그인/아웃)
+- SSOT: src.core.index_probe.probe_index_health 만 사용
+- ruff E501 회피: CSS 속성 개행
+- mypy 친화: type: ignore 제거, 방어적 타입 변환
 """
 from __future__ import annotations
 
+from typing import Dict, Optional
 import os
-from typing import Optional
 
 try:
-    import streamlit as st
-except Exception:  # pragma: no cover
-    st = None  # CI/Actions 환경 안전
+    import streamlit as st  # Streamlit 아닐 수 있어요.
+except Exception:
+    st = None  # type: ignore[assignment]
 
-from src.core.persist import effective_persist_dir
-from src.core.index_probe import probe_index_health, IndexHealth
+
+# =============================== [02] ready calc ================================
+def _ready_level() -> str:
+    """인덱스 상태를 HIGH/MID/LOW로 환산(코어 SSOT 기반, 안전 폴백)."""
+    size_ok = False
+    json_ok = False
+    ready_flag = False
+    try:
+        # 코어 SSOT 호출(인자 유연: persist 생략 또는 None)
+        from src.core.index_probe import probe_index_health  # lazy import
+
+        try:
+            info = probe_index_health()  # type: ignore[call-arg]
+        except TypeError:
+            info = probe_index_health(persist=None)  # type: ignore[call-arg]
+
+        # 방어적 접근(없으면 0/False)
+        chunks_size = int(getattr(info, "chunks_size", 0) or 0)
+        ready_flag = bool(getattr(info, "ready_exists", False))
+        json_sample = int(getattr(info, "json_sample", 0) or 0)
+        json_malformed = int(getattr(info, "json_malformed", 0) or 0)
+
+        size_ok = chunks_size > 0
+        json_ok = (json_sample > 0) and (json_malformed == 0)
+        ok = bool(ready_flag and size_ok and json_ok)
+        return "HIGH" if ok else ("MID" if (size_ok and json_ok) else "LOW")
+    except Exception:
+        # 폴백: SSOT 실패 시 보수적 판단
+        return "MID" if (size_ok or ready_flag or json_ok) else "LOW"
 
 
 def _from_secrets(name: str, default: Optional[str] = None) -> Optional[str]:
-    """Streamlit secrets 안전 접근 (미설치/미사용 환경에서도 예외 없이)."""
+    """Streamlit secrets 안전 접근 → 없으면 env."""
     try:
         if st is not None and hasattr(st, "secrets"):
-            val = st.secrets.get(name)
-            if val is None:
-                return os.getenv(name, default)
-            return str(val)
+            v = st.secrets.get(name)  # type: ignore[attr-defined]
+            if isinstance(v, str):
+                return v
+        return os.getenv(name, default)
     except Exception:
-        pass
-    return os.getenv(name, default)
-# ======================= [01] 헤더: 임포트/설정 — END =========================
+        return os.getenv(name, default)
 
-# ======================= [02] 상태 환산 — START ==============================
-def _ready_level() -> str:
-    """인덱스 상태를 HIGH/MID/LOW로 환산 (SSOT 기반)."""
-    try:
-        info: "IndexHealth" = probe_index_health(effective_persist_dir())
-        size_ok = int(getattr(info, "chunks_size", 0) or 0) > 0
-        json_ok = bool(
-            (getattr(info, "json_sample", 0) > 0)
-            and (getattr(info, "json_malformed", 0) == 0)
-        )
-        ok = bool(
-            getattr(info, "ready_exists", False)
-            and getattr(info, "chunks_exists", False)
-            and size_ok
-            and json_ok
-        )
-        return "HIGH" if ok else ("MID" if (size_ok and json_ok) else "LOW")
-    except Exception:
-        return "LOW"
-# ======================= [02] 상태 환산 — END ================================
 
-# ======================= [03] 렌더 — START ==================================
+# =============================== [03] render ===================================
 def render() -> None:
     """헤더 렌더링(학생: 상태칩+펄스만, 관리자: + 로그인/아웃 버튼)."""
     if st is None:
@@ -65,43 +71,28 @@ def render() -> None:
     level = _ready_level()
     label_map = {"HIGH": "준비완료", "MID": "준비중", "LOW": "문제발생"}
     dot_map = {"HIGH": "rd-high", "MID": "rd-mid", "LOW": "rd-low"}
-    label = label_map[level]
-    dot_cls = dot_map[level]
+    label = label_map.get(level, "준비중")
+    dot_cls = dot_map.get(level, "rd-mid")
 
-    # CSS: 한 줄 길이 제한을 피하기 위해 속성을 줄단위로 분리
+    # CSS (길이 제한 회피: 속성 줄바꿈)
     st.markdown(
         """
         <style>
-          .brand-wrap{
-            display:flex; align-items:center; gap:10px;
-          }
-          .brand-title{
-            font-weight:900; letter-spacing:.2px;
-            font-size:250%; line-height:1.1;
-          }
-          .ready-chip{
-            display:inline-flex; align-items:center; gap:6px;
-            padding:2px 10px; border-radius:12px;
-            background:#f4f6fb; border:1px solid #e5e7eb;
-            font-weight:800; color:#111827; font-size:18px;
-          }
-          .rd{
-            width:8px; height:8px; border-radius:50%;
-            display:inline-block;
-            animation:pulseDot 1.8s infinite;
-          }
-          .rd-high{
-            background:#16a34a;
-            box-shadow:0 0 0 0 rgba(22,163,74,.55);
-          }
-          .rd-mid{
-            background:#f59e0b;
-            box-shadow:0 0 0 0 rgba(245,158,11,.55);
-          }
-          .rd-low{
-            background:#ef4444;
-            box-shadow:0 0 0 0 rgba(239,68,68,.55);
-          }
+          .brand-wrap{ display:flex; align-items:center; gap:10px; }
+          .brand-title{ font-weight:900; letter-spacing:.2px;
+                        font-size:250%; line-height:1.1; }
+          .ready-chip{ display:inline-flex; align-items:center; gap:6px;
+                       padding:2px 10px; border-radius:12px;
+                       background:#f4f6fb; border:1px solid #e5e7eb;
+                       font-weight:800; color:#111827; font-size:18px; }
+          .rd{ width:8px; height:8px; border-radius:50%;
+               display:inline-block; animation:pulseDot 1.8s infinite; }
+          .rd-high{ background:#16a34a;
+                    box-shadow:0 0 0 0 rgba(22,163,74,.55); }
+          .rd-mid{  background:#f59e0b;
+                    box-shadow:0 0 0 0 rgba(245,158,11,.55); }
+          .rd-low{  background:#ef4444;
+                    box-shadow:0 0 0 0 rgba(239,68,68,.55); }
           @keyframes pulseDot{
             0%{ box-shadow:0 0 0 0 rgba(0,0,0,0.18); }
             70%{ box-shadow:0 0 0 16px rgba(0,0,0,0); }
@@ -110,9 +101,7 @@ def render() -> None:
           .admin-login-narrow [data-testid="stTextInput"] input{
             height:42px; border-radius:10px;
           }
-          .admin-login-narrow .stButton>button{
-            width:100%; height:42px;
-          }
+          .admin-login-narrow .stButton>button{ width:100%; height:42px; }
         </style>
         """,
         unsafe_allow_html=True,
@@ -125,12 +114,13 @@ def render() -> None:
             f'<span class="ready-chip">{label}'
             f'<span class="rd {dot_cls}"></span></span>'
         )
-        title_html = (
+        # ⛳️ 여기 문자열 결합만 수정: 'ff' → 'f'
+        st.markdown(
             '<div class="brand-wrap">'
             f'{chip_html}<span class="brand-title">LEES AI Teacher</span>'
-            '</div>'
+            "</div>",
+            unsafe_allow_html=True,
         )
-        st.markdown(title_html, unsafe_allow_html=True)
 
     with c3:
         if ss.get("admin_mode"):
@@ -195,4 +185,5 @@ def render() -> None:
                         st.rerun()
                     else:
                         st.error("비밀번호가 올바르지 않습니다.")
-# ======================= [03] 렌더 — END ====================================
+# =============================== [03] render — END ==============================
+

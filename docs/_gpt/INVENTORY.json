@@ -1,15 +1,16 @@
 {
-  "generated_at": "2025-09-07T16:08:29",
+  "generated_at": "2025-09-07T16:17:11",
   "root": "/home/runner/work/MAIC/MAIC",
-  "total_files": 84,
+  "total_files": 86,
   "total_dirs": 25,
   "counts_by_ext": {
     ".yml": 10,
     "<noext>": 2,
-    ".md": 12,
+    ".md": 13,
     ".yaml": 2,
     ".toml": 4,
     ".py": 51,
+    ".json": 1,
     ".ini": 1,
     ".txt": 1,
     ".sh": 1
@@ -82,8 +83,8 @@
     },
     {
       "path": "src/ui/header.py",
-      "size": 7541,
-      "kb": 7.4
+      "size": 7756,
+      "kb": 7.6
     },
     {
       "path": "prompts.yaml",
@@ -183,9 +184,11 @@
     "DEV_SETUP.md",
     "docs/_archive/2025-09-07_PROJECT_STATUS.md",
     "docs/_gpt/CONVENTIONS.MD",
+    "docs/_gpt/INVENTORY.json",
     "docs/_gpt/MAIC_refactor_report.md",
     "docs/_gpt/MASTERPLAN.md",
     "docs/_gpt/README.MD",
+    "docs/_gpt/TREE.md",
     "folders_files_map.md",
     "MAIC PROJECT MASTER PLAN",
     "mypy.ini",
