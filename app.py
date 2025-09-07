@@ -275,20 +275,21 @@ def _mount_background(
     """배경 렌더 OFF(호출 시 즉시 return)."""
     return
 
-
 # =================== [10] 부팅 훅: 인덱스 자동 복원 =======================
 def _boot_auto_restore_index() -> None:
-    """부팅 시 인덱스 자동 복원:
-    - chunks.jsonl 없거나 .ready 없으면 GH Releases에서 최신 index_*.zip 내려받아 복원
-    - 세션에서 1회만 시도
+    """부팅 시 인덱스 자동 복원(한 세션 1회).
+    - 조건: chunks.jsonl==0B 또는 미존재, 또는 .ready 미존재
+    - 동작: GH Releases에서 최신 index_*.zip 받아서 복원
+    - SSOT: persist는 core.persist.effective_persist_dir()만 사용
     """
     try:
-        if "st" in globals() and st is not None and st.session_state.get("_BOOT_RESTORE_DONE"):
-            return
+        if "st" in globals() and st is not None:
+            if st.session_state.get("_BOOT_RESTORE_DONE"):
+                return
     except Exception:
         pass
 
-    p = _effective_persist_dir()
+    p = effective_persist_dir()
     cj = p / "chunks.jsonl"
     ready = (p / ".ready").exists()
     if cj.exists() and cj.stat().st_size > 0 and ready:
@@ -299,10 +300,10 @@ def _boot_auto_restore_index() -> None:
             pass
         return
 
-    # ---- GH 시크릿 조회 ----
+    # ---- 시크릿/ENV 로더 (SSOT) ----
     def _secret(name: str, default: str = "") -> str:
         try:
-            if "st" in globals() and st is not None:
+            if "st" in globals() and st is not None and hasattr(st, "secrets"):
                 v = st.secrets.get(name)
                 if isinstance(v, str) and v:
                     return v
@@ -310,26 +311,26 @@ def _boot_auto_restore_index() -> None:
             pass
         return os.getenv(name, default)
 
-    def _resolve_owner_repo() -> Tuple[str, str]:
-        owner = _secret("GH_OWNER")
-        repo = _secret("GH_REPO")
-        if owner and repo:
-            return owner, repo
+    def _resolve_owner_repo() -> tuple[str, str]:
+        # 우선순위: GH_OWNER/GH_REPO → GITHUB_REPO(=owner/repo) → GITHUB_OWNER/GITHUB_REPO_NAME
+        owner = _secret("GH_OWNER") or _secret("GITHUB_OWNER")
+        repo = _secret("GH_REPO") or _secret("GITHUB_REPO_NAME")
         combo = _secret("GITHUB_REPO")
-        if combo and "/" in combo:
+        if (not owner or not repo) and combo and "/" in combo:
             o, r = combo.split("/", 1)
-            return o.strip(), r.strip()
-        owner = owner or _secret("GITHUB_OWNER")
-        repo = repo or _secret("GITHUB_REPO_NAME")
+            owner, repo = o.strip(), r.strip()
         return owner or "", repo or ""
 
     token = _secret("GH_TOKEN") or _secret("GITHUB_TOKEN")
     owner, repo = _resolve_owner_repo()
     if not (token and owner and repo):
-        return  # 복원 불가(시크릿 없음)
+        return  # 복원 불가(시크릿 미설정)
 
     # ---- 최신 릴리스의 index_*.zip 다운로드 ----
-    from urllib import request as _rq, error as _er
+    from urllib import request as _rq, error as _er, parse as _ps
+    import zipfile
+    import time
+    import json as _json
 
     api_latest = f"https://api.github.com/repos/{owner}/{repo}/releases/latest"
     try:
@@ -341,21 +342,20 @@ def _boot_auto_restore_index() -> None:
             },
         )
         with _rq.urlopen(req, timeout=20) as resp:
-            data = json.loads(resp.read().decode("utf-8", "ignore"))
+            data = _json.loads(resp.read().decode("utf-8", "ignore"))
     except Exception:
         return
 
-    assets = data.get("assets") or []
-    zip_asset: Optional[Dict[str, Any]] = None
-    for a in assets:
+    asset = None
+    for a in data.get("assets") or []:
         n = str(a.get("name") or "")
         if n.startswith("index_") and n.endswith(".zip"):
-            zip_asset = a
+            asset = a
             break
-    if not zip_asset:
+    if not asset:
         return
 
-    dl = zip_asset.get("browser_download_url")
+    dl = asset.get("browser_download_url")
     if not dl:
         return
 
@@ -363,19 +363,24 @@ def _boot_auto_restore_index() -> None:
     try:
         p.mkdir(parents=True, exist_ok=True)
         tmp = p / f"__restore_{int(time.time())}.zip"
-        _rq.urlretrieve(dl, tmp)  # 다운로드
-        import zipfile
-
+        _rq.urlretrieve(dl, tmp)
         with zipfile.ZipFile(tmp, "r") as zf:
             zf.extractall(p)
         try:
             tmp.unlink()
         except Exception:
             pass
+
+        # SSOT: 코어로 ready 마킹
         try:
-            (p / ".ready").write_text("ok", encoding="utf-8")
+            core_mark_ready(p)
         except Exception:
-            pass
+            try:
+                (p / ".ready").write_text("ok", encoding="utf-8")
+            except Exception:
+                pass
+
+        # 세션 플래그/경로 공유
         try:
             if "st" in globals() and st is not None:
                 st.session_state["_PERSIST_DIR"] = p.resolve()
@@ -384,7 +389,7 @@ def _boot_auto_restore_index() -> None:
             pass
     except Exception:
         return
-
+# =================== [10] 부팅 훅: 인덱스 자동 복원 — END =====================
 
 # =================== [11] 부팅 오토플로우 & 자동 복원 모드 ==================
 def _boot_autoflow_hook() -> None:
