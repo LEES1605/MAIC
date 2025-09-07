@@ -1,50 +1,35 @@
-# ======================= [01] imports & constants — START =======================
+# ======================= [01] imports — START =======================
 from __future__ import annotations
 
-import argparse
-import datetime as dt
-import fnmatch
-import json
-import os
 import sys
+import os
+import json
+import argparse
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Sequence, Tuple, Optional
 
-# Py3.11+: tomllib / Py3.10: tomli 로 대체
+# toml 파서: 3.11+는 tomllib, 그 미만은 tomli(없으면 None 처리로 안전 폴백)
 try:
-    import tomllib  # Python 3.11+
-except ModuleNotFoundError:
-    import tomli as tomllib  # type: ignore
+    import tomllib as _toml  # Python 3.11+
+except Exception:
+    try:
+        import tomli as _toml  # type: ignore
+    except Exception:
+        _toml = None  # type: ignore
 
-EXCLUDE_DIRS: Tuple[str, ...] = (
-    ".git",
-    ".github",
-    ".mypy_cache",
-    ".ruff_cache",
-    "__pycache__",
-    ".venv",
-    "venv",
-    "node_modules",
-    ".pytest_cache",
-)
 
-EXCLUDE_FILES: Tuple[str, ...] = (
-    ".DS_Store",
-    "*.zip",
-    "*.bin",
-)
+def _load_toml(path: Path) -> Dict[str, Any]:
+    """TOML 읽기(없으면 {}, 파서 없으면 {})."""
+    try:
+        if not path.exists() or _toml is None:
+            return {}
+        with path.open("rb") as f:
+            return _toml.load(f)
+    except Exception:
+        return {}
+# ======================= [01] imports — END =========================
 
-# 기본 제외 글롭(파일 + 디렉터리 패턴을 fnmatch에 맞게 정규화)
-DEFAULT_EXCLUDES: Tuple[str, ...] = EXCLUDE_FILES + tuple(f"*/{d}/*" for d in EXCLUDE_DIRS)
-
-DEFAULT_MAX_DEPTH = 4
-DEFAULT_STALE_DAYS = 120
-DEFAULT_TOPN_SIZES = 20
-DEFAULT_REPORTS: Tuple[str, ...] = ("stale", "sizes", "orphans")
-
-DOC_ROOTS: Tuple[str, ...] = ("docs", "docs/_gpt")
-# ======================= [01] imports & constants — END =========================
 # ======================= [02] CLI Compat Shim — START ==========================
 def _apply_out_dir_shim(argv: List[str]) -> List[str]:
     """Translate '--out-dir D' to '--out-tree D/TREE.md --out-inv D/INVENTORY.json'."""
