@@ -1,4 +1,3 @@
-# ========================== [01] imports & defaults ==========================
 from __future__ import annotations
 
 import json
@@ -36,10 +35,8 @@ _DEFAULT_KEYS: Tuple[str, ...] = (
     "MAIC_PERSIST_DIR",
 )
 
-# ============================ [02] public helpers =============================
 def get(name: str, default: Optional[str] = None) -> Optional[str]:
     """secrets → env 순서로 조회. dict/list면 JSON 문자열로 반환."""
-    # 1) streamlit secrets
     try:
         if _st is not None and hasattr(_st, "secrets"):
             secrets_obj: Any = getattr(_st, "secrets")
@@ -50,9 +47,7 @@ def get(name: str, default: Optional[str] = None) -> Optional[str]:
                 return json.dumps(val, ensure_ascii=False)
     except Exception:
         pass
-    # 2) env
     return os.getenv(name, default)
-
 
 def promote_env(
     keys: Optional[Sequence[str]] = None,
@@ -62,7 +57,7 @@ def promote_env(
     필요 시 secrets 값을 환경변수로 승격.
 
     - keys: 승격을 시도할 키 목록(없으면 내부 기본셋 사용)
-    - also_env: True면 단순 무시(하위호환용 플래그), 시퀀스면 keys에 추가
+    - also_env: True면 단순 보존(하위호환 플래그), 시퀀스면 keys에 추가
     """
     base_keys = list(keys) if keys is not None else list(_DEFAULT_KEYS)
     if isinstance(also_env, (list, tuple)):
@@ -81,12 +76,9 @@ def promote_env(
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
     os.environ.setdefault("STREAMLIT_SERVER_ENABLE_WEBSOCKET_COMPRESSION", "false")
 
-
-# ============================ [03] GH convenience =============================
 def token() -> str:
     """GitHub 토큰 우선순위."""
     return get("GH_TOKEN") or get("GITHUB_TOKEN") or ""
-
 
 def resolve_owner_repo() -> Tuple[str, str]:
     """GH 소유자/리포 결정."""
