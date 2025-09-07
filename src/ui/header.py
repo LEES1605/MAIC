@@ -16,7 +16,8 @@ except Exception:  # pragma: no cover
     st = None  # 런타임 미사용 시 안전
 
 # SSOT: 인덱스 상태는 core.index_probe만 참조 (dict 아님, dataclass)
-from src.core.index_probe import IndexHealth, probe_index_health
+from src.core.persist import effective_persist_dir
+from src.core.index_probe import probe_index_health, IndexHealth
 
 
 def _from_secrets(name: str, default: Optional[str] = None) -> Optional[str]:
