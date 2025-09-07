@@ -6,6 +6,8 @@ import datetime as dt
 import fnmatch
 import json
 import os
+import sys
+import importlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import (
@@ -19,11 +21,15 @@ from typing import (
     Tuple,
 )
 
-# tomllib: 3.11+ 표준 / 3.10 이하는 tomli 사용
-try:  # pragma: no cover - 환경별 로딩 분기
-    import tomllib  # type: ignore[attr-defined]
-except Exception:  # 3.10
-    import tomli as tomllib  # type: ignore[no-redef]
+# toml 로더: 3.11+ 은 tomllib, 3.10 이하는 tomli(동적 임포트, Any)
+_TOML: Any = None
+try:
+    if sys.version_info >= (3, 11):
+        _TOML = importlib.import_module("tomllib")
+    else:
+        _TOML = importlib.import_module("tomli")
+except Exception:
+    _TOML = None  # TOML 미지원 환경이면 넘어감
 
 # 기본 상수
 DEFAULT_MAX_DEPTH = 3
@@ -71,10 +77,10 @@ class ScanConfig:
 def _load_toml(path: Path) -> Dict[str, Any]:
     """3.11+ tomllib / 3.10 tomli 양쪽 지원. 실패 시 {}."""
     try:
-        if not path.exists() or path.stat().st_size == 0:
+        if _TOML is None or not path.exists() or path.stat().st_size == 0:
             return {}
         with path.open("rb") as f:
-            return tomllib.load(f)  # type: ignore[misc]
+            return _TOML.load(f)  # type: ignore[attr-defined]
     except Exception:
         return {}
 
@@ -214,11 +220,19 @@ def build_tree(files: Sequence[FileInfo], cfg: ScanConfig) -> str:
     for k in list(by_dir.keys()):
         if cfg.sort == "size":
             by_dir[k].sort(
-                key=lambda r: (-next(f.size for f in files if f.path.relative_to(cfg.root) == r), r.as_posix().lower())  # noqa: E501
+                key=lambda r: (
+                    -next(f.size for f in files if f.path.relative_to(cfg.root) == r),
+                    r.as_posix().lower(),
+                )
             )
         elif cfg.sort == "mtime":
             by_dir[k].sort(
-                key=lambda r: (-next(f.mtime for f in files if f.path.relative_to(cfg.root) == r), r.as_posix().lower())  # noqa: E501
+                key=lambda r: (
+                    -next(
+                        f.mtime for f in files if f.path.relative_to(cfg.root) == r
+                    ),
+                    r.as_posix().lower(),
+                )
             )
         else:
             by_dir[k].sort(key=lambda r: r.as_posix().lower())
@@ -227,19 +241,14 @@ def build_tree(files: Sequence[FileInfo], cfg: ScanConfig) -> str:
     lines.append("# Project Tree")
     lines.append("")
     lines.append(f"- root: `{cfg.root}`")
-    lines.append(
-        f"- generated: {dt.datetime.now().isoformat(timespec='seconds')}"
-    )
+    lines.append(f"- generated: {dt.datetime.now().isoformat(timespec='seconds')}")
     lines.append(
         f"- rules: depth={cfg.max_depth}, sort={cfg.sort}, "
         f"stale_days={cfg.stale_days}, excludes={len(cfg.exclude)}"
     )
     lines.append("")
     for d in sorted(by_dir.keys()):
-        if d == ".":
-            title = "/"
-        else:
-            title = f"/{d}"
+        title = "/" if d == "." else f"/{d}"
         lines.append(f"## `{title}`")
         for r in by_dir[d]:
             lines.append(f"- `{r.as_posix()}`")
@@ -291,7 +300,10 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     p.add_argument(
         "--snapshot",
         default=None,
-        help="optional dir to save a copy of outputs (e.g., docs/_gpt/snapshots/yyyymmdd)",
+        help=(
+            "optional dir to save a copy of outputs "
+            "(e.g., docs/_gpt/snapshots/yyyymmdd)"
+        ),
     )
     p.add_argument(
         "--config",
@@ -318,7 +330,9 @@ def _dump_text(path: Path, text: str) -> None:
 
 def _dump_json(path: Path, obj: Any) -> None:
     _ensure_parent(path)
-    path.write_text(json.dumps(obj, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(obj, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
 
 
 # ======================= [06] main ===========================================
