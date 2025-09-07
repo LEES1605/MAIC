@@ -1,5 +1,23 @@
-# =================================== [01] future import ===================================
+# =============================== [01] module header =============================
+"""
+상단 헤더(학생: 상태칩+펄스점만, 관리자: + 로그인/아웃)
+- SSOT: src.core.index_probe.probe_index_health 만 사용
+- secrets 접근: src.core.secret.get 사용
+"""
 from __future__ import annotations
+
+from typing import Dict, Optional, TYPE_CHECKING
+import os
+
+try:
+    import streamlit as st
+except Exception:
+    st = None  # type: ignore[assignment]
+
+from src.core.secret import get as secret_get
+
+if TYPE_CHECKING:
+    from src.core.index_probe import IndexHealth  # noqa: F401
 
 # =================================== [02] module imports ==================================
 from typing import Dict, Optional, TYPE_CHECKING
