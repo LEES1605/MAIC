@@ -1,0 +1,117 @@
+# Repository Tree (generated)
+
+- root: `/home/runner/work/MAIC/MAIC`
+- generated: 2025-09-07T16:08:29
+- rules: depth=4, sort=name, excludes=.DS_Store, *.zip, *.bin, */.git/*, */.github/*, */.mypy_cache/*, */.ruff_cache/*, */__pycache__/*, */.venv/*, */venv/*, */node_modules/*, */.pytest_cache/*, .git, .venv, node_modules, __pycache__, .mypy_cache, .ruff_cache, .pytest_cache, dist, build, .DS_Store, *.zip, *.bin
+
+```text
+📁 .ci
+  📄 patch-guard.yml
+📄 .gitattributes
+📁 .github
+  📁 workflows
+    📄 ci-core-probe.yml
+    📄 ci.yml
+    📄 codeql.yml
+    📄 gen-tree.yml
+    📄 guard-patch.yml
+    📄 nightly.yml
+    📄 PULL_REQUEST_TEMPLATE.MD
+    📄 release.yml
+    📄 sbom.yml
+    📄 sha-helper.yml
+📄 .pre-commit-config.yaml
+📁 .streamlit
+  📄 config.toml
+📄 app.py
+📄 CHANGELOG.md
+📄 DEV_SETUP.md
+📁 docs
+  📁 _archive
+    📄 2025-09-07_PROJECT_STATUS.md
+  📁 _gpt
+    📄 CONVENTIONS.MD
+    📄 MAIC_refactor_report.md
+    📄 MASTERPLAN.md
+    📄 README.MD
+📄 folders_files_map.md
+📄 MAIC PROJECT MASTER PLAN
+📄 mypy.ini
+📄 NIGHTLY_CHECKLIST.md
+📄 prompts.yaml
+📄 pyproject.toml
+📄 README.md
+📄 requirements.txt
+📄 ruff.toml
+📁 scripts
+  📄 check_import_paths.sh
+  📄 gen_tree.py
+  📄 gen_tree.toml
+📁 src
+  📄 __init__.py
+  📁 agents
+    📄 evaluator.py
+    📄 responder.py
+  📁 backup
+    📄 github_release.py
+  📁 common
+    📄 __init__.py
+    📄 utils.py
+  📁 compat
+    📄 __init__.py
+    📄 config_bridge.py
+    📄 llama.py
+  📄 config.py
+  📁 core
+    📄 __init__.py
+    📄 index_probe.py
+    📄 persist.py
+  📁 drive
+    📄 prepared.py
+  📁 features
+    📄 build_flow.py
+    📄 drive_card.py
+    📄 ui_header.py
+  📁 integrations
+    📄 __init__.py
+    📄 gdrive.py
+  📁 llm
+    📄 __init__.py
+    📄 providers.py
+    📄 streaming.py
+  📄 prompt_modes.py
+  📁 prompting
+    📄 __init__.py
+    📄 drive_source.py
+    📄 fallback_source.py
+    📄 github_source.py
+    📄 resolve.py
+    📄 types.py
+  📁 rag
+    📄 __init__.py
+    📄 index_build.py
+    📄 index_status.py
+    📄 label.py
+    📄 quality.py
+    📄 search.py
+  📄 rag_engine.py
+  📁 services
+    📄 index.py
+  📁 state
+    📄 session.py
+  📁 ui
+    📄 header.py
+  📄 ui_admin.py
+  📄 ui_components.py
+  📄 ui_orchestrator.py
+  📄 ui_theme.py
+  📁 vision
+    📄 ocr.py
+📄 TESTING_GUIDE.md
+📁 tests
+  📄 test_core_index_probe.py
+  📄 test_label_rag.py
+  📄 test_rag_search.py
+  📄 test_smoke_app_import.py
+  📄 test_smoke_gdrive_driver.py
+```

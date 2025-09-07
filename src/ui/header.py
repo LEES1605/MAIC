@@ -9,14 +9,13 @@ from __future__ import annotations
 import os
 from typing import Optional
 
-# Streamlit은 Actions 환경에서 미설치일 수 있으므로 예외 안전 임포트
 try:
     import streamlit as st
 except Exception:  # pragma: no cover
-    st = None  # 런타임 미사용 시 안전
+    st = None  # CI/Actions 환경 안전
 
-# SSOT: 인덱스 상태는 core.index_probe만 참조 (dict 아님, dataclass)
-from src.core.index_probe import IndexHealth, probe_index_health
+from src.core.persist import effective_persist_dir
+from src.core.index_probe import probe_index_health, IndexHealth
 
 
 def _from_secrets(name: str, default: Optional[str] = None) -> Optional[str]:
@@ -25,26 +24,33 @@ def _from_secrets(name: str, default: Optional[str] = None) -> Optional[str]:
         if st is not None and hasattr(st, "secrets"):
             val = st.secrets.get(name)
             if val is None:
-                return default
+                return os.getenv(name, default)
             return str(val)
     except Exception:
         pass
-    return default
+    return os.getenv(name, default)
 # ======================= [01] 헤더: 임포트/설정 — END =========================
-
 
 # ======================= [02] 상태 환산 — START ==============================
 def _ready_level() -> str:
-    """인덱스 상태를 HIGH/MID/LOW로 환산 (SSOT: probe_index_health)."""
+    """인덱스 상태를 HIGH/MID/LOW로 환산 (SSOT 기반)."""
     try:
-        info: IndexHealth = probe_index_health()  # 경로 해석은 코어가 처리
-        ok = bool(info.ready_exists and info.chunks_exists and info.chunks_size > 0)
-        json_ok = bool((info.json_sample > 0) and (info.json_malformed == 0))
-        return "HIGH" if ok else ("MID" if (info.chunks_size > 0 and json_ok) else "LOW")
+        info: "IndexHealth" = probe_index_health(effective_persist_dir())
+        size_ok = int(getattr(info, "chunks_size", 0) or 0) > 0
+        json_ok = bool(
+            (getattr(info, "json_sample", 0) > 0)
+            and (getattr(info, "json_malformed", 0) == 0)
+        )
+        ok = bool(
+            getattr(info, "ready_exists", False)
+            and getattr(info, "chunks_exists", False)
+            and size_ok
+            and json_ok
+        )
+        return "HIGH" if ok else ("MID" if (size_ok and json_ok) else "LOW")
     except Exception:
         return "LOW"
 # ======================= [02] 상태 환산 — END ================================
-
 
 # ======================= [03] 렌더 — START ==================================
 def render() -> None:
