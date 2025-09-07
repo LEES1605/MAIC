@@ -837,7 +837,7 @@ def _render_admin_index_panel() -> None:
 
         # 시도1: requests로 진행률 표시 업로드
         try:
-            import requests  # type: ignore
+            import requests
             total = int(zip_path.stat().st_size)
 
             class _Stream:
