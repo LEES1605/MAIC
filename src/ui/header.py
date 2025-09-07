@@ -34,15 +34,28 @@ def _from_secrets(name: str, default: Optional[str] = None) -> Optional[str]:
 
 
 # ======================= [02] 상태 환산 — START ==============================
+# src/ui/header.py 의 _ready_level() 전체를 다음으로 교체
+from src.core.index_probe import probe_index_health, IndexHealth  # 상단 import에 IndexHealth 추가
+
 def _ready_level() -> str:
-    """인덱스 상태를 HIGH/MID/LOW로 환산 (SSOT: probe_index_health)."""
+    """인덱스 상태를 HIGH/MID/LOW로 환산 (SSOT 기반)."""
     try:
-        info: IndexHealth = probe_index_health()  # 경로 해석은 코어가 처리
-        ok = bool(info.ready_exists and info.chunks_exists and info.chunks_size > 0)
-        json_ok = bool((info.json_sample > 0) and (info.json_malformed == 0))
-        return "HIGH" if ok else ("MID" if (info.chunks_size > 0 and json_ok) else "LOW")
+        info: "IndexHealth" = probe_index_health(effective_persist_dir())
+        size_ok = int(getattr(info, "chunks_size", 0) or 0) > 0
+        json_ok = bool(
+            (getattr(info, "json_sample", 0) > 0)
+            and (getattr(info, "json_malformed", 0) == 0)
+        )
+        ok = bool(
+            getattr(info, "ready_exists", False)
+            and getattr(info, "chunks_exists", False)
+            and size_ok
+            and json_ok
+        )
+        return "HIGH" if ok else ("MID" if (size_ok and json_ok) else "LOW")
     except Exception:
         return "LOW"
+
 # ======================= [02] 상태 환산 — END ================================
 
 
