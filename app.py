@@ -270,34 +270,16 @@ def _boot_auto_restore_index() -> None:
             pass
         return
 
-    # ---- 시크릿/ENV 로더 (SSOT) ----
-    def _secret(name: str, default: str = "") -> str:
-        try:
-            if "st" in globals() and st is not None and hasattr(st, "secrets"):
-                v = st.secrets.get(name)
-                if isinstance(v, str) and v:
-                    return v
-        except Exception:
-            pass
-        return os.getenv(name, default)
+    # ---- SSOT 시크릿 로더 사용 ----
+    from src.core.secret import token as _gh_token, resolve_owner_repo as _resolve_owner_repo
 
-    def _resolve_owner_repo() -> tuple[str, str]:
-        # 우선순위: GH_OWNER/GH_REPO → GITHUB_REPO(=owner/repo) → GITHUB_OWNER/GITHUB_REPO_NAME
-        owner = _secret("GH_OWNER") or _secret("GITHUB_OWNER")
-        repo = _secret("GH_REPO") or _secret("GITHUB_REPO_NAME")
-        combo = _secret("GITHUB_REPO")
-        if (not owner or not repo) and combo and "/" in combo:
-            o, r = combo.split("/", 1)
-            owner, repo = o.strip(), r.strip()
-        return owner or "", repo or ""
-
-    token = _secret("GH_TOKEN") or _secret("GITHUB_TOKEN")
+    token = _gh_token() or ""
     owner, repo = _resolve_owner_repo()
     if not (token and owner and repo):
         return  # 복원 불가(시크릿 미설정)
 
     # ---- 최신 릴리스의 index_*.zip 다운로드 ----
-    from urllib import request as _rq, error as _er, parse as _ps
+    from urllib import request as _rq, error as _er
     import zipfile
     import time
     import json as _json
