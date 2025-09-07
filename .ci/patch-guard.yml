@@ -1,0 +1,9 @@
+files:
+  - path: .github/workflows/guard-patch.yml
+    anchors:
+      - "name: CI • Patch Guard"
+      - "[03] Guard Script — START"
+  - path: .github/workflows/gen-tree.yml
+    anchors:
+      - "name: CI • Generate TREE/INVENTORY"
+      - "python scripts/gen_tree.py --out-dir docs/_gpt"
