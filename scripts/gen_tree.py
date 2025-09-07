@@ -278,7 +278,10 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     p.add_argument(
         "--snapshot",
         default=None,
-        help="optional: save a copy of outputs into this directory (e.g., docs/_gpt/snapshots/yyyymmdd)",
+        help=(
+            "optional: save a copy of outputs into this directory "
+            "(e.g., docs/_gpt/snapshots/yyyymmdd)"
+        ),
     )
     p.add_argument(
         "--config",
@@ -286,6 +289,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         help="optional TOML (pyproject.toml) to override settings",
     )
     return p.parse_args(argv)
+# ======================= [06] arg parser — END ===================================
 
 # ======================= [07] main ==============================================
 def main(argv: Optional[Sequence[str]] = None) -> int:
