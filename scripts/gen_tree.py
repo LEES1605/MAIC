@@ -6,14 +6,16 @@ import datetime as dt
 import fnmatch
 import json
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
 
-try:  # Python 3.11+
-    import tomllib
-except Exception:  # pragma: no cover
-    tomllib = None  # type: ignore[assignment]
+# Py3.11+: tomllib / Py3.10: tomli 로 대체
+try:
+    import tomllib  # Python 3.11+
+except ModuleNotFoundError:
+    import tomli as tomllib  # type: ignore
 
 EXCLUDE_DIRS: Tuple[str, ...] = (
     ".git",
@@ -42,8 +44,31 @@ DEFAULT_TOPN_SIZES = 20
 DEFAULT_REPORTS: Tuple[str, ...] = ("stale", "sizes", "orphans")
 
 DOC_ROOTS: Tuple[str, ...] = ("docs", "docs/_gpt")
-
 # ======================= [01] imports & constants — END =========================
+# ======================= [02] CLI Compat Shim — START ==========================
+def _apply_out_dir_shim(argv: List[str]) -> List[str]:
+    """Translate '--out-dir D' to '--out-tree D/TREE.md --out-inv D/INVENTORY.json'."""
+    if "--out-dir" not in argv:
+        return argv
+    try:
+        i = argv.index("--out-dir")
+        out_dir = argv[i + 1]
+    except Exception:
+        # 인자가 비어있으면 원래대로 두고 argparse가 에러를 내게 둔다
+        return argv
+    # '--out-dir D' 두 토큰 제거
+    newv = argv[:i] + argv[i + 2 :]
+    base = Path(out_dir)
+    newv += ["--out-tree", str(base / "TREE.md")]
+    newv += ["--out-inv", str(base / "INVENTORY.json")]
+    return newv
+
+# argparse가 실행되기 전에 argv를 변환
+try:
+    sys.argv = _apply_out_dir_shim(list(sys.argv))
+except Exception:
+    pass
+# ======================= [02] CLI Compat Shim — END ============================
 
 # ======================= [02] data models — START ===============================
 @dataclass
@@ -77,66 +102,78 @@ class ScanConfig:
 
 # ======================= [02] data models — END =================================
 
-# ======================= [03] utilities — START =================================
+# ======================= [03A] TOML loader — START ===================
 def _load_toml(path: Path) -> Dict:
-    """Load TOML using stdlib when available. Return {} if missing/invalid."""
-    if not path.exists() or path.stat().st_size == 0:
-        return {}
-    if tomllib is None:
-        return {}
+    """Load TOML on both 3.11+(tomllib) and 3.10(tomli). Return {} on failure."""
     try:
+        if not path.exists() or path.stat().st_size == 0:
+            return {}
         with path.open("rb") as f:
             return tomllib.load(f)
     except Exception:
         return {}
-
-
-def _norm_patterns(pats: Iterable[str]) -> Tuple[str, ...]:
+# ======================= [03A] TOML loader — END =====================
+# ======================= [03B] utils & walkers — START =========================
+def _norm_patterns(patts: Iterable[str]) -> Tuple[str, ...]:
+    """fnmatch에 맞도록 경로 구분자를 '/'로 통일."""
     out: List[str] = []
-    for p in pats:
-        p = str(p).strip()
-        if not p:
-            continue
-        out.append(p)
+    for p in patts:
+        s = str(p).replace("\\", "/").strip()
+        if s:
+            out.append(s)
     return tuple(out)
 
+def _depth_of(rel: Path) -> int:
+    """root 기준 상대경로의 디렉터리 깊이(루트=0)."""
+    return max(len(rel.parts) - 1, 0)
 
-def _is_excluded(rel: Path, patterns: Sequence[str]) -> bool:
-    s = str(rel)
+def _match_any(rel_posix: str, patterns: Sequence[str]) -> bool:
+    """상대 경로(문자열)가 제외 패턴과 매칭되는지."""
+    # 파일 경로와 디렉터리 경로(트레일링 슬래시) 모두 시험
+    s_file = rel_posix
+    s_dir = rel_posix.rstrip("/") + "/"
     for pat in patterns:
-        if fnmatch.fnmatch(s, pat):
+        if fnmatch.fnmatch(s_file, pat) or fnmatch.fnmatch(s_dir, pat):
             return True
     return False
 
+def _iter_files(root: Path, excludes: Sequence[str]) -> Iterator[FileInfo]:
+    """exclude 패턴을 적용해 파일을 순회하며 FileInfo를 생성."""
+    root = root.resolve()
+    exc = _norm_patterns(excludes)
+    for dirpath, dirnames, filenames in os.walk(root):
+        # 디렉터리 프루닝
+        rel_dir = Path(dirpath).resolve().relative_to(root)
+        pruned: List[str] = []
+        for d in list(dirnames):
+            d_rel = (rel_dir / d).as_posix()
+            if _match_any(d_rel, exc):
+                pruned.append(d)
+        if pruned:
+            dirnames[:] = [d for d in dirnames if d not in pruned]
 
-def _depth_of(rel: Path) -> int:
-    """Relative path depth helper (e.g., 'a/b/c.txt' -> 3 parts)."""
-    return len(rel.parts)
+        # 파일 처리
+        for fn in filenames:
+            p = Path(dirpath) / fn
+            rel = p.resolve().relative_to(root).as_posix()
+            if _match_any(rel, exc):
+                continue
+            try:
+                st = p.stat()
+                yield FileInfo(path=p, size=int(st.st_size), mtime=float(st.st_mtime))
+            except Exception:
+                # 접근 불가/사라진 파일은 건너뜀
+                continue
 
-
-def _iter_files(root: Path, exclude_globs: Sequence[str]) -> Iterator["FileInfo"]:
-    """Iterate files under root excluding patterns."""
-    for p in root.rglob("*"):
-        if not p.is_file():
-            continue
-        rel = p.relative_to(root)
-        if _is_excluded(rel, exclude_globs):
-            continue
-        try:
-            st = p.stat()
-            yield FileInfo(path=p, size=int(st.st_size), mtime=float(st.st_mtime))
-        except FileNotFoundError:
-            # raced file remove; ignore
-            continue
-
-
-def _sort_key(fi: "FileInfo", mode: str) -> Tuple:
-    if mode == "size":
-        return (-fi.size, str(fi.path))
-    if mode == "mtime":
-        return (-fi.mtime, str(fi.path))
-    return (str(fi.path).lower(),)
-# ======================= [03] utilities — END ===================================
+def _sort_key(fi: FileInfo, how: str):
+    """정렬 키 생성."""
+    name_key = str(fi.path).lower()
+    if how == "size":
+        return (-fi.size, name_key)
+    if how == "mtime":
+        return (-fi.mtime, name_key)
+    return (name_key,)
+# ======================= [03B] utils & walkers — END ===========================
 
 # ======================= [04] inventory & tree builders — START =================
 def build_inventory(files: Sequence[FileInfo], cfg: ScanConfig) -> Dict:
