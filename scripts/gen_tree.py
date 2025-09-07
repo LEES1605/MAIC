@@ -11,20 +11,23 @@ from pathlib import Path
 from typing import Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
 
 try:  # Python 3.11+
-    import tomllib  # type: ignore[attr-defined]
+    import tomllib
 except Exception:  # pragma: no cover
     tomllib = None  # type: ignore[assignment]
 
-DEFAULT_EXCLUDES: Tuple[str, ...] = (
+EXCLUDE_DIRS: Tuple[str, ...] = (
     ".git",
-    ".venv",
-    "node_modules",
-    "__pycache__",
+    ".github",
     ".mypy_cache",
     ".ruff_cache",
+    "__pycache__",
+    ".venv",
+    "venv",
+    "node_modules",
     ".pytest_cache",
-    "dist",
-    "build",
+)
+
+EXCLUDE_FILES: Tuple[str, ...] = (
     ".DS_Store",
     "*.zip",
     "*.bin",
@@ -38,7 +41,6 @@ DEFAULT_REPORTS: Tuple[str, ...] = ("stale", "sizes", "orphans")
 DOC_ROOTS: Tuple[str, ...] = ("docs", "docs/_gpt")
 
 # ======================= [01] imports & constants — END =========================
-
 
 # ======================= [02] data models — START ===============================
 @dataclass
@@ -72,7 +74,6 @@ class ScanConfig:
 
 # ======================= [02] data models — END =================================
 
-
 # ======================= [03] utilities — START =================================
 def _load_toml(path: Path) -> Dict:
     """Load TOML using stdlib when available. Return {} if missing/invalid."""
@@ -82,7 +83,7 @@ def _load_toml(path: Path) -> Dict:
         return {}
     try:
         with path.open("rb") as f:
-            return tomllib.load(f)  # type: ignore[misc]
+            return tomllib.load(f)
     except Exception:
         return {}
 
@@ -98,44 +99,34 @@ def _norm_patterns(pats: Iterable[str]) -> Tuple[str, ...]:
 
 
 def _is_excluded(rel: Path, patterns: Sequence[str]) -> bool:
-    """Check if rel path should be excluded by any pattern."""
-    s = str(rel).replace("\\", "/")
-    parts = s.split("/")
+    s = str(rel)
     for pat in patterns:
-        if fnmatch.fnmatch(s, pat) or any(fnmatch.fnmatch(x, pat) for x in parts):
+        if fnmatch.fnmatch(s, pat):
             return True
     return False
 
 
-def _depth_of(rel: Path) -> int:
-    return 0 if str(rel) == "." else len(rel.parts)
+@dataclass(frozen=True)
+class FileInfo:
+    path: Path
+    size: int
+    mtime: float
 
 
-def _iter_files(root: Path, cfg: ScanConfig) -> Iterator[FileInfo]:
-    """Yield FileInfo for all files under root with excludes and depth."""
-    base = root.resolve()
-    for dirpath, dirnames, filenames in os.walk(base):
-        cur = Path(dirpath)
-        rel_dir = cur.relative_to(base)
-        # prune directories
-        pruned: List[str] = []
-        for d in list(dirnames):
-            rel = (rel_dir / d)
-            if _is_excluded(rel, cfg.excludes) or _depth_of(rel) > cfg.max_depth:
-                pruned.append(d)
-                dirnames.remove(d)
-        # files
-        for fn in filenames:
-            rel = rel_dir / fn
-            if _is_excluded(rel, cfg.excludes):
-                continue
-            try:
-                p = cur / fn
-                st = p.stat()
-                yield FileInfo(path=p, size=int(st.st_size), mtime=float(st.st_mtime))
-            except FileNotFoundError:
-                # raced file remove; ignore
-                continue
+def _iter_files(root: Path, exclude_globs: Sequence[str]) -> Iterator[FileInfo]:
+    """Iterate files under root excluding patterns."""
+    for p in root.rglob("*"):
+        if not p.is_file():
+            continue
+        rel = p.relative_to(root)
+        if _is_excluded(rel, exclude_globs):
+            continue
+        try:
+            st = p.stat()
+            yield FileInfo(path=p, size=int(st.st_size), mtime=float(st.st_mtime))
+        except FileNotFoundError:
+            # raced file remove; ignore
+            continue
 
 
 def _sort_key(fi: FileInfo, mode: str) -> Tuple:
@@ -145,9 +136,7 @@ def _sort_key(fi: FileInfo, mode: str) -> Tuple:
         return (-fi.mtime, str(fi.path))
     return (str(fi.path).lower(),)
 
-
 # ======================= [03] utilities — END ===================================
-
 
 # ======================= [04] inventory & tree builders — START =================
 def build_inventory(files: Sequence[FileInfo], cfg: ScanConfig) -> Dict:
