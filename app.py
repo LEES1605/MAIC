@@ -480,8 +480,6 @@ def _auto_start_once() -> None:
         _safe_rerun("auto_start", ttl=1)
 # =================== [11] 부팅 오토플로우 & 자동 복원 모드 — END ==================
 
-
-
 # =================== [12] DIAG: Orchestrator Header ======================
 def _render_index_orchestrator_header() -> None:
     """상단 진단 헤더(미니멀): Persist 경로, 상태칩만 간결 표기."""
@@ -491,9 +489,11 @@ def _render_index_orchestrator_header() -> None:
     st.markdown("### 🧪 인덱스 오케스트레이터")
 
     def _persist_dir_safe() -> Path:
+        """SSOT persist 경로. 코어 모듈 우선, 실패시 기본값."""
         try:
-            p = _persist_dir()
-            return Path(str(p)).expanduser()
+            # lazy import로 모듈 의존을 늦춰 E402 회피 + Actions/로컬 모두 안전
+            from src.core.persist import effective_persist_dir as _epd  # type: ignore
+            return Path(str(_epd())).expanduser()
         except Exception:
             return Path.home() / ".maic" / "persist"
 
@@ -506,7 +506,7 @@ def _render_index_orchestrator_header() -> None:
     # 상태 계산
     status_text = "MISSING"
     try:
-        from src.rag.index_status import get_index_summary
+        from src.rag.index_status import get_index_summary  # lazy
         s = get_index_summary(persist)
         status_text = "READY" if getattr(s, "ready", False) else "MISSING"
     except Exception:
@@ -523,10 +523,6 @@ def _render_index_orchestrator_header() -> None:
 
     st.markdown("<span id='idx-admin-panel'></span>", unsafe_allow_html=True)
 # =================== [12] DIAG: Orchestrator Header — END ======================
-
-
-
-
 
 # =================== [13] ADMIN: Index Panel (prepared 전용) ==============
 def _render_admin_index_panel() -> None:
