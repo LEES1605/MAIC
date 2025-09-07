@@ -1,66 +1,61 @@
-# =============================== [01] module header =============================
-"""
-상단 헤더(학생: 상태칩+펄스점만, 관리자: + 로그인/아웃)
-- SSOT: src.core.index_probe.probe_index_health 만 사용
-- ruff E501 회피: CSS 속성 개행
-- mypy 친화: type: ignore 제거, 방어적 타입 변환
-"""
+# =================================== [01] future import ===================================
 from __future__ import annotations
 
-from typing import Dict, Optional
+# =================================== [02] module imports ==================================
+from typing import Dict, Optional, TYPE_CHECKING
 import os
 
 try:
-    import streamlit as st  # Streamlit 아닐 수 있어요.
+    import streamlit as st
 except Exception:
-    st = None  # type: ignore[assignment]
+    st = None  # Streamlit이 없는 환경(CI 등) 대비
+
+if TYPE_CHECKING:
+    # 런타임 의존은 함수 내부에서 lazy import 하므로, 타입만 체크 시 사용
+    from src.core.index_probe import IndexHealth  # noqa: F401
 
 
-# =============================== [02] ready calc ================================
+# =================================== [03] SSOT helpers ====================================
 def _ready_level() -> str:
-    """인덱스 상태를 HIGH/MID/LOW로 환산(코어 SSOT 기반, 안전 폴백)."""
-    size_ok = False
-    json_ok = False
-    ready_flag = False
+    """인덱스 상태를 HIGH/MID/LOW로 환산 (SSOT 기반)."""
     try:
-        # 코어 SSOT 호출(인자 유연: persist 생략 또는 None)
-        from src.core.index_probe import probe_index_health  # lazy import
+        # SSOT: 코어의 probe 호출(경로 결정을 코어에 위임)
+        from src.core.index_probe import probe_index_health
 
-        try:
-            info = probe_index_health()  # type: ignore[call-arg]
-        except TypeError:
-            info = probe_index_health(persist=None)  # type: ignore[call-arg]
-
-        # 방어적 접근(없으면 0/False)
-        chunks_size = int(getattr(info, "chunks_size", 0) or 0)
-        ready_flag = bool(getattr(info, "ready_exists", False))
-        json_sample = int(getattr(info, "json_sample", 0) or 0)
-        json_malformed = int(getattr(info, "json_malformed", 0) or 0)
-
-        size_ok = chunks_size > 0
-        json_ok = (json_sample > 0) and (json_malformed == 0)
-        ok = bool(ready_flag and size_ok and json_ok)
+        info: "IndexHealth" = probe_index_health()  # persist 미지정: 코어가 해석
+        size_ok = int(getattr(info, "chunks_size", 0) or 0) > 0
+        json_ok = bool(
+            (int(getattr(info, "json_sample", 0) or 0) > 0)
+            and int(getattr(info, "json_malformed", 0) or 0) == 0
+        )
+        ok = bool(
+            getattr(info, "ready_exists", False)
+            and getattr(info, "chunks_exists", False)
+            and size_ok
+            and json_ok
+        )
         return "HIGH" if ok else ("MID" if (size_ok and json_ok) else "LOW")
     except Exception:
-        # 폴백: SSOT 실패 시 보수적 판단
-        return "MID" if (size_ok or ready_flag or json_ok) else "LOW"
+        # 코어 호출 실패 시 보수적으로 LOW
+        return "LOW"
 
 
 def _from_secrets(name: str, default: Optional[str] = None) -> Optional[str]:
-    """Streamlit secrets 안전 접근 → 없으면 env."""
+    """Streamlit secrets 안전 접근."""
     try:
-        if st is not None and hasattr(st, "secrets"):
-            v = st.secrets.get(name)  # type: ignore[attr-defined]
-            if isinstance(v, str):
-                return v
-        return os.getenv(name, default)
+        if st is None or not hasattr(st, "secrets"):
+            return os.getenv(name, default)
+        val = st.secrets.get(name, None)
+        if val is None:
+            return os.getenv(name, default)
+        return str(val)
     except Exception:
         return os.getenv(name, default)
 
 
-# =============================== [03] render ===================================
+# =================================== [04] UI: header render ================================
 def render() -> None:
-    """헤더 렌더링(학생: 상태칩+펄스만, 관리자: + 로그인/아웃 버튼)."""
+    """상단 헤더(학생: 상태칩+펄스점, 관리자: + 로그인/아웃)."""
     if st is None:
         return
 
@@ -71,36 +66,31 @@ def render() -> None:
     level = _ready_level()
     label_map = {"HIGH": "준비완료", "MID": "준비중", "LOW": "문제발생"}
     dot_map = {"HIGH": "rd-high", "MID": "rd-mid", "LOW": "rd-low"}
-    label = label_map.get(level, "준비중")
-    dot_cls = dot_map.get(level, "rd-mid")
+    label = label_map.get(level, "문제발생")
+    dot_cls = dot_map.get(level, "rd-low")
 
-    # CSS (길이 제한 회피: 속성 줄바꿈)
+    # CSS (E501 회피 위해 속성 단위 줄바꿈)
     st.markdown(
         """
         <style>
           .brand-wrap{ display:flex; align-items:center; gap:10px; }
-          .brand-title{ font-weight:900; letter-spacing:.2px;
-                        font-size:250%; line-height:1.1; }
-          .ready-chip{ display:inline-flex; align-items:center; gap:6px;
-                       padding:2px 10px; border-radius:12px;
-                       background:#f4f6fb; border:1px solid #e5e7eb;
-                       font-weight:800; color:#111827; font-size:18px; }
-          .rd{ width:8px; height:8px; border-radius:50%;
-               display:inline-block; animation:pulseDot 1.8s infinite; }
-          .rd-high{ background:#16a34a;
-                    box-shadow:0 0 0 0 rgba(22,163,74,.55); }
-          .rd-mid{  background:#f59e0b;
-                    box-shadow:0 0 0 0 rgba(245,158,11,.55); }
-          .rd-low{  background:#ef4444;
-                    box-shadow:0 0 0 0 rgba(239,68,68,.55); }
+          .brand-title{ font-weight:900; letter-spacing:.2px; font-size:250%; line-height:1.1; }
+          .ready-chip{
+            display:inline-flex; align-items:center; gap:6px;
+            padding:2px 10px; border-radius:12px;
+            background:#f4f6fb; border:1px solid #e5e7eb;
+            font-weight:800; color:#111827; font-size:18px;
+          }
+          .rd{ width:8px; height:8px; border-radius:50%; display:inline-block; animation:pulseDot 1.8s infinite; }
+          .rd-high{ background:#16a34a; box-shadow:0 0 0 0 rgba(22,163,74,.55); }
+          .rd-mid{ background:#f59e0b; box-shadow:0 0 0 0 rgba(245,158,11,.55); }
+          .rd-low{ background:#ef4444; box-shadow:0 0 0 0 rgba(239,68,68,.55); }
           @keyframes pulseDot{
             0%{ box-shadow:0 0 0 0 rgba(0,0,0,0.18); }
             70%{ box-shadow:0 0 0 16px rgba(0,0,0,0); }
             100%{ box-shadow:0 0 0 0 rgba(0,0,0,0); }
           }
-          .admin-login-narrow [data-testid="stTextInput"] input{
-            height:42px; border-radius:10px;
-          }
+          .admin-login-narrow [data-testid="stTextInput"] input{ height:42px; border-radius:10px; }
           .admin-login-narrow .stButton>button{ width:100%; height:42px; }
         </style>
         """,
@@ -110,17 +100,13 @@ def render() -> None:
     # (빈칸) | [라벨+점 + 제목] | [관리자 버튼]
     _, c2, c3 = st.columns([1, 6, 2], gap="small")
     with c2:
-        chip_html = (
-            f'<span class="ready-chip">{label}'
-            f'<span class="rd {dot_cls}"></span></span>'
-        )
-        # ⛳️ 여기 문자열 결합만 수정: 'ff' → 'f'
-        st.markdown(
+        chip_html = f'<span class="ready-chip">{label}<span class="rd {dot_cls}"></span></span>'
+        title_html = (
             '<div class="brand-wrap">'
             f'{chip_html}<span class="brand-title">LEES AI Teacher</span>'
-            "</div>",
-            unsafe_allow_html=True,
+            "</div>"
         )
+        st.markdown(title_html, unsafe_allow_html=True)
 
     with c3:
         if ss.get("admin_mode"):
@@ -157,12 +143,8 @@ def render() -> None:
             left, mid, right = st.columns([2, 1, 2])
             with mid:
                 with st.form("admin_login_form", clear_on_submit=False):
-                    st.markdown(
-                        '<div class="admin-login-narrow">', unsafe_allow_html=True
-                    )
-                    pw = st.text_input(
-                        "비밀번호", type="password", key="admin_pw_input"
-                    )
+                    st.markdown('<div class="admin-login-narrow">', unsafe_allow_html=True)
+                    pw = st.text_input("비밀번호", type="password", key="admin_pw_input")
                     col_a, col_b = st.columns([1, 1])
                     submit = col_a.form_submit_button("로그인")
                     cancel = col_b.form_submit_button("닫기")
@@ -185,5 +167,3 @@ def render() -> None:
                         st.rerun()
                     else:
                         st.error("비밀번호가 올바르지 않습니다.")
-# =============================== [03] render — END ==============================
-
