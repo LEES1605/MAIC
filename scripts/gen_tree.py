@@ -275,13 +275,11 @@ def build_tree_md(files: Sequence[FileInfo], cfg: ScanConfig) -> str:
     )
     lines.append("")
     lines.append("```text")
-    base_prefix = ""
     for rel in items:
         if _depth_of(rel) > max_depth:
             continue
         parts = rel.parts
         # print parent directories and file
-        prefix = ""
         for i, part in enumerate(parts[:-1]):
             indent = "  " * i
             # Only print directories when first time encountered
