@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 # =============================== [02] module imports ==============================
+from __future__ import annotations
+
 import os
 import json
 import time
@@ -11,11 +13,24 @@ import importlib.util
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+# Streamlit은 없는 환경도 있으므로 방어적 로드
 try:
-    import streamlit as st  # Streamlit 환경이 아닐 수도 있으므로 try
+    import streamlit as st
 except Exception:
-    st = None
+    st = None  # type: ignore
 
+# ⛳️ SSOT 코어 임포트는 최상단에 정리 (E402 예방)
+from src.core.secret import promote_env as _promote_env
+from src.core.secret import get as _secret_get
+from src.core.persist import (
+    effective_persist_dir,
+    share_persist_dir_to_session,
+)
+from src.core.index_probe import (
+    get_brain_status as core_status,
+    is_brain_ready as core_is_ready,
+    mark_ready as core_mark_ready,
+)
 
 # =========================== [03] CORE: Persist Resolver ==========================
 def _effective_persist_dir() -> Path:
@@ -52,27 +67,63 @@ def _effective_persist_dir() -> Path:
 
 
 # ================== [04] secrets → env 승격 & 페이지 설정(안정 옵션) =================
-from src.core.secret import promote_env as _promote_env
+def _from_secrets(name: str, default: Optional[str] = None) -> Optional[str]:
+    """Streamlit secrets 우선, 없으면 os.environ. dict/list는 JSON 문자열화."""
+    try:
+        if st is None or not hasattr(st, "secrets"):
+            return os.getenv(name, default)
+        val = st.secrets.get(name, None)
+        if val is None:
+            return os.getenv(name, default)
+        if isinstance(val, str):
+            return val
+        return json.dumps(val, ensure_ascii=False)
+    except Exception:
+        return os.getenv(name, default)
+
 
 def _bootstrap_env() -> None:
     """필요 시 secrets 값을 환경변수로 승격 + 서버 안정화 옵션."""
-    keys = [
-        "OPENAI_API_KEY", "OPENAI_MODEL",
-        "GEMINI_API_KEY", "GEMINI_MODEL",
-        "GH_TOKEN", "GH_REPO", "GH_BRANCH", "GH_PROMPTS_PATH",
-        "GDRIVE_PREPARED_FOLDER_ID", "GDRIVE_BACKUP_FOLDER_ID",
-        "APP_MODE", "AUTO_START_MODE", "LOCK_MODE_FOR_STUDENTS",
-        "APP_ADMIN_PASSWORD", "DISABLE_BG", "MAIC_PERSIST_DIR",
-        "GITHUB_TOKEN", "GITHUB_OWNER", "GITHUB_REPO_NAME", "GITHUB_REPO",
-        "GH_OWNER", "GH_REPO",
-    ]
-    _promote_env(keys)
+    # ⛳️ 코어 유틸을 사용해 공통 키 승격
+    try:
+        _promote_env(
+            keys=[
+                "OPENAI_API_KEY",
+                "OPENAI_MODEL",
+                "GEMINI_API_KEY",
+                "GEMINI_MODEL",
+                "GH_TOKEN",
+                "GH_REPO",
+                "GH_BRANCH",
+                "GH_PROMPTS_PATH",
+                "GDRIVE_PREPARED_FOLDER_ID",
+                "GDRIVE_BACKUP_FOLDER_ID",
+                "APP_MODE",
+                "AUTO_START_MODE",
+                "LOCK_MODE_FOR_STUDENTS",
+                "APP_ADMIN_PASSWORD",
+                "DISABLE_BG",
+                "MAIC_PERSIST_DIR",
+                "GITHUB_TOKEN",
+                "GITHUB_OWNER",
+                "GITHUB_REPO_NAME",
+                "GITHUB_REPO",
+                "GH_OWNER",
+                "GH_REPO",
+            ],
+            also_env=True,  # 이미 환경변수에 있으면 보존
+        )
+    except Exception:
+        # 실패해도 앱 동작에는 영향 없도록 완화
+        pass
 
-    # Streamlit 안정화(기본값)
+    # Streamlit 안정화
     os.environ.setdefault("STREAMLIT_SERVER_FILE_WATCHER_TYPE", "none")
     os.environ.setdefault("STREAMLIT_RUN_ON_SAVE", "false")
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
-    os.environ.setdefault("STREAMLIT_SERVER_ENABLE_WEBSOCKET_COMPRESSION", "false")
+    os.environ.setdefault(
+        "STREAMLIT_SERVER_ENABLE_WEBSOCKET_COMPRESSION", "false"
+    )
 
 
 _bootstrap_env()
@@ -82,7 +133,7 @@ if st:
         st.set_page_config(page_title="LEES AI Teacher", layout="wide")
     except Exception:
         pass
-# ================== [04] secrets → env 승격 & 페이지 설정 — END ======================
+
 
 
 # ======================= [05] 경로/상태 & 에러 로거 — START =======================
