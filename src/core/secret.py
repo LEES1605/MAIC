@@ -1,64 +1,50 @@
-# ============================== [01] module header ==============================
-"""
-core.secret — Streamlit secrets ↔ env 접근 SSOT
-
-- get(name, default): st.secrets 우선, 없으면 os.environ, 문자열화하여 반환
-- promote_env(keys): 주어진 키들에 대해 secrets→env 승격 (env가 비어있을 때만)
-- token(): GH_TOKEN 또는 GITHUB_TOKEN 반환
-- resolve_owner_repo(): (owner, repo)를 여러 소스에서 안전하게 도출
-"""
+# =============================== [01] imports ===============================
 from __future__ import annotations
 
-from typing import Iterable, Optional, Tuple
 import os
+import json
+from typing import Optional, Sequence, Any
 
 try:
-    import streamlit as st  # pragma: no cover
-except Exception:  # pragma: no cover
-    st = None  # type: ignore[assignment]
+    import streamlit as st  # Streamlit 아닐 수도 있음
+except Exception:
+    st = None  # Streamlit 미사용 환경 허용
 
-# ============================== [02] api ========================================
-def get(name: str, default: Optional[str] = None) -> Optional[str]:
-    """st.secrets → os.environ 순으로 조회하고 문자열로 반환."""
-    try:
-        if st is not None and hasattr(st, "secrets"):
-            val = st.secrets.get(name)  # type: ignore[attr-defined]
-            if val is not None:
-                return str(val)
-    except Exception:
-        pass
-    return os.getenv(name, default)
-
-
-def promote_env(keys: Iterable[str]) -> None:
-    """지정된 키에 대해 secrets 값을 env로 승격(env가 비어있을 때만)."""
-    for k in keys:
+# =============================== [02] helpers ===============================
+def _from_secrets(name: str) -> Any | None:
+    """st.secrets 있으면 먼저 읽고, 없거나 키 없으면 None."""
+    if st is not None and hasattr(st, "secrets"):
         try:
-            if not os.getenv(k):
-                v = get(k)
-                if v is not None:
-                    os.environ[k] = str(v)
+            # st.secrets는 Mapping 유사 객체라 .get 사용 가능
+            return st.secrets.get(name)
         except Exception:
-            # best-effort
-            pass
+            return None
+    return None
 
+# =============================== [03] API: get ==============================
+def get(name: str, default: Optional[str] = None) -> Optional[str]:
+    """secrets → env 순으로 읽어서 문자열로 반환. dict/list는 JSON 직렬화."""
+    val = _from_secrets(name)
+    if val is None:
+        return os.getenv(name, default)
+    if isinstance(val, str):
+        return val
+    # dict/list 등은 JSON 문자열로 고정
+    return json.dumps(val, ensure_ascii=False)
 
-def token() -> Optional[str]:
-    """GitHub 토큰(GH_TOKEN 또는 GITHUB_TOKEN)."""
-    return get("GH_TOKEN") or get("GITHUB_TOKEN")
-
-
-def resolve_owner_repo() -> Tuple[str, str]:
-    """(owner, repo) 결정: GH_OWNER/GH_REPO → GITHUB_REPO → GITHUB_OWNER/GITHUB_REPO_NAME."""
-    owner = get("GH_OWNER") or get("GITHUB_OWNER") or ""
-    repo = get("GH_REPO") or get("GITHUB_REPO_NAME") or ""
-
-    combo = get("GITHUB_REPO")
-    if (not owner or not repo) and combo and "/" in combo:
-        o, r = combo.split("/", 1)
-        owner, repo = o.strip(), r.strip()
-
-    return owner, repo
-
-__all__ = ["get", "promote_env", "token", "resolve_owner_repo"]
-# ============================== [EOF] ===========================================
+# =========================== [04] API: promote_env ==========================
+def promote_env(names: Sequence[str], *, also_env: bool = True) -> None:
+    """
+    secrets 값을 os.environ으로 '승격'.
+    - also_env=True: 이미 env에 값이 있어도 덮어쓰지 않음(기본 동작 유지)
+    - also_env=False: env에 비어있을 때만 채움
+    """
+    for k in names:
+        if not k:
+            continue
+        # 이미 환경변수가 있다면 그대로 둠
+        if also_env and os.getenv(k):
+            continue
+        val = get(k, None)
+        if val is not None and not os.getenv(k):
+            os.environ[k] = str(val)
