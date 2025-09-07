@@ -1,97 +1,62 @@
-# ============================== [01] gen-tree.yml — START ===============================
-name: CI • Docs Tree & Inventory
-
+# ========================== [01] 워크플로 메타 — START ==========================
+name: CI • Generate TREE/INVENTORY
+# PR에서만 실행 (main에 push될 때는 동작하지 않음)
 on:
-  push:
-    branches: ['**']
   pull_request:
-
-# 자동 푸시를 위해 필요
+    paths:
+      - "**/*.py"
+      - "scripts/gen_tree.py"
+      - ".github/workflows/gen-tree.yml"
 permissions:
-  contents: write
+  contents: write   # same-repo PR에서 생성물 자동 커밋
+# ========================== [01] 워크플로 메타 — END ============================
 
-concurrency:
-  group: docs-tree-${{ github.ref }}
-  cancel-in-progress: false
-
+# ========================== [02] TREE/INV 생성 — START =========================
 jobs:
-  build-docs-tree:
-    name: Build & Auto-commit TREE/INVENTORY
+  gen-tree:
+    if: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
-    env:
-      PYTHONPATH: .
     steps:
-      - name: 🧰 Checkout
+      - name: 🧰 Checkout (full history)
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: 🐍 Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
-      - name: 📁 Ensure target folder exists
+      - name: 📦 Install deps
         run: |
-          set -e
+          python -m pip install --upgrade pip
+
+      - name: 🏗️ Generate files
+        run: |
+          set -euo pipefail
           mkdir -p docs/_gpt
+          python scripts/gen_tree.py --out-dir docs/_gpt
 
-      - name: 🛠️ Generate TREE/INVENTORY
-        run: |
-          set -e
-          # 기본 제너레이터: scripts/gen_tree.py 가 리포 트리를 스캔해 산출물을 만듭니다.
-          # (리포의 스크립트가 파일 경로를 내부에서 관리한다면, 단순 호출만으로 충분합니다.)
-          python scripts/gen_tree.py
-          # 혹시 스크립트가 경로를 다르게 쓰는 리포라면, 아래와 같이 보강 생성(무해)합니다.
-          if [ ! -f docs/_gpt/TREE.md ]; then
-            echo "# Repository Tree" > docs/_gpt/TREE.md
-            echo "" >> docs/_gpt/TREE.md
-            echo '```text' >> docs/_gpt/TREE.md
-            git ls-files | sed 's/^/ - /' >> docs/_gpt/TREE.md
-            echo '```' >> docs/_gpt/TREE.md
-          fi
-          if [ ! -f docs/_gpt/INVENTORY.json ]; then
-            python - <<'PYCODE'
-import json, os
-files = [{"path": p} for p in os.popen("git ls-files").read().splitlines()]
-with open("docs/_gpt/INVENTORY.json","w",encoding="utf-8") as f:
-    json.dump({"files": files}, f, ensure_ascii=False, indent=2)
-PYCODE
-          fi
-
-      - name: 📝 Auto-commit generated Tree/Inventory
-        # 포크 PR은 푸시 권한이 없어 실패하므로 스킵
-        if: |
-          github.event_name == 'push' || (
-            github.event_name == 'pull_request' &&
-            github.event.pull_request.head.repo.full_name == github.repository
-          )
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: ✅ Commit updated files (same-repo PR만)
+        if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
         run: |
           set -e
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          # 변경된 파일만 스테이징
-          git add docs/_gpt/TREE.md docs/_gpt/INVENTORY.json || true
-
-          # 커밋 필요 없으면 조용히 통과
-          if git diff --cached --quiet; then
-            echo "No changes to commit."
-            exit 0
-          fi
-
-          git commit -m "docs: auto-update TREE/INVENTORY [skip ci]"
-          git push
-
-      - name: 🔍 Verify clean working tree
-        # 포크 PR에서는 자동 커밋을 하지 않으니, 검증은 정보 출력만 하고 실패하지 않게 처리
-        run: |
-          set -e
-          if ! git diff --quiet; then
-            echo "::warning::Working tree not clean (this can happen on forked PRs without push perms)."
-            git status --porcelain || true
-            git diff --name-only || true
+          # 둘 중 일부만 생성될 수도 있으므로 존재하는 것만 add
+          test -f docs/_gpt/TREE.md && git add docs/_gpt/TREE.md || true
+          test -f docs/_gpt/INVENTORY.json && git add docs/_gpt/INVENTORY.json || true
+          if ! git diff --cached --quiet; then
+            git commit -m "ci(gen-tree): update TREE/INVENTORY"
+            git push
           else
-            echo "Working tree is clean."
+            echo "No changes to commit."
           fi
-# ============================== [01] gen-tree.yml — END =================================
+
+      - name: 📝 Show diff (fork PR 등 자동커밋 불가)
+        if: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
+        run: |
+          echo "Changed files (not committed due to fork PR):"
+          git status --porcelain || true
+          git diff --stat || true
+# ========================== [02] TREE/INV 생성 — END ===========================
