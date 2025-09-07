@@ -424,7 +424,10 @@ def _set_brain_status(
 
 
 def _auto_start_once() -> None:
-    """AUTO_START_MODE에 따른 1회성 자동 복원(releases 모듈 경유)."""
+    """AUTO_START_MODE에 따른 1회성 자동 복원.
+    - restore|on 이면 최신 Release에서 인덱스 복구 시도
+    - 성공 시 READY로 상태 업데이트 및 1회 rerun
+    """
     try:
         if st is None or not hasattr(st, "session_state"):
             return
@@ -442,26 +445,40 @@ def _auto_start_once() -> None:
     if mode not in ("restore", "on"):
         return
 
+    # releases 모듈이 있으면 사용하고, 없으면 [10] 훅 로직으로 폴백
     try:
         rel = importlib.import_module("src.backup.github_release")
         fn = getattr(rel, "restore_latest", None)
     except Exception:
         fn = None
 
-    if not callable(fn):
-        return
+    used_persist = effective_persist_dir()
+    ok = False
+    if callable(fn):
+        try:
+            ok = bool(fn(dest_dir=used_persist))
+        except Exception as e:
+            _errlog(f"restore_latest failed: {e}", where="[auto_start]", exc=e)
+            ok = False
+    else:
+        # 폴백: [10] 훅을 직접 실행
+        try:
+            _boot_auto_restore_index()
+            ok = core_is_ready(used_persist)
+        except Exception:
+            ok = False
 
-    try:
-        if fn(dest_dir=PERSIST_DIR):
-            _mark_ready()
-            if hasattr(st, "toast"):
-                st.toast("자동 복원 완료", icon="✅")
-            else:
-                st.success("자동 복원 완료")
-            _set_brain_status("READY", "자동 복원 완료", "release", attached=True)
-            _safe_rerun("auto_start", ttl=1)
-    except Exception as e:
-        _errlog(f"auto restore failed: {e}", where="[auto_start]", exc=e)
+    if ok:
+        try:
+            core_mark_ready(used_persist)
+        except Exception:
+            pass
+        if hasattr(st, "toast"):
+            st.toast("자동 복원 완료", icon="✅")
+        else:
+            st.success("자동 복원 완료")
+        _set_brain_status("READY", "자동 복원 완료", "release", attached=True)
+        _safe_rerun("auto_start", ttl=1)
 
 
 # =================== [12C] DIAG: Ready Probe — START ====================
