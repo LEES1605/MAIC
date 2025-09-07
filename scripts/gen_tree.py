@@ -2,14 +2,22 @@
 from __future__ import annotations
 
 # =============================== [02] module imports ==============================
-import argparse
-import fnmatch
-import json
+import sys
 import os
+import json
+import fnmatch
+import datetime as dt
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
-import datetime as dt
+from typing import Any, Dict, List, Tuple, Sequence, Iterator, Optional
+
+# Python 3.11+: tomllib / 그 미만: tomli
+if sys.version_info >= (3, 11):
+    import tomllib as _tomllib  # pyright: ignore[reportMissingImports]
+else:
+    import tomli as _tomllib  # pyright: ignore[reportMissingImports]
+# =============================== [02] module imports — END =======================
+
 
 # =============================== [03] constants ==================================
 # 트리 깊이/리포트/스테일 판단/Top-N 등 기본값
