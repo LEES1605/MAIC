@@ -11,11 +11,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
 
-# Py3.11+: tomllib / Py3.10: tomli 로 대체
+# Py3.11+: tomllib / Py3.10: tomli / 둘 다 없으면 None
 try:
-    import tomllib  # Python 3.11+
-except ModuleNotFoundError:
-    import tomli as tomllib  # type: ignore
+    import tomllib  # type: ignore[unused-ignore]  # Py3.11+
+except ModuleNotFoundError:  # pragma: no cover
+    try:
+        import tomli as tomllib  # type: ignore
+    except ModuleNotFoundError:  # 마지막 폴백
+        tomllib = None  # type: ignore[assignment]
 
 EXCLUDE_DIRS: Tuple[str, ...] = (
     ".git",
@@ -33,9 +36,10 @@ EXCLUDE_FILES: Tuple[str, ...] = (
     ".DS_Store",
     "*.zip",
     "*.bin",
+    "*.lock",
 )
 
-# 기본 제외 글롭(파일 + 디렉터리 패턴을 fnmatch에 맞게 정규화)
+# 파일/디렉터리 제외 글롭을 fnmatch 기준으로 정규화
 DEFAULT_EXCLUDES: Tuple[str, ...] = EXCLUDE_FILES + tuple(f"*/{d}/*" for d in EXCLUDE_DIRS)
 
 DEFAULT_MAX_DEPTH = 4
@@ -45,6 +49,8 @@ DEFAULT_REPORTS: Tuple[str, ...] = ("stale", "sizes", "orphans")
 
 DOC_ROOTS: Tuple[str, ...] = ("docs", "docs/_gpt")
 # ======================= [01] imports & constants — END =========================
+
+
 # ======================= [02] CLI Compat Shim — START ==========================
 def _apply_out_dir_shim(argv: List[str]) -> List[str]:
     """Translate '--out-dir D' to '--out-tree D/TREE.md --out-inv D/INVENTORY.json'."""
@@ -54,14 +60,14 @@ def _apply_out_dir_shim(argv: List[str]) -> List[str]:
         i = argv.index("--out-dir")
         out_dir = argv[i + 1]
     except Exception:
-        # 인자가 비어있으면 원래대로 두고 argparse가 에러를 내게 둔다
+        # 인자가 비정상이면 argparse에게 맡긴다.
         return argv
-    # '--out-dir D' 두 토큰 제거
-    newv = argv[:i] + argv[i + 2 :]
     base = Path(out_dir)
+    newv = argv[:i] + argv[i + 2 :]
     newv += ["--out-tree", str(base / "TREE.md")]
     newv += ["--out-inv", str(base / "INVENTORY.json")]
     return newv
+
 
 # argparse가 실행되기 전에 argv를 변환
 try:
@@ -70,7 +76,8 @@ except Exception:
     pass
 # ======================= [02] CLI Compat Shim — END ============================
 
-# ======================= [02] data models — START ===============================
+
+# ======================= [03] data models — START ==============================
 @dataclass
 class FileInfo:
     path: Path
@@ -98,22 +105,23 @@ class ScanConfig:
     out_tree: Path
     out_inv: Path
     snapshot: Optional[Path]
+# ======================= [03] data models — END ================================
 
 
-# ======================= [02] data models — END =================================
-
-# ======================= [03A] TOML loader — START ===================
+# ======================= [04] loaders & walkers — START ========================
 def _load_toml(path: Path) -> Dict:
     """Load TOML on both 3.11+(tomllib) and 3.10(tomli). Return {} on failure."""
     try:
+        if tomllib is None:
+            return {}
         if not path.exists() or path.stat().st_size == 0:
             return {}
         with path.open("rb") as f:
-            return tomllib.load(f)
+            return tomllib.load(f)  # type: ignore[misc]
     except Exception:
         return {}
-# ======================= [03A] TOML loader — END =====================
-# ======================= [03B] utils & walkers — START =========================
+
+
 def _norm_patterns(patts: Iterable[str]) -> Tuple[str, ...]:
     """fnmatch에 맞도록 경로 구분자를 '/'로 통일."""
     out: List[str] = []
@@ -123,19 +131,21 @@ def _norm_patterns(patts: Iterable[str]) -> Tuple[str, ...]:
             out.append(s)
     return tuple(out)
 
+
 def _depth_of(rel: Path) -> int:
     """root 기준 상대경로의 디렉터리 깊이(루트=0)."""
     return max(len(rel.parts) - 1, 0)
 
+
 def _match_any(rel_posix: str, patterns: Sequence[str]) -> bool:
     """상대 경로(문자열)가 제외 패턴과 매칭되는지."""
-    # 파일 경로와 디렉터리 경로(트레일링 슬래시) 모두 시험
     s_file = rel_posix
     s_dir = rel_posix.rstrip("/") + "/"
     for pat in patterns:
         if fnmatch.fnmatch(s_file, pat) or fnmatch.fnmatch(s_dir, pat):
             return True
     return False
+
 
 def _iter_files(root: Path, excludes: Sequence[str]) -> Iterator[FileInfo]:
     """exclude 패턴을 적용해 파일을 순회하며 FileInfo를 생성."""
@@ -162,8 +172,8 @@ def _iter_files(root: Path, excludes: Sequence[str]) -> Iterator[FileInfo]:
                 st = p.stat()
                 yield FileInfo(path=p, size=int(st.st_size), mtime=float(st.st_mtime))
             except Exception:
-                # 접근 불가/사라진 파일은 건너뜀
                 continue
+
 
 def _sort_key(fi: FileInfo, how: str):
     """정렬 키 생성."""
@@ -173,10 +183,11 @@ def _sort_key(fi: FileInfo, how: str):
     if how == "mtime":
         return (-fi.mtime, name_key)
     return (name_key,)
-# ======================= [03B] utils & walkers — END ===========================
+# ======================= [04] loaders & walkers — END ==========================
 
-# ======================= [04] inventory & tree builders — START =================
-def build_inventory(files: Sequence[FileInfo], cfg: ScanConfig) -> Dict:
+
+# ======================= [05] builders (inventory/tree) — START ================
+def build_inventory(files: Sequence[FileInfo], cfg: ScanConfig) -> Dict[str, object]:
     now = dt.datetime.now().isoformat(timespec="seconds")
     counts_by_ext: Dict[str, int] = {}
     for fi in files:
@@ -270,9 +281,6 @@ def _diff_inventory_paths(snap: Dict, files: Sequence[FileInfo], root: Path) -> 
         prev_top = snap.get("paths", None)
         if isinstance(prev_top, list):
             prev = set(prev_top)
-        else:
-            # fallback: build from previous inventory content
-            pass
     except Exception:
         prev = set()
 
@@ -282,11 +290,12 @@ def _diff_inventory_paths(snap: Dict, files: Sequence[FileInfo], root: Path) -> 
     return {"added": added, "removed": removed, "paths": sorted(list(cur))}
 
 
+_SEEN_KEYS: set = set()
+
+
 def build_tree_md(files: Sequence[FileInfo], cfg: ScanConfig) -> str:
     """Create a simple tree (markdown) up to max_depth, pruned by excludes."""
-    # Map dir -> [files]
     rel_files = [fi.path.relative_to(cfg.root) for fi in files]
-    # Build directory set present within depth
     max_depth = cfg.max_depth
     items = sorted(rel_files, key=lambda p: str(p).lower())
 
@@ -308,30 +317,25 @@ def build_tree_md(files: Sequence[FileInfo], cfg: ScanConfig) -> str:
         # print parent directories and file
         for i, part in enumerate(parts[:-1]):
             indent = "  " * i
-            # Only print directories when first time encountered
             key = f"D|{i}|{Path(*parts[: i + 1])}"
             if key not in _SEEN_KEYS:
                 _SEEN_KEYS.add(key)
                 lines.append(f"{indent}📁 {part}")
-        # file line
         indent = "  " * (len(parts) - 1)
         lines.append(f"{indent}📄 {parts[-1]}")
     lines.append("```")
     lines.append("")
     return "\n".join(lines)
+# ======================= [05] builders (inventory/tree) — END ==================
 
 
-_SEEN_KEYS: set = set()
-# ======================= [04] inventory & tree builders — END ===================
-
-
-# ======================= [05] argument parsing — START ==========================
+# ======================= [06] argument parsing — START ==========================
 def parse_args(argv: Optional[Sequence[str]] = None) -> ScanConfig:
     p = argparse.ArgumentParser(
         prog="gen_tree",
         description=(
-            "Generate repository tree (md) and inventory (json) with excludes and "
-            "basic reports."
+            "Generate repository tree (md) and inventory (json) with excludes "
+            "and basic reports."
         ),
     )
     p.add_argument("--root", default=".", help="scan root directory (default: .)")
@@ -366,19 +370,22 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> ScanConfig:
     p.add_argument(
         "--reports",
         default=",".join(DEFAULT_REPORTS),
-        help="comma-joined: stale,sizes,orphans (default: stale,sizes,orphans)",
+        help="comma-joined: stale,sizes,orphans "
+        "(default: stale,sizes,orphans)",
     )
     p.add_argument(
         "--stale-days",
         type=int,
         default=DEFAULT_STALE_DAYS,
-        help=f"stale threshold in days for .md (default: {DEFAULT_STALE_DAYS})",
+        help=f"stale threshold in days for .md "
+        f"(default: {DEFAULT_STALE_DAYS})",
     )
     p.add_argument(
         "--topn-sizes",
         type=int,
         default=DEFAULT_TOPN_SIZES,
-        help=f"Top-N largest files to report (default: {DEFAULT_TOPN_SIZES})",
+        help=f"Top-N largest files to report "
+        f"(default: {DEFAULT_TOPN_SIZES})",
     )
     p.add_argument(
         "--snapshot",
@@ -399,18 +406,18 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> ScanConfig:
     if a.exclude:
         excludes.extend(a.exclude)
     if cfg_toml:
-        ex = cfg_toml.get("root", {}).get("exclude", [])
+        root_cfg = cfg_toml.get("root", {}) if isinstance(cfg_toml, dict) else {}
+        ex = root_cfg.get("exclude", [])
         if isinstance(ex, list):
             excludes.extend([str(x) for x in ex])
-        max_depth = int(cfg_toml.get("root", {}).get("max_depth", a.max_depth))
-        a.max_depth = max_depth
-        reports = cfg_toml.get("reports", {}).get("enable", [])
+        a.max_depth = int(root_cfg.get("max_depth", a.max_depth))
+
+        rep_cfg = cfg_toml.get("reports", {}) if isinstance(cfg_toml, dict) else {}
+        reports = rep_cfg.get("enable", [])
         if isinstance(reports, list) and reports:
             a.reports = ",".join([str(x) for x in reports])
-        stale_days = cfg_toml.get("reports", {}).get("stale_days", a.stale_days)
-        a.stale_days = int(stale_days)
-        topn_sizes = cfg_toml.get("reports", {}).get("topn_sizes", a.topn_sizes)
-        a.topn_sizes = int(topn_sizes)
+        a.stale_days = int(rep_cfg.get("stale_days", a.stale_days))
+        a.topn_sizes = int(rep_cfg.get("topn_sizes", a.topn_sizes))
 
     reports_tuple = tuple(
         s.strip().lower() for s in str(a.reports).split(",") if s.strip()
@@ -429,44 +436,35 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> ScanConfig:
         snapshot=Path(a.snapshot) if a.snapshot else None,
     )
     return sc
+# ======================= [06] argument parsing — END ============================
 
 
-# ======================= [05] argument parsing — END ============================
-
-
-# ======================= [06] main — START =====================================
+# ======================= [07] main — START =====================================
 def main(argv: Optional[Sequence[str]] = None) -> int:
     cfg = parse_args(argv)
     cfg.root = cfg.root.resolve()
 
-    # NOTE: _iter_files expects exclude globs (Sequence[str]), not ScanConfig.
     files = list(_iter_files(cfg.root, cfg.excludes))
     files_sorted = sorted(files, key=lambda x: _sort_key(x, cfg.sort))
 
-    # ensure out directories
     cfg.out_tree.parent.mkdir(parents=True, exist_ok=True)
     cfg.out_inv.parent.mkdir(parents=True, exist_ok=True)
 
-    # inventory (with diff if snapshot provided)
     inv = build_inventory(files_sorted, cfg)
-    # save inventory with current paths to allow future diffs
+    # save paths for future diffs
     try:
-        inv["paths"] = [
-            str(fi.path.relative_to(cfg.root)) for fi in files_sorted
-        ]
+        inv["paths"] = [str(fi.path.relative_to(cfg.root)) for fi in files_sorted]
     except Exception:
         pass
     with cfg.out_inv.open("w", encoding="utf-8") as f:
         json.dump(inv, f, ensure_ascii=False, indent=2)
 
-    # tree md
     global _SEEN_KEYS
     _SEEN_KEYS = set()
     tree_md = build_tree_md(files_sorted, cfg)
     with cfg.out_tree.open("w", encoding="utf-8") as f:
         f.write(tree_md)
 
-    # console summary
     print(f"[gen_tree] root={cfg.root}")
     print(f"[gen_tree] wrote: {cfg.out_tree}")
     print(f"[gen_tree] wrote: {cfg.out_inv}")
@@ -475,5 +473,4 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-# ======================= [06] main — END =======================================
-
+# ======================= [07] main — END =======================================
