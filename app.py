@@ -432,200 +432,92 @@ def _auto_start_once() -> None:
 
 
 # =================== [12C] DIAG: Ready Probe — START ====================
--def _probe_index_health(p: Path) -> Dict[str, Any]:
--    """인덱스 준비상태를 경량 검증한다.
--    체크 항목:
--      - chunks.jsonl 존재/크기
--      - .ready 존재
--      - JSON 샘플 파싱(최대 200줄) 오류율
--    """
--    res: Dict[str, Any] = {"persist": str(p)}
--    try:
--        cj = p / "chunks.jsonl"
--        res["chunks_exists"] = cj.exists()
--        res["chunks_size"] = cj.stat().st_size if cj.exists() else 0
--        res["ready_exists"] = (p / ".ready").exists()
--        res["mtime"] = int(cj.stat().st_mtime) if cj.exists() else 0
--    except Exception:
--        res["chunks_exists"] = False
--        res["chunks_size"] = 0
--        res["ready_exists"] = False
--        res["mtime"] = 0
--
--    # JSON 샘플 검사(최대 200줄)
--    sample = 0
--    malformed = 0
--    try:
--        cj = p / "chunks.jsonl"
--        if cj.exists() and cj.stat().st_size > 0:
--            with cj.open("r", encoding="utf-8") as rf:
--                for i, line in enumerate(rf):
--                    if i >= 200:
--                        break
--                    s = line.strip()
--                    if not s:
--                        continue
--                    sample += 1
--                    try:
--                        json.loads(s)
--                    except Exception:
--                        malformed += 1
--
--        res["json_sample"] = sample
--        res["json_malformed"] = malformed
--        json_ok = (sample == 0) or (malformed == 0)
--        res["ok"] = bool(res["ready_exists"] and res["chunks_exists"] and (res["chunks_size"] > 0) and json_ok)
--        return res
--    except Exception:
--        return {
--            "persist": str(p),
--            "chunks_exists": False,
--            "chunks_size": 0,
--            "ready_exists": False,
--            "json_sample": 0,
--            "json_malformed": 0,
--            "ok": False,
--        }
--
--def _render_ready_probe() -> None:
--    """READY 여부를 미니멀 Pill로 시각화 + 상세는 expander."""
--    if st is None:
--        return
--
--    p = _effective_persist_dir()
--    info = _probe_index_health(p)
--    size = int(info.get("chunks_size", 0) or 0)
--    ready = bool(info.get("ready_exists"))
--    json_ok = bool((int(info.get("json_sample", 0) or 0) > 0) and int(info.get("json_malformed", 0) or 0) == 0)
--    ok = bool(ready and bool(info.get("chunks_exists")) and size > 0 and json_ok)
--
--    level = "HIGH" if ok else ("MID" if (size > 0 and json_ok) else "LOW")
--    badge = "🟢" if ok else ("🟡" if (size > 0 or ready or json_ok) else "🔴")
--
--    st.markdown(
--        """
--        <style>
--          .probe-pill{
--            display:inline-flex; align-items:center; gap:8px;
--            padding:6px 10px; border-radius:14px;
--            border:1px solid #dbeafe; background:#eff6ff;
--            font-weight:700; color:#0a2540;
--          }
--          .dot{ width:8px; height:8px; border-radius:50%;
--                background:#16a34a; box-shadow:0 0 0 0 rgba(22,163,74,.7);
--                animation:pulse 1.5s infinite; }
--          .dot.warn{ background:#f59e0b; box-shadow:0 0 0 0 rgba(245,158,11,.6); }
--          .dot.err{ background:#ef4444; box-shadow:0 0 0 0 rgba(239,68,68,.6); }
--          @keyframes pulse{
--            0%{ box-shadow:0 0 0 0 rgba(22,163,74,.7); }
--            70%{ box-shadow:0 0 0 10px rgba(22,163,74,0); }
--            100%{ box-shadow:0 0 0 0 rgba(22,163,74,0); }
--          }
--        </style>
--        """,
--        unsafe_allow_html=True,
--    )
--    dot_class = "dot" if level == "HIGH" else ("dot warn" if level == "MID" else "dot err")
--    pill_html = (
--        f'<span class="probe-pill">{badge} Ready Probe '
--        f'<span class="{dot_class}"></span><span>{level}</span></span>'
--    )
--    st.markdown(pill_html, unsafe_allow_html=True)
--
--    with st.expander("세부 상태 보기", expanded=False):
--        rows = [
--            ("Persist", str(info.get("persist"))),
--            ("chunks.jsonl", "OK" if info.get("chunks_exists") else "Missing"),
--            ("size", f"{int(info.get('chunks_size',0)): ,} bytes"),
--            (".ready", "OK" if info.get("ready_exists") else "Missing"),
--            ("JSON 샘플", f"{int(info.get('json_sample',0))} lines · malformed {int(info.get('json_malformed',0))}"),
--        ]
--        data = [{"항목": k, "상태": v} for k, v in rows]
--        st.dataframe(data, hide_index=True, use_container_width=True)
-+def _render_ready_probe() -> None:
-+    """READY 여부를 미니멀 Pill로 시각화 + 상세는 expander.
-+    SSOT: src.core.index_probe.probe_index_health(IndexHealth)
-+    - 코어 호출 실패 시, 존재/크기만 간소 폴백
-+    """
-+    if st is None:
-+        return
-+
-+    p = _effective_persist_dir()
-+
-+    # --- SSOT 호출 시도 ---
-+    info = None
-+    try:
-+        from src.core.index_probe import IndexHealth, probe_index_health  # lazy import
-+        info = probe_index_health(persist=p)
-+        size = int(getattr(info, "chunks_size", 0) or 0)
-+        ready = bool(getattr(info, "ready_exists", False))
-+        json_ok = bool(
-+            (int(getattr(info, "json_sample", 0) or 0) > 0)
-+            and int(getattr(info, "json_malformed", 0) or 0) == 0
-+        )
-+        ok = bool(ready and bool(getattr(info, "chunks_exists", False)) and size > 0 and json_ok)
-+    except Exception:
-+        # --- 폴백: 존재/크기만 점검 ---
-+        cj = p / "chunks.jsonl"
-+        size = cj.stat().st_size if cj.exists() else 0
-+        ready = (p / ".ready").exists()
-+        json_ok = True  # 샘플 검증 불가 시 보수적 True
-+        ok = bool(ready and size > 0)
-+
-+    level = "HIGH" if ok else ("MID" if (size > 0 and json_ok) else "LOW")
-+    badge = "🟢" if ok else ("🟡" if (size > 0 or ready or json_ok) else "🔴")
-+
-+    # CSS (펄스 점 포함)
-+    st.markdown(
-+        """
-+        <style>
-+          .probe-pill{
-+            display:inline-flex; align-items:center; gap:8px;
-+            padding:6px 10px; border-radius:14px;
-+            border:1px solid #dbeafe; background:#eff6ff;
-+            font-weight:700; color:#0a2540;
-+          }
-+          .dot{ width:8px; height:8px; border-radius:50%;
-+                background:#16a34a; box-shadow:0 0 0 0 rgba(22,163,74,.7);
-+                animation:pulse 1.5s infinite; }
-+          .dot.warn{ background:#f59e0b; box-shadow:0 0 0 0 rgba(245,158,11,.6); }
-+          .dot.err{ background:#ef4444; box-shadow:0 0 0 0 rgba(239,68,68,.6); }
-+          @keyframes pulse{
-+            0%{ box-shadow:0 0 0 0 rgba(22,163,74,.7); }
-+            70%{ box-shadow:0 0 0 10px rgba(22,163,74,0); }
-+            100%{ box-shadow:0 0 0 0 rgba(22,163,74,0); }
-+          }
-+        </style>
-+        """,
-+        unsafe_allow_html=True,
-+    )
-+    dot_class = "dot" if level == "HIGH" else ("dot warn" if level == "MID" else "dot err")
-+    pill_html = (
-+        f'<span class="probe-pill">{badge} Ready Probe '
-+        f'<span class="{dot_class}"></span><span>{level}</span></span>'
-+    )
-+    st.markdown(pill_html, unsafe_allow_html=True)
-+
-+    # 상세 표(SSOT 사용 시 풍부)
-+    with st.expander("세부 상태 보기", expanded=False):
-+        if info is not None:
-+            rows = [
-+                ("Persist", str(getattr(info, "persist", p))),
-+                ("chunks.jsonl", "OK" if getattr(info, "chunks_exists", False) else "Missing"),
-+                ("size", f"{int(getattr(info, 'chunks_size', 0)): ,} bytes"),
-+                (".ready", "OK" if getattr(info, "ready_exists", False) else "Missing"),
-+                ("JSON 샘플", f"{int(getattr(info, 'json_sample', 0))} lines · malformed {int(getattr(info, 'json_malformed', 0))}"),
-+            ]
-+        else:
-+            rows = [
-+                ("Persist", str(p)),
-+                ("chunks.jsonl", "OK" if (p / "chunks.jsonl").exists() else "Missing"),
-+                ("size", f"{size: ,} bytes"),
-+                (".ready", "OK" if (p / ".ready").exists() else "Missing"),
-+            ]
-+        data = [{"항목": k, "상태": v} for k, v in rows]
-+        st.dataframe(data, hide_index=True, use_container_width=True)
- # =================== [12C] DIAG: Ready Probe — END ====================
+def _render_ready_probe() -> None:
+    """READY 여부를 미니멀 Pill로 시각화 + 상세는 expander.
+    - SSOT: src.core.index_probe.probe_index_health(IndexHealth)
+    - 코어 호출 실패 시, 존재/크기만 간소 폴백
+    """
+    if st is None:
+        return
+
+    p = _effective_persist_dir()
+
+    # --- SSOT 호출 시도 ---
+    info = None
+    try:
+        from src.core.index_probe import IndexHealth, probe_index_health  # lazy import
+        info = probe_index_health(persist=p)
+        size = int(getattr(info, "chunks_size", 0) or 0)
+        ready = bool(getattr(info, "ready_exists", False))
+        json_ok = bool(
+            (int(getattr(info, "json_sample", 0) or 0) > 0)
+            and int(getattr(info, "json_malformed", 0) or 0) == 0
+        )
+        ok = bool(ready and bool(getattr(info, "chunks_exists", False)) and size > 0 and json_ok)
+    except Exception:
+        # --- 폴백: 존재/크기만 점검 ---
+        cj = p / "chunks.jsonl"
+        size = cj.stat().st_size if cj.exists() else 0
+        ready = (p / ".ready").exists()
+        json_ok = True  # 샘플 검증 불가 시 보수적 True
+        ok = bool(ready and size > 0)
+
+    level = "HIGH" if ok else ("MID" if (size > 0 and json_ok) else "LOW")
+    badge = "🟢" if ok else ("🟡" if (size > 0 or ready or json_ok) else "🔴")
+
+    # CSS (펄스 점 포함)
+    st.markdown(
+        """
+        <style>
+          .probe-pill{
+            display:inline-flex; align-items:center; gap:8px;
+            padding:6px 10px; border-radius:14px;
+            border:1px solid #dbeafe; background:#eff6ff;
+            font-weight:700; color:#0a2540;
+          }
+          .dot{ width:8px; height:8px; border-radius:50%;
+                background:#16a34a; box-shadow:0 0 0 0 rgba(22,163,74,.7);
+                animation:pulse 1.5s infinite; }
+          .dot.warn{ background:#f59e0b; box-shadow:0 0 0 0 rgba(245,158,11,.6); }
+          .dot.err{ background:#ef4444; box-shadow:0 0 0 0 rgba(239,68,68,.6); }
+          @keyframes pulse{
+            0%{ box-shadow:0 0 0 0 rgba(22,163,74,.7); }
+            70%{ box-shadow:0 0 0 10px rgba(22,163,74,0); }
+            100%{ box-shadow:0 0 0 0 rgba(22,163,74,0); }
+          }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    dot_class = "dot" if level == "HIGH" else ("dot warn" if level == "MID" else "dot err")
+    pill_html = (
+        f'<span class="probe-pill">{badge} Ready Probe '
+        f'<span class="{dot_class}"></span><span>{level}</span></span>'
+    )
+    st.markdown(pill_html, unsafe_allow_html=True)
+
+    # 상세 표(SSOT 사용 시 풍부)
+    with st.expander("세부 상태 보기", expanded=False):
+        if info is not None:
+            rows = [
+                ("Persist", str(getattr(info, "persist", p))),
+                ("chunks.jsonl", "OK" if getattr(info, "chunks_exists", False) else "Missing"),
+                ("size", f"{int(getattr(info, 'chunks_size', 0)): ,} bytes"),
+                (".ready", "OK" if getattr(info, "ready_exists", False) else "Missing"),
+                ("JSON 샘플", f"{int(getattr(info, 'json_sample', 0))} lines · malformed {int(getattr(info, 'json_malformed', 0))}"),
+            ]
+        else:
+            rows = [
+                ("Persist", str(p)),
+                ("chunks.jsonl", "OK" if (p / "chunks.jsonl").exists() else "Missing"),
+                ("size", f"{size: ,} bytes"),
+                (".ready", "OK" if (p / ".ready").exists() else "Missing"),
+            ]
+        data = [{"항목": k, "상태": v} for k, v in rows]
+        st.dataframe(data, hide_index=True, use_container_width=True)
+# =================== [12C] DIAG: Ready Probe — END ====================
+
 
 
 
