@@ -42,6 +42,7 @@ DOC_ROOTS: Tuple[str, ...] = ("docs", "docs/_gpt")
 
 # ======================= [01] imports & constants — END =========================
 
+
 # ======================= [02] data models — START ===============================
 @dataclass
 class FileInfo:
@@ -135,8 +136,8 @@ def _sort_key(fi: FileInfo, mode: str) -> Tuple:
     if mode == "mtime":
         return (-fi.mtime, str(fi.path))
     return (str(fi.path).lower(),)
-
 # ======================= [03] utilities — END ===================================
+
 
 # ======================= [04] inventory & tree builders — START =================
 def build_inventory(files: Sequence[FileInfo], cfg: ScanConfig) -> Dict:
