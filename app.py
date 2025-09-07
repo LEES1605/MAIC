@@ -527,8 +527,10 @@ def _render_index_orchestrator_header() -> None:
 # =================== [12] ADMIN: Index Panel — START ====================
 def _render_admin_index_panel() -> None:
     """관리자 인덱싱 패널 (prepared 전용 + 스텝/진행바/로그/스톨표시).
-    - 폼 submit → 세션 플래그 기록 → 다음 rerun에서 안전 실행
-    - 6단계(ZIP/Release)에 '실제 I/O 기반' 미니 진행바/텍스트 추가
+    개선점:
+    - 스캔(step1) 결과 보존: 인덱싱을 눌러도 스캔은 초록(OK)과 숫자를 유지
+    - 선택적 오토런: secrets/ENV AUTO_INDEX_ON_LOAD=1 이면 자동으로 인덱싱 진입
+    - 6단계(ZIP/Release)에 실제 I/O 기반 미니 진행바/로그
     """
     if "st" not in globals() or st is None or not _is_admin_view():
         return
@@ -584,10 +586,16 @@ def _render_admin_index_panel() -> None:
     ]
     stall_threshold_sec = 60
 
-    def _step_reset(names: List[str]) -> None:
-        st.session_state["_IDX_STEPS"] = [
-            {"name": n, "state": "idle", "note": ""} for n in names
-        ]
+    def _step_reset(
+        names: List[str],
+        keep_scan: Optional[Dict[str, str]] = None,
+    ) -> None:
+        """스텝 초기화. keep_scan={'state': 'ok', 'note': '223건'} 이면 스캔 유지."""
+        steps = [{"name": n, "state": "idle", "note": ""} for n in names]
+        if keep_scan:
+            steps[0]["state"] = keep_scan.get("state", "ok")
+            steps[0]["note"] = keep_scan.get("note", "")
+        st.session_state["_IDX_STEPS"] = steps
         st.session_state["_IDX_LOG"] = []
         st.session_state["_IDX_PROG"] = 0.0
         st.session_state["_IDX_START_TS"] = time.time()
@@ -704,8 +712,7 @@ def _render_admin_index_panel() -> None:
             st.session_state["_IDX_S6_BAR"] = ph.progress(frac, text="6단계 진행")
         st.session_state["_IDX_LAST_TS"] = time.time()
         st.session_state["_IDX_PH_S6"].markdown(
-            f"**6. {label}** — {cur:,} / {total:,} "
-            f"({int(frac * 100)}%)"
+            f"**6. {label}** — {cur:,} / {total:,} ({int(frac * 100)}%)"
         )
 
     # 초기 렌더
@@ -734,7 +741,6 @@ def _render_admin_index_panel() -> None:
             o, r = combo.split("/", 1)
             return o.strip(), r.strip()
 
-    # 나머지 이름도 허용(호환)
         owner = owner or _secret("GITHUB_OWNER")
         repo = repo or _secret("GITHUB_REPO_NAME")
         return owner or "", repo or ""
@@ -747,7 +753,6 @@ def _render_admin_index_panel() -> None:
     # ----- ZIP: 진행 콜백 포함 --------------------------------------------
     def _zip_index_dir(idx_dir: Path, out_dir: Path) -> Path:
         out_dir.mkdir(parents=True, exist_ok=True)
-        # 파일 수 파악
         files: List[Path] = []
         for root, _d, _f in os.walk(str(idx_dir)):
             for fn in _f:
@@ -772,7 +777,7 @@ def _render_admin_index_panel() -> None:
                     _log(f"zip: {i}/{total} {arc}")
         return zpath
 
-    # ----- 업로드: 스트리밍 진행표시(가능 시 requests 사용) ----------------
+    # ----- 업로드: 스트리밍 진행표시 --------------------------------------
     from urllib import request as _rq, error as _er, parse as _ps
 
     def _upload_release_zip(
@@ -835,9 +840,10 @@ def _render_admin_index_panel() -> None:
             f"?name={_ps.quote(zip_path.name)}"
         )
 
-        # 시도1: requests로 진행률 표시 업로드
+        # 시도1: requests(있으면)로 스트리밍 업로드
         try:
             import requests
+
             total = int(zip_path.stat().st_size)
 
             class _Stream:
@@ -884,10 +890,7 @@ def _render_admin_index_panel() -> None:
                 pass
 
             if resp.status_code >= 400:
-                return {
-                    "_error": f"HTTP {resp.status_code}",
-                    "detail": resp.text,
-                }
+                return {"_error": f"HTTP {resp.status_code}", "detail": resp.text}
             try:
                 return resp.json()
             except Exception:
@@ -895,7 +898,7 @@ def _render_admin_index_panel() -> None:
         except Exception as e:
             _log(f"requests 업로드 실패, urllib로 대체: {e}", "warn")
 
-        # 시도2: urllib(진행률은 파일 크기 단위 스텝만 갱신)
+        # 시도2: urllib (전체 바이트 단위로 갱신)
         try:
             data = zip_path.read_bytes()
             total = len(data)
@@ -964,19 +967,24 @@ def _render_admin_index_panel() -> None:
     else:
         _step_set(0, "ok", "0건")
 
-    with st.expander("이번에 인덱싱할 prepared 파일(예상)", expanded=False):
-        st.write(f"총 {prepared_count}건 (표시는 최대 400건)")
-        if prepared_count:
-            rows = []
-            for rec in files_list[:400]:
-                name = str(
-                    rec.get("name") or rec.get("path") or rec.get("file") or ""
-                )
-                fid = str(rec.get("id") or rec.get("fileId") or "")
-                rows.append({"name": name, "id": fid})
-            st.dataframe(rows, hide_index=True, use_container_width=True)
-        else:
-            st.caption("일치하는 파일이 없습니다.")
+    # 선택적 오토런: 시크릿/ENV로 제어 (기본 OFF)
+    try:
+        auto_index_on_load = _secret("AUTO_INDEX_ON_LOAD", "0") == "1"
+    except Exception:
+        auto_index_on_load = False
+    if (
+        auto_index_on_load
+        and not st.session_state.get("_IDX_AUTORUN_DONE")
+        and prepared_count > 0
+    ):
+        st.session_state["_IDX_REQ"] = {
+            "ts": time.time(),
+            "auto_up": _all_gh_secrets(),
+            "show_after": True,
+        }
+        st.session_state["_IDX_AUTORUN_DONE"] = True
+        _log("자동 실행: AUTO_INDEX_ON_LOAD=1", "warn")
+        st.rerun()
 
     # ----- 실행 컨트롤 (폼 기반 이벤트 보존) -------------------------------
     with st.form("idx_actions_form", clear_on_submit=False):
@@ -999,7 +1007,14 @@ def _render_admin_index_panel() -> None:
         reset_view = c4.form_submit_button("🧹 화면 초기화")
 
         if reset_view:
-            _step_reset(step_names)
+            # 스캔 유지 초기화: 직전 스캔 노트/상태만 살림
+            keep = None
+            try:
+                s0 = _steps()[0]
+                keep = {"state": s0["state"], "note": s0.get("note", "")}
+            except Exception:
+                keep = None
+            _step_reset(step_names, keep_scan=keep)
             st.session_state["_IDX_BAR"] = None
             st.session_state["_IDX_PH_BAR"].empty()
             st.session_state["_IDX_PH_LOG"].empty()
@@ -1017,8 +1032,16 @@ def _render_admin_index_panel() -> None:
     # ----- 인덱싱 실행 (세션 플래그 소비) ----------------------------------
     req = st.session_state.pop("_IDX_REQ", None)
     if req:
+        # reset 전에 직전 스캔 정보를 보존
+        keep = None
+        try:
+            s0 = _steps()[0]
+            keep = {"state": s0["state"], "note": s0.get("note", "")}
+        except Exception:
+            keep = None
+
         used_persist: Optional[Path] = None
-        _step_reset(step_names)
+        _step_reset(step_names, keep_scan=keep)
         _render_stepper()
         _render_status()
         st.session_state["_IDX_PH_BAR"].empty()
@@ -1051,6 +1074,8 @@ def _render_admin_index_panel() -> None:
             # prepared 소비
             _step_set(3, "run", "prepared 소비 중")
             try:
+                import importlib as _imp2
+
                 def _load_prepared_api() -> Tuple[
                     Optional[Any], Optional[Any], List[str]
                 ]:
@@ -1060,7 +1085,7 @@ def _render_admin_index_panel() -> None:
                         Optional[Any], Optional[Any]
                     ]:
                         try:
-                            m = _imp.import_module(modname)
+                            m = _imp2.import_module(modname)
                             chk_fn = getattr(m, "check_prepared_updates", None)
                             mark_fn = getattr(
                                 m, "mark_prepared_consumed", None
@@ -1226,6 +1251,9 @@ def _render_admin_index_panel() -> None:
         else:
             st.caption("표시할 로그가 없습니다.")
 # =================== [12] ADMIN: Index Panel — END ====================
+
+
+
 # ========== [12A] ADMIN: Panels (legacy aggregator, no-op) — START ==========
 def _render_admin_panels() -> None:
     """
