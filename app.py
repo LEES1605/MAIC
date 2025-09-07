@@ -482,92 +482,48 @@ def _auto_start_once() -> None:
 
 
 
-# =================== [12C] DIAG: Ready Probe — START ====================
-def _render_ready_probe() -> None:
-    """READY 여부를 미니멀 Pill로 시각화 + 상세는 expander.
-    - SSOT: src.core.index_probe.probe_index_health(IndexHealth)
-    - 코어 호출 실패 시, 존재/크기만 간소 폴백
-    """
-    if st is None:
+# =================== [12] DIAG: Orchestrator Header ======================
+def _render_index_orchestrator_header() -> None:
+    """상단 진단 헤더(미니멀): Persist 경로, 상태칩만 간결 표기."""
+    if "st" not in globals() or st is None:
         return
 
-    p = _effective_persist_dir()
+    st.markdown("### 🧪 인덱스 오케스트레이터")
 
-    # --- SSOT 호출 시도 ---
-    info = None
+    def _persist_dir_safe() -> Path:
+        try:
+            p = _persist_dir()
+            return Path(str(p)).expanduser()
+        except Exception:
+            return Path.home() / ".maic" / "persist"
+
+    persist = _persist_dir_safe()
+
+    with st.container():
+        st.caption("Persist Dir")
+        st.code(str(persist), language="text")
+
+    # 상태 계산
+    status_text = "MISSING"
     try:
-        from src.core.index_probe import IndexHealth, probe_index_health  # lazy import
-        info = probe_index_health(persist=p)
-        size = int(getattr(info, "chunks_size", 0) or 0)
-        ready = bool(getattr(info, "ready_exists", False))
-        json_ok = bool(
-            (int(getattr(info, "json_sample", 0) or 0) > 0)
-            and int(getattr(info, "json_malformed", 0) or 0) == 0
-        )
-        ok = bool(ready and bool(getattr(info, "chunks_exists", False)) and size > 0 and json_ok)
+        from src.rag.index_status import get_index_summary
+        s = get_index_summary(persist)
+        status_text = "READY" if getattr(s, "ready", False) else "MISSING"
     except Exception:
-        # --- 폴백: 존재/크기만 점검 ---
-        cj = p / "chunks.jsonl"
-        size = cj.stat().st_size if cj.exists() else 0
-        ready = (p / ".ready").exists()
-        json_ok = True  # 샘플 검증 불가 시 보수적 True
-        ok = bool(ready and size > 0)
+        status_text = "MISSING"
 
-    level = "HIGH" if ok else ("MID" if (size > 0 and json_ok) else "LOW")
-    badge = "🟢" if ok else ("🟡" if (size > 0 or ready or json_ok) else "🔴")
+    badge = "🟩 READY" if status_text == "READY" else "🟨 MISSING"
+    st.markdown(f"**상태**\n\n{badge}")
 
-    # CSS (펄스 점 포함)
-    st.markdown(
-        """
-        <style>
-          .probe-pill{
-            display:inline-flex; align-items:center; gap:8px;
-            padding:6px 10px; border-radius:14px;
-            border:1px solid #dbeafe; background:#eff6ff;
-            font-weight:700; color:#0a2540;
-          }
-          .dot{ width:8px; height:8px; border-radius:50%;
-                background:#16a34a; box-shadow:0 0 0 0 rgba(22,163,74,.7);
-                animation:pulse 1.5s infinite; }
-          .dot.warn{ background:#f59e0b; box-shadow:0 0 0 0 rgba(245,158,11,.6); }
-          .dot.err{ background:#ef4444; box-shadow:0 0 0 0 rgba(239,68,68,.6); }
-          @keyframes pulse{
-            0%{ box-shadow:0 0 0 0 rgba(22,163,74,.7); }
-            70%{ box-shadow:0 0 0 10px rgba(22,163,74,0); }
-            100%{ box-shadow:0 0 0 0 rgba(22,163,74,0); }
-          }
-        </style>
-        """,
-        unsafe_allow_html=True,
+    st.info(
+        "강제 인덱싱(HQ, 느림)·백업과 인덱싱 파일 미리보기는 **관리자 인덱싱 패널**에서 합니다. "
+        "관리자 모드 진입 후 아래 섹션으로 이동하세요.",
+        icon="ℹ️",
     )
 
-    dot_class = "dot" if level == "HIGH" else ("dot warn" if level == "MID" else "dot err")
-    pill_html = (
-        f'<span class="probe-pill">{badge} Ready Probe '
-        f'<span class="{dot_class}"></span><span>{level}</span></span>'
-    )
-    st.markdown(pill_html, unsafe_allow_html=True)
+    st.markdown("<span id='idx-admin-panel'></span>", unsafe_allow_html=True)
+# =================== [12] DIAG: Orchestrator Header — END ======================
 
-    # 상세 표(SSOT 사용 시 풍부)
-    with st.expander("세부 상태 보기", expanded=False):
-        if info is not None:
-            rows = [
-                ("Persist", str(getattr(info, "persist", p))),
-                ("chunks.jsonl", "OK" if getattr(info, "chunks_exists", False) else "Missing"),
-                ("size", f"{int(getattr(info, 'chunks_size', 0)): ,} bytes"),
-                (".ready", "OK" if getattr(info, "ready_exists", False) else "Missing"),
-                ("JSON 샘플", f"{int(getattr(info, 'json_sample', 0))} lines · malformed {int(getattr(info, 'json_malformed', 0))}"),
-            ]
-        else:
-            rows = [
-                ("Persist", str(p)),
-                ("chunks.jsonl", "OK" if (p / "chunks.jsonl").exists() else "Missing"),
-                ("size", f"{size: ,} bytes"),
-                (".ready", "OK" if (p / ".ready").exists() else "Missing"),
-            ]
-        data = [{"항목": k, "상태": v} for k, v in rows]
-        st.dataframe(data, hide_index=True, use_container_width=True)
-# =================== [12C] DIAG: Ready Probe — END ====================
 
 
 
