@@ -1226,6 +1226,20 @@ def _render_admin_index_panel() -> None:
         else:
             st.caption("표시할 로그가 없습니다.")
 # =================== [12] ADMIN: Index Panel — END ====================
+# ========== [12A] ADMIN: Panels (legacy aggregator, no-op) — START ==========
+def _render_admin_panels() -> None:
+    """
+    [Deprecated] Backward-compatibility shim.
+
+    과거에는 관리자 하위 패널을 이 함수가 모아서 렌더링했지만
+    지금은 아래처럼 개별 함수를 직접 호출합니다:
+      - _render_admin_index_panel()
+      - _render_admin_indexed_sources_panel()
+
+    여기서는 아무 것도 하지 않습니다(중복 렌더링 방지).
+    """
+    return None
+# ========== [12A] ADMIN: Panels (legacy aggregator, no-op) — END ==========
 
 
 # ============= [13] 인덱싱된 소스 목록(읽기 전용 대시보드) ==============
