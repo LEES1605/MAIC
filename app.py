@@ -546,7 +546,11 @@ def _render_admin_panels() -> None:
 
 # =================== [12] ADMIN: Index Panel(시각화·백업) ==================
 def _render_admin_index_panel() -> None:
-    """관리자 인덱싱 패널 (prepared 전용 + 스텝/진행바/로그/스톨표시)."""
+    """관리자 인덱싱 패널 (prepared 전용 + 스텝/진행바/로그/스톨표시).
+    - 버튼을 폼으로 감싸 submit 이벤트를 세션 플래그에 기록 → 다음 rerun에서 안전하게 실행
+    - 위젯에 고유 key 부여 → 충돌/소멸 방지
+    - prepared 목록 로그는 개수 변동시에만 찍어 중복 로그 억제
+    """
     if "st" not in globals() or st is None or not _is_admin_view():
         return
 
@@ -558,13 +562,7 @@ def _render_admin_index_panel() -> None:
         unsafe_allow_html=True,
     )
 
-    # --- 안전 래퍼(외부 훅 없을 때 NameError 방지) -------------------------
-    def _errlog_safe(msg: str, where: str = "") -> None:
-        try:
-            _errlog(msg, where=where)
-        except Exception:
-            pass
-
+    # ----- 안전 래퍼 -----
     def _persist_dir_safe() -> Path:
         try:
             p = _persist_dir()
@@ -578,112 +576,6 @@ def _render_admin_index_panel() -> None:
         except Exception:
             pass
 
-    # --- UI 플레이스홀더(덮어쓰기 → 중복 렌더 제거) -------------------------
-    if "_IDX_PH_STEPS" not in st.session_state:
-        st.session_state["_IDX_PH_STEPS"] = st.empty()
-    if "_IDX_PH_STATUS" not in st.session_state:
-        st.session_state["_IDX_PH_STATUS"] = st.empty()
-    if "_IDX_PH_BAR" not in st.session_state:
-        st.session_state["_IDX_PH_BAR"] = st.empty()
-    if "_IDX_PH_LOG" not in st.session_state:
-        st.session_state["_IDX_PH_LOG"] = st.empty()
-
-    # --- 스텝/로그 헬퍼 ----------------------------------------------------
-    step_names: List[str] = [
-        "스캔",
-        "Persist확정",
-        "인덱싱",
-        "prepared소비",
-        "요약/배지",
-        "ZIP/Release",
-    ]
-    stall_threshold_sec = 60  # 마지막 업데이트 이후 60초 이상이면 STALLED
-
-    def _step_reset(names: List[str]) -> None:
-        st.session_state["_IDX_STEPS"] = [
-            {"name": n, "state": "idle", "note": ""} for n in names
-        ]
-        st.session_state["_IDX_LOG"] = []
-        st.session_state["_IDX_PROG"] = 0.0
-        st.session_state["_IDX_START_TS"] = time.time()
-        st.session_state["_IDX_LAST_TS"] = time.time()
-
-    def _steps() -> List[Dict[str, str]]:
-        if "_IDX_STEPS" not in st.session_state:
-            _step_reset(step_names)
-        return list(st.session_state["_IDX_STEPS"])
-
-    def _touch() -> None:
-        st.session_state["_IDX_LAST_TS"] = time.time()
-        _render_status()
-
-    def _step_set(idx: int, state: str, note: str = "") -> None:
-        steps = _steps()
-        if 0 <= idx < len(steps):
-            steps[idx]["state"] = state
-            if note:
-                steps[idx]["note"] = note
-            st.session_state["_IDX_STEPS"] = steps
-            _touch()
-            _render_stepper()
-            _update_progress()
-
-    def _icon(state: str) -> str:
-        return {"idle": "⚪", "run": "🔵", "ok": "🟢", "fail": "🔴", "skip": "⚪"}.get(
-            state, "⚪"
-        )
-
-    def _render_stepper() -> None:
-        steps = _steps()
-        lines = []
-        for i, s in enumerate(steps, start=1):
-            note = f" — {s.get('note','')}" if s.get("note") else ""
-            lines.append(f"{_icon(s['state'])} {i}. {s['name']}{note}")
-        st.session_state["_IDX_PH_STEPS"].markdown(
-            "\n".join([f"- {ln}" for ln in lines])
-        )
-
-    def _is_running() -> bool:
-        return any(s["state"] == "run" for s in _steps())
-
-    def _render_status() -> None:
-        now = time.time()
-        last = float(st.session_state.get("_IDX_LAST_TS", now))
-        start = float(st.session_state.get("_IDX_START_TS", now))
-        since_last = int(now - last)
-        since_start = int(now - start)
-        running = _is_running()
-        stalled = running and since_last >= stall_threshold_sec
-        if stalled:
-            text = (
-                f"🟥 **STALLED** · 마지막 업데이트 {since_last}s 전 · 총 경과 {since_start}s"
-            )
-        elif running:
-            text = (
-                f"🟦 RUNNING · 마지막 업데이트 {since_last}s 전 · 총 경과 {since_start}s"
-            )
-        else:
-            text = f"🟩 IDLE/COMPLETE · 총 경과 {since_start}s"
-        st.session_state["_IDX_PH_STATUS"].markdown(text)
-
-    def _update_progress() -> None:
-        steps = _steps()
-        done = sum(1 for s in steps if s["state"] in ("ok", "skip"))
-        prog = done / len(steps)
-        st.session_state["_IDX_PROG"] = prog
-        bar = st.session_state.get("_IDX_BAR")
-        if bar is None:
-            st.session_state["_IDX_BAR"] = st.session_state["_IDX_PH_BAR"].progress(
-                prog, text="진행률"
-            )
-        else:
-            try:
-                bar.progress(prog)
-            except Exception:
-                st.session_state["_IDX_BAR"] = (
-                    st.session_state["_IDX_PH_BAR"].progress(prog, text="진행률")
-                )
-
     def _log(msg: str, level: str = "info") -> None:
         buf: List[str] = st.session_state.get("_IDX_LOG", [])
         prefix = {"info": "•", "warn": "⚠", "err": "✖"}.get(level, "•")
@@ -694,14 +586,92 @@ def _render_admin_index_panel() -> None:
             buf = buf[-200:]
         st.session_state["_IDX_LOG"] = buf
         st.session_state["_IDX_PH_LOG"].text("\n".join(buf))
-        _touch()
+        st.session_state["_IDX_LAST_TS"] = time.time()
+        _render_status()
+
+    # ----- 플레이스홀더/스텝 초기화 -----
+    if "_IDX_PH_STEPS" not in st.session_state:
+        st.session_state["_IDX_PH_STEPS"] = st.empty()
+    if "_IDX_PH_STATUS" not in st.session_state:
+        st.session_state["_IDX_PH_STATUS"] = st.empty()
+    if "_IDX_PH_BAR" not in st.session_state:
+        st.session_state["_IDX_PH_BAR"] = st.empty()
+    if "_IDX_PH_LOG" not in st.session_state:
+        st.session_state["_IDX_PH_LOG"] = st.empty()
+
+    step_names: List[str] = ["스캔", "Persist확정", "인덱싱", "prepared소비", "요약/배지", "ZIP/Release"]
+    stall_threshold_sec = 60
+
+    def _step_reset(names: List[str]) -> None:
+        st.session_state["_IDX_STEPS"] = [{"name": n, "state": "idle", "note": ""} for n in names]
+        st.session_state["_IDX_LOG"] = []
+        st.session_state["_IDX_PROG"] = 0.0
+        st.session_state["_IDX_START_TS"] = time.time()
+        st.session_state["_IDX_LAST_TS"] = time.time()
+
+    def _steps() -> List[Dict[str, str]]:
+        if "_IDX_STEPS" not in st.session_state:
+            _step_reset(step_names)
+        return list(st.session_state["_IDX_STEPS"])
+
+    def _icon(state: str) -> str:
+        return {"idle": "⚪", "run": "🔵", "ok": "🟢", "fail": "🔴", "skip": "⚪"}.get(state, "⚪")
+
+    def _render_stepper() -> None:
+        lines = []
+        for i, s in enumerate(_steps(), start=1):
+            note = f" — {s.get('note','')}" if s.get("note") else ""
+            lines.append(f"{_icon(s['state'])} {i}. {s['name']}{note}")
+        st.session_state["_IDX_PH_STEPS"].markdown("\n".join([f"- {ln}" for ln in lines]))
+
+    def _update_progress() -> None:
+        steps = _steps()
+        done = sum(1 for s in steps if s["state"] in ("ok", "skip"))
+        prog = done / len(steps)
+        st.session_state["_IDX_PROG"] = prog
+        bar = st.session_state.get("_IDX_BAR")
+        if bar is None:
+            st.session_state["_IDX_BAR"] = st.session_state["_IDX_PH_BAR"].progress(prog, text="진행률")
+        else:
+            try:
+                bar.progress(prog)
+            except Exception:
+                st.session_state["_IDX_BAR"] = st.session_state["_IDX_PH_BAR"].progress(prog, text="진행률")
+
+    def _render_status() -> None:
+        now = time.time()
+        last = float(st.session_state.get("_IDX_LAST_TS", now))
+        start = float(st.session_state.get("_IDX_START_TS", now))
+        since_last = int(now - last)
+        since_start = int(now - start)
+        running = any(s["state"] == "run" for s in _steps())
+        stalled = running and since_last >= stall_threshold_sec
+        if stalled:
+            text = f"🟥 **STALLED** · 마지막 업데이트 {since_last}s 전 · 총 경과 {since_start}s"
+        elif running:
+            text = f"🟦 RUNNING · 마지막 업데이트 {since_last}s 전 · 총 경과 {since_start}s"
+        else:
+            text = f"🟩 IDLE/COMPLETE · 총 경과 {since_start}s"
+        st.session_state["_IDX_PH_STATUS"].markdown(text)
+
+    def _step_set(idx: int, state: str, note: str = "") -> None:
+        steps = _steps()
+        if 0 <= idx < len(steps):
+            steps[idx]["state"] = state
+            if note:
+                steps[idx]["note"] = note
+            st.session_state["_IDX_STEPS"] = steps
+            st.session_state["_IDX_LAST_TS"] = time.time()
+            _render_stepper()
+            _update_progress()
+            _render_status()
 
     # 초기 렌더
     _render_stepper()
     _render_status()
     _update_progress()
 
-    # --- GH 업로드/백업 헬퍼 ----------------------------------------------
+    # ----- GH/시크릿 헬퍼 -----
     def _secret(name: str, default: str = "") -> str:
         try:
             v = st.secrets.get(name)
@@ -746,10 +716,7 @@ def _render_admin_index_panel() -> None:
                         pass
         return zpath
 
-    def _gh_api(
-        url: str, token: str, data: Optional[bytes], method: str, ctype: str
-    ) -> Dict[str, Any]:
-        """GitHub REST API 호출 헬퍼."""
+    def _gh_api(url: str, token: str, data: Optional[bytes], method: str, ctype: str) -> Dict[str, Any]:
         from urllib import request as _rq, error as _er
         req = _rq.Request(url, data=data, method=method)
         req.add_header("Authorization", f"token {token}")
@@ -768,46 +735,26 @@ def _render_admin_index_panel() -> None:
         except Exception:
             return {"_error": "network_error"}
 
-    def _upload_release_zip(
-        owner: str,
-        repo: str,
-        token: str,
-        tag: str,
-        zip_path: Path,
-        name: Optional[str] = None,
-        body: str = "",
-    ) -> Dict[str, Any]:
+    def _upload_release_zip(owner: str, repo: str, token: str, tag: str, zip_path: Path,
+                            name: Optional[str] = None, body: str = "") -> Dict[str, Any]:
         from urllib import parse as _ps
         api = "https://api.github.com"
         get_url = f"{api}/repos/{owner}/{repo}/releases/tags/{_ps.quote(tag)}"
         rel = _gh_api(get_url, token, None, "GET", "")
         if "_error" in rel:
-            payload = json.dumps(
-                {"tag_name": tag, "name": name or tag, "body": body}
-            ).encode("utf-8")
-            rel = _gh_api(
-                f"{api}/repos/{owner}/{repo}/releases",
-                token,
-                payload,
-                "POST",
-                "application/json",
-            )
+            payload = json.dumps({"tag_name": tag, "name": name or tag, "body": body}).encode("utf-8")
+            rel = _gh_api(f"{api}/repos/{owner}/{repo}/releases", token, payload, "POST", "application/json")
             if "_error" in rel:
                 return rel
-
         rid = rel.get("id")
         if not rid:
             return {"_error": "no_release_id"}
-
-        up_url = (
-            f"https://uploads.github.com/repos/{owner}/{repo}/releases/{rid}/assets"
-            f"?name={_ps.quote(zip_path.name)}"
-        )
+        up_url = (f"https://uploads.github.com/repos/{owner}/{repo}/releases/{rid}/assets"
+                  f"?name={_ps.quote(zip_path.name)}")
         try:
             data = zip_path.read_bytes()
         except Exception:
             return {"_error": "zip_read_failed"}
-
         from urllib import request as _rq, error as _er
         req = _rq.Request(up_url, data=data, method="POST")
         req.add_header("Authorization", f"token {token}")
@@ -825,58 +772,11 @@ def _render_admin_index_panel() -> None:
         except Exception:
             return {"_error": "network_error"}
 
-    # --- prepared 목록 미리보기 -------------------------------------------
+    # ----- prepared 목록 미리보기 (중복 로그 억제) -----
     st.caption("※ 이 패널은 Drive의 prepared만을 입력원으로 사용합니다.")
-
-    def _load_prepared_api() -> Tuple[Optional[Any], Optional[Any], List[str]]:
-        tried: List[str] = []
-
-        def _try(modname: str) -> Tuple[Optional[Any], Optional[Any]]:
-            try:
-                m = importlib.import_module(modname)
-                chk_fn = getattr(m, "check_prepared_updates", None)
-                mark_fn = getattr(m, "mark_prepared_consumed", None)
-                if callable(chk_fn) and callable(mark_fn):
-                    tried.append(f"ok: {modname}")
-                    return chk_fn, mark_fn
-                tried.append(f"miss attrs: {modname}")
-                return None, None
-            except Exception as e:
-                tried.append(f"fail: {modname} ({e})")
-                return None, None
-
-        for name in ("prepared", "gdrive"):
-            chk, mark = _try(name)
-            if chk and mark:
-                return chk, mark, tried
-        for name in ("src.prepared", "src.drive.prepared", "src.integrations.gdrive"):
-            chk, mark = _try(name)
-            if chk and mark:
-                return chk, mark, tried
-        repo_dir = Path(__file__).resolve().parent
-        for fname in ("prepared.py", "gdrive.py"):
-            path = repo_dir / fname
-            if path.exists():
-                try:
-                    spec = importlib.util.spec_from_file_location(
-                        f"_dyn_{fname[:-3]}", str(path)
-                    )
-                    if spec and spec.loader:
-                        mod = importlib.util.module_from_spec(spec)
-                        spec.loader.exec_module(mod)
-                        chk = getattr(mod, "check_prepared_updates", None)
-                        mark = getattr(mod, "mark_prepared_consumed", None)
-                        if callable(chk) and callable(mark):
-                            tried.append(f"ok: {path}")
-                            return chk, mark, tried
-                        tried.append(f"miss attrs: {path}")
-                except Exception as e:
-                    tried.append(f"fail: {path} ({e})")
-        return None, None, tried
 
     def _load_prepared_lister() -> Tuple[Optional[Any], List[str]]:
         tried: List[str] = []
-
         def _try(modname: str) -> Optional[Any]:
             try:
                 m = importlib.import_module(modname)
@@ -889,7 +789,6 @@ def _render_admin_index_panel() -> None:
             except Exception as e:
                 tried.append(f"fail: {modname} ({e})")
                 return None
-
         for name in ("src.integrations.gdrive", "gdrive"):
             fn = _try(name)
             if fn:
@@ -900,33 +799,227 @@ def _render_admin_index_panel() -> None:
     lister, dbg1 = _load_prepared_lister()
     if lister:
         try:
-            _step_set(0, "run", "prepared 목록 수집 중")
             files_list = lister() or []
-            _step_set(0, "ok", f"{len(files_list)}건")
-            _log(f"prepared 목록 {len(files_list)}건")
         except Exception as e:
-            _step_set(0, "fail", "목록 수집 실패")
             _log(f"prepared list failed: {e}", "err")
     else:
-        st.warning("prepared 목록 함수를 찾지 못했습니다.")
         for m in dbg1:
-            st.write("• " + m)
-        _step_set(0, "fail", "목록 함수 없음")
-        _log("prepared 목록 함수를 찾지 못했습니다.", "warn")
+            _log("• " + m, "warn")
+
+    prepared_count = len(files_list)
+    last_count = int(st.session_state.get("_IDX_PREPARED_LAST", -1))
+    if prepared_count != last_count:
+        _log(f"prepared 목록 {prepared_count}건")
+        st.session_state["_IDX_PREPARED_LAST"] = prepared_count
+
+    # 스텝 1 표시
+    if prepared_count > 0:
+        _step_set(0, "ok", f"{prepared_count}건")
+    else:
+        _step_set(0, "ok", "0건")
 
     with st.expander("이번에 인덱싱할 prepared 파일(예상)", expanded=False):
-        st.write(f"총 {len(files_list)}건 (표시는 최대 400건)")
-        if files_list:
+        st.write(f"총 {prepared_count}건 (표시는 최대 400건)")
+        if prepared_count:
             rows = []
             for rec in files_list[:400]:
-                name = str(
-                    rec.get("name") or rec.get("path") or rec.get("file") or ""
-                )
+                name = str(rec.get("name") or rec.get("path") or rec.get("file") or "")
                 fid = str(rec.get("id") or rec.get("fileId") or "")
                 rows.append({"name": name, "id": fid})
             st.dataframe(rows, hide_index=True, use_container_width=True)
         else:
             st.caption("일치하는 파일이 없습니다.")
+
+    # ----- 실행 컨트롤 (폼 기반: 이벤트 보존) -----
+    with st.form("idx_actions_form", clear_on_submit=False):
+        c1, c2, c3, c4 = st.columns([1, 2, 2, 1])
+        submit_reindex = c1.form_submit_button("🔁 강제 재인덱싱(HQ, prepared)", use_container_width=True)
+        show_after = c2.toggle("인덱싱 결과 표시", key="IDX_SHOW_AFTER", value=True)
+        auto_up = c3.toggle("인덱싱 후 자동 ZIP 업로드", key="IDX_AUTO_UP", value=_all_gh_secrets(),
+                            help="GH/GITHUB 시크릿이 모두 있으면 켜짐")
+        reset_view = c4.form_submit_button("🧹 화면 초기화")
+
+        if reset_view:
+            _step_reset(step_names)
+            st.session_state["_IDX_BAR"] = None
+            st.session_state["_IDX_PH_BAR"].empty()
+            st.session_state["_IDX_PH_LOG"].empty()
+            _log("화면 상태를 초기화했습니다.")
+
+        if submit_reindex:
+            # 클릭 신호를 세션에 남기고 rerun → 다음 턴에서 안전하게 처리
+            st.session_state["_IDX_REQ"] = {"ts": time.time(), "auto_up": auto_up, "show_after": show_after}
+            _log("인덱싱 요청 접수")
+            st.rerun()
+
+    # ----- 인덱싱 실행 (세션 플래그 소비) -----
+    req = st.session_state.pop("_IDX_REQ", None)
+    if req:
+        used_persist: Optional[Path] = None
+        _step_reset(step_names)
+        _render_stepper(); _render_status(); st.session_state["_IDX_PH_BAR"].empty(); st.session_state["_IDX_BAR"] = None
+        _log("인덱싱 시작")
+
+        try:
+            from src.rag import index_build as _idx
+
+            _step_set(1, "run", "persist 확인 중")
+            try:
+                from src.rag.index_build import PERSIST_DIR as _pp
+                used_persist = Path(str(_pp)).expanduser()
+            except Exception:
+                used_persist = Path.home() / ".maic" / "persist"
+            _step_set(1, "ok", str(used_persist))
+            _log(f"persist={used_persist}")
+
+            _step_set(2, "run", "HQ 인덱싱 중")
+            os.environ["MAIC_INDEX_MODE"] = "HQ"
+            os.environ["MAIC_USE_PREPARED_ONLY"] = "1"
+            _idx.rebuild_index()
+            _step_set(2, "ok", "완료")
+            _log("인덱싱 완료")
+
+            cj = used_persist / "chunks.jsonl"
+            if cj.exists() and cj.stat().st_size > 0:
+                _mark_ready_safe()
+
+            _step_set(3, "run", "prepared 소비 중")
+            # prepared 소비는 선택적(있으면 실행)
+            def _load_prepared_api() -> Tuple[Optional[Any], Optional[Any], List[str]]:
+                tried: List[str] = []
+                def _try(modname: str) -> Tuple[Optional[Any], Optional[Any]]:
+                    try:
+                        m = importlib.import_module(modname)
+                        chk_fn = getattr(m, "check_prepared_updates", None)
+                        mark_fn = getattr(m, "mark_prepared_consumed", None)
+                        if callable(chk_fn) and callable(mark_fn):
+                            tried.append(f"ok: {modname}")
+                            return chk_fn, mark_fn
+                        tried.append(f"miss attrs: {modname}")
+                        return None, None
+                    except Exception as e:
+                        tried.append(f"fail: {modname} ({e})")
+                        return None, None
+                for name in ("prepared", "gdrive"):
+                    chk, mark = _try(name)
+                    if chk and mark: return chk, mark, tried
+                for name in ("src.prepared", "src.drive.prepared", "src.integrations.gdrive"):
+                    chk, mark = _try(name)
+                    if chk and mark: return chk, mark, tried
+                return None, None, tried
+
+            try:
+                persist_for_seen = used_persist or _persist_dir_safe()
+                chk, mark, dbg2 = _load_prepared_api()
+                info: Dict[str, Any] = {}
+                new_files: List[str] = []
+                if callable(chk):
+                    try:
+                        info = chk(persist_for_seen, files_list) or {}
+                    except TypeError:
+                        info = chk(persist_for_seen) or {}
+                    new_files = list(info.get("files") or [])
+                else:
+                    for m in dbg2:
+                        _log("• " + m, "warn")
+                if new_files and callable(mark):
+                    try:
+                        mark(persist_for_seen, new_files)
+                    except TypeError:
+                        mark(new_files)
+                    _log(f"소비(seen) {len(new_files)}건")
+                _step_set(3, "ok", f"{len(new_files)}건")
+            except Exception as e:
+                _step_set(3, "fail", "소비 실패")
+                _log(f"prepared 소비 실패: {e}", "err")
+
+            _step_set(4, "run", "요약 계산")
+            try:
+                from src.rag.index_status import get_index_summary
+                summary2 = get_index_summary(used_persist)
+                note = f"files={summary2.total_files}, chunks={summary2.total_chunks}"
+                _step_set(4, "ok", note)
+                _log(f"요약 {note}")
+            except Exception:
+                _step_set(4, "ok", "요약 모듈 없음")
+                _log("요약 모듈 없음", "warn")
+
+            if req.get("auto_up") and _all_gh_secrets():
+                _step_set(5, "run", "ZIP/Release 업로드")
+                owner, repo_name = _resolve_owner_repo()
+                token = _secret("GH_TOKEN") or _secret("GITHUB_TOKEN")
+                if owner and repo_name and token:
+                    idx_dir = used_persist or _persist_dir_safe()
+                    backup_dir = idx_dir / "backups"
+                    z = _zip_index_dir(idx_dir, backup_dir)
+                    tag = f"index-{int(time.time())}"
+                    res = _upload_release_zip(owner, repo_name, token, tag, z, name=tag, body="MAIC index")
+                    if "_error" in res:
+                        _step_set(5, "fail", res.get("_error", "error"))
+                        if "detail" in res:
+                            with st.expander("상세 오류"):
+                                st.code(res["detail"])
+                        _log(f"업로드 실패: {res.get('_error')}", "err")
+                    else:
+                        _step_set(5, "ok", "업로드 완료")
+                        url = res.get("browser_download_url")
+                        if url:
+                            st.write(f"다운로드: {url}")
+                        _log("업로드 완료")
+                else:
+                    _step_set(5, "skip", "시크릿 없음")
+                    _log("시크릿 없어 업로드 생략", "warn")
+            else:
+                _step_set(5, "skip", "자동 업로드 꺼짐")
+                _log("자동 업로드 꺼짐")
+
+            st.success("강제 재인덱싱 완료 (prepared 전용)")
+        except Exception as e:
+            _step_set(2, "fail", "인덱싱 실패")
+            _log(f"인덱싱 실패: {e}", "err")
+            st.error("강제 재인덱싱 중 오류가 발생했어요.")
+
+    # ----- 인덱싱 후 요약/경로 표시 -----
+    show_after = bool(st.session_state.get("IDX_SHOW_AFTER", True))
+    if show_after:
+        try:
+            from src.rag.index_build import PERSIST_DIR as _px
+            idx_persist = Path(str(_px)).expanduser()
+        except Exception:
+            idx_persist = Path.home() / ".maic" / "persist"
+        glb_persist = _persist_dir_safe()
+        st.write(f"**Persist(Indexer):** `{str(idx_persist)}`")
+        st.write(f"**Persist(Global):** `{str(glb_persist)}`")
+        if str(idx_persist) != str(glb_persist):
+            st.warning("Persist 경로가 서로 다릅니다. 설정/부팅 훅을 점검하세요.")
+
+        try:
+            from src.rag.index_status import get_index_summary
+            summary = get_index_summary(idx_persist)
+            ready_txt = "Yes" if summary.ready else "No"
+            st.caption(f"요약: ready={ready_txt} · files={summary.total_files} · chunks={summary.total_chunks}")
+            if summary.sample_files:
+                with st.expander("샘플 파일(최대 3개)", expanded=False):
+                    rows = [{"path": s} for s in summary.sample_files]
+                    st.dataframe(rows, hide_index=True, use_container_width=True)
+        except Exception:
+            cj = idx_persist / "chunks.jsonl"
+            rd = (idx_persist / ".ready").exists()
+            if cj.exists():
+                st.caption("요약 모듈 없음: chunks.jsonl 존재")
+                if not rd:
+                    st.info(".ready 파일이 없어 준비 상태가 미완성입니다.")
+            else:
+                st.info("`chunks.jsonl`이 아직 없어 결과를 표시할 수 없습니다.")
+
+    # ----- 실시간 로그 -----
+    with st.expander("실시간 로그 (최근 200줄)", expanded=False):
+        buf: List[str] = st.session_state.get("_IDX_LOG", [])
+        if buf:
+            st.text("\n".join(buf))
+        else:
+            st.caption("표시할 로그가 없습니다.")
+
 
     # --- 실행 컨트롤 -------------------------------------------------------
     c1, c2, c3, c4 = st.columns([1, 2, 2, 1])
