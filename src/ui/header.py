@@ -114,9 +114,10 @@ def render() -> None:
             f'<span class="ready-chip">{label}'
             f'<span class="rd {dot_cls}"></span></span>'
         )
+        # ⛳️ 여기 문자열 결합만 수정: 'ff' → 'f'
         st.markdown(
             '<div class="brand-wrap">'
-            ff"{chip_html}<span class='brand-title'>LEES AI Teacher</span>"
+            f'{chip_html}<span class="brand-title">LEES AI Teacher</span>'
             "</div>",
             unsafe_allow_html=True,
         )
@@ -184,4 +185,5 @@ def render() -> None:
                         st.rerun()
                     else:
                         st.error("비밀번호가 올바르지 않습니다.")
-# =============================== [EOF] ==========================================
+# =============================== [03] render — END ==============================
+
