@@ -472,84 +472,63 @@ def _auto_start_once() -> None:
         _errlog(f"auto restore failed: {e}", where="[auto_start]", exc=e)
 
 
-# =================== [11] 관리자: 오케스트레이터 패널 ====================
-def _render_admin_panels() -> None:
-    """관리자 진단(오케스트레이터) — 토글 켬 이후에만 import & 렌더."""
-    if st is None:
+# =================== [11] DIAG: Orchestrator Header — START ====================
+def _render_index_orchestrator_header() -> None:
+    """상단 진단 헤더(미니멀): Persist 경로, 상태칩만 간결 표기.
+    - 불필요한 '인덱싱 패널 열기' 버튼 제거
+    - 관리자 섹션 점프용 앵커만 조용히 심어둠
+    """
+    if "st" not in globals() or st is None:
         return
 
-    toggle_key = "_admin_diag_open"
-    st.session_state.setdefault(toggle_key, False)
+    # 제목
+    st.markdown("### 🧪 인덱스 오케스트레이터")
 
+    # Persist 경로 안전 획득
+    def _persist_dir_safe() -> Path:
+        try:
+            p = _persist_dir()
+            return Path(str(p)).expanduser()
+        except Exception:
+            return Path.home() / ".maic" / "persist"
+
+    persist = _persist_dir_safe()
+
+    # Persist Dir UI
+    with st.container():
+        st.caption("Persist Dir")
+        st.code(str(persist), language="text")
+
+    # 상태(READY/MISSING) 계산
+    status_text = "MISSING"
     try:
-        open_panel = st.toggle(
-            "🛠 진단 도구",
-            value=st.session_state[toggle_key],
-            help="필요할 때만 로드합니다.",
-        )
+        from src.rag.index_status import get_index_summary
+        s = get_index_summary(persist)
+        status_text = "READY" if getattr(s, "ready", False) else "MISSING"
     except Exception:
-        open_panel = st.checkbox(
-            "🛠 진단 도구",
-            value=st.session_state[toggle_key],
-            help="필요할 때만 로드합니다.",
-        )
-    st.session_state[toggle_key] = bool(open_panel)
-    if not open_panel:
-        st.caption("▶ 위 토글을 켜면 진단 도구 모듈을 불러옵니다.")
-        return
+        # 요약 모듈/파일 없으면 MISSING로 둔다
+        status_text = "MISSING"
 
-    def _import_orchestrator_with_fallback():
-        tried_msgs: List[str] = []
-        for module_name in ("src.ui_orchestrator", "ui_orchestrator"):
-            try:
-                return importlib.import_module(module_name)
-            except Exception as e:
-                tried_msgs.append(f"{module_name} 실패: {e}")
-        for candidate in ("src/ui_orchestrator.py", "ui_orchestrator.py"):
-            try:
-                spec = importlib.util.spec_from_file_location(
-                    "ui_orchestrator", candidate
-                )
-                if spec and spec.loader:
-                    mod = importlib.util.module_from_spec(spec)
-                    spec.loader.exec_module(mod)
-                    return mod
-            except Exception as e:
-                tried_msgs.append(f"{candidate} 로드 실패: {e}")
-        raise ImportError(" or ".join(tried_msgs))
+    # 상태 칩
+    badge = "🟩 READY" if status_text == "READY" else "🟨 MISSING"
+    st.markdown(f"**상태**\n\n{badge}")
 
-    import time as _time
-    import traceback as _tb
-    load_start = _time.perf_counter()
-    try:
-        mod = _import_orchestrator_with_fallback()
-        render_fn = getattr(mod, "render_index_orchestrator_panel", None)
-        if not callable(render_fn):
-            render_fn = getattr(mod, "render_diagnostics_panel", None)
-        if not callable(render_fn):
-            st.warning(
-                "진단 렌더러 없음 "
-                "(render_index_orchestrator_panel / render_diagnostics_panel)"
-            )
-            return
-        render_fn()
-    except Exception as e:
-        st.error("진단 도구 렌더링 중 오류가 발생했습니다.")
-        with st.expander("오류 자세히 보기"):
-            st.code("".join(_tb.format_exception(type(e), e, e.__traceback__)))
-        return
-    finally:
-        elapsed_ms = (_time.perf_counter() - load_start) * 1000.0
+    # 안내(간결)
+    st.info(
+        "강제 인덱싱(HQ, 느림)·백업과 인덱싱 파일 미리보기는 **관리자 인덱싱 패널**에서 합니다. "
+        "관리자 모드 진입 후 아래 섹션으로 내려가면 됩니다.",
+        icon="ℹ️",
+    )
 
-    st.caption(f"✓ 로드/렌더 완료 — {elapsed_ms:.0f} ms")
+    # 관리자 섹션으로의 앵커(버튼 없이, 조용히)
+    st.markdown("<span id='idx-admin-panel'></span>", unsafe_allow_html=True)
+# =================== [11] DIAG: Orchestrator Header — END ====================
 
-
-# =================== [12] ADMIN: Index Panel(시각화·백업) ==================
 # =================== [12] ADMIN: Index Panel — START ====================
 def _render_admin_index_panel() -> None:
     """관리자 인덱싱 패널 (prepared 전용 + 스텝/진행바/로그/스톨표시).
     - 폼 submit → 세션 플래그 기록 → 다음 rerun에서 안전 실행
-    - 위젯 key 고유화, 중복 로그 억제, ruff E70x 제거
+    - 6단계(ZIP/Release)에 '실제 I/O 기반' 미니 진행바/텍스트 추가
     """
     if "st" not in globals() or st is None or not _is_admin_view():
         return
@@ -592,6 +571,8 @@ def _render_admin_index_panel() -> None:
         st.session_state["_IDX_PH_BAR"] = st.empty()
     if "_IDX_PH_LOG" not in st.session_state:
         st.session_state["_IDX_PH_LOG"] = st.empty()
+    if "_IDX_PH_S6" not in st.session_state:
+        st.session_state["_IDX_PH_S6"] = st.empty()
 
     step_names: List[str] = [
         "스캔",
@@ -611,6 +592,8 @@ def _render_admin_index_panel() -> None:
         st.session_state["_IDX_PROG"] = 0.0
         st.session_state["_IDX_START_TS"] = time.time()
         st.session_state["_IDX_LAST_TS"] = time.time()
+        st.session_state["_IDX_PH_S6"].empty()
+        st.session_state["_IDX_S6_BAR"] = None
 
     def _steps() -> List[Dict[str, str]]:
         if "_IDX_STEPS" not in st.session_state:
@@ -705,6 +688,26 @@ def _render_admin_index_panel() -> None:
         st.session_state["_IDX_LAST_TS"] = time.time()
         _render_status()
 
+    # --- 6단계 전용: 미니 진행 표시 ---------------------------------------
+    def _s6_progress(label: str, cur: int, total: int) -> None:
+        total = max(total, 1)
+        frac = min(max(cur / total, 0.0), 1.0)
+        bar = st.session_state.get("_IDX_S6_BAR")
+        if bar is None:
+            ph = st.session_state["_IDX_PH_S6"]
+            bar = ph.progress(0.0, text="6단계 진행")
+            st.session_state["_IDX_S6_BAR"] = bar
+        try:
+            bar.progress(frac)
+        except Exception:
+            ph = st.session_state["_IDX_PH_S6"]
+            st.session_state["_IDX_S6_BAR"] = ph.progress(frac, text="6단계 진행")
+        st.session_state["_IDX_LAST_TS"] = time.time()
+        st.session_state["_IDX_PH_S6"].markdown(
+            f"**6. {label}** — {cur:,} / {total:,} "
+            f"({int(frac * 100)}%)"
+        )
+
     # 초기 렌더
     _render_stepper()
     _render_status()
@@ -731,6 +734,7 @@ def _render_admin_index_panel() -> None:
             o, r = combo.split("/", 1)
             return o.strip(), r.strip()
 
+    # 나머지 이름도 허용(호환)
         owner = owner or _secret("GITHUB_OWNER")
         repo = repo or _secret("GITHUB_REPO_NAME")
         return owner or "", repo or ""
@@ -740,50 +744,36 @@ def _render_admin_index_panel() -> None:
         ow, rp = _resolve_owner_repo()
         return bool(tok and ow and rp)
 
+    # ----- ZIP: 진행 콜백 포함 --------------------------------------------
     def _zip_index_dir(idx_dir: Path, out_dir: Path) -> Path:
         out_dir.mkdir(parents=True, exist_ok=True)
+        # 파일 수 파악
+        files: List[Path] = []
+        for root, _d, _f in os.walk(str(idx_dir)):
+            for fn in _f:
+                files.append(Path(root) / fn)
+        total = len(files)
+
         ts = int(time.time())
         zname = f"index_{ts}.zip"
         zpath = out_dir / zname
         import zipfile
 
+        _s6_progress("ZIP 생성", 0, total if total > 0 else 1)
         with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as zf:
-            for root, _d, _f in os.walk(str(idx_dir)):
-                for fn in _f:
-                    p = Path(root) / fn
-                    arc = str(p.relative_to(idx_dir))
-                    try:
-                        zf.write(str(p), arcname=arc)
-                    except Exception:
-                        pass
+            for i, p in enumerate(files, start=1):
+                arc = str(p.relative_to(idx_dir))
+                try:
+                    zf.write(str(p), arcname=arc)
+                except Exception:
+                    pass
+                if i == 1 or i % 25 == 0 or i == total:
+                    _s6_progress("ZIP 생성", i, total if total > 0 else 1)
+                    _log(f"zip: {i}/{total} {arc}")
         return zpath
 
+    # ----- 업로드: 스트리밍 진행표시(가능 시 requests 사용) ----------------
     from urllib import request as _rq, error as _er, parse as _ps
-    import importlib as _imp
-
-    def _gh_api(
-        url: str,
-        token: str,
-        data: Optional[bytes],
-        method: str,
-        ctype: str,
-    ) -> Dict[str, Any]:
-        req = _rq.Request(url, data=data, method=method)
-        req.add_header("Authorization", f"token {token}")
-        req.add_header("Accept", "application/vnd.github+json")
-        if ctype:
-            req.add_header("Content-Type", ctype)
-        try:
-            with _rq.urlopen(req, timeout=30) as resp:
-                txt = resp.read().decode("utf-8", "ignore")
-                try:
-                    return json.loads(txt)
-                except Exception:
-                    return {"_raw": txt}
-        except _er.HTTPError as e:
-            return {"_error": f"HTTP {e.code}", "detail": e.read().decode()}
-        except Exception:
-            return {"_error": "network_error"}
 
     def _upload_release_zip(
         owner: str,
@@ -796,6 +786,31 @@ def _render_admin_index_panel() -> None:
     ) -> Dict[str, Any]:
         api = "https://api.github.com"
         get_url = f"{api}/repos/{owner}/{repo}/releases/tags/{_ps.quote(tag)}"
+
+        def _gh_api(
+            url: str,
+            token_: str,
+            data: Optional[bytes],
+            method: str,
+            ctype: str,
+        ) -> Dict[str, Any]:
+            req = _rq.Request(url, data=data, method=method)
+            req.add_header("Authorization", f"token {token_}")
+            req.add_header("Accept", "application/vnd.github+json")
+            if ctype:
+                req.add_header("Content-Type", ctype)
+            try:
+                with _rq.urlopen(req, timeout=30) as resp:
+                    txt = resp.read().decode("utf-8", "ignore")
+                    try:
+                        return json.loads(txt)
+                    except Exception:
+                        return {"_raw": txt}
+            except _er.HTTPError as e:
+                return {"_error": f"HTTP {e.code}", "detail": e.read().decode()}
+            except Exception:
+                return {"_error": "network_error"}
+
         rel = _gh_api(get_url, token, None, "GET", "")
         if "_error" in rel:
             payload = json.dumps(
@@ -819,18 +834,79 @@ def _render_admin_index_panel() -> None:
             f"https://uploads.github.com/repos/{owner}/{repo}/releases/{rid}/assets"
             f"?name={_ps.quote(zip_path.name)}"
         )
+
+        # 시도1: requests로 진행률 표시 업로드
+        try:
+            import requests  # type: ignore
+            total = int(zip_path.stat().st_size)
+
+            class _Stream:
+                def __init__(self, path: Path) -> None:
+                    self.f = open(path, "rb")
+                    self.t = total
+                    self.s = 0
+
+                def read(self, n: int = 1024 * 128) -> bytes:
+                    chunk = self.f.read(n)
+                    if not chunk:
+                        return b""
+                    self.s += len(chunk)
+                    _s6_progress("업로드", self.s, self.t)
+                    if self.s == len(chunk) or self.s % (1024 * 1024) < n:
+                        _log(f"upload: {self.s:,}/{self.t:,} bytes")
+                    return chunk
+
+                def __len__(self) -> int:
+                    return self.t
+
+                def close(self) -> None:
+                    try:
+                        self.f.close()
+                    except Exception:
+                        pass
+
+            stream = _Stream(zip_path)
+            headers = {
+                "Authorization": f"token {token}",
+                "Accept": "application/vnd.github+json",
+                "Content-Type": "application/zip",
+                "Content-Length": str(total),
+            }
+            resp = requests.post(
+                up_url,
+                data=stream,
+                headers=headers,
+                timeout=180,
+            )
+            try:
+                stream.close()
+            except Exception:
+                pass
+
+            if resp.status_code >= 400:
+                return {
+                    "_error": f"HTTP {resp.status_code}",
+                    "detail": resp.text,
+                }
+            try:
+                return resp.json()
+            except Exception:
+                return {"_raw": resp.text}
+        except Exception as e:
+            _log(f"requests 업로드 실패, urllib로 대체: {e}", "warn")
+
+        # 시도2: urllib(진행률은 파일 크기 단위 스텝만 갱신)
         try:
             data = zip_path.read_bytes()
-        except Exception:
-            return {"_error": "zip_read_failed"}
-
-        req = _rq.Request(up_url, data=data, method="POST")
-        req.add_header("Authorization", f"token {token}")
-        req.add_header("Content-Type", "application/zip")
-        req.add_header("Accept", "application/vnd.github+json")
-        try:
-            with _rq.urlopen(req, timeout=60) as resp:
+            total = len(data)
+            _s6_progress("업로드(대체)", 0, total)
+            req = _rq.Request(up_url, data=data, method="POST")
+            req.add_header("Authorization", f"token {token}")
+            req.add_header("Content-Type", "application/zip")
+            req.add_header("Accept", "application/vnd.github+json")
+            with _rq.urlopen(req, timeout=180) as resp:
                 txt = resp.read().decode("utf-8", "ignore")
+                _s6_progress("업로드(대체)", total, total)
                 try:
                     return json.loads(txt)
                 except Exception:
@@ -842,6 +918,7 @@ def _render_admin_index_panel() -> None:
 
     # ----- prepared 목록 미리보기 -----------------------------------------
     st.caption("※ 이 패널은 Drive의 prepared만을 입력원으로 사용합니다.")
+    import importlib as _imp
 
     def _load_prepared_lister() -> Tuple[Optional[Any], List[str]]:
         tried: List[str] = []
@@ -971,41 +1048,48 @@ def _render_admin_index_panel() -> None:
             if cj.exists() and cj.stat().st_size > 0:
                 _mark_ready_safe()
 
-            def _load_prepared_api() -> Tuple[Optional[Any], Optional[Any], List[str]]:
-                tried2: List[str] = []
-
-                def _try(modname: str) -> Tuple[Optional[Any], Optional[Any]]:
-                    try:
-                        m = _imp.import_module(modname)
-                        chk_fn = getattr(m, "check_prepared_updates", None)
-                        mark_fn = getattr(m, "mark_prepared_consumed", None)
-                        if callable(chk_fn) and callable(mark_fn):
-                            tried2.append(f"ok: {modname}")
-                            return chk_fn, mark_fn
-                        tried2.append(f"miss attrs: {modname}")
-                        return None, None
-                    except Exception as e:
-                        tried2.append(f"fail: {modname} ({e})")
-                        return None, None
-
-                for name in ("prepared", "gdrive"):
-                    chk, mark = _try(name)
-                    if chk and mark:
-                        return chk, mark, tried2
-
-                for name in (
-                    "src.prepared",
-                    "src.drive.prepared",
-                    "src.integrations.gdrive",
-                ):
-                    chk, mark = _try(name)
-                    if chk and mark:
-                        return chk, mark, tried2
-
-                return None, None, tried2
-
+            # prepared 소비
             _step_set(3, "run", "prepared 소비 중")
             try:
+                def _load_prepared_api() -> Tuple[
+                    Optional[Any], Optional[Any], List[str]
+                ]:
+                    tried2: List[str] = []
+
+                    def _try(modname: str) -> Tuple[
+                        Optional[Any], Optional[Any]
+                    ]:
+                        try:
+                            m = _imp.import_module(modname)
+                            chk_fn = getattr(m, "check_prepared_updates", None)
+                            mark_fn = getattr(
+                                m, "mark_prepared_consumed", None
+                            )
+                            if callable(chk_fn) and callable(mark_fn):
+                                tried2.append(f"ok: {modname}")
+                                return chk_fn, mark_fn
+                            tried2.append(f"miss attrs: {modname}")
+                            return None, None
+                        except Exception as e:
+                            tried2.append(f"fail: {modname} ({e})")
+                            return None, None
+
+                    for name in ("prepared", "gdrive"):
+                        chk, mark = _try(name)
+                        if chk and mark:
+                            return chk, mark, tried2
+
+                    for name in (
+                        "src.prepared",
+                        "src.drive.prepared",
+                        "src.integrations.gdrive",
+                    ):
+                        chk, mark = _try(name)
+                        if chk and mark:
+                            return chk, mark, tried2
+
+                    return None, None, tried2
+
                 persist_for_seen = used_persist or _persist_dir_safe()
                 chk, mark, dbg2 = _load_prepared_api()
                 info: Dict[str, Any] = {}
@@ -1036,6 +1120,7 @@ def _render_admin_index_panel() -> None:
                 _step_set(3, "fail", "소비 실패")
                 _log(f"prepared 소비 실패: {e}", "err")
 
+            # 요약
             _step_set(4, "run", "요약 계산")
             try:
                 from src.rag.index_status import get_index_summary
@@ -1050,6 +1135,7 @@ def _render_admin_index_panel() -> None:
                 _step_set(4, "ok", "요약 모듈 없음")
                 _log("요약 모듈 없음", "warn")
 
+            # ZIP/Release
             if req.get("auto_up") and _all_gh_secrets():
                 _step_set(5, "run", "ZIP/Release 업로드")
                 owner, repo_name = _resolve_owner_repo()
@@ -1132,62 +1218,6 @@ def _render_admin_index_panel() -> None:
             else:
                 st.info("`chunks.jsonl`이 아직 없어 결과를 표시할 수 없습니다.")
 
-    # ----- 수동 백업 / 업로드(Zip) ----------------------------------------
-    with st.expander("백업 / 업로드(Zip)", expanded=False):
-        ow_r, rp_r = _resolve_owner_repo()
-        token_r = _secret("GH_TOKEN") or _secret("GITHUB_TOKEN")
-        owner = st.text_input("GitHub Owner", ow_r, key="IDX_BK_OWNER")
-        repo_name = st.text_input("GitHub Repo", rp_r, key="IDX_BK_REPO")
-        token = st.text_input("GitHub Token", token_r, key="IDX_BK_TOKEN")
-        default_tag = f"index-{int(time.time())}"
-        tag = st.text_input("Release Tag", default_tag, key="IDX_BK_TAG")
-        try:
-            from src.rag.index_build import PERSIST_DIR as _px
-            idx_persist2 = Path(str(_px)).expanduser()
-        except Exception:
-            idx_persist2 = Path.home() / ".maic" / "persist"
-        local_dir = st.text_input(
-            "Local Backup Dir",
-            str((idx_persist2 / "backups").resolve()),
-            key="IDX_BK_DIR",
-        )
-        c1_bk, c2_bk = st.columns([1, 1])
-        act_zip = c1_bk.button("📦 로컬 ZIP 백업 만들기", key="IDX_BK_MKZIP")
-        act_up = c2_bk.button("⬆ Releases에 업로드(Zip)", key="IDX_BK_UPLOAD")
-
-        if act_zip:
-            z = _zip_index_dir(idx_persist2, Path(local_dir))
-            if z.exists() and z.stat().st_size > 0:
-                st.success(f"ZIP 생성 완료: `{str(z)}`")
-            else:
-                st.error("ZIP 생성에 실패했습니다.")
-
-        if act_up:
-            if not owner or not repo_name or not token:
-                st.error("Owner/Repo/Token을 입력해 주세요.")
-            else:
-                z = _zip_index_dir(idx_persist2, Path(local_dir))
-                st.caption(f"업로드 대상 ZIP: `{z.name}`")
-                res = _upload_release_zip(
-                    owner,
-                    repo_name,
-                    token,
-                    tag,
-                    z,
-                    name=tag,
-                    body="MAIC index",
-                )
-                if "_error" in res:
-                    st.error(f"업로드 실패: {res.get('_error')}")
-                    if "detail" in res:
-                        with st.expander("상세 오류"):
-                            st.code(res["detail"])
-                else:
-                    st.success("업로드 성공")
-                    browser = res.get("browser_download_url")
-                    if browser:
-                        st.write(f"다운로드: {browser}")
-
     # ----- 실시간 로그 -----------------------------------------------------
     with st.expander("실시간 로그 (최근 200줄)", expanded=False):
         buf: List[str] = st.session_state.get("_IDX_LOG", [])
@@ -1196,6 +1226,7 @@ def _render_admin_index_panel() -> None:
         else:
             st.caption("표시할 로그가 없습니다.")
 # =================== [12] ADMIN: Index Panel — END ====================
+
 
 # ============= [13] 인덱싱된 소스 목록(읽기 전용 대시보드) ==============
 def _render_admin_indexed_sources_panel() -> None:
