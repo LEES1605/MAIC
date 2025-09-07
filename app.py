@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional, Tuple
 try:
     import streamlit as st
 except Exception:
-    st = None  # type: ignore
+    st = None
 
 # ⛳️ SSOT 코어 임포트는 최상단에 정리 (E402 예방)
 from src.core.secret import promote_env as _promote_env
@@ -490,7 +490,7 @@ def _render_index_orchestrator_header() -> None:
         """SSOT persist 경로. 코어 모듈 우선, 실패 시 기본값."""
         try:
             # lazy import: Actions/로컬 모두 안전
-            from src.core.persist import effective_persist_dir as _epd  # type: ignore
+            from src.core.persist import effective_persist_dir as _epd
             return Path(str(_epd())).expanduser()
         except Exception:
             return Path.home() / ".maic" / "persist"
