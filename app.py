@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple
 try:
     import streamlit as st  # Streamlit 환경이 아닐 수도 있으므로 try
 except Exception:
-    st = None  # type: ignore[assignment]
+    st = None
 
 
 # =========================== [03] CORE: Persist Resolver ==========================
