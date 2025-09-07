@@ -52,59 +52,27 @@ def _effective_persist_dir() -> Path:
 
 
 # ================== [04] secrets → env 승격 & 페이지 설정(안정 옵션) =================
-def _from_secrets(name: str, default: Optional[str] = None) -> Optional[str]:
-    """Streamlit secrets 우선, 없으면 os.environ. dict/list는 JSON 문자열화."""
-    try:
-        if st is None or not hasattr(st, "secrets"):
-            return os.getenv(name, default)
-        val = st.secrets.get(name, None)
-        if val is None:
-            return os.getenv(name, default)
-        if isinstance(val, str):
-            return val
-        return json.dumps(val, ensure_ascii=False)
-    except Exception:
-        return os.getenv(name, default)
-
+from src.core.secret import promote_env as _promote_env
 
 def _bootstrap_env() -> None:
     """필요 시 secrets 값을 환경변수로 승격 + 서버 안정화 옵션."""
     keys = [
-        "OPENAI_API_KEY",
-        "OPENAI_MODEL",
-        "GEMINI_API_KEY",
-        "GEMINI_MODEL",
-        "GH_TOKEN",
-        "GH_REPO",
-        "GH_BRANCH",
-        "GH_PROMPTS_PATH",
-        "GDRIVE_PREPARED_FOLDER_ID",
-        "GDRIVE_BACKUP_FOLDER_ID",
-        "APP_MODE",
-        "AUTO_START_MODE",
-        "LOCK_MODE_FOR_STUDENTS",
-        "APP_ADMIN_PASSWORD",
-        "DISABLE_BG",
-        "MAIC_PERSIST_DIR",
-        "GITHUB_TOKEN",
-        "GITHUB_OWNER",
-        "GITHUB_REPO_NAME",
-        "GITHUB_REPO",
-        "GH_OWNER",
-        "GH_REPO",
+        "OPENAI_API_KEY", "OPENAI_MODEL",
+        "GEMINI_API_KEY", "GEMINI_MODEL",
+        "GH_TOKEN", "GH_REPO", "GH_BRANCH", "GH_PROMPTS_PATH",
+        "GDRIVE_PREPARED_FOLDER_ID", "GDRIVE_BACKUP_FOLDER_ID",
+        "APP_MODE", "AUTO_START_MODE", "LOCK_MODE_FOR_STUDENTS",
+        "APP_ADMIN_PASSWORD", "DISABLE_BG", "MAIC_PERSIST_DIR",
+        "GITHUB_TOKEN", "GITHUB_OWNER", "GITHUB_REPO_NAME", "GITHUB_REPO",
+        "GH_OWNER", "GH_REPO",
     ]
-    for k in keys:
-        v = _from_secrets(k)
-        if v and not os.getenv(k):
-            os.environ[k] = str(v)
+    _promote_env(keys)
 
-    # Streamlit 안정화
+    # Streamlit 안정화(기본값)
     os.environ.setdefault("STREAMLIT_SERVER_FILE_WATCHER_TYPE", "none")
     os.environ.setdefault("STREAMLIT_RUN_ON_SAVE", "false")
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
-    os.environ.setdefault(
-        "STREAMLIT_SERVER_ENABLE_WEBSOCKET_COMPRESSION", "false"
-    )
+    os.environ.setdefault("STREAMLIT_SERVER_ENABLE_WEBSOCKET_COMPRESSION", "false")
 
 
 _bootstrap_env()
@@ -114,6 +82,8 @@ if st:
         st.set_page_config(page_title="LEES AI Teacher", layout="wide")
     except Exception:
         pass
+# ================== [04] secrets → env 승격 & 페이지 설정 — END ======================
+
 
 # ======================= [05] 경로/상태 & 에러 로거 — START =======================
 # NOTE:
@@ -392,6 +362,8 @@ def _boot_auto_restore_index() -> None:
 # =================== [10] 부팅 훅: 인덱스 자동 복원 — END =====================
 
 # =================== [11] 부팅 오토플로우 & 자동 복원 모드 ==================
+from src.core.secret import get as _secret_get
+
 def _boot_autoflow_hook() -> None:
     """앱 부팅 시 1회 오토 플로우 실행(관리자=대화형, 학생=자동)."""
     try:
@@ -437,15 +409,10 @@ def _auto_start_once() -> None:
     except Exception:
         return
 
-    mode = (
-        os.getenv("AUTO_START_MODE")
-        or _from_secrets("AUTO_START_MODE", "off")
-        or "off"
-    ).lower()
+    mode = (os.getenv("AUTO_START_MODE") or _secret_get("AUTO_START_MODE", "off") or "off").lower()
     if mode not in ("restore", "on"):
         return
 
-    # releases 모듈이 있으면 사용하고, 없으면 [10] 훅 로직으로 폴백
     try:
         rel = importlib.import_module("src.backup.github_release")
         fn = getattr(rel, "restore_latest", None)
@@ -461,7 +428,6 @@ def _auto_start_once() -> None:
             _errlog(f"restore_latest failed: {e}", where="[auto_start]", exc=e)
             ok = False
     else:
-        # 폴백: [10] 훅을 직접 실행
         try:
             _boot_auto_restore_index()
             ok = core_is_ready(used_persist)
@@ -479,6 +445,8 @@ def _auto_start_once() -> None:
             st.success("자동 복원 완료")
         _set_brain_status("READY", "자동 복원 완료", "release", attached=True)
         _safe_rerun("auto_start", ttl=1)
+# =================== [11] 부팅 오토플로우 & 자동 복원 모드 — END ==================
+
 
 
 # =================== [12C] DIAG: Ready Probe — START ====================
