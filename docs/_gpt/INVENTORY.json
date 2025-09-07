@@ -1,5 +1,5 @@
 {
-  "generated_at": "2025-09-07T16:14:37",
+  "generated_at": "2025-09-07T16:17:11",
   "root": "/home/runner/work/MAIC/MAIC",
   "total_files": 86,
   "total_dirs": 25,
@@ -83,8 +83,8 @@
     },
     {
       "path": "src/ui/header.py",
-      "size": 7689,
-      "kb": 7.5
+      "size": 7756,
+      "kb": 7.6
     },
     {
       "path": "prompts.yaml",
