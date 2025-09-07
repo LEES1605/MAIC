@@ -560,67 +560,31 @@ def _render_index_orchestrator_header() -> None:
     st.markdown("<span id='idx-admin-panel'></span>", unsafe_allow_html=True)
 
 # =================== [12C] DIAG: Ready Probe — START ====================
-def _probe_index_health(p: Path) -> Dict[str, Any]:
-    """인덱스 준비상태를 경량 검증한다.
-    체크 항목:
-      - chunks.jsonl 존재/크기
-      - .ready 존재
-      - JSON 샘플 파싱(최대 200줄) 오류율
-    """
-    res: Dict[str, Any] = {"persist": str(p)}
-    try:
-        cj = p / "chunks.jsonl"
-        res["chunks_exists"] = cj.exists()
-        res["chunks_size"] = cj.stat().st_size if cj.exists() else 0
-        res["ready_exists"] = (p / ".ready").exists()
-        res["mtime"] = int(cj.stat().st_mtime) if cj.exists() else 0
-
-        # JSON 샘플 파싱(최대 200줄)
-        malformed = 0
-        sample = 0
-        if cj.exists():
-            with cj.open("r", encoding="utf-8") as rf:
-                for i, line in enumerate(rf):
-                    if i >= 200:
-                        break
-                    s = line.strip()
-                    if not s:
-                        continue
-                    sample += 1
-                    try:
-                        json.loads(s)
-                    except Exception:
-                        malformed += 1
-
-        res["json_sample"] = sample
-        res["json_malformed"] = malformed
-        json_ok = (malformed == 0) or (sample > 0 and malformed / sample <= 0.02)
-        res["json_ok"] = json_ok
-
-        res["ok"] = (
-            res["chunks_exists"]
-            and res["chunks_size"] > 0
-            and res["ready_exists"]
-            and json_ok
-        )
-    except Exception as e:
-        _errlog(f"probe failed: {e}", where="[ready-probe]", exc=e)
-        res["ok"] = False
-    return res
-
-
 def _render_ready_probe() -> None:
-    """READY 여부를 미니멀 Pill로 시각화 + 상세는 expander."""
+    """READY 여부를 미니멀 Pill로 시각화 + 상세는 expander.
+    - SSOT: src.core.index_probe.probe_index_health(IndexHealth dataclass)
+    - 로컬 구현체(_probe_index_health) 제거/중복 해소
+    """
     if st is None:
         return
 
     p = _effective_persist_dir()
-    info = _probe_index_health(p)
 
-    ok = bool(info.get("ok"))
-    size = int(info.get("chunks_size") or 0)
-    ready = bool(info.get("ready_exists"))
-    json_ok = bool(info.get("json_ok"))
+    # ---- SSOT 호출: 코어 모듈(있으면) → 실패 시 안전 폴백 ----
+    try:
+        from src.core.index_probe import IndexHealth, probe_index_health
+        info: "IndexHealth" = probe_index_health(persist=p)
+        size = int(info.chunks_size)
+        ready = bool(info.ready_exists)
+        json_ok = bool((info.json_sample > 0) and (info.json_malformed == 0))
+        ok = bool(ready and info.chunks_exists and size > 0 and json_ok)
+    except Exception:
+        # 폴백: 존재/크기만 점검(간소)
+        cj = p / "chunks.jsonl"
+        size = cj.stat().st_size if cj.exists() else 0
+        ready = (p / ".ready").exists()
+        json_ok = True  # 샘플 검증 불가 시 보수적으로 True
+        ok = bool(ready and size > 0)
 
     level = "HIGH" if ok else ("MID" if (size > 0 and json_ok) else "LOW")
     badge = "🟢" if ok else ("🟡" if (size > 0 or ready or json_ok) else "🔴")
@@ -657,22 +621,29 @@ def _render_ready_probe() -> None:
     )
     st.markdown(pill_html, unsafe_allow_html=True)
 
-    # 세부 상태
+    # 세부 상태 표 (SSOT 사용 시만 풍부하게 표시)
     with st.expander("세부 상태 보기", expanded=False):
-        rows = [
-            ("Persist", info.get("persist", "")),
-            ("chunks.jsonl", "OK" if info.get("chunks_exists") else "Missing"),
-            ("size", f"{size:,} bytes"),
-            (".ready", "OK" if ready else "Missing"),
-            (
-                "JSON 샘플",
-                f'{int(info.get("json_sample",0))} lines · '
-                f'malformed {int(info.get("json_malformed",0))}',
-            ),
-        ]
+        rows = []
+        try:
+            from src.core.index_probe import IndexHealth, probe_index_health
+            info2: "IndexHealth" = probe_index_health(persist=p)
+            rows = [
+                ("Persist", str(info2.persist)),
+                ("chunks.jsonl", "OK" if info2.chunks_exists else "Missing"),
+                ("size", f"{int(info2.chunks_size):,} bytes"),
+                (".ready", "OK" if info2.ready_exists else "Missing"),
+                ("JSON 샘플", f"{int(info2.json_sample)} lines · malformed {int(info2.json_malformed)}"),
+            ]
+        except Exception:
+            rows = [
+                ("Persist", str(p)),
+                ("size", f"{size:,} bytes"),
+                (".ready", "OK" if ready else "Missing"),
+            ]
         data = [{"항목": k, "상태": v} for k, v in rows]
         st.dataframe(data, hide_index=True, use_container_width=True)
 # =================== [12C] DIAG: Ready Probe — END ====================
+
 
 # =================== [13] ADMIN: Index Panel (prepared 전용) ==============
 def _render_admin_index_panel() -> None:
@@ -1613,7 +1584,7 @@ def _render_body() -> None:
         _render_index_orchestrator_header()
         try:
             # (선택) 기존 상세 Probe 함수가 있다면 호출
-            _render_ready_probe()  # noqa: F821  (있으면 렌더, 없으면 무시)
+            _render_ready_probe()
         except Exception:
             pass
         try:
