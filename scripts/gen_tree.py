@@ -1,34 +1,50 @@
-# ======================= [01] imports — START =======================
+# ======================= [01] imports & constants — START =======================
 from __future__ import annotations
 
-import sys
-import os
-import json
 import argparse
+import fnmatch
+import json
+import os
+import sys
+import datetime as dt
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Sequence, Tuple, Optional
+from typing import Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
 
-# toml 파서: 3.11+는 tomllib, 그 미만은 tomli(없으면 None 처리로 안전 폴백)
+# Python 3.11+ tomllib, 3.10 이하에서는 tomli 백필
 try:
-    import tomllib as _toml  # Python 3.11+
-except Exception:
+    import tomllib  # type: ignore[attr-defined]
+except Exception:  # pragma: no cover
     try:
-        import tomli as _toml  # type: ignore
+        import tomli as tomllib  # type: ignore  # noqa: F401
     except Exception:
-        _toml = None  # type: ignore
+        tomllib = None  # type: ignore
 
+# 기본 값들(레포 상황에 맞춰 안전치로 설정)
+DEFAULT_MAX_DEPTH: int = 6
+DEFAULT_REPORTS: Tuple[str, ...] = ("stale", "sizes", "orphans")
+DEFAULT_STALE_DAYS: int = 45
+DEFAULT_TOPN_SIZES: int = 30
 
-def _load_toml(path: Path) -> Dict[str, Any]:
-    """TOML 읽기(없으면 {}, 파서 없으면 {})."""
-    try:
-        if not path.exists() or _toml is None:
-            return {}
-        with path.open("rb") as f:
-            return _toml.load(f)
-    except Exception:
-        return {}
-# ======================= [01] imports — END =========================
+# 트리/인벤토리에서 무시할 경로 패턴들
+DEFAULT_EXCLUDES: Tuple[str, ...] = (
+    ".git",
+    ".github",
+    ".venv",
+    "__pycache__",
+    "node_modules",
+    ".mypy_cache",
+    ".ruff_cache",
+    "dist",
+    "build",
+    "venv",
+)
+
+# 문서 루트 힌트(고아 파일 리포트용) — 두 개가 필요했던 기존 로직 호환
+DOC_ROOTS: Tuple[str, str] = ("docs", "docs/_gpt")
+
+# ======================= [01] imports & constants — END =========================
+
 
 # ======================= [02] CLI Compat Shim — START ==========================
 def _apply_out_dir_shim(argv: List[str]) -> List[str]:
