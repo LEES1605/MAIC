@@ -1,50 +1,124 @@
-# =============================== [01] imports ===============================
+# src/core/secret.py
+"""
+SSOT: Secrets/Env 유틸 (Streamlit 유무에 안전)
+- get(): secrets/env 읽기 (dict/list는 JSON 문자열로 반환)
+- promote_env(): 지정 키들을 env로 승격 (동명이 없을 때만)
+- resolve_owner_repo(): GitHub owner/repo 결정
+- token(): GitHub API 토큰 조회
+"""
 from __future__ import annotations
 
-import os
 import json
-from typing import Optional, Sequence, Any
+import os
+from typing import Any, Dict, Optional, Sequence, Tuple
 
 try:
-    import streamlit as st  # Streamlit 아닐 수도 있음
+    import streamlit as st  # 런타임에 없을 수도 있음
 except Exception:
-    st = None  # Streamlit 미사용 환경 허용
+    st = None  # type: ignore[assignment]
 
-# =============================== [02] helpers ===============================
-def _from_secrets(name: str) -> Any | None:
-    """st.secrets 있으면 먼저 읽고, 없거나 키 없으면 None."""
-    if st is not None and hasattr(st, "secrets"):
-        try:
-            # st.secrets는 Mapping 유사 객체라 .get 사용 가능
-            return st.secrets.get(name)
-        except Exception:
-            return None
-    return None
 
-# =============================== [03] API: get ==============================
+_DEFAULT_KEYS: Tuple[str, ...] = (
+    # LLM
+    "OPENAI_API_KEY",
+    "OPENAI_MODEL",
+    "GEMINI_API_KEY",
+    "GEMINI_MODEL",
+    # GitHub
+    "GH_TOKEN",
+    "GH_OWNER",
+    "GH_REPO",
+    "GITHUB_TOKEN",
+    "GITHUB_OWNER",
+    "GITHUB_REPO_NAME",
+    "GITHUB_REPO",  # "owner/repo"
+    # App
+    "APP_MODE",
+    "AUTO_START_MODE",
+    "LOCK_MODE_FOR_STUDENTS",
+    "APP_ADMIN_PASSWORD",
+    "DISABLE_BG",
+    "MAIC_PERSIST_DIR",
+    # GDrive
+    "GDRIVE_PREPARED_FOLDER_ID",
+    "GDRIVE_BACKUP_FOLDER_ID",
+)
+
+
 def get(name: str, default: Optional[str] = None) -> Optional[str]:
-    """secrets → env 순으로 읽어서 문자열로 반환. dict/list는 JSON 직렬화."""
-    val = _from_secrets(name)
+    """secrets 우선 → env, dict/list는 JSON 문자열로 반환."""
+    val: Any = None
+    try:
+        if st is not None and hasattr(st, "secrets"):
+            val = st.secrets.get(name)  # type: ignore[attr-defined]
+    except Exception:
+        val = None
+
     if val is None:
-        return os.getenv(name, default)
+        val = os.getenv(name, None)
+
+    if val is None:
+        return default
     if isinstance(val, str):
         return val
-    # dict/list 등은 JSON 문자열로 고정
-    return json.dumps(val, ensure_ascii=False)
+    # dict/list → JSON 문자열
+    try:
+        return json.dumps(val, ensure_ascii=False)
+    except Exception:
+        return default
 
-# =========================== [04] API: promote_env ==========================
-def promote_env(names: Sequence[str], *, also_env: bool = True) -> None:
+
+def promote_env(
+    names: Optional[Sequence[str]] = None,
+    *,
+    # 호환용 별칭(앱에서 keys/also_env를 쓴 기록이 있어 지원)
+    keys: Optional[Sequence[str]] = None,
+    also_env: Optional[Sequence[str]] = None,
+) -> None:
     """
-    secrets 값을 os.environ으로 '승격'.
-    - also_env=True: 이미 env에 값이 있어도 덮어쓰지 않음(기본 동작 유지)
-    - also_env=False: env에 비어있을 때만 채움
+    secrets → os.environ 승격.
+    - 이미 env에 있으면 덮어쓰지 않음.
+    - names/keys 둘 중 하나로 목록 제공. 없으면 _DEFAULT_KEYS 사용.
+    - also_env: 승격 후 존재 여부만 강제 보정이 필요할 때 추가 확인용.
     """
-    for k in names:
-        if not k:
-            continue
-        # 이미 환경변수가 있다면 그대로 둠
-        if also_env and os.getenv(k):
-            continue
-        val = get(k, None)
-        if val is not None and not os.getenv(k):
-            os.environ[k] = str(val)
+    wanted: Sequence[str] = names or keys or _DEFAULT_KEYS
+    for k in wanted:
+        v = get(k)
+        if v and not os.getenv(k):
+            os.environ[k] = str(v)
+
+    # 그냥 존재만 보장하고 싶은 키가 있다면 여기서 한 번 더 확인
+    if also_env:
+        for k in also_env:
+            if not os.getenv(k):
+                v2 = get(k)
+                if v2:
+                    os.environ[k] = str(v2)
+
+
+def resolve_owner_repo() -> Tuple[str, str]:
+    """
+    GitHub owner/repo 결정 규칙:
+    1) GH_OWNER + GH_REPO
+    2) GITHUB_REPO = "owner/repo"
+    3) GITHUB_OWNER + GITHUB_REPO_NAME
+    없으면 ("","")
+    """
+    owner = get("GH_OWNER") or ""
+    repo = get("GH_REPO") or ""
+    if owner and repo:
+        return owner.strip(), repo.strip()
+
+    combo = get("GITHUB_REPO") or ""
+    if combo and "/" in combo:
+        o, r = combo.split("/", 1)
+        return o.strip(), r.strip()
+
+    owner = get("GITHUB_OWNER") or ""
+    repo = get("GITHUB_REPO_NAME") or ""
+    return owner.strip(), repo.strip()
+
+
+def token() -> Optional[str]:
+    """GitHub API 토큰 조회(GH_TOKEN → GITHUB_TOKEN)."""
+    return get("GH_TOKEN") or get("GITHUB_TOKEN")
