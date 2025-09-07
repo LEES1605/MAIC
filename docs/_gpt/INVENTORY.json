@@ -1,0 +1,252 @@
+{
+  "generated_at": "2025-09-07T16:08:29",
+  "root": "/home/runner/work/MAIC/MAIC",
+  "total_files": 84,
+  "total_dirs": 25,
+  "counts_by_ext": {
+    ".yml": 10,
+    "<noext>": 2,
+    ".md": 12,
+    ".yaml": 2,
+    ".toml": 4,
+    ".py": 51,
+    ".ini": 1,
+    ".txt": 1,
+    ".sh": 1
+  },
+  "top_sizes": [
+    {
+      "path": "app.py",
+      "size": 62503,
+      "kb": 61.0
+    },
+    {
+      "path": "docs/_gpt/MAIC_refactor_report.md",
+      "size": 41170,
+      "kb": 40.2
+    },
+    {
+      "path": "src/backup/github_release.py",
+      "size": 26235,
+      "kb": 25.6
+    },
+    {
+      "path": "src/rag_engine.py",
+      "size": 18182,
+      "kb": 17.8
+    },
+    {
+      "path": "scripts/gen_tree.py",
+      "size": 15861,
+      "kb": 15.5
+    },
+    {
+      "path": "src/rag/index_build.py",
+      "size": 15246,
+      "kb": 14.9
+    },
+    {
+      "path": "src/rag/search.py",
+      "size": 11021,
+      "kb": 10.8
+    },
+    {
+      "path": "docs/_archive/2025-09-07_PROJECT_STATUS.md",
+      "size": 10638,
+      "kb": 10.4
+    },
+    {
+      "path": "src/integrations/gdrive.py",
+      "size": 10559,
+      "kb": 10.3
+    },
+    {
+      "path": "src/ui_orchestrator.py",
+      "size": 9374,
+      "kb": 9.2
+    },
+    {
+      "path": "src/services/index.py",
+      "size": 8682,
+      "kb": 8.5
+    },
+    {
+      "path": "src/llm/providers.py",
+      "size": 8452,
+      "kb": 8.3
+    },
+    {
+      "path": "src/config.py",
+      "size": 7784,
+      "kb": 7.6
+    },
+    {
+      "path": "src/ui/header.py",
+      "size": 7541,
+      "kb": 7.4
+    },
+    {
+      "path": "prompts.yaml",
+      "size": 7454,
+      "kb": 7.3
+    },
+    {
+      "path": "src/agents/evaluator.py",
+      "size": 7396,
+      "kb": 7.2
+    },
+    {
+      "path": "src/llm/streaming.py",
+      "size": 6330,
+      "kb": 6.2
+    },
+    {
+      "path": "docs/_gpt/MASTERPLAN.md",
+      "size": 6042,
+      "kb": 5.9
+    },
+    {
+      "path": "src/rag/quality.py",
+      "size": 5965,
+      "kb": 5.8
+    },
+    {
+      "path": "src/agents/responder.py",
+      "size": 5632,
+      "kb": 5.5
+    }
+  ],
+  "stale_docs": [],
+  "orphans": [
+    ".github/workflows/PULL_REQUEST_TEMPLATE.MD",
+    "CHANGELOG.md",
+    "DEV_SETUP.md",
+    "folders_files_map.md",
+    "NIGHTLY_CHECKLIST.md",
+    "README.md",
+    "TESTING_GUIDE.md"
+  ],
+  "config": {
+    "max_depth": 4,
+    "excludes": [
+      ".DS_Store",
+      "*.zip",
+      "*.bin",
+      "*/.git/*",
+      "*/.github/*",
+      "*/.mypy_cache/*",
+      "*/.ruff_cache/*",
+      "*/__pycache__/*",
+      "*/.venv/*",
+      "*/venv/*",
+      "*/node_modules/*",
+      "*/.pytest_cache/*",
+      ".git",
+      ".venv",
+      "node_modules",
+      "__pycache__",
+      ".mypy_cache",
+      ".ruff_cache",
+      ".pytest_cache",
+      "dist",
+      "build",
+      ".DS_Store",
+      "*.zip",
+      "*.bin"
+    ],
+    "sort": "name",
+    "reports": [
+      "stale",
+      "sizes",
+      "orphans"
+    ],
+    "stale_days": 120,
+    "topn_sizes": 20
+  },
+  "paths": [
+    ".ci/patch-guard.yml",
+    ".gitattributes",
+    ".github/workflows/ci-core-probe.yml",
+    ".github/workflows/ci.yml",
+    ".github/workflows/codeql.yml",
+    ".github/workflows/gen-tree.yml",
+    ".github/workflows/guard-patch.yml",
+    ".github/workflows/nightly.yml",
+    ".github/workflows/PULL_REQUEST_TEMPLATE.MD",
+    ".github/workflows/release.yml",
+    ".github/workflows/sbom.yml",
+    ".github/workflows/sha-helper.yml",
+    ".pre-commit-config.yaml",
+    ".streamlit/config.toml",
+    "app.py",
+    "CHANGELOG.md",
+    "DEV_SETUP.md",
+    "docs/_archive/2025-09-07_PROJECT_STATUS.md",
+    "docs/_gpt/CONVENTIONS.MD",
+    "docs/_gpt/MAIC_refactor_report.md",
+    "docs/_gpt/MASTERPLAN.md",
+    "docs/_gpt/README.MD",
+    "folders_files_map.md",
+    "MAIC PROJECT MASTER PLAN",
+    "mypy.ini",
+    "NIGHTLY_CHECKLIST.md",
+    "prompts.yaml",
+    "pyproject.toml",
+    "README.md",
+    "requirements.txt",
+    "ruff.toml",
+    "scripts/check_import_paths.sh",
+    "scripts/gen_tree.py",
+    "scripts/gen_tree.toml",
+    "src/__init__.py",
+    "src/agents/evaluator.py",
+    "src/agents/responder.py",
+    "src/backup/github_release.py",
+    "src/common/__init__.py",
+    "src/common/utils.py",
+    "src/compat/__init__.py",
+    "src/compat/config_bridge.py",
+    "src/compat/llama.py",
+    "src/config.py",
+    "src/core/__init__.py",
+    "src/core/index_probe.py",
+    "src/core/persist.py",
+    "src/drive/prepared.py",
+    "src/features/build_flow.py",
+    "src/features/drive_card.py",
+    "src/features/ui_header.py",
+    "src/integrations/__init__.py",
+    "src/integrations/gdrive.py",
+    "src/llm/__init__.py",
+    "src/llm/providers.py",
+    "src/llm/streaming.py",
+    "src/prompt_modes.py",
+    "src/prompting/__init__.py",
+    "src/prompting/drive_source.py",
+    "src/prompting/fallback_source.py",
+    "src/prompting/github_source.py",
+    "src/prompting/resolve.py",
+    "src/prompting/types.py",
+    "src/rag/__init__.py",
+    "src/rag/index_build.py",
+    "src/rag/index_status.py",
+    "src/rag/label.py",
+    "src/rag/quality.py",
+    "src/rag/search.py",
+    "src/rag_engine.py",
+    "src/services/index.py",
+    "src/state/session.py",
+    "src/ui/header.py",
+    "src/ui_admin.py",
+    "src/ui_components.py",
+    "src/ui_orchestrator.py",
+    "src/ui_theme.py",
+    "src/vision/ocr.py",
+    "TESTING_GUIDE.md",
+    "tests/test_core_index_probe.py",
+    "tests/test_label_rag.py",
+    "tests/test_rag_search.py",
+    "tests/test_smoke_app_import.py",
+    "tests/test_smoke_gdrive_driver.py"
+  ]
+}
