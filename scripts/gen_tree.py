@@ -103,17 +103,15 @@ class ScanConfig:
 
 # ======================= [02] data models — END =================================
 
-# ======================= [03A] TOML loader — START ===================
-def _load_toml(path: Path) -> Dict:
-    """Load TOML on both 3.11+(tomllib) and 3.10(tomli). Return {} on failure."""
-    try:
-        if not path.exists() or path.stat().st_size == 0:
-            return {}
-        with path.open("rb") as f:
-            return tomllib.load(f)
-    except Exception:
-        return {}
-# ======================= [03A] TOML loader — END =====================
+# ======================= [03A] TOML loader — START =========================
+# Python 3.11+: tomllib, 그 미만: tomli
+import sys
+if sys.version_info >= (3, 11):
+    import tomllib  # stdlib
+else:
+    import tomli as tomllib
+# ======================= [03A] TOML loader — END ===========================
+
 # ======================= [03B] utils & walkers — START =========================
 def _norm_patterns(patts: Iterable[str]) -> Tuple[str, ...]:
     """fnmatch에 맞도록 경로 구분자를 '/'로 통일."""
