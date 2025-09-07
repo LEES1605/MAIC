@@ -230,17 +230,14 @@ def _errlog(msg: str, where: str = "", exc: Exception | None = None) -> None:
 def _is_admin_view() -> bool:
     """관리자 패널 표시 여부(학생 화면 완전 차단).
     - 오직 세션 로그인 플래그로만 허용: admin_mode | is_admin
-    - 시크릿/환경변수 ADMIN_MODE, APP_MODE 등은 '표시' 판단에 사용하지 않음
-      (운영 편의로 서버에서 켜두더라도 학생 브라우저에는 비노출)
     """
+    if st is None:
+        return False
     try:
-        if st is None:
-            return False
         ss = st.session_state
         return bool(ss.get("admin_mode") or ss.get("is_admin"))
     except Exception:
         return False
-
 
 # ======================= [07] RERUN GUARD utils ==============================
 def _safe_rerun(tag: str, ttl: int = 1) -> None:
@@ -268,142 +265,15 @@ def _safe_rerun(tag: str, ttl: int = 1) -> None:
 
 # ================= [08] 헤더(배지·타이틀·로그인/아웃) — START ==============
 def _header() -> None:
-    """상단 헤더.
-    - 학생: 제목 왼쪽에 상태라벨 + 펄스점만 표시(준비완료/준비중/문제발생)
-    - 관리자: 동일 + 우측에 로그인/로그아웃 버튼
-    """
-    if st is None:
-        return
-
-    ss = st.session_state
-    ss.setdefault("admin_mode", False)
-    ss.setdefault("_show_admin_login", False)
-
-    # ---- 상태 진단(간단) ----
+    """모듈화된 헤더 호출 래퍼(호환용)."""
     try:
-        info = _probe_index_health(_effective_persist_dir())
-        ok = bool(info.get("ok"))
-        size_ok = int(info.get("chunks_size") or 0) > 0
-        json_ok = bool(info.get("json_ok"))
-        level = "HIGH" if ok else ("MID" if (size_ok and json_ok) else "LOW")
-    except Exception:
-        level = "LOW"
-
-    label_map = {"HIGH": "준비완료", "MID": "준비중", "LOW": "문제발생"}
-    dot_map = {"HIGH": "rd-high", "MID": "rd-mid", "LOW": "rd-low"}
-    label = label_map[level]
-    dot_cls = dot_map[level]
-
-    # ---- 최소 CSS (미니멀) ----
-    st.markdown(
-        """
-        <style>
-          .brand-wrap{ display:flex; align-items:center; gap:10px; }
-          .brand-title{
-            font-weight:900; letter-spacing:.2px;
-            font-size:250%; line-height:1.1;
-          }
-          .ready-chip{
-            display:inline-flex; align-items:center; gap:6px;
-            padding:2px 10px; border-radius:12px;
-            background:#f4f6fb; border:1px solid #e5e7eb;
-            font-weight:800; color:#111827; font-size:18px; /* +50% */
-          }
-          .rd{ width:8px; height:8px; border-radius:50%; display:inline-block; } /* 점 조금 작게 */
-          .rd-high{ background:#16a34a; box-shadow:0 0 0 0 rgba(22,163,74,.55); animation:pulseDot 1.8s infinite; }
-          .rd-mid { background:#f59e0b; box-shadow:0 0 0 0 rgba(245,158,11,.55); animation:pulseDot 1.8s infinite; }
-          .rd-low { background:#ef4444; box-shadow:0 0 0 0 rgba(239,68,68,.55); animation:pulseDot 1.8s infinite; }
-          @keyframes pulseDot {
-            0%   { box-shadow:0 0 0 0   rgba(0,0,0,0.18); }
-            70%  { box-shadow:0 0 0 16px rgba(0,0,0,0); }  /* 파장 더 크게 */
-            100% { box-shadow:0 0 0 0   rgba(0,0,0,0); }
-          }
-          .admin-login-narrow [data-testid="stTextInput"] input{
-            height:42px; border-radius:10px;
-          }
-          .admin-login-narrow .stButton>button{ width:100%; height:42px; }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    # ---- 레이아웃: (빈칸) | [라벨+점 + 제목] | [관리자 버튼] ----
-    _, c2, c3 = st.columns([1, 6, 2], gap="small")
-    with c2:
-        chip_html = (
-            f'<span class="ready-chip">{label}'
-            f'<span class="rd {dot_cls}"></span></span>'
-        )
-        st.markdown(
-            f'<div class="brand-wrap">{chip_html}'
-            f'<span class="brand-title">LEES AI Teacher</span></div>',
-            unsafe_allow_html=True,
-        )
-
-    with c3:
-        if ss.get("admin_mode"):
-            if st.button("🚪 로그아웃", key="logout_now", help="관리자 로그아웃"):
-                ss["admin_mode"] = False
-                ss["_show_admin_login"] = False
-                try:
-                    st.toast("로그아웃 완료", icon="👋")
-                except Exception:
-                    st.success("로그아웃 완료")
-                st.rerun()
-        else:
-            if st.button("🔐 관리자", key="open_admin_login", help="관리자 로그인"):
-                ss["_show_admin_login"] = not ss.get("_show_admin_login", False)
-
-    # ---- 관리자 로그인 폼(필요 시) ----
-    if (not ss.get("admin_mode")) and ss.get("_show_admin_login"):
-        with st.container(border=True):
-            st.write("🔐 관리자 로그인")
-            try:
-                pwd_set = (
-                    _from_secrets("ADMIN_PASSWORD", None)
-                    or _from_secrets("APP_ADMIN_PASSWORD", None)
-                    or _from_secrets("MAIC_ADMIN_PASSWORD", None)
-                    or os.getenv("ADMIN_PASSWORD")
-                    or os.getenv("APP_ADMIN_PASSWORD")
-                    or os.getenv("MAIC_ADMIN_PASSWORD")
-                    or None
-                )
-            except Exception:
-                pwd_set = None
-
-            left, mid, right = st.columns([2, 1, 2])
-            with mid:
-                with st.form("admin_login_form", clear_on_submit=False):
-                    st.markdown(
-                        '<div class="admin-login-narrow">', unsafe_allow_html=True
-                    )
-                    pw = st.text_input(
-                        "비밀번호", type="password", key="admin_pw_input"
-                    )
-                    col_a, col_b = st.columns([1, 1])
-                    submit = col_a.form_submit_button("로그인")
-                    cancel = col_b.form_submit_button("닫기")
-                    st.markdown("</div>", unsafe_allow_html=True)
-
-                if cancel:
-                    ss["_show_admin_login"] = False
-                    st.rerun()
-
-                if submit:
-                    if not pwd_set:
-                        st.error("서버에 관리자 비밀번호가 설정되어 있지 않습니다.")
-                    elif pw and str(pw) == str(pwd_set):
-                        ss["admin_mode"] = True
-                        ss["_show_admin_login"] = False
-                        try:
-                            st.toast("로그인 성공", icon="✅")
-                        except Exception:
-                            st.success("로그인 성공")
-                        st.rerun()
-                    else:
-                        st.error("비밀번호가 올바르지 않습니다.")
+        from src.ui.header import render as _render_header  # lazy import
+        _render_header()
+    except Exception as e:
+        # fallback: 최소 타이틀
+        if st is not None:
+            st.markdown("### LEES AI Teacher")
 # ================= [08] 헤더(배지·타이틀·로그인/아웃) — END ===============
-
 
 # ======================= [09] 배경(비활성: No-Op) ===========================
 def _inject_modern_bg_lib() -> None:
@@ -1691,7 +1561,6 @@ def _render_body() -> None:
     if st is None:
         return
 
-    # 1) 부팅 훅(1회)
     if not st.session_state.get("_boot_checked"):
         try:
             _boot_auto_restore_index()
@@ -1701,28 +1570,36 @@ def _render_body() -> None:
         finally:
             st.session_state["_boot_checked"] = True
 
-    # 2) 배경(현재 No-Op)
     _mount_background(
         theme="light", accent="#5B8CFF", density=3, interactive=True, animate=True,
         gradient="radial", grid=True, grain=False, blur=0, seed=1234, readability_veil=True,
     )
 
-    # 3) 헤더(상태라벨+펄스만)
     _header()
 
-    # 4) 관리자 전용 섹션 (학생에겐 완전 비노출)
+    # 관리자만: 오케스트레이터/스캔/인덱싱/읽기전용/Probe 상세
     if _is_admin_view():
-        _render_index_orchestrator_header()   # Persist/상태 배지(설명 포함)
-        _render_ready_probe()                  # Ready Probe 상세
-        _render_admin_prepared_scan_panel()    # 스캔(인덱싱 없이)
-        _render_admin_index_panel()            # 강제 인덱싱
-        _render_admin_indexed_sources_panel()  # 읽기 전용 목록
-        st.caption("ⓘ 복구/재인덱싱/스캔은 ‘🛠 진단 도구’ 또는 관리자 패널에서 수행할 수 있어요.")
+        _render_index_orchestrator_header()
+        try:
+            # (선택) 기존 상세 Probe 함수가 있다면 호출
+            _render_ready_probe()  # noqa: F821  (있으면 렌더, 없으면 무시)
+        except Exception:
+            pass
+        try:
+            _render_admin_prepared_scan_panel()
+        except Exception:
+            pass
+        try:
+            _render_admin_index_panel()
+        except Exception:
+            pass
+        try:
+            _render_admin_indexed_sources_panel()
+        except Exception:
+            pass
 
-    # 5) 자동 복원 훅(필요 시 1회)
     _auto_start_once()
 
-    # 6) 채팅 UI
     _inject_chat_styles_once()
     with st.container():
         st.markdown('<div class="chatpane"><div class="messages">', unsafe_allow_html=True)
