@@ -1,5 +1,1 @@
-# ===== [01] PKG EXPORTS ======================================================
-from __future__ import annotations
-
-__all__: list[str] = []
-# ===== [02] END ==============================================================
+# Package marker for 'src' (kept intentionally empty)

@@ -1,0 +1,57 @@
+# ============================ [01] CODEQL SECURITY SCAN — START ============================
+name: CodeQL
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  # 매주 일요일 01:30 KST (토요일 16:30 UTC)
+  schedule:
+    - cron: "30 16 * * 6"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codeql-analysis
+  cancel-in-progress: false
+
+jobs:
+  analyze:
+    name: CodeQL (Python)
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        language: ["python"]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # (선택) Python 런타임 지정 — Python 리포 인식 안정화
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          queries: +security-and-quality
+
+      # Python은 빌드가 필요 없지만, 표준 단계 유지 (다른 언어 추가 대비)
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"
+# ============================= [01] CODEQL SECURITY SCAN — END =============================

@@ -1,0 +1,114 @@
+# ========================== [01] guard-patch.yml — START ==========================
+name: CI • Patch Guard
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, edited]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  patch-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 🧰 Checkout (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 📦 Install deps
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pyyaml
+
+      - name: 🔎 Run Patch Guard
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -euo pipefail
+          python - <<'PYCODE'
+import os, sys, re, hashlib, subprocess, json, pathlib
+try:
+    import yaml  # type: ignore
+except Exception as e:
+    print("::error::pyyaml not available", flush=True)
+    sys.exit(1)
+
+BASE_REF = os.environ.get("BASE_REF", "main")
+PR_BODY  = os.environ.get("PR_BODY", "") or ""
+CFG_PATH = ".ci/patch-guard.yml"
+
+def load_cfg():
+    # 1) repo file 우선
+    if pathlib.Path(CFG_PATH).exists():
+        with open(CFG_PATH, "r", encoding="utf-8") as f:
+            return yaml.safe_load(f) or {}
+    # 2) PR body 내 HTML 주석 블록 파싱
+    m = re.search(r"<!--\s*PATCH-GUARD\s*(.*?)-->", PR_BODY, re.S | re.I)
+    if not m:
+        print("::error::.ci/patch-guard.yml 또는 PR 본문의 <!-- PATCH-GUARD ... --> 블록이 필요합니다.")
+        sys.exit(1)
+    content = m.group(1)
+    try:
+        return yaml.safe_load(content) or {}
+    except Exception as e:
+        print(f"::error::PR 본문의 PATCH-GUARD YAML 파싱 실패: {e}")
+        sys.exit(1)
+
+def git_show(ref, path):
+    r = subprocess.run(["git","fetch","origin", ref], capture_output=True, text=True)
+    # ignore failure (branch may already be fetched)
+    r = subprocess.run(["git","show", f"origin/{ref}:{path}"], capture_output=True)
+    return r.returncode, r.stdout, r.stderr
+
+cfg = load_cfg()
+files = cfg.get("files", [])
+if not isinstance(files, list) or not files:
+    print("::error::PATCH-GUARD 설정에 files 리스트가 없습니다.")
+    sys.exit(1)
+
+errors = []
+for i, item in enumerate(files, 1):
+    path = str(item.get("path", "")).strip()
+    exp_sha = (item.get("sha256") or "").strip()
+    anchors = item.get("anchors", [])
+    if not path:
+        errors.append(f"[item {i}] path 누락")
+        continue
+    code, data, err = git_show(BASE_REF, path)
+    if code != 0:
+        errors.append(f"{path}: origin/{BASE_REF}에서 파일을 찾을 수 없음")
+        continue
+    h = hashlib.sha256(data).hexdigest()
+    if exp_sha:
+        if h != exp_sha:
+            errors.append(f"{path}: sha256 불일치 (expected={exp_sha}, got={h})")
+    # anchor 검사 (string 포함 또는 정규식: 're:...')
+    try:
+        text = data.decode("utf-8", errors="ignore")
+    except Exception:
+        text = ""
+    for a in anchors or []:
+        if isinstance(a, str) and a.startswith("re:"):
+            pat = a[3:]
+            if not re.search(pat, text, re.S):
+                errors.append(f"{path}: anchor regex 미존재: {pat}")
+        else:
+            s = str(a)
+            if s not in text:
+                errors.append(f"{path}: anchor 문자열 미존재: {s}")
+
+if errors:
+    print("::error::Patch Guard 실패:\n- " + "\n- ".join(errors))
+    sys.exit(1)
+print("Patch Guard OK")
+PYCODE
+# ========================== [01] guard-patch.yml — END ============================

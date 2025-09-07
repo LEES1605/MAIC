@@ -1,18 +1,51 @@
-# ===== [01] PRE-COMMIT HOOKS ================================================
+# ============================ [01] PRE-COMMIT CONFIG — START ============================
+# MAIC: pre-commit hooks (최소 변경 버전)
+# - 기존 훅(ruff/mypy/bandit)은 유지
+# - 로컬에서도 '오탈자 임포트 가드'와 '스모크 테스트(수동)' 추가
+
+minimum_pre_commit_version: "3.5.0"
+default_stages: [commit]
+
 repos:
+  # 기존: Ruff (자동수정 포함)
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.5.7
     hooks:
       - id: ruff
         args: [--fix]
       - id: ruff-format
+
+  # 기존: mypy (추가 타입 스텁 유지)
   - repo: https://github.com/pre-commit/mirrors-mypy
     rev: v1.10.0
     hooks:
       - id: mypy
-        additional_dependencies: [types-requests, types-PyYAML]
+        additional_dependencies:
+          - types-requests
+          - types-PyYAML
+
+  # 기존: bandit(보안 정적 분석)
   - repo: https://github.com/PyCQA/bandit
     rev: 1.7.8
     hooks:
       - id: bandit
         args: [-q, -r, .]
+
+  # 신규: 로컬 커스텀 훅
+  - repo: local
+    hooks:
+      # (수동 실행용) 초고속 스모크 테스트
+      - id: smoke-tests
+        name: Run smoke tests (manual)
+        entry: bash -lc 'pytest -q tests/test_smoke_*'
+        language: system
+        pass_filenames: false
+        stages: [manual]
+
+      # 오탈자 임포트 가드(로컬에서도 방지) — CI 가드와 동일 로직
+      - id: forbid-typo-imports
+        name: Forbid typo imports (integration/intergration/intergratoins)
+        entry: bash -lc 'set -euo pipefail; PATTERN="src\.intergration|src\.intergratoins|src\.integration\.|src\.integration$"; HITS="$(git grep -nE \"$PATTERN\" -- \":!*.md\" || true)"; if [ -n \"$HITS\" ]; then echo \"Forbidden imports found:\"; echo \"$HITS\"; exit 1; fi'
+        language: system
+        pass_filenames: false
+# ============================= [01] PRE-COMMIT CONFIG — END =============================

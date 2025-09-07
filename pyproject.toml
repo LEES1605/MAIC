@@ -34,12 +34,17 @@ dev = [
   "types-PyYAML",
 ]
 
-# ===== [04] TOOL CONFIG POINTERS ============================================
+# ===== [04] TOOL CONFIG POINTERS ============================================  # [04] START
 [tool.ruff]
 extend = "ruff.toml"
+src = ["src"]  # isort/ruff가 프로젝트 first-party 탐지 시 사용할 소스 루트
+
+[tool.ruff.lint.isort]
+known-first-party = ["src"]  # 'src'를 first-party로 분류하여 import 그룹 충돌 해소
 
 [tool.mypy]
 config_file = "mypy.ini"
+# [04] END
 
 # ===== [05] SETUPTOOLS (package discovery) ==================================
 [tool.setuptools]

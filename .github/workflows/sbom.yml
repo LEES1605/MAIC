@@ -1,0 +1,47 @@
+# ============================ [01] SBOM (CycloneDX) WORKFLOW — START ============================
+name: SBOM
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]     # 정식 릴리스 태그 푸시 시에도 실행
+  pull_request:
+  # 매주 일요일 01:40 KST (토요일 16:40 UTC)
+  schedule:
+    - cron: "40 16 * * 6"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sbom-build
+  cancel-in-progress: false
+
+jobs:
+  generate:
+    name: Generate SBOM (CycloneDX JSON)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Anchore 공식 SBOM 액션 (Syft 기반)
+      - name: Create SBOM
+        id: sbom
+        uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: cyclonedx-json
+          output-file: sbom-${{ github.sha }}.cdx.json
+          upload-artifact: true  # Actions 아티팩트로 자동 업로드
+
+      # 정식 릴리스(v*) 태그에서만 릴리스 자산으로 첨부
+      - name: Attach SBOM to Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: sbom-${{ github.sha }}.cdx.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+# ============================= [01] SBOM (CycloneDX) WORKFLOW — END =============================

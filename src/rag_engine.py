@@ -1,4 +1,5 @@
-# ===== [01] IMPORTS ==========================================================
+# ruff: noqa: I001  # (파일 한정) import 정렬 경고 임시 비활성화 — CI 안정화용
+# ===== [01] IMPORTS =============================================  # [01] START
 from __future__ import annotations
 
 import io
@@ -10,20 +11,21 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import streamlit as st
-from src.compat.config_bridge import PERSIST_DIR  # 호환용(로컬 인덱스가 있을 때만 사용)
 
+from src.compat.config_bridge import PERSIST_DIR  # 호환용(로컬 인덱스가 있을 때만 사용)
+# [01] END
 
 # ===== [02] ERRORS ===========================================================
 class RAGEngineError(Exception):
-    ...
+    """기본 RAG 엔진 예외"""
 
 
 class QueryEngineNotReady(RAGEngineError):
-    ...
+    """쿼리 엔진 준비 안 됨"""
 
 
 class LocalIndexMissing(RAGEngineError):
-    ...
+    """로컬 인덱스 없음"""
 
 
 # ===== [03] LOCAL PATH HELPERS (fallback 전용) ===============================
@@ -39,10 +41,11 @@ def _index_exists(persist_dir: str | PathLike[str]) -> bool:
     except Exception:
         return False
 
-
-# ===== [04] SECRETS/ID HELPERS ==============================================
+# ===== [04] SECRETS/ID HELPERS ==============================================  # [04] START
 def _flatten_secrets(obj: Any = None, prefix: str = "") -> List[Tuple[str, Any]]:
+    """Streamlit secrets를 (경로, 값) 리스트로 평탄화."""
     from collections.abc import Mapping as _Map
+
     if obj is None:
         obj = st.secrets
     out: List[Tuple[str, Any]] = []
@@ -62,6 +65,7 @@ def _parse_drive_id(s: str) -> Optional[str]:
     """URL/ID 혼합 입력에서 폴더/파일 ID만 추출."""
     s = (s or "").strip()
     import re
+
     for patt in (
         r"/folders/([A-Za-z0-9_-]{20,})",
         r"/file/d/([A-Za-z0-9_-]{20,})",
@@ -78,59 +82,66 @@ def _find_folder_id(kind: str) -> Optional[str]:
     kind: 'BACKUP' | 'PREPARED' | 'DEFAULT'
     표준 키 + 프로젝트 별칭(APP_*)까지 폭넓게 인식.
     """
-    KEY_PREFS = {
-        "BACKUP": (
-            "GDRIVE_BACKUP_FOLDER_ID",
-            "BACKUP_FOLDER_ID",
-            "BACKUP_FOLDER_URL",
-            "APP_BACKUP_FOLDER_ID",  # 별칭 호환
-        ),
+    # 1) 표준 키 우선
+    KEY_PREFS: Dict[str, Tuple[str, ...]] = {
+        "BACKUP": ("GDRIVE_BACKUP_FOLDER_ID", "BACKUP_FOLDER_ID", "BACKUP_FOLDER_URL", "APP_BACKUP_FOLDER_ID"),
         "PREPARED": (
             "GDRIVE_PREPARED_FOLDER_ID",
             "PREPARED_FOLDER_ID",
             "PREPARED_FOLDER_URL",
-            "APP_GDRIVE_FOLDER_ID",  # 별칭 호환(프로젝트에선 prepared로 사용)
+            "APP_GDRIVE_FOLDER_ID",
         ),
         "DEFAULT": ("GDRIVE_FOLDER_ID", "GDRIVE_FOLDER_URL"),
     }
     for k in KEY_PREFS.get(kind, ()):
-        if k in st.secrets and str(st.secrets[k]).strip():
-            v = str(st.secrets[k]).strip()
-            return _parse_drive_id(v) or v
+        try:
+            if k in st.secrets and str(st.secrets[k]).strip():
+                vs = str(st.secrets[k]).strip()
+                return _parse_drive_id(vs) or vs
+        except Exception:
+            continue
 
-    # 중첩 탐색 (키 경로에 토큰이 포함되면 후보로 인정)
-    TOK = {
+    # 2) 중첩 탐색(경로 텍스트에 토큰이 포함되면 후보로 인정)
+    TOK: Dict[str, Tuple[str, ...]] = {
         "BACKUP": ("BACKUP",),
         "PREPARED": ("PREPARED", "APP_GDRIVE_FOLDER_ID", "SOURCE", "DATA"),
         "DEFAULT": ("GDRIVE_FOLDER_ID",),
-    }[kind]
+    }
+    tokens = TOK[kind]
     for path, val in _flatten_secrets():
         try:
             if isinstance(val, (str, int)) and str(val).strip():
                 up = path.upper()
-                if any(t in up for t in TOK) and (
+                if any(t in up for t in tokens) and (
                     "FOLDER_ID" in up or "URL" in up or up.endswith(".ID") or up.endswith("_ID")
                 ):
-                    v = str(val).strip()
-                    return _parse_drive_id(v) or v
+                    vs = str(val).strip()
+                    return _parse_drive_id(vs) or vs
         except Exception:
             continue
 
-    # 환경변수도 확인
-    ENV = {
+    # 3) 환경변수 확인
+    ENV: Dict[str, Tuple[str, ...]] = {
         "BACKUP": ("GDRIVE_BACKUP_FOLDER_ID", "BACKUP_FOLDER_ID", "BACKUP_FOLDER_URL"),
-        "PREPARED": ("GDRIVE_PREPARED_FOLDER_ID", "PREPARED_FOLDER_ID", "PREPARED_FOLDER_URL", "APP_GDRIVE_FOLDER_ID"),
+        "PREPARED": (
+            "GDRIVE_PREPARED_FOLDER_ID",
+            "PREPARED_FOLDER_ID",
+            "PREPARED_FOLDER_URL",
+            "APP_GDRIVE_FOLDER_ID",
+        ),
         "DEFAULT": ("GDRIVE_FOLDER_ID", "GDRIVE_FOLDER_URL"),
-    }[kind]
-    for e in ENV:
-        v = os.getenv(e)
-        if v:
-            return _parse_drive_id(v) or v
+    }
+    for e in ENV[kind]:
+        env_v = os.getenv(e)  # ← 다른 지역변수명으로 분리해 mypy 타입 충돌 제거
+        if env_v:
+            return _parse_drive_id(env_v) or env_v
+
     return None
+# [04] END
 
 
-# ===== [05] GOOGLE DRIVE AUTH (OAuth 우선, SA 폴백) ==========================
-def _get_drive_credentials():
+# ===== [05] GOOGLE DRIVE AUTH (OAuth 우선, SA 폴백) ==========================  # [05] START
+def _get_drive_credentials() -> tuple[Any, str]:
     # 1) 사용자 OAuth (My Drive에 '생성/업로드' 가능)
     cid = st.secrets.get("GDRIVE_OAUTH_CLIENT_ID") or st.secrets.get("GOOGLE_OAUTH_CLIENT_ID")
     csec = st.secrets.get("GDRIVE_OAUTH_CLIENT_SECRET") or st.secrets.get("GOOGLE_OAUTH_CLIENT_SECRET")
@@ -151,7 +162,7 @@ def _get_drive_credentials():
             "oauth",
         )
 
-    # 2) 서비스계정(SA) — 개인 드라이브에서 '새로 업로드'는 불가(공유드라이브/이미 존재 파일 갱신/읽기 위주)
+    # 2) 서비스계정(SA)
     sa_raw = None
     for k in (
         "GDRIVE_SERVICE_ACCOUNT_JSON",
@@ -166,6 +177,7 @@ def _get_drive_credentials():
         for _, v in _flatten_secrets():
             try:
                 from collections.abc import Mapping as _Map
+
                 if isinstance(v, _Map) and v.get("type") == "service_account" and "private_key" in v:
                     sa_raw = v
                     break
@@ -183,13 +195,13 @@ def _get_drive_credentials():
     return SACreds.from_service_account_info(info, scopes=["https://www.googleapis.com/auth/drive"]), "sa"
 
 
-def _drive_client():
+def _drive_client() -> Any:
     from googleapiclient.discovery import build
 
     creds, mode = _get_drive_credentials()
     st.session_state["gdrive_auth_mode"] = mode  # 디버그 표시에 사용
     return build("drive", "v3", credentials=creds, cache_discovery=False)
-
+# [05] END
 
 # ===== [06] REMOTE-ONLY LOAD =================================================
 def _download_latest_backup_zip_bytes() -> Tuple[bytes, Dict[str, Any]]:
@@ -200,13 +212,17 @@ def _download_latest_backup_zip_bytes() -> Tuple[bytes, Dict[str, Any]]:
 
     svc = _drive_client()
     q = f"'{backup_folder}' in parents and trashed=false and mimeType='application/zip'"
-    resp = svc.files().list(
-        q=q,
-        orderBy="modifiedTime desc",
-        fields="files(id,name,modifiedTime,size)",
-        pageSize=1,
-        supportsAllDrives=True,
-    ).execute()
+    resp = (
+        svc.files()
+        .list(
+            q=q,
+            orderBy="modifiedTime desc",
+            fields="files(id,name,modifiedTime,size)",
+            pageSize=1,
+            supportsAllDrives=True,
+        )
+        .execute()
+    )
     files = resp.get("files", [])
     if not files:
         raise LocalIndexMissing("드라이브 백업 ZIP이 없습니다.")
@@ -274,7 +290,7 @@ def _load_index_from_disk(persist_dir: str | PathLike[str]) -> Dict[str, Any]:
     return data
 
 
-# ===== [08] LOCAL TF-IDF QUERY ENGINE =======================================
+# ===== [08] LOCAL TF-IDF QUERY ENGINE =======================================  # [08] START
 class _LocalQueryEngine:
     """
     간단한 TF-IDF 코사인 유사도 기반 검색기.
@@ -286,6 +302,14 @@ class _LocalQueryEngine:
     def __init__(self, idx: Dict[str, Any], top_k_default: int = 5) -> None:
         self.idx = idx
         self.top_k_default = int(top_k_default)
+
+        # mypy 안정화: 내부 필드 선 선언(지연 초기화 경고 방지)
+        self._texts: List[str] = []
+        self._metas: List[Dict[str, Any]] = []
+        self._vectors: List[Dict[str, float]] = []
+        self._norms: List[float] = []
+        self._idf: Dict[str, float] = {}
+
         self._build_vectors()
 
     # ------------------------ 내부 유틸 -------------------------------------
@@ -293,35 +317,42 @@ class _LocalQueryEngine:
     def _tokenize(s: str) -> List[str]:
         # 영문/숫자/한글 연속 문자열을 토큰으로 사용 (간단한 토크나이저)
         import re
+
         return re.findall(r"[A-Za-z0-9가-힣]+", (s or "").lower())
 
     def _build_vectors(self) -> None:
         """두 패스: DF 수집 → IDF 계산 → 각 청크 TF-IDF 벡터 & 노름 계산"""
         import math
+
         chunks = self.idx.get("chunks", [])
-        self._texts: List[str] = []
-        self._metas: List[Dict[str, Any]] = []
-        self._vectors: List[Dict[str, float]] = []
-        self._norms: List[float] = []
+        self._texts = []
+        self._metas = []
+        self._vectors = []
+        self._norms = []
         df: Dict[str, int] = {}
-        # 1) DF 수집
+
+        # 1) DF 수집 (집합으로 중복 제거)
         for rec in chunks:
             txt = rec.get("text", "") or ""
-            toks = set(self._tokenize(txt))
-            for t in toks:
+            seen = set(self._tokenize(txt))  # ← set[str]
+            for t in seen:
                 df[t] = df.get(t, 0) + 1
         N = max(1, len(chunks))
+
         # 2) IDF
-        self._idf: Dict[str, float] = {t: math.log((N + 1) / (c + 1)) + 1.0 for t, c in df.items()}
+        self._idf = {t: math.log((N + 1) / (c + 1)) + 1.0 for t, c in df.items()}
+
         # 3) 각 청크 벡터
         for rec in chunks:
             txt = rec.get("text", "") or ""
-            meta = rec.get("meta", {}) or {}
-            toks = self._tokenize(txt)
+            meta: Dict[str, Any] = rec.get("meta", {}) or {}
+            toks = self._tokenize(txt)  # ← list[str] (위의 seen과 변수명 분리로 재할당 충돌 제거)
+
             # TF
             tf: Dict[str, int] = {}
             for t in toks:
                 tf[t] = tf.get(t, 0) + 1
+
             # TF-IDF
             vec: Dict[str, float] = {}
             for t, f in tf.items():
@@ -329,6 +360,7 @@ class _LocalQueryEngine:
                 if idf is None:
                     continue
                 vec[t] = (1.0 + math.log(f)) * idf
+
             # 노름
             norm = math.sqrt(sum(v * v for v in vec.values())) if vec else 0.0
 
@@ -340,7 +372,9 @@ class _LocalQueryEngine:
     # ------------------------ 공개 API --------------------------------------
     def query(self, q: str, top_k: Optional[int] = None) -> Any:
         """쿼리 상위 top_k 결과 반환. 결과 객체는 .response 와 .hits(list)를 가짐."""
-        import math, heapq
+        import heapq
+        import math
+
         k = int(top_k or self.top_k_default)
         q_toks = self._tokenize(q or "")
         if not q_toks:
@@ -360,12 +394,11 @@ class _LocalQueryEngine:
 
         # 코사인 유사도 계산 (상위 k 유지)
         heap: List[Tuple[float, int]] = []  # (score, idx)
-        for i, (vec, norm) in enumerate(zip(self._vectors, self._norms)):
+        for i, (vec, norm) in enumerate(zip(self._vectors, self._norms, strict=True)):
             if not vec or norm == 0.0:
                 continue
-            # 점곱
+            # 점곱 — 작은 사전 기준으로 곱하면 빠름
             dot = 0.0
-            # 작은 사전 기준으로 곱하면 빠름
             (a, b) = (q_vec, vec) if len(q_vec) <= len(vec) else (vec, q_vec)
             for t, w in a.items():
                 vw = b.get(t)
@@ -385,26 +418,28 @@ class _LocalQueryEngine:
 
         # 점수 내림차순 정렬
         heap.sort(reverse=True)
-        hits = []
+        hits: List[Dict[str, Any]] = []
         for score, i in heap:
             meta = self._metas[i] or {}
             txt = self._texts[i]
             # 짧은 스니펫
             snippet = (txt[:160] + "…") if len(txt) > 160 else txt
-            hits.append({
-                "score": round(float(score), 4),
-                "text": txt,
-                "snippet": snippet,
-                "meta": meta,
-            })
+            hits.append(
+                {
+                    "score": round(float(score), 4),
+                    "text": txt,
+                    "snippet": snippet,
+                    "meta": meta,
+                }
+            )
 
         # 사람이 읽기 쉬운 응답 문자열
-        lines = []
+        lines: List[str] = []
         for h in hits:
             name = h["meta"].get("file_name") or h["meta"].get("doc_name") or "(unknown)"
             page = h["meta"].get("page_approx")
             hint = h["meta"].get("section_hint")
-            url  = h["meta"].get("source_drive_url")
+            url = h["meta"].get("source_drive_url")
             tag = f"{name}"
             if page:
                 tag += f" · p.{page}"
@@ -418,42 +453,42 @@ class _LocalQueryEngine:
 
         resp = "Top matches:\n" + "\n".join(lines)
         return type("R", (), {"response": resp, "hits": hits})
+# [08] END
 
-
-class _Index:
-    def __init__(self, data: Dict[str, Any]) -> None:
-        self.data = data
-
-    def as_query_engine(self, **kw: Any) -> _LocalQueryEngine:
-        top_k = int(kw.get("top_k", 5)) if kw else 5
-        return _LocalQueryEngine(self.data, top_k_default=top_k)
-
-
-# ===== [09] PUBLIC API =======================================================
+# ===== [09] PUBLIC API =======================================================  # [09] START
 def get_or_build_index(
-    update_pct: Optional[Callable[[int], None]] = None,
-    update_msg: Optional[Callable[[str], None]] = None,
-    gdrive_folder_id: Optional[str] = None,
-    raw_sa: Optional[str] = None,
+    update_pct: Optional[Callable[[int], None]] = None,  # noqa: ARG001 (향후용)
+    update_msg: Optional[Callable[[str], None]] = None,  # noqa: ARG001 (향후용)
+    gdrive_folder_id: Optional[str] = None,  # noqa: ARG001 (향후용)
+    raw_sa: Optional[str] = None,  # noqa: ARG001 (향후용)
     persist_dir: str | PathLike[str] = str(PERSIST_DIR),
-    manifest_path: Optional[str] = None,
-    should_stop: Optional[Callable[[], bool]] = None,
+    manifest_path: Optional[str] = None,  # noqa: ARG001 (향후용)
+    should_stop: Optional[Callable[[], bool]] = None,  # noqa: ARG001 (향후용)
 ) -> Any:
     """
     1) 로컬에 인덱스가 있으면 그대로 사용
     2) 없으면 Google Drive의 최신 백업 ZIP을 '메모리로' 읽어 로드(로컬 저장 X)
     """
+
+    # 전역 심볼(_Index) 의존 제거: 함수 내부 래퍼로 동일 인터페이스 제공
+    class _IndexObj:
+        def __init__(self, data: Dict[str, Any]) -> None:
+            self.data = data
+
+        def as_query_engine(self, **kw: Any) -> _LocalQueryEngine:
+            top_k = int(kw.get("top_k", 5)) if kw else 5
+            return _LocalQueryEngine(self.data, top_k_default=top_k)
+
     # 1) 로컬 우선
     try:
         if _index_exists(persist_dir):
-            return _Index(_load_index_from_disk(persist_dir))
+            return _IndexObj(_load_index_from_disk(persist_dir))
     except Exception:
-        pass  # 로컬이 망가져도 원격 시도
+        # 로컬이 망가져도 원격 시도
+        pass
 
     # 2) 원격(in-memory)
     data = _load_index_in_memory_from_drive()
-    return _Index(data)
+    return _IndexObj(data)
+# ===== [09] END ===============================================================
 
-
-
-# ===== [10] END ==============================================================

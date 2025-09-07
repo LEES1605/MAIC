@@ -1,0 +1,120 @@
+# ============================ [01] NIGHTLY PRE-RELEASE WORKFLOW — START ============================
+name: Nightly Pre-Release
+
+on:
+  # 매일 00:30 KST (UTC 15:30)
+  schedule:
+    - cron: "30 15 * * *"
+  # 수동 실행 허용
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nightly-pre-release
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    name: Quality Gate (lint / type / tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 태그/이력 필요(버전/릴리스용)
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Show tool versions
+        run: |
+          python -V
+          pip -V
+          git rev-parse --short HEAD
+          git describe --tags --always || true
+
+      - name: Install build deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install build twine
+          if [ -f requirements-dev.txt ]; then
+            pip install -r requirements-dev.txt
+          else
+            pip install ruff mypy pytest
+          fi
+
+      - name: Ruff (fix)
+        run: ruff check . --fix
+
+      - name: mypy (clear cache)
+        run: |
+          mypy --clear-cache
+          mypy .
+
+      - name: pytest
+        run: pytest -q
+
+      - name: Build & Twine check
+        run: |
+          python -m build
+          twine check dist/*
+
+      - name: Upload dist artifacts (CI)
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ github.sha }}
+          path: dist/*
+
+  publish:
+    name: Draft Nightly Pre-Release
+    needs: [gate]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Resolve nightly tag/name
+        id: vars
+        shell: bash
+        run: |
+          set -euo pipefail
+          TS="$(date -u +'%Y%m%d')"
+          SHA="$(git rev-parse --short HEAD)"
+          TAG="nightly-${TS}-${SHA}"
+          NAME="Nightly ${TS} (${SHA})"
+          echo "tag=${TAG}"   >> "$GITHUB_OUTPUT"
+          echo "name=${NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Build release zip
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIP="maic-${{ steps.vars.outputs.tag }}.zip"
+          rm -f "$ZIP"
+          git ls-files > files.txt
+          # 리포 내용 압축(gihtub 워크플로/캐시 제외)
+          zip -9 -r "$ZIP" -@ < files.txt
+          sha256sum "$ZIP" > "$ZIP.sha256"
+
+      - name: Publish pre-release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.vars.outputs.tag }}
+          name:     ${{ steps.vars.outputs.name }}
+          prerelease: true
+          generate_release_notes: true
+          files: |
+            maic-${{ steps.vars.outputs.tag }}.zip
+            maic-${{ steps.vars.outputs.tag }}.zip.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+# ============================= [01] NIGHTLY PRE-RELEASE WORKFLOW — END =============================

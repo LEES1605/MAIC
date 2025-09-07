@@ -1,0 +1,113 @@
+# ===== [00] META =============================================================  # [00] START
+name: Release
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (e.g., v1.2.3)"
+        required: true
+permissions:
+  contents: write
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+# [00] END
+
+# ===== [01] JOB: Gate (lint/type/tests/build) ================================ # [01] START
+jobs:
+  gate:
+    name: Quality Gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Show tool versions
+        run: |
+          python -V
+          pip -V
+          git rev-parse --short HEAD
+          git describe --tags --always || true
+
+      - name: Install build deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install build twine
+          if [ -f requirements-dev.txt ]; then
+            pip install -r requirements-dev.txt
+          else
+            pip install ruff mypy pytest
+          fi
+
+      - name: Ruff (fix)
+        run: ruff check . --fix
+
+      - name: mypy (clear cache)
+        run: |
+          mypy --clear-cache
+          mypy .
+
+      - name: pytest
+        run: pytest -q --maxfail=1 --disable-warnings
+
+      - name: Build & Twine check
+        run: |
+          python -m build
+          twine check dist/*
+# [01] END
+
+# ===== [02] JOB: Build & Release ============================================ # [02] START
+  publish:
+    name: Build & Publish Release
+    needs: [ gate ]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve version
+        id: ver
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF:-}" == refs/tags/v* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+          else
+            TAG="${{ github.event.inputs.version }}"
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Build release zip
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          ZIP="dist/maic-${{ steps.ver.outputs.tag }}.zip"
+          rm -f "$ZIP"
+          git ls-files > files.txt
+          zip -9 -r "$ZIP" -@ < files.txt
+          sha256sum "$ZIP" > "$ZIP.sha256"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: Release ${{ steps.ver.outputs.tag }}
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            dist/maic-${{ steps.ver.outputs.tag }}.zip
+            dist/maic-${{ steps.ver.outputs.tag }}.zip.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+# [02] END

@@ -1,0 +1,106 @@
+# MAIC 프로젝트 마스터 플랜
+
+> 목적: 지난 세션 성과를 정리하고, 다음 세션을 위한 **실행 계획·우선순위·협의 규약**을 명문화한다.
+
+---
+
+## 🧭 메타 & 릴리스 노트
+- 🔖 **최신 릴리스 노트:** https://github.com/LEES1605/MAIC/releases/latest
+- 📦 **모든 릴리스:** https://github.com/LEES1605/MAIC/releases
+- 📝 **상세 변경 기록(CHANGELOG):** [CHANGELOG.md](./CHANGELOG.md)
+
+
+---
+
+## 0) 한눈에 보는 현재 상태
+
+- **CI 파이프라인(엄격 모드)**
+  - ✅ `ruff`(lint/format) 통과
+  - ✅ `mypy`(strict, py3.10/3.11/3.12) 통과
+  - ⏭ `pytest`: 테스트 파일 부재 시 스킵(게이트 구조 유지)
+- **워크플로**
+  - ✅ 기본 CI (push/PR)
+  - ✅ `nightly.yml` (스케줄/수동 + 게이트 통과 후 프리릴리스 옵션)
+  - ✅ `release.yml` (태그/수동 + 게이트 통과 후 정식 릴리스)
+- **코드 품질(핵심 개선)**
+  - 불필요 `# type: ignore[...]` 제거
+  - 동적 의존(`streamlit`, `openai` 등) **예외 가드/폴백/동적 임포트**
+  - **구획(START~END)** 단위 패치 가능한 구조 정리
+
+---
+
+## 1) 우리가 해낸 일 (요약)
+
+### 1.1 린트/타입 안정화
+- `ruff`: import 정리, E501/E741/F841 등 전수 정리
+- `mypy`: 재정의/Optional/attr-defined 제거 → **가드 + 명시 타입 + Protocol**
+
+### 1.2 핵심 파일별 개선(기능 불변, 안정성↑)
+- `src/rag_engine.py`: TF-IDF 내부 타입 충돌 해소, 헬퍼 정리
+- `src/ui_orchestrator.py`: 미사용 제거, 타입 명시, 오류 로그 수집 보강
+- `src/ui_components.py`: `Callable[..., Any]`로 타입 개선
+- `src/rag/index_build.py`: ZIP 언팩 결과 타입 명시
+- `src/rag/__init__.py`: 잘못된 export 제거
+- `src/config.py`: `Settings` 단일 바인딩 + 타입 선언
+- `src/llm/providers.py`: `openai` 동적 임포트, `_secret` 가드화, E501 해결
+- `src/backup/github_release.py`: **완전 재구성 + 구획화**, 유틸 폴백/Protocol
+- `app.py`: 오케스트레이터 지연 임포트 + 파일 경로 폴백 가드
+
+### 1.3 CI/Actions 체계
+- **CI 게이트:** ruff → format → mypy → pytest(있을 때)
+- **Nightly/Release:** 게이트 통과 시에만 프리릴리스/정식 릴리스 발행
+
+---
+
+## 2) 실패/시도 기록 (Retrospective)
+- 동일 오류 반복 감지 미흡(초기) → **“동일/상이 + 내 판단(실수/새 원인)”** 보고 프로토콜 확립
+- 속성 임포트 과신 → **모듈 임포트 + `getattr` 가드** 표준화
+- 불필요 ignore 의존 → **타입/가드/Protocol**로 근본 해결
+- 테스트 부재 → 최소 스모크 테스트 필요성 확인
+
+---
+
+## 3) 강력한 협의 규약 (필수)
+1. **구획 단일 교체(START~END)** — 필요한 구획 1개만 통째 교체
+2. **기능 불변 우선** — 에러 제거가 1차 목표
+3. **Lint/Type 게이트 준수** — 로컬도 CI 기준과 동일
+4. **로그 리포팅 프로토콜** — “동일/상이 + 내 판단(실수/새 원인)” 반드시 보고
+5. **동적 의존 가드** — `hasattr/getattr` + 폴백
+6. **불필요 ignore 금지**
+7. **한 번에 하나의 변경**
+8. **문서화/구획화** — PR에 요약·테스트 방법 포함
+
+---
+
+## 4) 앞으로 할 일 (로드맵)
+- **즉시(시급)**
+  - 스모크 테스트 2개 추가 → pytest 게이트 가동
+  - 브랜치 보호 규칙 적용(게이트 필수)
+- **단기(1–2 스프린트)**
+  - pre-commit 훅(ruff/mypy)
+  - 의존성 잠금(`pip-tools`), CodeQL, SBOM
+- **중기**
+  - RAG 품질 향상(임베딩/청크링/평가)
+  - UI 진단패널 헬스체크/이슈 템플릿 연동
+- **장기**
+  - 배포 표준화, 관측성, 데이터 수명 관리
+
+---
+
+## 5) 다음 세션 진행안
+1) 스모크 테스트 2개(PR 2건, 구획 단일 교체)  
+2) 브랜치 보호 규칙 문서화/적용  
+3) pre-commit 설정 추가  
+4) (옵션) CodeQL·SBOM 워크플로 초안
+
+---
+
+## 6) 부록 — 로컬 재현 가이드
+```bash
+python -m pip install -U pip wheel
+pip install -r requirements.txt || true
+pip install -U ruff mypy pytest pytest-cov
+
+ruff check . --fix && ruff format .
+mypy .
+pytest -q --maxfail=1 --disable-warnings  # tests/ 있을 때

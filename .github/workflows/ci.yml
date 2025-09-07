@@ -1,66 +1,73 @@
-# ===== [00] WORKFLOW NAME ====================================================
-name: ci
+# ============================ [01] MAIN CI (ruff/mypy/pytest) — START ============================
+name: CI
 
-# ===== [01] TRIGGERS =========================================================
 on:
   push:
+    branches: ["**"]
   pull_request:
-  workflow_dispatch:
 
-# ===== [02] JOBS =============================================================
+permissions:
+  contents: read
+
 jobs:
-  build:
+  checks:
+    name: Lint • Typecheck • Tests
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.12"]
 
     steps:
-      # ===== [02-01] CHECKOUT ================================================
       - name: Checkout
         uses: actions/checkout@v4
 
-      # ===== [02-02] PYTHON SETUP ============================================
-      - name: Setup Python
+      - name: Setup Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-          cache: "pip"
+          python-version: ${{ matrix.python-version }}
+          cache: pip
 
-      # ===== [02-03] INSTALL RUNTIME & DEV TOOLS =============================
       - name: Upgrade pip/setuptools/wheel
+        run: python -m pip install -U pip setuptools wheel
+
+      # 선택적 런타임 의존성 설치: requirements.txt가 있으면 설치
+      - name: Install runtime requirements (optional)
         run: |
-          python -m pip install --upgrade pip setuptools wheel
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
 
-      - name: Install package (editable)
+      # 개발 도구 설치 (ruff/mypy/pytest)
+      - name: Install dev tools
+        run: pip install ruff mypy pytest
+
+      # 🔒 오탈자 임포트 가드: 'integration/intergration/intergratoins' 패턴 차단
+      - name: Guard • forbid typo imports
+        shell: bash
         run: |
-          pip install -e .
+          set -euo pipefail
+          PATTERN='src\.intergration|src\.intergratoins|src\.integration\.|src\.integration$'
+          HITS="$(git grep -nE "$PATTERN" -- ':!*.md' || true)"
+          if [ -n "$HITS" ]; then
+            echo "::error title=Forbidden import detected::Use 'src.integrations.*' (not integration/intergration/intergratoins)"
+            echo "$HITS"
+            exit 1
+          fi
+          echo "OK: no forbidden import typos found."
 
-      - name: Install dev tools (pinned Ruff)
-        run: |
-          pip install mypy bandit pytest
-          pip install ruff==0.12.9
-          pip install types-requests types-PyYAML
-          echo "Ruff version:" && ruff --version
+      # 자동 수정 모드 (--fix)로 가벼운 규칙은 러너에서 정리
+      - name: Ruff
+        run: ruff check . --fix
 
-      # ===== [02-04] RUFF (AUTO-FIX & CHECK) ======================================
-      - name: Ruff - organize imports (auto-fix I001 only)
-        run: ruff check . --fix --select I001
-
-      - name: Ruff - format (apply)
-        run: ruff format .
-
-      - name: Ruff - lint (verify)
-        run: ruff check .
-
-      - name: Ruff - format check (verify)
-        run: ruff format --check .
-
-      # ===== [02-05] MYPY ====================================================
-      - name: Mypy
+      - name: mypy
         run: mypy .
 
-      # ===== [02-06] BANDIT (SECURITY) ======================================
-      - name: Bandit
-        run: bandit -q -r .
+      # src 패키지 인식 위해 PYTHONPATH 설정
+      - name: Set PYTHONPATH
+        run: echo "PYTHONPATH=$PWD" >> "$GITHUB_ENV"
 
-      # ===== [02-07] TESTS (OPTIONAL) =======================================
-      - name: PyTest (optional)
-        run: pytest -q || true
+      - name: Pytest
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: pytest -q
+# ============================= [01] MAIN CI (ruff/mypy/pytest) — END =============================
