@@ -45,17 +45,8 @@ DEFAULT_EXCLUDES: Tuple[str, ...] = (
 DOC_ROOTS: Tuple[str, str] = ("docs/", "content/")
 
 # ======================= [03A] TOML loader — START =========================
-# Python 3.11+: tomllib / 그 미만: tomli
-import sys
-from typing import Any, Dict
-
-if sys.version_info >= (3, 11):
-    import tomllib as _tomllib  # pyright: ignore[reportMissingImports]
-else:
-    import tomli as _tomllib  # pyright: ignore[reportMissingImports]
-
 def _load_toml(path: Path) -> Dict[str, Any]:
-    """pyproject.toml 같은 설정 파일 안전 로더. 실패 시 {}."""
+    """pyproject.toml 등 TOML 설정 안전 로더. 실패 시 {}."""
     try:
         if not path.exists():
             return {}
@@ -64,6 +55,7 @@ def _load_toml(path: Path) -> Dict[str, Any]:
     except Exception:
         return {}
 # ======================= [03A] TOML loader — END ===========================
+
 
 
 # ======================= [03B] utils & walkers — START ===========================
