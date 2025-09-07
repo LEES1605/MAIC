@@ -3,12 +3,14 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any, Optional, Sequence, Tuple
+import importlib
+from typing import Any, Optional, Sequence, Tuple, Union
 
+# streamlit은 실행 환경에 없을 수도 있으므로 동적 임포트 + Any로 안전 처리
 try:
-    import streamlit as _st  # 런타임에 없을 수 있음
+    _st: Any = importlib.import_module("streamlit")  # type: ignore[assignment]
 except Exception:
-    _st = None  # type: ignore[assignment] 금지 -> Any|None로 처리
+    _st = None  # 실행환경에 없으면 None
 
 _DEFAULT_KEYS: Tuple[str, ...] = (
     "OPENAI_API_KEY",
@@ -52,15 +54,27 @@ def get(name: str, default: Optional[str] = None) -> Optional[str]:
     return os.getenv(name, default)
 
 
-def promote_env(keys: Optional[Sequence[str]] = None) -> None:
-    """필요 시 secrets 값을 환경변수로 승격."""
-    klist = list(keys) if keys is not None else list(_DEFAULT_KEYS)
-    for k in klist:
+def promote_env(
+    keys: Optional[Sequence[str]] = None,
+    also_env: Union[bool, Sequence[str], None] = None,
+) -> None:
+    """
+    필요 시 secrets 값을 환경변수로 승격.
+
+    - keys: 승격을 시도할 키 목록(없으면 내부 기본셋 사용)
+    - also_env: True면 단순 무시(하위호환용 플래그), 시퀀스면 keys에 추가
+    """
+    base_keys = list(keys) if keys is not None else list(_DEFAULT_KEYS)
+    if isinstance(also_env, (list, tuple)):
+        base_keys.extend([str(k) for k in also_env])
+
+    for k in base_keys:
         if os.getenv(k):
             continue
         v = get(k, None)
         if v is not None:
             os.environ[k] = str(v)
+
     # 서버 안정화 기본값
     os.environ.setdefault("STREAMLIT_SERVER_FILE_WATCHER_TYPE", "none")
     os.environ.setdefault("STREAMLIT_RUN_ON_SAVE", "false")
