@@ -108,11 +108,9 @@ def _bootstrap_env() -> None:
                 "GITHUB_REPO",
                 "GH_OWNER",
                 "GH_REPO",
-            ],
-            _promote_env()
+            ]
         )
     except Exception:
-        # 실패해도 앱 동작에는 영향 없도록 완화
         pass
 
     # Streamlit 안정화
