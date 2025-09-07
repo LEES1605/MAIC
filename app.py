@@ -228,42 +228,18 @@ def _errlog(msg: str, where: str = "", exc: Exception | None = None) -> None:
 
 # ========================= [06] ACCESS: Admin Gate ============================
 def _is_admin_view() -> bool:
-    """관리자 패널 표시 여부.
-    허용 조건(하나라도 참이면 True):
-    - 세션 토글/플래그: _diag / is_admin / admin_mode / _admin_diag_open
-    - 시크릿: ADMIN_MODE == "1" 또는 APP_MODE == "admin"
-    - 환경변수: ADMIN_MODE == "1" 또는 APP_MODE == "admin"
+    """관리자 패널 표시 여부(학생 화면 완전 차단).
+    - 오직 세션 로그인 플래그로만 허용: admin_mode | is_admin
+    - 시크릿/환경변수 ADMIN_MODE, APP_MODE 등은 '표시' 판단에 사용하지 않음
+      (운영 편의로 서버에서 켜두더라도 학생 브라우저에는 비노출)
     """
     try:
-        if st is not None:
-            try:
-                ss = st.session_state
-                if bool(
-                    ss.get("_diag")
-                    or ss.get("is_admin")
-                    or ss.get("admin_mode")
-                    or ss.get("_admin_diag_open")
-                ):
-                    return True
-            except Exception:
-                pass
-            try:
-                if str(st.secrets.get("ADMIN_MODE", "")).strip() == "1":
-                    return True
-            except Exception:
-                pass
-            try:
-                if str(st.secrets.get("APP_MODE", "")).strip().lower() == "admin":
-                    return True
-            except Exception:
-                pass
-        if os.getenv("ADMIN_MODE", "") == "1":
-            return True
-        if (os.getenv("APP_MODE") or "").strip().lower() == "admin":
-            return True
+        if st is None:
+            return False
+        ss = st.session_state
+        return bool(ss.get("admin_mode") or ss.get("is_admin"))
     except Exception:
-        pass
-    return False
+        return False
 
 
 # ======================= [07] RERUN GUARD utils ==============================
@@ -327,29 +303,20 @@ def _header() -> None:
           }
           .ready-chip{
             display:inline-flex; align-items:center; gap:6px;
-            padding:2px 8px; border-radius:12px;
+            padding:2px 10px; border-radius:12px;
             background:#f4f6fb; border:1px solid #e5e7eb;
-            font-weight:700; color:#111827; font-size:12px;
+            font-weight:800; color:#111827; font-size:18px; /* +50% */
           }
-          .rd{ width:10px; height:10px; border-radius:50%;
-               display:inline-block; }
-          .rd-high{ background:#16a34a;
-                    box-shadow:0 0 0 0 rgba(22,163,74,.55);
-                    animation:pulseDot 1.8s infinite; }
-          .rd-mid { background:#f59e0b;
-                    box-shadow:0 0 0 0 rgba(245,158,11,.55);
-                    animation:pulseDot 1.8s infinite; }
-          .rd-low { background:#ef4444;
-                    box-shadow:0 0 0 0 rgba(239,68,68,.55);
-                    animation:pulseDot 1.8s infinite; }
+          .rd{ width:8px; height:8px; border-radius:50%; display:inline-block; } /* 점 조금 작게 */
+          .rd-high{ background:#16a34a; box-shadow:0 0 0 0 rgba(22,163,74,.55); animation:pulseDot 1.8s infinite; }
+          .rd-mid { background:#f59e0b; box-shadow:0 0 0 0 rgba(245,158,11,.55); animation:pulseDot 1.8s infinite; }
+          .rd-low { background:#ef4444; box-shadow:0 0 0 0 rgba(239,68,68,.55); animation:pulseDot 1.8s infinite; }
           @keyframes pulseDot {
-            0%{ box-shadow:0 0 0 0 rgba(0,0,0,0.12); }
-            70%{ box-shadow:0 0 0 8px rgba(0,0,0,0); }
-            100%{ box-shadow:0 0 0 0 rgba(0,0,0,0); }
+            0%{   box-shadow:0 0 0 0   rgba(0,0,0,0.18); }
+            70%{  box-shadow:0 0 0 16px rgba(0,0,0,0); } /* 파장 더 크게 */
+            100%{ box-shadow:0 0 0 0   rgba(0,0,0,0); }
           }
-          .admin-login-narrow [data-testid="stTextInput"] input{
-            height:42px; border-radius:10px;
-          }
+          .admin-login-narrow [data-testid="stTextInput"] input{ height:42px; border-radius:10px; }
           .admin-login-narrow .stButton>button{ width:100%; height:42px; }
         </style>
         """,
@@ -357,12 +324,9 @@ def _header() -> None:
     )
 
     # ---- 레이아웃: (빈칸) | [라벨+점 + 제목] | [관리자 버튼] ----
-    c1, c2, c3 = st.columns([1, 6, 2], gap="small")
+    _, c2, c3 = st.columns([1, 6, 2], gap="small")
     with c2:
-        chip_html = (
-            f'<span class="ready-chip">{label}'
-            f'<span class="rd {dot_cls}"></span></span>'
-        )
+        chip_html = f'<span class="ready-chip">{label}<span class="rd {dot_cls}"></span></span>'
         st.markdown(
             f'<div class="brand-wrap">{chip_html}'
             f'<span class="brand-title">LEES AI Teacher</span></div>',
@@ -373,10 +337,8 @@ def _header() -> None:
             if st.button("🚪 로그아웃", key="logout_now", help="관리자 로그아웃"):
                 ss["admin_mode"] = False
                 ss["_show_admin_login"] = False
-                try:
-                    st.toast("로그아웃 완료", icon="👋")
-                except Exception:
-                    st.success("로그아웃 완료")
+                try: st.toast("로그아웃 완료", icon="👋")
+                except Exception: st.success("로그아웃 완료")
                 st.rerun()
         else:
             if st.button("🔐 관리자", key="open_admin_login", help="관리자 로그인"):
@@ -402,12 +364,8 @@ def _header() -> None:
             left, mid, right = st.columns([2, 1, 2])
             with mid:
                 with st.form("admin_login_form", clear_on_submit=False):
-                    st.markdown(
-                        '<div class="admin-login-narrow">', unsafe_allow_html=True
-                    )
-                    pw = st.text_input(
-                        "비밀번호", type="password", key="admin_pw_input"
-                    )
+                    st.markdown('<div class="admin-login-narrow">', unsafe_allow_html=True)
+                    pw = st.text_input("비밀번호", type="password", key="admin_pw_input")
                     col_a, col_b = st.columns([1, 1])
                     submit = col_a.form_submit_button("로그인")
                     cancel = col_b.form_submit_button("닫기")
@@ -423,10 +381,8 @@ def _header() -> None:
                     elif pw and str(pw) == str(pwd_set):
                         ss["admin_mode"] = True
                         ss["_show_admin_login"] = False
-                        try:
-                            st.toast("로그인 성공", icon="✅")
-                        except Exception:
-                            st.success("로그인 성공")
+                        try: st.toast("로그인 성공", icon="✅")
+                        except Exception: st.success("로그인 성공")
                         st.rerun()
                     else:
                         st.error("비밀번호가 올바르지 않습니다.")
@@ -1718,6 +1674,7 @@ def _render_body() -> None:
     if st is None:
         return
 
+    # 1) 부팅 훅(1회)
     if not st.session_state.get("_boot_checked"):
         try:
             _boot_auto_restore_index()
@@ -1727,49 +1684,31 @@ def _render_body() -> None:
         finally:
             st.session_state["_boot_checked"] = True
 
+    # 2) 배경(현재 No-Op)
     _mount_background(
-        theme="light",
-        accent="#5B8CFF",
-        density=3,
-        interactive=True,
-        animate=True,
-        gradient="radial",
-        grid=True,
-        grain=False,
-        blur=0,
-        seed=1234,
-        readability_veil=True,
+        theme="light", accent="#5B8CFF", density=3, interactive=True, animate=True,
+        gradient="radial", grid=True, grain=False, blur=0, seed=1234, readability_veil=True,
     )
 
+    # 3) 헤더(상태라벨+펄스만)
     _header()
-    _render_index_orchestrator_header()
 
-    # ▶ READY 프로브(미니멀 Pill + expander 디테일)
-    _render_ready_probe()
-
-    try:
-        _qlao = globals().get("_quick_local_attach_only")
-        if callable(_qlao):
-            _qlao()
-    except Exception as e:
-        _errlog(f"quick attach failed: {e}", where="[render_body]", exc=e)
-
+    # 4) 관리자 전용 섹션 (학생에겐 완전 비노출)
     if _is_admin_view():
-        _render_admin_panels()              # 호환 스텁
-        _render_admin_prepared_scan_panel() # 스캔(인덱싱 없이)
-        _render_admin_index_panel()         # 강제 인덱싱
+        _render_index_orchestrator_header()   # Persist/상태 배지(설명 포함)
+        _render_ready_probe()                  # Ready Probe 상세
+        _render_admin_prepared_scan_panel()    # 스캔(인덱싱 없이)
+        _render_admin_index_panel()            # 강제 인덱싱
         _render_admin_indexed_sources_panel()  # 읽기 전용 목록
-        st.caption(
-            "ⓘ 복구/재인덱싱/스캔은 ‘🛠 진단 도구’ 또는 관리자 패널에서 수행할 수 있어요."
-        )
+        st.caption("ⓘ 복구/재인덱싱/스캔은 ‘🛠 진단 도구’ 또는 관리자 패널에서 수행할 수 있어요.")
 
+    # 5) 자동 복원 훅(필요 시 1회)
     _auto_start_once()
 
+    # 6) 채팅 UI
     _inject_chat_styles_once()
     with st.container():
-        st.markdown(
-            '<div class="chatpane"><div class="messages">', unsafe_allow_html=True
-        )
+        st.markdown('<div class="chatpane"><div class="messages">', unsafe_allow_html=True)
         try:
             _render_chat_panel()
         except Exception as e:
@@ -1778,9 +1717,7 @@ def _render_body() -> None:
 
     with st.container(border=True, key="chatpane_container"):
         st.markdown('<div class="chatpane">', unsafe_allow_html=True)
-        st.session_state["__mode"] = (
-            _render_mode_controls_pills() or st.session_state.get("__mode", "")
-        )
+        st.session_state["__mode"] = _render_mode_controls_pills() or st.session_state.get("__mode", "")
         with st.form("chat_form", clear_on_submit=False):
             q: str = st.text_input("질문", placeholder="질문을 입력하세요…", key="q_text")
             submitted: bool = st.form_submit_button("➤")
