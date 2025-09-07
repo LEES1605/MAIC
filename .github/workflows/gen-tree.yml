@@ -1,0 +1,42 @@
+# ======================= [01] gen-tree workflow — START =======================
+name: Generate Repo Tree & Inventory
+
+on:
+  pull_request:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  gen-tree:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Generate tree & inventory
+        run: |
+          python scripts/gen_tree.py \
+            --root . \
+            --out-tree docs/_gpt/TREE.md \
+            --out-inv docs/_gpt/INVENTORY.json
+
+      - name: Verify outputs are committed
+        run: |
+          git add docs/_gpt/TREE.md docs/_gpt/INVENTORY.json
+          # fail if files changed by generator (ask contributor to commit them)
+          git diff --cached --quiet || (echo "::error ::Tree/Inventory changed. Commit generated files." && exit 1)
+
+      - name: Upload artifacts (diagnostic)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gen-tree-outputs
+          path: |
+            docs/_gpt/TREE.md
+            docs/_gpt/INVENTORY.json
+# ======================= [01] gen-tree workflow — END =========================
