@@ -2,8 +2,6 @@
 from __future__ import annotations
 
 # =============================== [02] module imports ==============================
-from __future__ import annotations
-
 import os
 import json
 import time
@@ -489,9 +487,9 @@ def _render_index_orchestrator_header() -> None:
     st.markdown("### 🧪 인덱스 오케스트레이터")
 
     def _persist_dir_safe() -> Path:
-        """SSOT persist 경로. 코어 모듈 우선, 실패시 기본값."""
+        """SSOT persist 경로. 코어 모듈 우선, 실패 시 기본값."""
         try:
-            # lazy import로 모듈 의존을 늦춰 E402 회피 + Actions/로컬 모두 안전
+            # lazy import: Actions/로컬 모두 안전
             from src.core.persist import effective_persist_dir as _epd  # type: ignore
             return Path(str(_epd())).expanduser()
         except Exception:
@@ -1458,14 +1456,9 @@ def _render_body() -> None:
 
     _header()
 
-    # 관리자만: 오케스트레이터/스캔/인덱싱/읽기전용/Probe 상세
+    # 관리자만: 오케스트레이터/스캔/인덱싱/읽기전용 상세
     if _is_admin_view():
         _render_index_orchestrator_header()
-        try:
-            # (선택) 기존 상세 Probe 함수가 있다면 호출
-            _render_ready_probe()
-        except Exception:
-            pass
         try:
             _render_admin_prepared_scan_panel()
         except Exception:
