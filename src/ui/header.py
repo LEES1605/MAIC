@@ -1,3 +1,4 @@
+# ======================= [01] 헤더: 임포트/설정 — START =======================
 """
 src/ui/header.py
 - 상단 헤더(학생: 상태칩+펄스점만, 관리자: + 로그인/아웃)
@@ -5,38 +6,47 @@ src/ui/header.py
 """
 from __future__ import annotations
 
-from typing import Dict
 import os
+from typing import Optional
 
+# Streamlit은 Actions 환경에서 미설치일 수 있으므로 예외 안전 임포트
 try:
     import streamlit as st
-except Exception:
-    st = None  # type: ignore
+except Exception:  # pragma: no cover
+    st = None  # 런타임 미사용 시 안전
 
-from src.core.persist import effective_persist_dir
-from src.core.index_probe import probe_index_health
+# SSOT: 인덱스 상태는 core.index_probe만 참조 (dict 아님, dataclass)
+from src.core.index_probe import IndexHealth, probe_index_health
 
 
-def _ready_level() -> str:
-    """인덱스 상태를 HIGH/MID/LOW로 환산."""
+def _from_secrets(name: str, default: Optional[str] = None) -> Optional[str]:
+    """Streamlit secrets 안전 접근 (미설치/미사용 환경에서도 예외 없이)."""
     try:
-        info: Dict[str, object] = probe_index_health(effective_persist_dir())
-        ok = bool(info.get("ok"))
-        size_ok = int(info.get("chunks_size") or 0) > 0
-        json_ok = bool(info.get("json_ok"))
-        return "HIGH" if ok else ("MID" if (size_ok and json_ok) else "LOW")
+        if st is not None and hasattr(st, "secrets"):
+            val = st.secrets.get(name)
+            if val is None:
+                return default
+            return str(val)
+    except Exception:
+        pass
+    return default
+# ======================= [01] 헤더: 임포트/설정 — END =========================
+
+
+# ======================= [02] 상태 환산 — START ==============================
+def _ready_level() -> str:
+    """인덱스 상태를 HIGH/MID/LOW로 환산 (SSOT: probe_index_health)."""
+    try:
+        info: IndexHealth = probe_index_health()  # 경로 해석은 코어가 처리
+        ok = bool(info.ready_exists and info.chunks_exists and info.chunks_size > 0)
+        json_ok = bool((info.json_sample > 0) and (info.json_malformed == 0))
+        return "HIGH" if ok else ("MID" if (info.chunks_size > 0 and json_ok) else "LOW")
     except Exception:
         return "LOW"
+# ======================= [02] 상태 환산 — END ================================
 
 
-def _from_secrets(name: str, default: str | None = None) -> str | None:
-    """Streamlit secrets 안전 접근."""
-    try:
-        return str(st.secrets.get(name))  # type: ignore[attr-defined]
-    except Exception:
-        return default
-
-
+# ======================= [03] 렌더 — START ==================================
 def render() -> None:
     """헤더 렌더링(학생: 상태칩+펄스만, 관리자: + 로그인/아웃 버튼)."""
     if st is None:
@@ -179,3 +189,4 @@ def render() -> None:
                         st.rerun()
                     else:
                         st.error("비밀번호가 올바르지 않습니다.")
+# ======================= [03] 렌더 — END ====================================
