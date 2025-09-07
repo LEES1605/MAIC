@@ -116,58 +116,52 @@ if st:
         pass
 
 
-# ======================= [05] 경로/상태 & 에러 로거 ============================
-def _persist_dir() -> Path:
-    """인덱스 퍼시스트 경로를 결정.
-    우선순위: 1) src.rag.index_build.PERSIST_DIR → 2) src.config.PERSIST_DIR → 3) ~/.maic/persist
-    """
-    try:
-        from src.rag.index_build import PERSIST_DIR as IDX
-        return Path(IDX).expanduser()
-    except Exception:
-        pass
-    try:
-        from src.config import PERSIST_DIR as CFG
-        return Path(CFG).expanduser()
-    except Exception:
-        pass
-    return Path.home() / ".maic" / "persist"
-
-
-PERSIST_DIR = _persist_dir()
-try:
-    PERSIST_DIR.mkdir(parents=True, exist_ok=True)
-except Exception:
-    pass
-
-
-def _share_persist_dir_into_session(p: Path) -> None:
-    """세션 상태에 persist 경로 공유(다른 모듈과 일관성)."""
-    try:
-        if st is not None:
-            st.session_state["_PERSIST_DIR"] = p
-    except Exception:
-        pass
-
-
-_share_persist_dir_into_session(PERSIST_DIR)
-
-
+# ========================= [05] Brain Readiness (core wrapper) — START =========================
 def _mark_ready() -> None:
-    """준비 신호 파일(.ready) 생성."""
+    """준비 신호 파일(.ready) 생성 — 가능하면 코어 모듈로 위임, 실패 시 안전 폴백."""
     try:
-        (PERSIST_DIR / ".ready").write_text("ok", encoding="utf-8")
+        # 1) 세션에 공유된 persist 경로 우선
+        p: Optional[Path]
+        try:
+            p = st.session_state.get("_PERSIST_DIR") if st is not None else None
+        except Exception:
+            p = None
+
+        # 2) 코어 모듈이 있으면 사용
+        try:
+            from src.core.index_probe import mark_ready as _core_mark_ready  # lazy import
+            _core_mark_ready(persist=p)
+            return
+        except Exception:
+            pass
+
+        # 3) 폴백: 기존 방식 (디렉터리 존재 가정, 실패 무해화)
+        base = p if isinstance(p, Path) else _persist_dir()
+        (base / ".ready").write_text("ok", encoding="utf-8")
     except Exception:
+        # 실패 무해화
         pass
 
 
 def _is_brain_ready() -> bool:
-    """인덱스 준비 여부 — .ready && chunks.jsonl(>0B) 둘 다 있어야 True."""
+    """인덱스 준비 여부 — `.ready` && `chunks.jsonl`(>0B) 둘 다 있어야 True.
+    가능하면 코어 모듈로 위임, 실패 시 안전 폴백.
+    """
+    # 1) 세션 persist 우선
     p: Optional[Path]
     try:
         p = st.session_state.get("_PERSIST_DIR") if st is not None else None
     except Exception:
         p = None
+
+    # 2) 코어 모듈 시도
+    try:
+        from src.core.index_probe import is_brain_ready as _core_is_ready  # lazy import
+        return bool(_core_is_ready(persist=p))
+    except Exception:
+        pass
+
+    # 3) 폴백(레거시 로직 그대로)
     if not isinstance(p, Path):
         p = _persist_dir()
     if not p.exists():
@@ -182,48 +176,46 @@ def _is_brain_ready() -> bool:
 
 
 def _get_brain_status() -> Dict[str, str]:
-    """앱 전역 상위 상태(SSOT)."""
+    """앱 전역 상위 상태(SSOT). 세션 오버라이드가 있으면 우선 적용.
+    위임: src.core.index_probe.get_brain_status (가능 시)
+    """
     try:
+        # 1) Streamlit 미사용 환경
         if st is None:
-            return {"code": "MISSING", "msg": "Streamlit unavailable"}
+            # 최소한의 상태 코드 반환(테스트/CI 환경 호환)
+            try:
+                from src.core.index_probe import get_brain_status as _core_status  # optional
+                return _core_status()
+            except Exception:
+                return {"code": "MISSING", "msg": "Streamlit unavailable"}
+
+        # 2) 세션 오버라이드 우선
         ss = st.session_state
         code = ss.get("brain_status_code")
         msg = ss.get("brain_status_msg")
         if code and msg:
             return {"code": str(code), "msg": str(msg)}
+
+        # 3) 코어 모듈 시도(세션 persist 힌트 전달)
+        p: Optional[Path]
+        try:
+            p = ss.get("_PERSIST_DIR")
+        except Exception:
+            p = None
+        try:
+            from src.core.index_probe import get_brain_status as _core_status
+            return _core_status(persist=p if isinstance(p, Path) else None)
+        except Exception:
+            pass
+
+        # 4) 폴백: 기존 판단
         if _is_brain_ready():
             return {"code": "READY", "msg": "로컬 인덱스 연결됨(SSOT)"}
         return {"code": "MISSING", "msg": "인덱스 없음(관리자에서 '업데이트 점검' 필요)"}
     except Exception as e:
         _errlog("상태 계산 실패", where="[05]_get_brain_status", exc=e)
         return {"code": "MISSING", "msg": "상태 계산 실패"}
-
-
-def _errlog(msg: str, where: str = "", exc: Exception | None = None) -> None:
-    """표준 에러 로깅(콘솔 + Streamlit 노출). 민감정보 금지, 실패 무해화."""
-    try:
-        prefix = f"{where} " if where else ""
-        print(f"[ERR] {prefix}{msg}")
-        if exc:
-            traceback.print_exception(exc)
-        if st is not None:
-            try:
-                with st.expander("자세한 오류 로그", expanded=False):
-                    detail = ""
-                    if exc:
-                        try:
-                            detail = "".join(
-                                traceback.format_exception(
-                                    type(exc), exc, exc.__traceback__
-                                )
-                            )
-                        except Exception:
-                            detail = "traceback 사용 불가"
-                    st.code(f"{prefix}{msg}\n{detail}")
-            except Exception:
-                pass
-    except Exception:
-        pass
+# ========================= [05] Brain Readiness (core wrapper) — END ===========================
 
 
 # ========================= [06] ACCESS: Admin Gate ============================
