@@ -9,13 +9,11 @@ from __future__ import annotations
 import os
 from typing import Optional
 
-# Streamlit은 Actions 환경에서 미설치일 수 있으므로 예외 안전 임포트
 try:
     import streamlit as st
 except Exception:  # pragma: no cover
-    st = None  # 런타임 미사용 시 안전
+    st = None  # CI/Actions 환경 안전
 
-# SSOT: 인덱스 상태는 core.index_probe만 참조 (dict 아님, dataclass)
 from src.core.persist import effective_persist_dir
 from src.core.index_probe import probe_index_health, IndexHealth
 
@@ -26,7 +24,6 @@ def _from_secrets(name: str, default: Optional[str] = None) -> Optional[str]:
         if st is not None and hasattr(st, "secrets"):
             val = st.secrets.get(name)
             if val is None:
-                # secrets에 없으면 환경변수로 폴백
                 return os.getenv(name, default)
             return str(val)
     except Exception:
@@ -54,7 +51,6 @@ def _ready_level() -> str:
     except Exception:
         return "LOW"
 # ======================= [02] 상태 환산 — END ================================
-
 
 # ======================= [03] 렌더 — START ==================================
 def render() -> None:
