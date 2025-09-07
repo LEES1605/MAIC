@@ -1,5 +1,5 @@
 {
-  "generated_at": "2025-09-07T16:17:11",
+  "generated_at": "2025-09-07T16:25:28",
   "root": "/home/runner/work/MAIC/MAIC",
   "total_files": 86,
   "total_dirs": 25,
@@ -18,8 +18,8 @@
   "top_sizes": [
     {
       "path": "app.py",
-      "size": 62503,
-      "kb": 61.0
+      "size": 65694,
+      "kb": 64.2
     },
     {
       "path": "docs/_gpt/MAIC_refactor_report.md",
