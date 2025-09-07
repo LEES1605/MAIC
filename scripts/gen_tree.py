@@ -36,26 +36,27 @@ DEFAULT_EXCLUDES: Tuple[str, ...] = (
 # 문서 루트 후보(orphans 리포트에서 사용)
 DOC_ROOTS: Tuple[str, str] = ("docs/", "content/")
 
-# ======================= [03A] TOML loader — START ===============================
-def _load_toml(path: Path) -> Dict:
-    """py3.11+: tomllib, 그 미만: tomli. 둘 다 없으면 빈 dict."""
+# ======================= [03A] TOML loader — START =========================
+# Python 3.11+: tomllib / 그 미만: tomli
+import sys
+from typing import Any, Dict
+
+if sys.version_info >= (3, 11):
+    import tomllib as _tomllib  # pyright: ignore[reportMissingImports]
+else:
+    import tomli as _tomllib  # pyright: ignore[reportMissingImports]
+
+def _load_toml(path: Path) -> Dict[str, Any]:
+    """pyproject.toml 같은 설정 파일 안전 로더. 실패 시 {}."""
     try:
-        if not path or not path.exists():
-            return {}
-        # 함수 내부 import는 ruff E402 회피 및 tomli 미설치 환경 대응
-        try:
-            import sys as _sys  # noqa: F401
-            if _sys.version_info >= (3, 11):
-                import tomllib as _tomllib  # type: ignore
-            else:
-                import tomli as _tomllib  # type: ignore
-        except Exception:
+        if not path.exists():
             return {}
         with path.open("rb") as f:
             return _tomllib.load(f)
     except Exception:
         return {}
-# ======================= [03A] TOML loader — END =================================
+# ======================= [03A] TOML loader — END ===========================
+
 
 # ======================= [03B] utils & walkers — START ===========================
 def _norm_patterns(patts: Iterable[str]) -> Tuple[str, ...]:
@@ -311,11 +312,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if a.exclude:
         excludes.extend(a.exclude)
     # pyproject.toml → [tool.gen_tree] 섹션 기준
-    tool_cfg = {}
+    tool_cfg: Dict[str, Any] = {}
     try:
         tool_cfg = (cfg_toml.get("tool") or {}).get("gen_tree") or {}
     except Exception:
-        tool_cfg = {}
+        tool_cfg: Dict[str, Any] = {}
 
     # toml overrides
     if tool_cfg:
