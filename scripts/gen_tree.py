@@ -33,6 +33,9 @@ EXCLUDE_FILES: Tuple[str, ...] = (
     "*.bin",
 )
 
+# 기본 제외 글롭(파일 + 디렉터리 패턴을 fnmatch에 맞게 정규화)
+DEFAULT_EXCLUDES: Tuple[str, ...] = EXCLUDE_FILES + tuple(f"*/{d}/*" for d in EXCLUDE_DIRS)
+
 DEFAULT_MAX_DEPTH = 4
 DEFAULT_STALE_DAYS = 120
 DEFAULT_TOPN_SIZES = 20
@@ -41,7 +44,6 @@ DEFAULT_REPORTS: Tuple[str, ...] = ("stale", "sizes", "orphans")
 DOC_ROOTS: Tuple[str, ...] = ("docs", "docs/_gpt")
 
 # ======================= [01] imports & constants — END =========================
-
 
 # ======================= [02] data models — START ===============================
 @dataclass
@@ -107,14 +109,12 @@ def _is_excluded(rel: Path, patterns: Sequence[str]) -> bool:
     return False
 
 
-@dataclass(frozen=True)
-class FileInfo:
-    path: Path
-    size: int
-    mtime: float
+def _depth_of(rel: Path) -> int:
+    """Relative path depth helper (e.g., 'a/b/c.txt' -> 3 parts)."""
+    return len(rel.parts)
 
 
-def _iter_files(root: Path, exclude_globs: Sequence[str]) -> Iterator[FileInfo]:
+def _iter_files(root: Path, exclude_globs: Sequence[str]) -> Iterator["FileInfo"]:
     """Iterate files under root excluding patterns."""
     for p in root.rglob("*"):
         if not p.is_file():
@@ -130,14 +130,13 @@ def _iter_files(root: Path, exclude_globs: Sequence[str]) -> Iterator[FileInfo]:
             continue
 
 
-def _sort_key(fi: FileInfo, mode: str) -> Tuple:
+def _sort_key(fi: "FileInfo", mode: str) -> Tuple:
     if mode == "size":
         return (-fi.size, str(fi.path))
     if mode == "mtime":
         return (-fi.mtime, str(fi.path))
     return (str(fi.path).lower(),)
 # ======================= [03] utilities — END ===================================
-
 
 # ======================= [04] inventory & tree builders — START =================
 def build_inventory(files: Sequence[FileInfo], cfg: ScanConfig) -> Dict:
