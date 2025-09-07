@@ -22,14 +22,14 @@ def _default_persist_dir() -> Path:
     # 1) index_build.PERSIST_DIR (preferred)
     try:
         # Late import to avoid optional dependency at import-time
-        from src.rag.index_build import PERSIST_DIR as IDX  # type: ignore
+        from src.rag.index_build import PERSIST_DIR as IDX
         return Path(str(IDX)).expanduser()
     except Exception:
         pass
 
     # 2) config.PERSIST_DIR
     try:
-        from src.config import PERSIST_DIR as CFG  # type: ignore
+        from src.config import PERSIST_DIR as CFG
         return Path(str(CFG)).expanduser()
     except Exception:
         pass
