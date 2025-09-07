@@ -109,7 +109,7 @@ def _bootstrap_env() -> None:
                 "GH_OWNER",
                 "GH_REPO",
             ],
-            also_env=True,  # 이미 환경변수에 있으면 보존
+            _promote_env()
         )
     except Exception:
         # 실패해도 앱 동작에는 영향 없도록 완화
