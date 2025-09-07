@@ -402,7 +402,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     cfg = parse_args(argv)
     cfg.root = cfg.root.resolve()
 
-    files = list(_iter_files(cfg.root, cfg))
+    # NOTE: _iter_files expects exclude globs (Sequence[str]), not ScanConfig.
+    files = list(_iter_files(cfg.root, cfg.excludes))
     files_sorted = sorted(files, key=lambda x: _sort_key(x, cfg.sort))
 
     # ensure out directories
@@ -438,3 +439,4 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 if __name__ == "__main__":
     raise SystemExit(main())
 # ======================= [06] main — END =======================================
+
