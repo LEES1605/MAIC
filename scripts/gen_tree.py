@@ -1,4 +1,4 @@
-# ======================= [01] imports & constants — START =======================
+# ======================= [01] imports & constants ============================
 from __future__ import annotations
 
 import argparse
@@ -7,123 +7,86 @@ import fnmatch
 import json
 import os
 import sys
+import importlib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
-
-# Py3.11+: tomllib / Py3.10: tomli / 둘 다 없으면 None
-try:
-    import tomllib  # type: ignore[unused-ignore]  # Py3.11+
-except ModuleNotFoundError:  # pragma: no cover
-    try:
-        import tomli as tomllib  # type: ignore
-    except ModuleNotFoundError:  # 마지막 폴백
-        tomllib = None  # type: ignore[assignment]
-
-EXCLUDE_DIRS: Tuple[str, ...] = (
-    ".git",
-    ".github",
-    ".mypy_cache",
-    ".ruff_cache",
-    "__pycache__",
-    ".venv",
-    "venv",
-    "node_modules",
-    ".pytest_cache",
+from typing import (
+    Any,
+    Dict,
+    Iterable,
+    Iterator,
+    List,
+    Optional,
+    Sequence,
+    Tuple,
 )
 
-EXCLUDE_FILES: Tuple[str, ...] = (
-    ".DS_Store",
-    "*.zip",
-    "*.bin",
-    "*.lock",
-)
-
-# 파일/디렉터리 제외 글롭을 fnmatch 기준으로 정규화
-DEFAULT_EXCLUDES: Tuple[str, ...] = EXCLUDE_FILES + tuple(f"*/{d}/*" for d in EXCLUDE_DIRS)
-
-DEFAULT_MAX_DEPTH = 4
-DEFAULT_STALE_DAYS = 120
-DEFAULT_TOPN_SIZES = 20
-DEFAULT_REPORTS: Tuple[str, ...] = ("stale", "sizes", "orphans")
-
-DOC_ROOTS: Tuple[str, ...] = ("docs", "docs/_gpt")
-# ======================= [01] imports & constants — END =========================
-
-
-# ======================= [02] CLI Compat Shim — START ==========================
-def _apply_out_dir_shim(argv: List[str]) -> List[str]:
-    """Translate '--out-dir D' to '--out-tree D/TREE.md --out-inv D/INVENTORY.json'."""
-    if "--out-dir" not in argv:
-        return argv
-    try:
-        i = argv.index("--out-dir")
-        out_dir = argv[i + 1]
-    except Exception:
-        # 인자가 비정상이면 argparse에게 맡긴다.
-        return argv
-    base = Path(out_dir)
-    newv = argv[:i] + argv[i + 2 :]
-    newv += ["--out-tree", str(base / "TREE.md")]
-    newv += ["--out-inv", str(base / "INVENTORY.json")]
-    return newv
-
-
-# argparse가 실행되기 전에 argv를 변환
+# toml 로더: 3.11+ 은 tomllib, 3.10 이하는 tomli(동적 임포트, Any)
+_TOML: Any = None
 try:
-    sys.argv = _apply_out_dir_shim(list(sys.argv))
+    if sys.version_info >= (3, 11):
+        _TOML = importlib.import_module("tomllib")
+    else:
+        _TOML = importlib.import_module("tomli")
 except Exception:
-    pass
-# ======================= [02] CLI Compat Shim — END ============================
+    _TOML = None  # TOML 미지원 환경이면 넘어감
+
+# 기본 상수
+DEFAULT_MAX_DEPTH = 3
+DEFAULT_REPORTS = ("stale", "sizes", "orphans")
+DEFAULT_STALE_DAYS = 45
+DEFAULT_TOPN_SIZES = 20
+DEFAULT_EXCLUDES = (
+    ".git/**",
+    ".venv/**",
+    "venv/**",
+    "__pycache__/**",
+    "node_modules/**",
+    "docs/_gpt/**",
+)
+# 문서/소스 루트(고아 파일 탐지용)
+DOC_ROOTS = ("docs/", "src/")
 
 
-# ======================= [03] data models — START ==============================
-@dataclass
+# ======================= [02] dataclass & config =============================
+@dataclass(frozen=True)
 class FileInfo:
     path: Path
     size: int
     mtime: float
 
     @property
-    def ext(self) -> str:
-        return self.path.suffix.lower()
-
-    @property
     def mtime_dt(self) -> dt.datetime:
         return dt.datetime.fromtimestamp(self.mtime)
 
 
-@dataclass
+@dataclass(frozen=True)
 class ScanConfig:
     root: Path
-    excludes: Tuple[str, ...]
-    max_depth: int
-    sort: str  # "name" | "size" | "mtime"
-    reports: Tuple[str, ...]
-    stale_days: int
-    topn_sizes: int
-    out_tree: Path
-    out_inv: Path
-    snapshot: Optional[Path]
-# ======================= [03] data models — END ================================
+    max_depth: int = DEFAULT_MAX_DEPTH
+    exclude: Tuple[str, ...] = tuple(DEFAULT_EXCLUDES)
+    sort: str = "name"  # name | size | mtime
+    reports: Tuple[str, ...] = tuple(DEFAULT_REPORTS)
+    stale_days: int = DEFAULT_STALE_DAYS
+    topn_sizes: int = DEFAULT_TOPN_SIZES
+    out_tree: Path = Path("docs/_gpt/TREE.md")
+    out_inv: Path = Path("docs/_gpt/INVENTORY.json")
 
 
-# ======================= [04] loaders & walkers — START ========================
-def _load_toml(path: Path) -> Dict:
-    """Load TOML on both 3.11+(tomllib) and 3.10(tomli). Return {} on failure."""
+# ======================= [03] loaders & walkers ==============================
+def _load_toml(path: Path) -> Dict[str, Any]:
+    """3.11+ tomllib / 3.10 tomli 양쪽 지원. 실패 시 {}."""
     try:
-        if tomllib is None:
-            return {}
-        if not path.exists() or path.stat().st_size == 0:
+        if _TOML is None or not path.exists() or path.stat().st_size == 0:
             return {}
         with path.open("rb") as f:
-            return tomllib.load(f)  # type: ignore[misc]
+            return _TOML.load(f)
     except Exception:
         return {}
 
 
 def _norm_patterns(patts: Iterable[str]) -> Tuple[str, ...]:
-    """fnmatch에 맞도록 경로 구분자를 '/'로 통일."""
+    """fnmatch용 경로 구분자를 '/'로 통일."""
     out: List[str] = []
     for p in patts:
         s = str(p).replace("\\", "/").strip()
@@ -133,12 +96,13 @@ def _norm_patterns(patts: Iterable[str]) -> Tuple[str, ...]:
 
 
 def _depth_of(rel: Path) -> int:
-    """root 기준 상대경로의 디렉터리 깊이(루트=0)."""
-    return max(len(rel.parts) - 1, 0)
+    """경로 깊이(루트=0)."""
+    parts = rel.as_posix().split("/")
+    return max(len([p for p in parts if p]) - 1, 0)
 
 
 def _match_any(rel_posix: str, patterns: Sequence[str]) -> bool:
-    """상대 경로(문자열)가 제외 패턴과 매칭되는지."""
+    """exclude 패턴 일치 여부."""
     s_file = rel_posix
     s_dir = rel_posix.rstrip("/") + "/"
     for pat in patterns:
@@ -148,16 +112,16 @@ def _match_any(rel_posix: str, patterns: Sequence[str]) -> bool:
 
 
 def _iter_files(root: Path, excludes: Sequence[str]) -> Iterator[FileInfo]:
-    """exclude 패턴을 적용해 파일을 순회하며 FileInfo를 생성."""
+    """exclude 패턴을 적용해 파일을 순회하며 FileInfo 생성."""
     root = root.resolve()
     exc = _norm_patterns(excludes)
     for dirpath, dirnames, filenames in os.walk(root):
-        # 디렉터리 프루닝
         rel_dir = Path(dirpath).resolve().relative_to(root)
+        # 디렉터리 프루닝
         pruned: List[str] = []
         for d in list(dirnames):
-            d_rel = (rel_dir / d).as_posix()
-            if _match_any(d_rel, exc):
+            rel = (rel_dir / d).as_posix()
+            if _match_any(rel, exc):
                 pruned.append(d)
         if pruned:
             dirnames[:] = [d for d in dirnames if d not in pruned]
@@ -175,302 +139,258 @@ def _iter_files(root: Path, excludes: Sequence[str]) -> Iterator[FileInfo]:
                 continue
 
 
-def _sort_key(fi: FileInfo, how: str):
-    """정렬 키 생성."""
-    name_key = str(fi.path).lower()
+def _sort_key(fi: FileInfo, how: str) -> Tuple[Any, ...]:
+    how = how.lower()
+    name_key = fi.path.as_posix().lower()
     if how == "size":
         return (-fi.size, name_key)
     if how == "mtime":
         return (-fi.mtime, name_key)
     return (name_key,)
-# ======================= [04] loaders & walkers — END ==========================
 
 
-# ======================= [05] builders (inventory/tree) — START ================
-def build_inventory(files: Sequence[FileInfo], cfg: ScanConfig) -> Dict[str, object]:
+# ======================= [04] builders (inventory/tree) ======================
+def build_inventory(files: Sequence[FileInfo], cfg: ScanConfig) -> Dict[str, Any]:
     now = dt.datetime.now().isoformat(timespec="seconds")
+
     counts_by_ext: Dict[str, int] = {}
     for fi in files:
-        ext = fi.ext or "<noext>"
+        ext = fi.path.suffix.lower() or "<noext>"
         counts_by_ext[ext] = counts_by_ext.get(ext, 0) + 1
 
-    # top sizes
-    top_sizes = sorted(files, key=lambda x: (-x.size, str(x.path)))[: cfg.topn_sizes]
-    top_sizes_out = [
-        {
-            "path": str(fi.path.relative_to(cfg.root)),
-            "size": fi.size,
-            "kb": round(fi.size / 1024, 1),
-        }
-        for fi in top_sizes
+    # Top-N sizes
+    topn = sorted(files, key=lambda x: (-x.size, x.path.as_posix()))[: cfg.topn_sizes]
+    topn_payload = [
+        {"path": str(fi.path.relative_to(cfg.root)), "size": fi.size} for fi in topn
     ]
 
-    # stale docs (md older than threshold)
+    # Stale docs(.md)
     stale_cut = dt.datetime.now() - dt.timedelta(days=cfg.stale_days)
     stale_docs: List[Dict[str, str]] = []
     if "stale" in cfg.reports:
         for fi in files:
-            if fi.ext == ".md" and fi.mtime_dt < stale_cut:
+            if fi.path.suffix.lower() == ".md" and fi.mtime_dt < stale_cut:
                 stale_docs.append(
                     {
                         "path": str(fi.path.relative_to(cfg.root)),
-                        "last_modified": fi.mtime_dt.isoformat(timespec="seconds"),
+                        "mtime": fi.mtime_dt.isoformat(timespec="seconds"),
                     }
                 )
+        stale_docs.sort(key=lambda d: d["path"].lower())
 
-    # orphans: markdown outside doc roots
+    # Orphans: docs/src 바깥
     orphans: List[str] = []
     if "orphans" in cfg.reports:
         for fi in files:
-            if fi.ext == ".md":
-                rel = fi.path.relative_to(cfg.root)
-                s = str(rel).replace("\\", "/")
-                if not s.startswith(DOC_ROOTS[0]) and not s.startswith(DOC_ROOTS[1]):
-                    orphans.append(s)
+            s = str(fi.path.relative_to(cfg.root)).replace("\\", "/")
+            if not s.startswith(DOC_ROOTS[0]) and not s.startswith(DOC_ROOTS[1]):
+                orphans.append(s)
+        orphans.sort(key=str.lower)
 
-    inv: Dict[str, object] = {
-        "generated_at": now,
+    return {
+        "generated": now,
         "root": str(cfg.root),
-        "total_files": len(files),
-        "total_dirs": _count_dirs(files, cfg.root),
-        "counts_by_ext": counts_by_ext,
-        "top_sizes": top_sizes_out,
-        "stale_docs": stale_docs,
-        "orphans": orphans,
-        "config": {
-            "max_depth": cfg.max_depth,
-            "excludes": list(cfg.excludes),
+        "rules": {
+            "depth": cfg.max_depth,
             "sort": cfg.sort,
-            "reports": list(cfg.reports),
             "stale_days": cfg.stale_days,
             "topn_sizes": cfg.topn_sizes,
+            "excludes": list(cfg.exclude),
         },
+        "counts_by_ext": counts_by_ext,
+        "topn_sizes": topn_payload if "sizes" in cfg.reports else [],
+        "stale_docs": stale_docs,
+        "orphans": orphans,
+        "total_files": len(files),
+        "total_bytes": int(sum(fi.size for fi in files)),
     }
 
-    # diff with snapshot
-    if cfg.snapshot and cfg.snapshot.exists():
-        try:
-            with cfg.snapshot.open("r", encoding="utf-8") as f:
-                snap = json.load(f)
-            inv["diff"] = _diff_inventory_paths(snap, files, cfg.root)
-        except Exception:
-            inv["diff"] = {"error": "snapshot_load_failed"}
 
-    return inv
-
-
-def _count_dirs(files: Sequence[FileInfo], root: Path) -> int:
-    dirs = set()
+def build_tree(files: Sequence[FileInfo], cfg: ScanConfig) -> str:
+    """간단한 마크다운 트리 생성."""
+    by_dir: Dict[str, List[Path]] = {}
     for fi in files:
-        try:
-            rel = fi.path.relative_to(root)
-        except Exception:
-            rel = fi.path
-        parent = rel.parent
-        while True:
-            dirs.add(str(parent))
-            if str(parent) in (".", ""):
-                break
-            parent = parent.parent
-    return len([d for d in dirs if d not in (".", "")])
+        rel = fi.path.relative_to(cfg.root)
+        if _depth_of(rel) > cfg.max_depth:
+            continue
+        key = str(rel.parent).replace("\\", "/")
+        by_dir.setdefault(key, []).append(rel)
 
-
-def _diff_inventory_paths(snap: Dict, files: Sequence[FileInfo], root: Path) -> Dict:
-    prev = set()
-    try:
-        prev_top = snap.get("paths", None)
-        if isinstance(prev_top, list):
-            prev = set(prev_top)
-    except Exception:
-        prev = set()
-
-    cur = set(str(fi.path.relative_to(root)) for fi in files)
-    added = sorted(list(cur - prev))
-    removed = sorted(list(prev - cur))
-    return {"added": added, "removed": removed, "paths": sorted(list(cur))}
-
-
-_SEEN_KEYS: set = set()
-
-
-def build_tree_md(files: Sequence[FileInfo], cfg: ScanConfig) -> str:
-    """Create a simple tree (markdown) up to max_depth, pruned by excludes."""
-    rel_files = [fi.path.relative_to(cfg.root) for fi in files]
-    max_depth = cfg.max_depth
-    items = sorted(rel_files, key=lambda p: str(p).lower())
+    # 정렬
+    for k in list(by_dir.keys()):
+        if cfg.sort == "size":
+            by_dir[k].sort(
+                key=lambda r: (
+                    -next(f.size for f in files if f.path.relative_to(cfg.root) == r),
+                    r.as_posix().lower(),
+                )
+            )
+        elif cfg.sort == "mtime":
+            by_dir[k].sort(
+                key=lambda r: (
+                    -next(
+                        f.mtime for f in files if f.path.relative_to(cfg.root) == r
+                    ),
+                    r.as_posix().lower(),
+                )
+            )
+        else:
+            by_dir[k].sort(key=lambda r: r.as_posix().lower())
 
     lines: List[str] = []
-    lines.append("# Repository Tree (generated)")
+    lines.append("# Project Tree")
     lines.append("")
     lines.append(f"- root: `{cfg.root}`")
     lines.append(f"- generated: {dt.datetime.now().isoformat(timespec='seconds')}")
     lines.append(
         f"- rules: depth={cfg.max_depth}, sort={cfg.sort}, "
-        f"excludes={', '.join(cfg.excludes)}"
+        f"stale_days={cfg.stale_days}, excludes={len(cfg.exclude)}"
     )
     lines.append("")
-    lines.append("```text")
-    for rel in items:
-        if _depth_of(rel) > max_depth:
-            continue
-        parts = rel.parts
-        # print parent directories and file
-        for i, part in enumerate(parts[:-1]):
-            indent = "  " * i
-            key = f"D|{i}|{Path(*parts[: i + 1])}"
-            if key not in _SEEN_KEYS:
-                _SEEN_KEYS.add(key)
-                lines.append(f"{indent}📁 {part}")
-        indent = "  " * (len(parts) - 1)
-        lines.append(f"{indent}📄 {parts[-1]}")
-    lines.append("```")
-    lines.append("")
-    return "\n".join(lines)
-# ======================= [05] builders (inventory/tree) — END ==================
+    for d in sorted(by_dir.keys()):
+        title = "/" if d == "." else f"/{d}"
+        lines.append(f"## `{title}`")
+        for r in by_dir[d]:
+            lines.append(f"- `{r.as_posix()}`")
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
 
 
-# ======================= [06] argument parsing — START ==========================
-def parse_args(argv: Optional[Sequence[str]] = None) -> ScanConfig:
-    p = argparse.ArgumentParser(
-        prog="gen_tree",
-        description=(
-            "Generate repository tree (md) and inventory (json) with excludes "
-            "and basic reports."
-        ),
-    )
-    p.add_argument("--root", default=".", help="scan root directory (default: .)")
-    p.add_argument(
-        "--out-tree",
-        default="docs/_gpt/TREE.md",
-        help="output markdown tree path (default: docs/_gpt/TREE.md)",
-    )
-    p.add_argument(
-        "--out-inv",
-        default="docs/_gpt/INVENTORY.json",
-        help="output inventory json path (default: docs/_gpt/INVENTORY.json)",
-    )
+# ======================= [05] argparse & I/O =================================
+def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
+    p = argparse.ArgumentParser(prog="gen_tree")
+    p.add_argument("--root", default=".", help="scan root directory")
+    p.add_argument("--out-tree", default="docs/_gpt/TREE.md", help="tree md path")
+    p.add_argument("--out-inv", default="docs/_gpt/INVENTORY.json", help="inv json path")
     p.add_argument(
         "--max-depth",
         type=int,
         default=DEFAULT_MAX_DEPTH,
-        help=f"max directory depth (default: {DEFAULT_MAX_DEPTH})",
+        help=f"max depth (default {DEFAULT_MAX_DEPTH})",
     )
     p.add_argument(
         "--exclude",
         action="append",
         default=[],
-        help="exclude patterns (can repeat). Example: --exclude node_modules",
+        help="glob exclude, repeatable (e.g., 'docs/_gpt/**')",
     )
     p.add_argument(
         "--sort",
         choices=("name", "size", "mtime"),
         default="name",
-        help="sorting for internal lists (default: name)",
+        help="sort order",
     )
     p.add_argument(
         "--reports",
         default=",".join(DEFAULT_REPORTS),
-        help="comma-joined: stale,sizes,orphans "
-        "(default: stale,sizes,orphans)",
+        help="comma list: stale,sizes,orphans",
     )
     p.add_argument(
         "--stale-days",
         type=int,
         default=DEFAULT_STALE_DAYS,
-        help=f"stale threshold in days for .md "
-        f"(default: {DEFAULT_STALE_DAYS})",
+        help=f"stale md threshold (default {DEFAULT_STALE_DAYS})",
     )
     p.add_argument(
         "--topn-sizes",
         type=int,
         default=DEFAULT_TOPN_SIZES,
-        help=f"Top-N largest files to report "
-        f"(default: {DEFAULT_TOPN_SIZES})",
+        help=f"Top-N sizes (default {DEFAULT_TOPN_SIZES})",
     )
     p.add_argument(
         "--snapshot",
-        default="",
-        help="previous inventory json path to diff (optional)",
+        default=None,
+        help=(
+            "optional dir to save a copy of outputs "
+            "(e.g., docs/_gpt/snapshots/yyyymmdd)"
+        ),
     )
     p.add_argument(
         "--config",
-        default="scripts/gen_tree.toml",
-        help="optional TOML config path (default: scripts/gen_tree.toml)",
+        default="pyproject.toml",
+        help="optional TOML to override defaults",
+    )
+    # 호환 파라미터: --out-dir (TREE/INV 를 그 안에 저장)
+    p.add_argument(
+        "--out-dir",
+        default=None,
+        help="compat: write TREE.md and INVENTORY.json under this directory",
+    )
+    return p.parse_args(argv)
+
+
+def _ensure_parent(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+
+def _dump_text(path: Path, text: str) -> None:
+    _ensure_parent(path)
+    path.write_text(text, encoding="utf-8")
+
+
+def _dump_json(path: Path, obj: Any) -> None:
+    _ensure_parent(path)
+    path.write_text(
+        json.dumps(obj, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
 
-    a = p.parse_args(argv)
 
-    # Load overrides from TOML (optional)
-    cfg_toml = _load_toml(Path(a.config))
-    excludes = list(DEFAULT_EXCLUDES)
-    if a.exclude:
-        excludes.extend(a.exclude)
-    if cfg_toml:
-        root_cfg = cfg_toml.get("root", {}) if isinstance(cfg_toml, dict) else {}
-        ex = root_cfg.get("exclude", [])
-        if isinstance(ex, list):
-            excludes.extend([str(x) for x in ex])
-        a.max_depth = int(root_cfg.get("max_depth", a.max_depth))
-
-        rep_cfg = cfg_toml.get("reports", {}) if isinstance(cfg_toml, dict) else {}
-        reports = rep_cfg.get("enable", [])
-        if isinstance(reports, list) and reports:
-            a.reports = ",".join([str(x) for x in reports])
-        a.stale_days = int(rep_cfg.get("stale_days", a.stale_days))
-        a.topn_sizes = int(rep_cfg.get("topn_sizes", a.topn_sizes))
-
-    reports_tuple = tuple(
-        s.strip().lower() for s in str(a.reports).split(",") if s.strip()
-    )
-
-    sc = ScanConfig(
-        root=Path(a.root),
-        excludes=_norm_patterns(excludes),
-        max_depth=int(a.max_depth),
-        sort=str(a.sort),
-        reports=reports_tuple,
-        stale_days=int(a.stale_days),
-        topn_sizes=int(a.topn_sizes),
-        out_tree=Path(a.out_tree),
-        out_inv=Path(a.out_inv),
-        snapshot=Path(a.snapshot) if a.snapshot else None,
-    )
-    return sc
-# ======================= [06] argument parsing — END ============================
-
-
-# ======================= [07] main — START =====================================
+# ======================= [06] main ===========================================
 def main(argv: Optional[Sequence[str]] = None) -> int:
-    cfg = parse_args(argv)
-    cfg.root = cfg.root.resolve()
+    a = parse_args(argv)
 
-    files = list(_iter_files(cfg.root, cfg.excludes))
-    files_sorted = sorted(files, key=lambda x: _sort_key(x, cfg.sort))
-
-    cfg.out_tree.parent.mkdir(parents=True, exist_ok=True)
-    cfg.out_inv.parent.mkdir(parents=True, exist_ok=True)
-
-    inv = build_inventory(files_sorted, cfg)
-    # save paths for future diffs
+    # TOML 로 오버라이드(있으면)
+    tool_cfg: Dict[str, Any] = {}
     try:
-        inv["paths"] = [str(fi.path.relative_to(cfg.root)) for fi in files_sorted]
+        cfg_toml = _load_toml(Path(a.config))
+        tool_cfg = cfg_toml.get("tool", {}).get("gen_tree", {})
     except Exception:
-        pass
-    with cfg.out_inv.open("w", encoding="utf-8") as f:
-        json.dump(inv, f, ensure_ascii=False, indent=2)
+        tool_cfg = {}
 
-    global _SEEN_KEYS
-    _SEEN_KEYS = set()
-    tree_md = build_tree_md(files_sorted, cfg)
-    with cfg.out_tree.open("w", encoding="utf-8") as f:
-        f.write(tree_md)
+    # excludes 구성
+    excludes = list(DEFAULT_EXCLUDES)
+    excludes.extend(a.exclude or [])
+    excludes.extend(tool_cfg.get("exclude", []))
+    excludes = list(dict.fromkeys(excludes))  # uniq, 순서유지
 
-    print(f"[gen_tree] root={cfg.root}")
-    print(f"[gen_tree] wrote: {cfg.out_tree}")
-    print(f"[gen_tree] wrote: {cfg.out_inv}")
+    # out 경로 계산
+    out_tree = Path(a.out_tree)
+    out_inv = Path(a.out_inv)
+    if a.out_dir:
+        base = Path(a.out_dir)
+        out_tree = base / "TREE.md"
+        out_inv = base / "INVENTORY.json"
+
+    cfg = ScanConfig(
+        root=Path(a.root).resolve(),
+        max_depth=int(tool_cfg.get("max_depth", a.max_depth)),
+        exclude=tuple(_norm_patterns(excludes)),
+        sort=str(tool_cfg.get("sort", a.sort)),
+        reports=tuple(str(tool_cfg.get("reports", a.reports)).split(",")),
+        stale_days=int(tool_cfg.get("stale_days", a.stale_days)),
+        topn_sizes=int(tool_cfg.get("topn_sizes", a.topn_sizes)),
+        out_tree=out_tree,
+        out_inv=out_inv,
+    )
+
+    files = list(_iter_files(cfg.root, cfg.exclude))
+    files.sort(key=lambda fi: _sort_key(fi, cfg.sort))
+
+    inv = build_inventory(files, cfg)
+    tree_md = build_tree(files, cfg)
+
+    _dump_json(cfg.out_inv, inv)
+    _dump_text(cfg.out_tree, tree_md)
+
+    # snapshot 옵션
+    if a.snapshot:
+        snap_dir = Path(a.snapshot)
+        _dump_json(snap_dir / cfg.out_inv.name, inv)
+        _dump_text(snap_dir / cfg.out_tree.name, tree_md)
+
+    print(f"Wrote: {cfg.out_tree} / {cfg.out_inv}")
     return 0
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())
-# ======================= [07] main — END =======================================

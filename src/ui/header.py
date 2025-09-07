@@ -21,29 +21,30 @@ if TYPE_CHECKING:
     from src.core.index_probe import IndexHealth  # noqa: F401
 
 
-# =============================== [02] SSOT helpers ===============================
+# =============================== [02] ready level — START ==================
 def _ready_level() -> str:
-    """인덱스 상태를 HIGH/MID/LOW로 환산 (코어 SSOT 기반)."""
+    """인덱스 상태를 HIGH/MID/LOW로 환산 (SSOT 기반)."""
     try:
-        # 코어가 persist 경로를 자체 해석하므로 인자 생략
+        # lazy import: 타입 힌트는 문자열 리터럴로만 사용
         from src.core.index_probe import probe_index_health
+    except Exception:
+        return "LOW"
 
-        info: "IndexHealth" = probe_index_health()  # type: ignore[assignment]
+    try:
+        info = probe_index_health()
+        ok = bool(getattr(info, "ok", False))
+        if ok:
+            return "HIGH"
         size_ok = int(getattr(info, "chunks_size", 0) or 0) > 0
         json_ok = bool(
             (int(getattr(info, "json_sample", 0) or 0) > 0)
             and int(getattr(info, "json_malformed", 0) or 0) == 0
         )
-        ok = bool(
-            getattr(info, "ready_exists", False)
-            and getattr(info, "chunks_exists", False)
-            and size_ok
-            and json_ok
-        )
-        return "HIGH" if ok else ("MID" if (size_ok and json_ok) else "LOW")
+        return "MID" if (size_ok and json_ok) else "LOW"
     except Exception:
-        # SSOT 호출 실패 시 보수적으로 LOW
         return "LOW"
+# =============================== [02] ready level — END ====================
+
 
 
 # =============================== [03] UI: header render ==========================

@@ -9,6 +9,11 @@ on:
     paths-ignore:
       - 'docs/_gpt/**'
 
+# 중복 실행 자동 취소(최신 커밋만 유지)
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: true
+
 permissions:
   contents: write
 
@@ -30,13 +35,20 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt || true
-          pip install tomli || true
+          # Python 3.11 미만에서는 tomli가 필요
+          python - <<'PY'
+      import sys, subprocess
+      if sys.version_info < (3, 11):
+          subprocess.check_call([sys.executable, "-m", "pip", "install", "tomli>=2.0.1"])
+      PY
 
-      # ⛳️ PATCH-GUARD 앵커 (유지 필수)
+
+      # ⛳️ PATCH-GUARD가 확인하는 앵커 (이 줄과 다음 run 라인은 꼭 유지)
       - name: Generate
         run: |
           python scripts/gen_tree.py --out-dir docs/_gpt
 
+      # PR에서는 생성 산출물을 PR 브랜치에 자동 커밋
       - name: Auto-commit generated files (PR only)
         if: ${{ github.event_name == 'pull_request' }}
         run: |
@@ -49,6 +61,7 @@ jobs:
             git push origin "HEAD:${{ github.head_ref }}"
           fi
 
+      # main으로 push될 때는 변경 없음을 검증만
       - name: Verify clean (push to main)
         if: ${{ github.event_name == 'push' }}
         run: |

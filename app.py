@@ -11,11 +11,24 @@ import importlib.util
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+# Streamlit은 없는 환경도 있으므로 방어적 로드
 try:
-    import streamlit as st  # Streamlit 환경이 아닐 수도 있으므로 try
+    import streamlit as st
 except Exception:
     st = None
 
+# ⛳️ SSOT 코어 임포트는 최상단에 정리 (E402 예방)
+from src.core.secret import promote_env as _promote_env
+from src.core.secret import get as _secret_get
+from src.core.persist import (
+    effective_persist_dir,
+    share_persist_dir_to_session,
+)
+from src.core.index_probe import (
+    get_brain_status as core_status,
+    is_brain_ready as core_is_ready,
+    mark_ready as core_mark_ready,
+)
 
 # =========================== [03] CORE: Persist Resolver ==========================
 def _effective_persist_dir() -> Path:
@@ -52,27 +65,61 @@ def _effective_persist_dir() -> Path:
 
 
 # ================== [04] secrets → env 승격 & 페이지 설정(안정 옵션) =================
-from src.core.secret import promote_env as _promote_env
+def _from_secrets(name: str, default: Optional[str] = None) -> Optional[str]:
+    """Streamlit secrets 우선, 없으면 os.environ. dict/list는 JSON 문자열화."""
+    try:
+        if st is None or not hasattr(st, "secrets"):
+            return os.getenv(name, default)
+        val = st.secrets.get(name, None)
+        if val is None:
+            return os.getenv(name, default)
+        if isinstance(val, str):
+            return val
+        return json.dumps(val, ensure_ascii=False)
+    except Exception:
+        return os.getenv(name, default)
+
 
 def _bootstrap_env() -> None:
     """필요 시 secrets 값을 환경변수로 승격 + 서버 안정화 옵션."""
-    keys = [
-        "OPENAI_API_KEY", "OPENAI_MODEL",
-        "GEMINI_API_KEY", "GEMINI_MODEL",
-        "GH_TOKEN", "GH_REPO", "GH_BRANCH", "GH_PROMPTS_PATH",
-        "GDRIVE_PREPARED_FOLDER_ID", "GDRIVE_BACKUP_FOLDER_ID",
-        "APP_MODE", "AUTO_START_MODE", "LOCK_MODE_FOR_STUDENTS",
-        "APP_ADMIN_PASSWORD", "DISABLE_BG", "MAIC_PERSIST_DIR",
-        "GITHUB_TOKEN", "GITHUB_OWNER", "GITHUB_REPO_NAME", "GITHUB_REPO",
-        "GH_OWNER", "GH_REPO",
-    ]
-    _promote_env(keys)
+    # ⛳️ 코어 유틸을 사용해 공통 키 승격
+    try:
+        _promote_env(
+            keys=[
+                "OPENAI_API_KEY",
+                "OPENAI_MODEL",
+                "GEMINI_API_KEY",
+                "GEMINI_MODEL",
+                "GH_TOKEN",
+                "GH_REPO",
+                "GH_BRANCH",
+                "GH_PROMPTS_PATH",
+                "GDRIVE_PREPARED_FOLDER_ID",
+                "GDRIVE_BACKUP_FOLDER_ID",
+                "APP_MODE",
+                "AUTO_START_MODE",
+                "LOCK_MODE_FOR_STUDENTS",
+                "APP_ADMIN_PASSWORD",
+                "DISABLE_BG",
+                "MAIC_PERSIST_DIR",
+                "GITHUB_TOKEN",
+                "GITHUB_OWNER",
+                "GITHUB_REPO_NAME",
+                "GITHUB_REPO",
+                "GH_OWNER",
+                "GH_REPO",
+            ]
+        )
+    except Exception:
+        pass
 
-    # Streamlit 안정화(기본값)
+    # Streamlit 안정화
     os.environ.setdefault("STREAMLIT_SERVER_FILE_WATCHER_TYPE", "none")
     os.environ.setdefault("STREAMLIT_RUN_ON_SAVE", "false")
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
-    os.environ.setdefault("STREAMLIT_SERVER_ENABLE_WEBSOCKET_COMPRESSION", "false")
+    os.environ.setdefault(
+        "STREAMLIT_SERVER_ENABLE_WEBSOCKET_COMPRESSION", "false"
+    )
 
 
 _bootstrap_env()
@@ -82,7 +129,7 @@ if st:
         st.set_page_config(page_title="LEES AI Teacher", layout="wide")
     except Exception:
         pass
-# ================== [04] secrets → env 승격 & 페이지 설정 — END ======================
+
 
 
 # ======================= [05] 경로/상태 & 에러 로거 — START =======================
@@ -270,34 +317,16 @@ def _boot_auto_restore_index() -> None:
             pass
         return
 
-    # ---- 시크릿/ENV 로더 (SSOT) ----
-    def _secret(name: str, default: str = "") -> str:
-        try:
-            if "st" in globals() and st is not None and hasattr(st, "secrets"):
-                v = st.secrets.get(name)
-                if isinstance(v, str) and v:
-                    return v
-        except Exception:
-            pass
-        return os.getenv(name, default)
+    # ---- SSOT 시크릿 로더 사용 ----
+    from src.core.secret import token as _gh_token, resolve_owner_repo as _resolve_owner_repo
 
-    def _resolve_owner_repo() -> tuple[str, str]:
-        # 우선순위: GH_OWNER/GH_REPO → GITHUB_REPO(=owner/repo) → GITHUB_OWNER/GITHUB_REPO_NAME
-        owner = _secret("GH_OWNER") or _secret("GITHUB_OWNER")
-        repo = _secret("GH_REPO") or _secret("GITHUB_REPO_NAME")
-        combo = _secret("GITHUB_REPO")
-        if (not owner or not repo) and combo and "/" in combo:
-            o, r = combo.split("/", 1)
-            owner, repo = o.strip(), r.strip()
-        return owner or "", repo or ""
-
-    token = _secret("GH_TOKEN") or _secret("GITHUB_TOKEN")
+    token = _gh_token() or ""
     owner, repo = _resolve_owner_repo()
     if not (token and owner and repo):
         return  # 복원 불가(시크릿 미설정)
 
     # ---- 최신 릴리스의 index_*.zip 다운로드 ----
-    from urllib import request as _rq, error as _er, parse as _ps
+    from urllib import request as _rq, error as _er
     import zipfile
     import time
     import json as _json
@@ -447,205 +476,49 @@ def _auto_start_once() -> None:
         _safe_rerun("auto_start", ttl=1)
 # =================== [11] 부팅 오토플로우 & 자동 복원 모드 — END ==================
 
+# =================== [12] DIAG: Orchestrator Header ======================
+def _render_index_orchestrator_header() -> None:
+    """상단 진단 헤더(미니멀): Persist 경로, 상태칩만 간결 표기."""
+    if "st" not in globals() or st is None:
+        return
 
+    st.markdown("### 🧪 인덱스 오케스트레이터")
 
-# =================== [12C] DIAG: Ready Probe — START ====================
--def _probe_index_health(p: Path) -> Dict[str, Any]:
--    """인덱스 준비상태를 경량 검증한다.
--    체크 항목:
--      - chunks.jsonl 존재/크기
--      - .ready 존재
--      - JSON 샘플 파싱(최대 200줄) 오류율
--    """
--    res: Dict[str, Any] = {"persist": str(p)}
--    try:
--        cj = p / "chunks.jsonl"
--        res["chunks_exists"] = cj.exists()
--        res["chunks_size"] = cj.stat().st_size if cj.exists() else 0
--        res["ready_exists"] = (p / ".ready").exists()
--        res["mtime"] = int(cj.stat().st_mtime) if cj.exists() else 0
--    except Exception:
--        res["chunks_exists"] = False
--        res["chunks_size"] = 0
--        res["ready_exists"] = False
--        res["mtime"] = 0
--
--    # JSON 샘플 검사(최대 200줄)
--    sample = 0
--    malformed = 0
--    try:
--        cj = p / "chunks.jsonl"
--        if cj.exists() and cj.stat().st_size > 0:
--            with cj.open("r", encoding="utf-8") as rf:
--                for i, line in enumerate(rf):
--                    if i >= 200:
--                        break
--                    s = line.strip()
--                    if not s:
--                        continue
--                    sample += 1
--                    try:
--                        json.loads(s)
--                    except Exception:
--                        malformed += 1
--
--        res["json_sample"] = sample
--        res["json_malformed"] = malformed
--        json_ok = (sample == 0) or (malformed == 0)
--        res["ok"] = bool(res["ready_exists"] and res["chunks_exists"] and (res["chunks_size"] > 0) and json_ok)
--        return res
--    except Exception:
--        return {
--            "persist": str(p),
--            "chunks_exists": False,
--            "chunks_size": 0,
--            "ready_exists": False,
--            "json_sample": 0,
--            "json_malformed": 0,
--            "ok": False,
--        }
--
--def _render_ready_probe() -> None:
--    """READY 여부를 미니멀 Pill로 시각화 + 상세는 expander."""
--    if st is None:
--        return
--
--    p = _effective_persist_dir()
--    info = _probe_index_health(p)
--    size = int(info.get("chunks_size", 0) or 0)
--    ready = bool(info.get("ready_exists"))
--    json_ok = bool((int(info.get("json_sample", 0) or 0) > 0) and int(info.get("json_malformed", 0) or 0) == 0)
--    ok = bool(ready and bool(info.get("chunks_exists")) and size > 0 and json_ok)
--
--    level = "HIGH" if ok else ("MID" if (size > 0 and json_ok) else "LOW")
--    badge = "🟢" if ok else ("🟡" if (size > 0 or ready or json_ok) else "🔴")
--
--    st.markdown(
--        """
--        <style>
--          .probe-pill{
--            display:inline-flex; align-items:center; gap:8px;
--            padding:6px 10px; border-radius:14px;
--            border:1px solid #dbeafe; background:#eff6ff;
--            font-weight:700; color:#0a2540;
--          }
--          .dot{ width:8px; height:8px; border-radius:50%;
--                background:#16a34a; box-shadow:0 0 0 0 rgba(22,163,74,.7);
--                animation:pulse 1.5s infinite; }
--          .dot.warn{ background:#f59e0b; box-shadow:0 0 0 0 rgba(245,158,11,.6); }
--          .dot.err{ background:#ef4444; box-shadow:0 0 0 0 rgba(239,68,68,.6); }
--          @keyframes pulse{
--            0%{ box-shadow:0 0 0 0 rgba(22,163,74,.7); }
--            70%{ box-shadow:0 0 0 10px rgba(22,163,74,0); }
--            100%{ box-shadow:0 0 0 0 rgba(22,163,74,0); }
--          }
--        </style>
--        """,
--        unsafe_allow_html=True,
--    )
--    dot_class = "dot" if level == "HIGH" else ("dot warn" if level == "MID" else "dot err")
--    pill_html = (
--        f'<span class="probe-pill">{badge} Ready Probe '
--        f'<span class="{dot_class}"></span><span>{level}</span></span>'
--    )
--    st.markdown(pill_html, unsafe_allow_html=True)
--
--    with st.expander("세부 상태 보기", expanded=False):
--        rows = [
--            ("Persist", str(info.get("persist"))),
--            ("chunks.jsonl", "OK" if info.get("chunks_exists") else "Missing"),
--            ("size", f"{int(info.get('chunks_size',0)): ,} bytes"),
--            (".ready", "OK" if info.get("ready_exists") else "Missing"),
--            ("JSON 샘플", f"{int(info.get('json_sample',0))} lines · malformed {int(info.get('json_malformed',0))}"),
--        ]
--        data = [{"항목": k, "상태": v} for k, v in rows]
--        st.dataframe(data, hide_index=True, use_container_width=True)
-+def _render_ready_probe() -> None:
-+    """READY 여부를 미니멀 Pill로 시각화 + 상세는 expander.
-+    SSOT: src.core.index_probe.probe_index_health(IndexHealth)
-+    - 코어 호출 실패 시, 존재/크기만 간소 폴백
-+    """
-+    if st is None:
-+        return
-+
-+    p = _effective_persist_dir()
-+
-+    # --- SSOT 호출 시도 ---
-+    info = None
-+    try:
-+        from src.core.index_probe import IndexHealth, probe_index_health  # lazy import
-+        info = probe_index_health(persist=p)
-+        size = int(getattr(info, "chunks_size", 0) or 0)
-+        ready = bool(getattr(info, "ready_exists", False))
-+        json_ok = bool(
-+            (int(getattr(info, "json_sample", 0) or 0) > 0)
-+            and int(getattr(info, "json_malformed", 0) or 0) == 0
-+        )
-+        ok = bool(ready and bool(getattr(info, "chunks_exists", False)) and size > 0 and json_ok)
-+    except Exception:
-+        # --- 폴백: 존재/크기만 점검 ---
-+        cj = p / "chunks.jsonl"
-+        size = cj.stat().st_size if cj.exists() else 0
-+        ready = (p / ".ready").exists()
-+        json_ok = True  # 샘플 검증 불가 시 보수적 True
-+        ok = bool(ready and size > 0)
-+
-+    level = "HIGH" if ok else ("MID" if (size > 0 and json_ok) else "LOW")
-+    badge = "🟢" if ok else ("🟡" if (size > 0 or ready or json_ok) else "🔴")
-+
-+    # CSS (펄스 점 포함)
-+    st.markdown(
-+        """
-+        <style>
-+          .probe-pill{
-+            display:inline-flex; align-items:center; gap:8px;
-+            padding:6px 10px; border-radius:14px;
-+            border:1px solid #dbeafe; background:#eff6ff;
-+            font-weight:700; color:#0a2540;
-+          }
-+          .dot{ width:8px; height:8px; border-radius:50%;
-+                background:#16a34a; box-shadow:0 0 0 0 rgba(22,163,74,.7);
-+                animation:pulse 1.5s infinite; }
-+          .dot.warn{ background:#f59e0b; box-shadow:0 0 0 0 rgba(245,158,11,.6); }
-+          .dot.err{ background:#ef4444; box-shadow:0 0 0 0 rgba(239,68,68,.6); }
-+          @keyframes pulse{
-+            0%{ box-shadow:0 0 0 0 rgba(22,163,74,.7); }
-+            70%{ box-shadow:0 0 0 10px rgba(22,163,74,0); }
-+            100%{ box-shadow:0 0 0 0 rgba(22,163,74,0); }
-+          }
-+        </style>
-+        """,
-+        unsafe_allow_html=True,
-+    )
-+    dot_class = "dot" if level == "HIGH" else ("dot warn" if level == "MID" else "dot err")
-+    pill_html = (
-+        f'<span class="probe-pill">{badge} Ready Probe '
-+        f'<span class="{dot_class}"></span><span>{level}</span></span>'
-+    )
-+    st.markdown(pill_html, unsafe_allow_html=True)
-+
-+    # 상세 표(SSOT 사용 시 풍부)
-+    with st.expander("세부 상태 보기", expanded=False):
-+        if info is not None:
-+            rows = [
-+                ("Persist", str(getattr(info, "persist", p))),
-+                ("chunks.jsonl", "OK" if getattr(info, "chunks_exists", False) else "Missing"),
-+                ("size", f"{int(getattr(info, 'chunks_size', 0)): ,} bytes"),
-+                (".ready", "OK" if getattr(info, "ready_exists", False) else "Missing"),
-+                ("JSON 샘플", f"{int(getattr(info, 'json_sample', 0))} lines · malformed {int(getattr(info, 'json_malformed', 0))}"),
-+            ]
-+        else:
-+            rows = [
-+                ("Persist", str(p)),
-+                ("chunks.jsonl", "OK" if (p / "chunks.jsonl").exists() else "Missing"),
-+                ("size", f"{size: ,} bytes"),
-+                (".ready", "OK" if (p / ".ready").exists() else "Missing"),
-+            ]
-+        data = [{"항목": k, "상태": v} for k, v in rows]
-+        st.dataframe(data, hide_index=True, use_container_width=True)
- # =================== [12C] DIAG: Ready Probe — END ====================
+    def _persist_dir_safe() -> Path:
+        """SSOT persist 경로. 코어 모듈 우선, 실패 시 기본값."""
+        try:
+            # lazy import: Actions/로컬 모두 안전
+            from src.core.persist import effective_persist_dir as _epd
+            return Path(str(_epd())).expanduser()
+        except Exception:
+            return Path.home() / ".maic" / "persist"
 
+    persist = _persist_dir_safe()
 
+    with st.container():
+        st.caption("Persist Dir")
+        st.code(str(persist), language="text")
+
+    # 상태 계산
+    status_text = "MISSING"
+    try:
+        from src.rag.index_status import get_index_summary  # lazy
+        s = get_index_summary(persist)
+        status_text = "READY" if getattr(s, "ready", False) else "MISSING"
+    except Exception:
+        status_text = "MISSING"
+
+    badge = "🟩 READY" if status_text == "READY" else "🟨 MISSING"
+    st.markdown(f"**상태**\n\n{badge}")
+
+    st.info(
+        "강제 인덱싱(HQ, 느림)·백업과 인덱싱 파일 미리보기는 **관리자 인덱싱 패널**에서 합니다. "
+        "관리자 모드 진입 후 아래 섹션으로 이동하세요.",
+        icon="ℹ️",
+    )
+
+    st.markdown("<span id='idx-admin-panel'></span>", unsafe_allow_html=True)
+# =================== [12] DIAG: Orchestrator Header — END ======================
 
 # =================== [13] ADMIN: Index Panel (prepared 전용) ==============
 def _render_admin_index_panel() -> None:
@@ -1581,14 +1454,9 @@ def _render_body() -> None:
 
     _header()
 
-    # 관리자만: 오케스트레이터/스캔/인덱싱/읽기전용/Probe 상세
+    # 관리자만: 오케스트레이터/스캔/인덱싱/읽기전용 상세
     if _is_admin_view():
         _render_index_orchestrator_header()
-        try:
-            # (선택) 기존 상세 Probe 함수가 있다면 호출
-            _render_ready_probe()
-        except Exception:
-            pass
         try:
             _render_admin_prepared_scan_panel()
         except Exception:
