@@ -1,7 +1,7 @@
 # Repository Tree (generated)
 
 - root: `/home/runner/work/MAIC/MAIC`
-- generated: 2025-09-07T16:08:29
+- generated: 2025-09-07T16:14:37
 - rules: depth=4, sort=name, excludes=.DS_Store, *.zip, *.bin, */.git/*, */.github/*, */.mypy_cache/*, */.ruff_cache/*, */__pycache__/*, */.venv/*, */venv/*, */node_modules/*, */.pytest_cache/*, .git, .venv, node_modules, __pycache__, .mypy_cache, .ruff_cache, .pytest_cache, dist, build, .DS_Store, *.zip, *.bin
 
 ```text
@@ -31,9 +31,11 @@
     📄 2025-09-07_PROJECT_STATUS.md
   📁 _gpt
     📄 CONVENTIONS.MD
+    📄 INVENTORY.json
     📄 MAIC_refactor_report.md
     📄 MASTERPLAN.md
     📄 README.MD
+    📄 TREE.md
 📄 folders_files_map.md
 📄 MAIC PROJECT MASTER PLAN
 📄 mypy.ini
