@@ -545,10 +545,11 @@ def _render_admin_panels() -> None:
 
 
 # =================== [12] ADMIN: Index Panel(시각화·백업) ==================
+# =================== [12] ADMIN: Index Panel — START ====================
 def _render_admin_index_panel() -> None:
     """관리자 인덱싱 패널 (prepared 전용 + 스텝/진행바/로그/스톨표시).
-    - 폼 submit → 세션 플래그에 기록 → 다음 rerun에서 안전 실행
-    - 위젯 key 고유화, 중복 로그 억제, ruff E70x 위반 제거
+    - 폼 submit → 세션 플래그 기록 → 다음 rerun에서 안전 실행
+    - 위젯 key 고유화, 중복 로그 억제, ruff E70x 제거
     """
     if "st" not in globals() or st is None or not _is_admin_view():
         return
@@ -630,7 +631,9 @@ def _render_admin_index_panel() -> None:
         for i, s in enumerate(_steps(), start=1):
             note = f" — {s.get('note','')}" if s.get("note") else ""
             lines.append(f"{_icon(s['state'])} {i}. {s['name']}{note}")
-        st.session_state["_IDX_PH_STEPS"].markdown("\n".join(f"- {ln}" for ln in lines))
+        st.session_state["_IDX_PH_STEPS"].markdown(
+            "\n".join(f"- {ln}" for ln in lines)
+        )
 
     def _update_progress() -> None:
         steps = _steps()
@@ -648,9 +651,8 @@ def _render_admin_index_panel() -> None:
             try:
                 bar.progress(prog)
             except Exception:
-                st.session_state["_IDX_BAR"] = st.session_state["_IDX_PH_BAR"].progress(
-                    prog,
-                    text="진행률",
+                st.session_state["_IDX_BAR"] = (
+                    st.session_state["_IDX_PH_BAR"].progress(prog, text="진행률")
                 )
 
     def _render_status() -> None:
@@ -665,10 +667,14 @@ def _render_admin_index_panel() -> None:
 
         if stalled:
             text = (
-                f"🟥 **STALLED** · 마지막 업데이트 {since_last}s 전 · 총 경과 {since_start}s"
+                "🟥 **STALLED** · 마지막 업데이트 "
+                f"{since_last}s 전 · 총 경과 {since_start}s"
             )
         elif running:
-            text = f"🟦 RUNNING · 마지막 업데이트 {since_last}s 전 · 총 경과 {since_start}s"
+            text = (
+                "🟦 RUNNING · 마지막 업데이트 "
+                f"{since_last}s 전 · 총 경과 {since_start}s"
+            )
         else:
             text = f"🟩 IDLE/COMPLETE · 총 경과 {since_start}s"
 
@@ -753,6 +759,7 @@ def _render_admin_index_panel() -> None:
         return zpath
 
     from urllib import request as _rq, error as _er, parse as _ps
+    import importlib as _imp
 
     def _gh_api(
         url: str,
@@ -836,8 +843,6 @@ def _render_admin_index_panel() -> None:
     # ----- prepared 목록 미리보기 -----------------------------------------
     st.caption("※ 이 패널은 Drive의 prepared만을 입력원으로 사용합니다.")
 
-    import importlib as _imp
-
     def _load_prepared_lister() -> Tuple[Optional[Any], List[str]]:
         tried: List[str] = []
 
@@ -887,7 +892,9 @@ def _render_admin_index_panel() -> None:
         if prepared_count:
             rows = []
             for rec in files_list[:400]:
-                name = str(rec.get("name") or rec.get("path") or rec.get("file") or "")
+                name = str(
+                    rec.get("name") or rec.get("path") or rec.get("file") or ""
+                )
                 fid = str(rec.get("id") or rec.get("fileId") or "")
                 rows.append({"name": name, "id": fid})
             st.dataframe(rows, hide_index=True, use_container_width=True)
@@ -1125,426 +1132,28 @@ def _render_admin_index_panel() -> None:
             else:
                 st.info("`chunks.jsonl`이 아직 없어 결과를 표시할 수 없습니다.")
 
-    # ----- 실시간 로그 -----------------------------------------------------
-    with st.expander("실시간 로그 (최근 200줄)", expanded=False):
-        buf: List[str] = st.session_state.get("_IDX_LOG", [])
-        if buf:
-            st.text("\n".join(buf))
-        else:
-            st.caption("표시할 로그가 없습니다.")
-
-    # ----- 실행 컨트롤 (폼 기반: 이벤트 보존) -----
-    with st.form("idx_actions_form", clear_on_submit=False):
-        c1, c2, c3, c4 = st.columns([1, 2, 2, 1])
-        submit_reindex = c1.form_submit_button("🔁 강제 재인덱싱(HQ, prepared)", use_container_width=True)
-        show_after = c2.toggle("인덱싱 결과 표시", key="IDX_SHOW_AFTER", value=True)
-        auto_up = c3.toggle("인덱싱 후 자동 ZIP 업로드", key="IDX_AUTO_UP", value=_all_gh_secrets(),
-                            help="GH/GITHUB 시크릿이 모두 있으면 켜짐")
-        reset_view = c4.form_submit_button("🧹 화면 초기화")
-
-        if reset_view:
-            _step_reset(step_names)
-            st.session_state["_IDX_BAR"] = None
-            st.session_state["_IDX_PH_BAR"].empty()
-            st.session_state["_IDX_PH_LOG"].empty()
-            _log("화면 상태를 초기화했습니다.")
-
-        if submit_reindex:
-            # 클릭 신호를 세션에 남기고 rerun → 다음 턴에서 안전하게 처리
-            st.session_state["_IDX_REQ"] = {"ts": time.time(), "auto_up": auto_up, "show_after": show_after}
-            _log("인덱싱 요청 접수")
-            st.rerun()
-
-    # ----- 인덱싱 실행 (세션 플래그 소비) -----
-    req = st.session_state.pop("_IDX_REQ", None)
-    if req:
-        used_persist: Optional[Path] = None
-        _step_reset(step_names)
-        _render_stepper(); _render_status(); st.session_state["_IDX_PH_BAR"].empty(); st.session_state["_IDX_BAR"] = None
-        _log("인덱싱 시작")
-
-        try:
-            from src.rag import index_build as _idx
-
-            _step_set(1, "run", "persist 확인 중")
-            try:
-                from src.rag.index_build import PERSIST_DIR as _pp
-                used_persist = Path(str(_pp)).expanduser()
-            except Exception:
-                used_persist = Path.home() / ".maic" / "persist"
-            _step_set(1, "ok", str(used_persist))
-            _log(f"persist={used_persist}")
-
-            _step_set(2, "run", "HQ 인덱싱 중")
-            os.environ["MAIC_INDEX_MODE"] = "HQ"
-            os.environ["MAIC_USE_PREPARED_ONLY"] = "1"
-            _idx.rebuild_index()
-            _step_set(2, "ok", "완료")
-            _log("인덱싱 완료")
-
-            cj = used_persist / "chunks.jsonl"
-            if cj.exists() and cj.stat().st_size > 0:
-                _mark_ready_safe()
-
-            _step_set(3, "run", "prepared 소비 중")
-            # prepared 소비는 선택적(있으면 실행)
-            def _load_prepared_api() -> Tuple[Optional[Any], Optional[Any], List[str]]:
-                tried: List[str] = []
-                def _try(modname: str) -> Tuple[Optional[Any], Optional[Any]]:
-                    try:
-                        m = importlib.import_module(modname)
-                        chk_fn = getattr(m, "check_prepared_updates", None)
-                        mark_fn = getattr(m, "mark_prepared_consumed", None)
-                        if callable(chk_fn) and callable(mark_fn):
-                            tried.append(f"ok: {modname}")
-                            return chk_fn, mark_fn
-                        tried.append(f"miss attrs: {modname}")
-                        return None, None
-                    except Exception as e:
-                        tried.append(f"fail: {modname} ({e})")
-                        return None, None
-                for name in ("prepared", "gdrive"):
-                    chk, mark = _try(name)
-                    if chk and mark: return chk, mark, tried
-                for name in ("src.prepared", "src.drive.prepared", "src.integrations.gdrive"):
-                    chk, mark = _try(name)
-                    if chk and mark: return chk, mark, tried
-                return None, None, tried
-
-            try:
-                persist_for_seen = used_persist or _persist_dir_safe()
-                chk, mark, dbg2 = _load_prepared_api()
-                info: Dict[str, Any] = {}
-                new_files: List[str] = []
-                if callable(chk):
-                    try:
-                        info = chk(persist_for_seen, files_list) or {}
-                    except TypeError:
-                        info = chk(persist_for_seen) or {}
-                    new_files = list(info.get("files") or [])
-                else:
-                    for m in dbg2:
-                        _log("• " + m, "warn")
-                if new_files and callable(mark):
-                    try:
-                        mark(persist_for_seen, new_files)
-                    except TypeError:
-                        mark(new_files)
-                    _log(f"소비(seen) {len(new_files)}건")
-                _step_set(3, "ok", f"{len(new_files)}건")
-            except Exception as e:
-                _step_set(3, "fail", "소비 실패")
-                _log(f"prepared 소비 실패: {e}", "err")
-
-            _step_set(4, "run", "요약 계산")
-            try:
-                from src.rag.index_status import get_index_summary
-                summary2 = get_index_summary(used_persist)
-                note = f"files={summary2.total_files}, chunks={summary2.total_chunks}"
-                _step_set(4, "ok", note)
-                _log(f"요약 {note}")
-            except Exception:
-                _step_set(4, "ok", "요약 모듈 없음")
-                _log("요약 모듈 없음", "warn")
-
-            if req.get("auto_up") and _all_gh_secrets():
-                _step_set(5, "run", "ZIP/Release 업로드")
-                owner, repo_name = _resolve_owner_repo()
-                token = _secret("GH_TOKEN") or _secret("GITHUB_TOKEN")
-                if owner and repo_name and token:
-                    idx_dir = used_persist or _persist_dir_safe()
-                    backup_dir = idx_dir / "backups"
-                    z = _zip_index_dir(idx_dir, backup_dir)
-                    tag = f"index-{int(time.time())}"
-                    res = _upload_release_zip(owner, repo_name, token, tag, z, name=tag, body="MAIC index")
-                    if "_error" in res:
-                        _step_set(5, "fail", res.get("_error", "error"))
-                        if "detail" in res:
-                            with st.expander("상세 오류"):
-                                st.code(res["detail"])
-                        _log(f"업로드 실패: {res.get('_error')}", "err")
-                    else:
-                        _step_set(5, "ok", "업로드 완료")
-                        url = res.get("browser_download_url")
-                        if url:
-                            st.write(f"다운로드: {url}")
-                        _log("업로드 완료")
-                else:
-                    _step_set(5, "skip", "시크릿 없음")
-                    _log("시크릿 없어 업로드 생략", "warn")
-            else:
-                _step_set(5, "skip", "자동 업로드 꺼짐")
-                _log("자동 업로드 꺼짐")
-
-            st.success("강제 재인덱싱 완료 (prepared 전용)")
-        except Exception as e:
-            _step_set(2, "fail", "인덱싱 실패")
-            _log(f"인덱싱 실패: {e}", "err")
-            st.error("강제 재인덱싱 중 오류가 발생했어요.")
-
-    # ----- 인덱싱 후 요약/경로 표시 -----
-    show_after = bool(st.session_state.get("IDX_SHOW_AFTER", True))
-    if show_after:
-        try:
-            from src.rag.index_build import PERSIST_DIR as _px
-            idx_persist = Path(str(_px)).expanduser()
-        except Exception:
-            idx_persist = Path.home() / ".maic" / "persist"
-        glb_persist = _persist_dir_safe()
-        st.write(f"**Persist(Indexer):** `{str(idx_persist)}`")
-        st.write(f"**Persist(Global):** `{str(glb_persist)}`")
-        if str(idx_persist) != str(glb_persist):
-            st.warning("Persist 경로가 서로 다릅니다. 설정/부팅 훅을 점검하세요.")
-
-        try:
-            from src.rag.index_status import get_index_summary
-            summary = get_index_summary(idx_persist)
-            ready_txt = "Yes" if summary.ready else "No"
-            st.caption(f"요약: ready={ready_txt} · files={summary.total_files} · chunks={summary.total_chunks}")
-            if summary.sample_files:
-                with st.expander("샘플 파일(최대 3개)", expanded=False):
-                    rows = [{"path": s} for s in summary.sample_files]
-                    st.dataframe(rows, hide_index=True, use_container_width=True)
-        except Exception:
-            cj = idx_persist / "chunks.jsonl"
-            rd = (idx_persist / ".ready").exists()
-            if cj.exists():
-                st.caption("요약 모듈 없음: chunks.jsonl 존재")
-                if not rd:
-                    st.info(".ready 파일이 없어 준비 상태가 미완성입니다.")
-            else:
-                st.info("`chunks.jsonl`이 아직 없어 결과를 표시할 수 없습니다.")
-
-    # ----- 실시간 로그 -----
-    with st.expander("실시간 로그 (최근 200줄)", expanded=False):
-        buf: List[str] = st.session_state.get("_IDX_LOG", [])
-        if buf:
-            st.text("\n".join(buf))
-        else:
-            st.caption("표시할 로그가 없습니다.")
-
-
-    # --- 실행 컨트롤 -------------------------------------------------------
-    c1, c2, c3, c4 = st.columns([1, 2, 2, 1])
-    do_rebuild = c1.button(
-        "🔁 강제 재인덱싱(HQ, prepared)", help="Drive prepared만 사용"
-    )
-    show_after = c2.toggle("인덱싱 결과 표시", value=True)
-    auto_up = c3.toggle(
-        "인덱싱 후 자동 ZIP 업로드",
-        value=_all_gh_secrets(),
-        help="GH/GITHUB 시크릿이 모두 있으면 켜짐",
-    )
-    reset_view = c4.button("🧹 화면 초기화")
-
-    if reset_view:
-        _step_reset(step_names)
-        _render_stepper()
-        _render_status()
-        st.session_state["_IDX_BAR"] = None
-        st.session_state["_IDX_PH_BAR"].empty()
-        st.session_state["_IDX_PH_LOG"].empty()
-        _log("화면 상태를 초기화했습니다.")
-
-    # --- 강제 인덱싱(HQ: prepared only) -----------------------------------
-    used_persist: Optional[Path] = None
-    if do_rebuild:
-        _step_reset(step_names)
-        _render_stepper()
-        _render_status()
-        st.session_state["_IDX_BAR"] = None
-        st.session_state["_IDX_PH_BAR"].empty()
-        st.session_state["_IDX_PH_LOG"].empty()
-        _log("인덱싱 시작")
-        try:
-            from src.rag import index_build as _idx
-
-            _step_set(1, "run", "persist 확인 중")
-            try:
-                from src.rag.index_build import PERSIST_DIR as _pp
-                used_persist = Path(str(_pp)).expanduser()
-            except Exception:
-                used_persist = Path.home() / ".maic" / "persist"
-            _step_set(1, "ok", str(used_persist))
-            _log(f"persist={used_persist}")
-
-            _step_set(2, "run", "HQ 인덱싱 중")
-            os.environ["MAIC_INDEX_MODE"] = "HQ"
-            os.environ["MAIC_USE_PREPARED_ONLY"] = "1"
-            _idx.rebuild_index()
-            _step_set(2, "ok", "완료")
-            _log("인덱싱 완료")
-
-            cj = used_persist / "chunks.jsonl"
-            if cj.exists() and cj.stat().st_size > 0:
-                try:
-                    _mark_ready_safe()
-                except Exception:
-                    try:
-                        (used_persist / ".ready").write_text("ok", encoding="utf-8")
-                    except Exception:
-                        pass
-
-            _step_set(3, "run", "prepared 소비 중")
-            try:
-                persist_for_seen = used_persist or _persist_dir_safe()
-                chk, mark, dbg2 = _load_prepared_api()
-                info: Dict[str, Any] = {}
-                new_files: List[str] = []
-                files_arg: Any = files_list or []
-                if callable(chk):
-                    try:
-                        info = chk(persist_for_seen, files_arg) or {}
-                    except TypeError:
-                        try:
-                            info = chk(persist_for_seen) or {}
-                        except Exception:
-                            info = {}
-                    try:
-                        new_files = list(info.get("files") or [])
-                    except Exception:
-                        new_files = []
-                else:
-                    for m in dbg2:
-                        _log("• " + m, "warn")
-                if new_files and callable(mark):
-                    try:
-                        mark(persist_for_seen, new_files)
-                    except TypeError:
-                        mark(new_files)
-                    _log(f"소비(seen) {len(new_files)}건")
-                _step_set(3, "ok", f"{len(new_files)}건")
-            except Exception as e:
-                _step_set(3, "fail", "소비 실패")
-                _log(f"prepared 소비 실패: {e}", "err")
-
-            _step_set(4, "run", "요약 계산")
-            try:
-                from src.rag.index_status import get_index_summary
-                summary2 = get_index_summary(used_persist)
-                note = (
-                    f"files={summary2.total_files}, chunks={summary2.total_chunks}"
-                )
-                _step_set(4, "ok", note)
-                _log(f"요약 {note}")
-            except Exception:
-                _step_set(4, "ok", "요약 모듈 없음")
-                _log("요약 모듈 없음", "warn")
-
-            if auto_up and _all_gh_secrets():
-                _step_set(5, "run", "ZIP/Release 업로드")
-                owner, repo_name = _resolve_owner_repo()
-                token = _secret("GH_TOKEN") or _secret("GITHUB_TOKEN")
-                if owner and repo_name and token:
-                    idx_dir = used_persist or _persist_dir_safe()
-                    backup_dir = idx_dir / "backups"
-                    z = _zip_index_dir(idx_dir, backup_dir)
-                    tag = f"index-{int(time.time())}"
-                    res = _upload_release_zip(
-                        owner, repo_name, token, tag, z, name=tag, body="MAIC index"
-                    )
-                    if "_error" in res:
-                        _step_set(5, "fail", res.get("_error", "error"))
-                        if "detail" in res:
-                            with st.expander("상세 오류"):
-                                st.code(res["detail"])
-                        _log(f"업로드 실패: {res.get('_error')}", "err")
-                    else:
-                        _step_set(5, "ok", "업로드 완료")
-                        url = res.get("browser_download_url")
-                        if url:
-                            st.write(f"다운로드: {url}")
-                        _log("업로드 완료")
-                else:
-                    _step_set(5, "skip", "시크릿 없음")
-                    _log("시크릿 없어 업로드 생략", "warn")
-            else:
-                _step_set(5, "skip", "자동 업로드 꺼짐")
-                _log("자동 업로드 꺼짐")
-
-            st.success("강제 재인덱싱 완료 (prepared 전용)")
-        except Exception as e:
-            _step_set(2, "fail", "인덱싱 실패")
-            _log(f"인덱싱 실패: {e}", "err")
-            _errlog_safe(f"reindex failed: {e}", where="[admin-index.rebuild]")
-            st.error("강제 재인덱싱 중 오류가 발생했어요.")
-        finally:
-            try:
-                if used_persist is not None and st is not None:
-                    st.session_state["_PERSIST_DIR"] = used_persist
-            except Exception:
-                pass
-
-    # --- 인덱싱 후 요약 & 경로 불일치 진단 --------------------------------
-    if show_after:
-        try:
-            from src.rag.index_build import PERSIST_DIR as _px
-            idx_persist = Path(str(_px)).expanduser()
-        except Exception:
-            idx_persist = Path.home() / ".maic" / "persist"
-        glb_persist = _persist_dir_safe()
-
-        st.write(f"**Persist(Indexer):** `{str(idx_persist)}`")
-        st.write(f"**Persist(Global):** `{str(glb_persist)}`")
-        if str(idx_persist) != str(glb_persist):
-            st.warning("Persist 경로가 서로 다릅니다. 설정/부팅 훅을 점검하세요.")
-
-        summary: Optional["_IndexSummary"] = None
-        try:
-            from src.rag.index_status import get_index_summary
-            summary = get_index_summary(idx_persist)
-        except Exception:
-            summary = None
-
-        if summary:
-            ready_txt = "Yes" if summary.ready else "No"
-            st.caption(
-                f"요약: ready={ready_txt} · files={summary.total_files} "
-                f"· chunks={summary.total_chunks}"
-            )
-            if summary.sample_files:
-                with st.expander("샘플 파일(최대 3개)", expanded=False):
-                    rows = [{"path": s} for s in summary.sample_files]
-                    st.dataframe(rows, hide_index=True, use_container_width=True)
-        else:
-            cj = idx_persist / "chunks.jsonl"
-            rd = (idx_persist / ".ready").exists()
-            if cj.exists():
-                st.caption("요약 모듈 없음: chunks.jsonl 존재")
-                if not rd:
-                    st.info(".ready 파일이 없어 준비 상태가 미완성입니다.")
-            else:
-                st.info("`chunks.jsonl`이 아직 없어 결과를 표시할 수 없습니다.")
-
-    # --- 라이브 로그 --------------------------------------------------------
-    with st.expander("실시간 로그 (최근 200줄)", expanded=False):
-        buf: List[str] = st.session_state.get("_IDX_LOG", [])
-        if buf:
-            st.text("\n".join(buf))
-        else:
-            st.caption("표시할 로그가 없습니다.")
-
-    # --- 수동 백업/업로드 ---------------------------------------------------
+    # ----- 수동 백업 / 업로드(Zip) ----------------------------------------
     with st.expander("백업 / 업로드(Zip)", expanded=False):
         ow_r, rp_r = _resolve_owner_repo()
         token_r = _secret("GH_TOKEN") or _secret("GITHUB_TOKEN")
-        owner = st.text_input("GitHub Owner", ow_r)
-        repo_name = st.text_input("GitHub Repo", rp_r)
-        token = st.text_input("GitHub Token", token_r)
+        owner = st.text_input("GitHub Owner", ow_r, key="IDX_BK_OWNER")
+        repo_name = st.text_input("GitHub Repo", rp_r, key="IDX_BK_REPO")
+        token = st.text_input("GitHub Token", token_r, key="IDX_BK_TOKEN")
         default_tag = f"index-{int(time.time())}"
-        tag = st.text_input("Release Tag", default_tag)
+        tag = st.text_input("Release Tag", default_tag, key="IDX_BK_TAG")
         try:
             from src.rag.index_build import PERSIST_DIR as _px
             idx_persist2 = Path(str(_px)).expanduser()
         except Exception:
             idx_persist2 = Path.home() / ".maic" / "persist"
         local_dir = st.text_input(
-            "Local Backup Dir", str((idx_persist2 / "backups").resolve())
+            "Local Backup Dir",
+            str((idx_persist2 / "backups").resolve()),
+            key="IDX_BK_DIR",
         )
-
-        c1, c2 = st.columns([1, 1])
-        act_zip = c1.button("📦 로컬 ZIP 백업 만들기")
-        act_up = c2.button("⬆ Releases에 업로드(Zip)")
+        c1_bk, c2_bk = st.columns([1, 1])
+        act_zip = c1_bk.button("📦 로컬 ZIP 백업 만들기", key="IDX_BK_MKZIP")
+        act_up = c2_bk.button("⬆ Releases에 업로드(Zip)", key="IDX_BK_UPLOAD")
 
         if act_zip:
             z = _zip_index_dir(idx_persist2, Path(local_dir))
@@ -1560,7 +1169,13 @@ def _render_admin_index_panel() -> None:
                 z = _zip_index_dir(idx_persist2, Path(local_dir))
                 st.caption(f"업로드 대상 ZIP: `{z.name}`")
                 res = _upload_release_zip(
-                    owner, repo_name, token, tag, z, name=tag, body="MAIC index"
+                    owner,
+                    repo_name,
+                    token,
+                    tag,
+                    z,
+                    name=tag,
+                    body="MAIC index",
                 )
                 if "_error" in res:
                     st.error(f"업로드 실패: {res.get('_error')}")
@@ -1573,6 +1188,14 @@ def _render_admin_index_panel() -> None:
                     if browser:
                         st.write(f"다운로드: {browser}")
 
+    # ----- 실시간 로그 -----------------------------------------------------
+    with st.expander("실시간 로그 (최근 200줄)", expanded=False):
+        buf: List[str] = st.session_state.get("_IDX_LOG", [])
+        if buf:
+            st.text("\n".join(buf))
+        else:
+            st.caption("표시할 로그가 없습니다.")
+# =================== [12] ADMIN: Index Panel — END ====================
 
 # ============= [13] 인덱싱된 소스 목록(읽기 전용 대시보드) ==============
 def _render_admin_indexed_sources_panel() -> None:
