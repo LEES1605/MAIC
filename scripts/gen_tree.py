@@ -10,10 +10,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
 
-try:  # Python 3.11+
-    import tomllib
-except Exception:  # pragma: no cover
-    tomllib = None  # type: ignore[assignment]
+# Py3.11+: tomllib / Py3.10: tomli 로 대체
+try:
+    import tomllib  # Python 3.11+
+except ModuleNotFoundError:
+    import tomli as tomllib  # type: ignore
 
 EXCLUDE_DIRS: Tuple[str, ...] = (
     ".git",
@@ -42,8 +43,8 @@ DEFAULT_TOPN_SIZES = 20
 DEFAULT_REPORTS: Tuple[str, ...] = ("stale", "sizes", "orphans")
 
 DOC_ROOTS: Tuple[str, ...] = ("docs", "docs/_gpt")
-
 # ======================= [01] imports & constants — END =========================
+
 
 # ======================= [02] data models — START ===============================
 @dataclass
@@ -77,66 +78,16 @@ class ScanConfig:
 
 # ======================= [02] data models — END =================================
 
-# ======================= [03] utilities — START =================================
 def _load_toml(path: Path) -> Dict:
-    """Load TOML using stdlib when available. Return {} if missing/invalid."""
-    if not path.exists() or path.stat().st_size == 0:
-        return {}
-    if tomllib is None:
-        return {}
+    """Load TOML on both 3.11+(tomllib) and 3.10(tomli). Return {} on failure."""
     try:
+        if not path.exists() or path.stat().st_size == 0:
+            return {}
         with path.open("rb") as f:
             return tomllib.load(f)
     except Exception:
         return {}
 
-
-def _norm_patterns(pats: Iterable[str]) -> Tuple[str, ...]:
-    out: List[str] = []
-    for p in pats:
-        p = str(p).strip()
-        if not p:
-            continue
-        out.append(p)
-    return tuple(out)
-
-
-def _is_excluded(rel: Path, patterns: Sequence[str]) -> bool:
-    s = str(rel)
-    for pat in patterns:
-        if fnmatch.fnmatch(s, pat):
-            return True
-    return False
-
-
-def _depth_of(rel: Path) -> int:
-    """Relative path depth helper (e.g., 'a/b/c.txt' -> 3 parts)."""
-    return len(rel.parts)
-
-
-def _iter_files(root: Path, exclude_globs: Sequence[str]) -> Iterator["FileInfo"]:
-    """Iterate files under root excluding patterns."""
-    for p in root.rglob("*"):
-        if not p.is_file():
-            continue
-        rel = p.relative_to(root)
-        if _is_excluded(rel, exclude_globs):
-            continue
-        try:
-            st = p.stat()
-            yield FileInfo(path=p, size=int(st.st_size), mtime=float(st.st_mtime))
-        except FileNotFoundError:
-            # raced file remove; ignore
-            continue
-
-
-def _sort_key(fi: "FileInfo", mode: str) -> Tuple:
-    if mode == "size":
-        return (-fi.size, str(fi.path))
-    if mode == "mtime":
-        return (-fi.mtime, str(fi.path))
-    return (str(fi.path).lower(),)
-# ======================= [03] utilities — END ===================================
 
 # ======================= [04] inventory & tree builders — START =================
 def build_inventory(files: Sequence[FileInfo], cfg: ScanConfig) -> Dict:
