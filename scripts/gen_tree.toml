@@ -1,0 +1,14 @@
+# ================== [01] gen_tree config — START ==================
+[root]
+max_depth = 4
+exclude = [
+  ".git", ".venv", "node_modules", "__pycache__", ".mypy_cache",
+  ".ruff_cache", ".pytest_cache", "dist", "build", ".DS_Store",
+  "*.zip", "*.bin"
+]
+
+[reports]
+enable = ["stale", "sizes", "orphans"]
+stale_days = 120
+topn_sizes = 20
+# ================== [01] gen_tree config — END ====================
