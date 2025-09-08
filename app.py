@@ -1254,24 +1254,56 @@ def _inject_chat_styles_once() -> None:
         unsafe_allow_html=True,
     )
 
-# ===================== [15B] 채팅 모드 Pill 컨트롤 =======================
+# [15B] 모드 라디오 — SSOT 연결 (전체 교체)
 def _render_mode_controls_pills() -> str:
-    """채팅 모드 선택 라디오(Pill 스타일). 선택값을 문자열로 반환."""
+    """
+    질문 모드 선택(문법·문장·지문[·이야기]).
+    SSOT(src.core.modes)에서 라벨을 가져와 라디오를 구성.
+    반환: 내부 key("grammar"|"sentence"|"passage"|"story")
+    """
+    _inject_chat_styles_once()
     if st is None:
-        return ""
-    # 원하는 모드셋: 문법, 문장, 지문, 이야기
-    options = ["문법", "문장", "지문", "이야기"]
+        return "grammar"
 
-    # 세션에 예전 값(기본/요약/문제풀이)이 남아 있으면 자연스럽게 매핑
-    legacy_map = {"기본": "문장", "요약": "지문", "문제풀이": "문장"}
-    prev = str(st.session_state.get("__mode", options[0]))
-    default = legacy_map.get(prev, prev)
-    if default not in options:
-        default = options[0]
+    try:
+        from src.core.modes import enabled_modes, find_mode_by_label
+        modes = enabled_modes()  # SSOT
+        labels = [m.label for m in modes]
+        keys = [m.key for m in modes]
+    except Exception:
+        # 문제가 생겨도 최소 3모드는 유지
+        labels = ["문법", "문장", "지문"]
+        keys = ["grammar", "sentence", "passage"]
 
-    idx = options.index(default)
-    mode = st.radio("채팅 모드", options, index=idx, horizontal=True, label_visibility="collapsed")
-    return str(mode)
+    # 마지막 선택 복원
+    ss = st.session_state
+    last_key = str(ss.get("__mode") or "grammar")
+    try:
+        cur_idx = keys.index(last_key)
+    except ValueError:
+        cur_idx = 0
+
+    sel_label = st.radio(
+        "질문 모드",
+        options=labels,
+        index=cur_idx,
+        horizontal=True,
+        label_visibility="collapsed",
+    )
+
+    # 라벨→key 매핑
+    try:
+        if "src.core.modes" in globals():
+            from src.core.modes import find_mode_by_label  # type: ignore
+        spec = find_mode_by_label(sel_label) if callable(find_mode_by_label) else None
+        cur_key = spec.key if spec else keys[labels.index(sel_label)]
+    except Exception:
+        cur_key = keys[labels.index(sel_label)]
+
+    ss["qa_mode_radio"] = sel_label
+    ss["__mode"] = cur_key
+    return cur_key
+
 
 # ========================== [16] 채팅 패널 ===============================
 def _render_chat_panel() -> None:
