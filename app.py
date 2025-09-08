@@ -33,10 +33,12 @@ def _effective_persist_dir() -> Path:
     실패 시 기본(~/.maic/persist)로 안전 폴백합니다.
     """
     try:
+        from src.core.persist import effective_persist_dir
         return effective_persist_dir()
     except Exception:
         return Path.home() / ".maic" / "persist"
 # =========================== [03] CORE: Persist Resolver ==========================
+
 
 # ================== [04] secrets → env 승격 & 페이지 설정(안정 옵션) =================
 def _bootstrap_env() -> None:
