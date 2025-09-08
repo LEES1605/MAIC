@@ -68,7 +68,7 @@ SELF_BASENAME = SELF_PATH.name
 # ============================ [02] imports & consts — END =========================
 
 # ============================= [03] types & helpers — START =======================
-class Violation(Tuple[Path, int, str, str]):
+class Violation(NamedTuple):
     """
     (파일경로, 라인번호, 유형코드, 메시지) 튜플.
     유형코드:
@@ -163,7 +163,7 @@ def scan(root: Path, *, include_self: bool, verbose: bool = False) -> List[Viola
             flagged = _should_flag_line(ext, line)
             if flagged:
                 code, msg = flagged
-                violations.append((file, i, code, msg))
+                violations.append(Violation(file, i, code, msg))
     return violations
 
 
