@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional, Any, Dict, Tuple
 import importlib
+import os
+import traceback
 
 # ===== [02] Persist path resolution (SSOT: core.persist) — START =====
 def _persist_dir() -> Path:
@@ -76,7 +78,7 @@ def index_status(p: Optional[Path] = None) -> Dict[str, Any]:
 # [03] END ======================================================================
 
 
-# [04] Streamlit SSOT sync (optional) — START
+# ===== [04] Streamlit SSOT sync (optional, no hard dependency) — START =====
 def _set_brain_status(code: str, msg: str = "", source: str = "", attached: bool = False) -> None:
     """app.py의 세션 키와 동일한 필드에 상태를 반영(존재 시)."""
     try:
@@ -94,7 +96,7 @@ def _set_brain_status(code: str, msg: str = "", source: str = "", attached: bool
         ss.setdefault("index_change_stats", {})
     except Exception:
         pass
-# [04] END
+# ===== [04] Streamlit SSOT sync (optional, no hard dependency) — END =====
 
 
 # [05] Dynamic import helpers ====================================================
@@ -112,7 +114,10 @@ def _try_import(modname: str, names: list[str]) -> Dict[str, Any]:
 
 # [06] Decision tree: choose best available indexer =============================
 def _pick_reindex_fn() -> Tuple[Optional[Any], str]:
-    """가능한 인덱싱 함수 후보 중 첫 번째로 발견되는 함수를 반환."""
+    """
+    가능한 인덱싱 함수 후보 중 첫 번째로 발견되는 함수를 반환.
+    반환: (callable | None, name)
+    """
     cand = _try_import(
         "src.rag.index_build",
         [
@@ -139,26 +144,25 @@ def _pick_reindex_fn() -> Tuple[Optional[Any], str]:
     return None, ""
 
 
-# [07] Public API: reindex() =====================================================
+# ========================== [07] Public API: reindex() — START ==========================
 def reindex(dest_dir=None) -> bool:
     """
     SSOT: core.persist.effective_persist_dir() 기준으로 인덱싱.
     - dest_dir가 주어지면 해당 경로에 빌드(테스트/임시용).
     - 성공 기준: chunks.jsonl > 0B && .ready 존재.
     """
-    from pathlib import Path
-    import importlib
-
     base = Path(dest_dir).expanduser() if dest_dir else _persist_dir()
     try:
         mod = importlib.import_module("src.rag.index_build")
         fn = getattr(mod, "rebuild_index", None)
         if not callable(fn):
             return False
-        fn(output_dir=base)  # SSOT 경로 명시적 전달
+        # 인덱서에 명시적 출력 경로 전달(SSOT 경로 보장)
+        fn(output_dir=base)
     except Exception:
         return False
 
+    # 산출물 검증 + .ready 멱등 보정
     _ensure_ready_signal(base)
     try:
         cj = base / "chunks.jsonl"
@@ -167,6 +171,7 @@ def reindex(dest_dir=None) -> bool:
         return ok
     except Exception:
         return False
+# =========================== [07] Public API: reindex() — END ===========================
 
 
 # [08] Public API: restore_or_attach() ==========================================
@@ -175,7 +180,7 @@ def restore_or_attach(dest_dir: Optional[str | Path] = None) -> bool:
     복구(릴리스) 또는 로컬 첨부를 시도하여 사용 가능한 인덱스를 만든다.
     - 1) 이미 .ready+chunks가 있으면 그대로 READY
     - 2) GitHub 최신 릴리스 복구 시도 (있다면)
-    - 3) 성공/부분성공이면 상태를 반영
+    - 3) 성공/부분성공이면 SSOT 보정 후 상태를 반영
     """
     base = Path(dest_dir).expanduser() if dest_dir else _persist_dir()
     if _local_ready(base):
@@ -199,16 +204,32 @@ def restore_or_attach(dest_dir: Optional[str | Path] = None) -> bool:
 
     _set_brain_status("MISSING", "복구/연결 실패(인덱스 없음)", "", attached=False)
     return False
+# [08] END =====================================================================
 
 
 # [09] Public API: attach_local() ===============================================
 def attach_local(dest_dir: Optional[str | Path] = None) -> bool:
-    """네트워크 없이 로컬 신호만으로 READY 승격(.ready 보정 포함)."""
+    """
+    네트워크 호출 없이 로컬 신호만으로 READY 승격(.ready 보정 포함).
+    """
     base = Path(dest_dir).expanduser() if dest_dir else _persist_dir()
     _ensure_ready_signal(base)
+
     if _local_ready(base):
         _set_brain_status("READY", "로컬 인덱스 연결됨", "local", attached=True)
         return True
+
     _set_brain_status("MISSING", "인덱스 없음(attach 불가)", "", attached=False)
     return False
+# [09] END =====================================================================
+
+
+# [10] Safety: minimal logger (console only) ====================================
+def _log_console(msg: str) -> None:
+    try:
+        print(f"[services.index] {msg}")
+    except Exception:
+        pass
+
+
 # ===== [NEW FILE / src/services/index.py / L0001–L9999] — END =====
