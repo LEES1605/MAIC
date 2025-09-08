@@ -114,10 +114,18 @@ def rebuild_index(output_dir: str | Path | None = None) -> Dict[str, Any]:
         overlap_chars = 200
         max_chunks = 800
 
-    # --- persist dir 결정: 인자 → 전역 → config → 폴백 -----------------------
+    # --- persist dir 결정: 인자 → SSOT → 전역/CFG → 폴백 ----------------------
     def _persist_dir() -> Path:
         if output_dir:
             return Path(output_dir).expanduser()
+        # SSOT 최우선 사용
+        try:
+            from src.core.persist import effective_persist_dir as _ssot  # noqa: E402
+            p = _ssot()
+            return p if isinstance(p, Path) else Path(str(p)).expanduser()
+        except Exception:
+            pass
+        # 하위호환: 전역 상수/CFG → 기본
         try:
             cfg = globals().get("PERSIST_DIR")
             if cfg:
