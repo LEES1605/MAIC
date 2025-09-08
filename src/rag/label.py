@@ -3,12 +3,12 @@
 src.rag.label — 출처 라벨러(표준화)
 
 정책(표시 문자열의 표준화):
-  - [문법책] → [문법서적] 으로 정규화 (칩 표기 통일)
+  - [문법책] → [문법서적] (칩 표기 통일)
   - [AI지식], [이유문법] 유지
-결정 규칙(기존 유지):
+결정 규칙:
   1) 파일명이 '이유문법*' 또는 '[깨알문법]*' → [이유문법]
-  2) 그 외 상위 히트가 PDF → [문법서적]
-  3) 히트가 존재(비-PDF)해도 문법 자료로 간주 → [문법서적]
+  2) 그 외 .pdf → [문법서적]
+  3) 히트가 존재(비-PDF 포함) → [문법서적]
   4) 히트가 없으면 → [AI지식]
 """
 
@@ -32,7 +32,7 @@ except Exception:  # pragma: no cover
     except Exception:  # pragma: no cover
         _get_or_build_index = None  # type: ignore
 
-__all__ = ["search_hits", "decide_label"]
+__all__ = ["search_hits", "decide_label", "canonicalize_label"]
 
 # ── 표준 라벨/에일리어스 ───────────────────────────────────────────────────────
 _CANON = {
@@ -44,7 +44,8 @@ _ALIASES = {
     "[문법책]": _CANON["BOOK"],  # 과거 표기 흡수
 }
 
-def _canon(label: str) -> str:
+def canonicalize_label(label: str) -> str:
+    """과거 표기를 표준 표기로 치환."""
     return _ALIASES.get(label, label)
 
 # ── 데이터셋 경로 해석 ─────────────────────────────────────────────────────────
