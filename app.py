@@ -27,36 +27,16 @@ from src.core.index_probe import (
 
 # =========================== [03] CORE: Persist Resolver ==========================
 def _effective_persist_dir() -> Path:
-    """앱 전역 Persist 경로 해석기(단일 소스).
-    우선순위:
-      1) 세션 스탬프: st.session_state['_PERSIST_DIR']
-      2) 인덱서 기본값: src.rag.index_build.PERSIST_DIR
-      3) ENV/Secrets: MAIC_PERSIST_DIR
-      4) 기본값: ~/.maic/persist
+    """앱 전역 Persist 경로 해석기(SSOT 위임).
+    코어 정책을 그대로 따릅니다:
+      세션 → env MAIC_PERSIST → env MAIC_PERSIST_DIR(레거시) → 인덱서 상수 → 기본
+    실패 시 기본(~/.maic/persist)로 안전 폴백합니다.
     """
-    # 세션 고정값
     try:
-        if "st" in globals() and st is not None:
-            p = st.session_state.get("_PERSIST_DIR")
-            if p:
-                return Path(str(p)).expanduser()
+        return effective_persist_dir()
     except Exception:
-        pass
-
-    # 인덱서 기본값
-    try:
-        from src.rag.index_build import PERSIST_DIR as _pp
-        return Path(str(_pp)).expanduser()
-    except Exception:
-        pass
-
-    # 환경/시크릿
-    envp = os.getenv("MAIC_PERSIST_DIR", "")
-    if envp:
-        return Path(envp).expanduser()
-
-    # 기본
-    return Path.home() / ".maic" / "persist"
+        return Path.home() / ".maic" / "persist"
+# =========================== [03] CORE: Persist Resolver ==========================
 
 
 # ================== [04] secrets → env 승격 & 페이지 설정(안정 옵션) =================
@@ -717,11 +697,7 @@ def _render_admin_index_panel() -> None:
             from src.rag import index_build as _idx  # 내부 인덱서
 
             _step_set(1, "run", "persist 확인 중")
-            try:
-                from src.rag.index_build import PERSIST_DIR as _pp
-                used_persist = Path(str(_pp)).expanduser()
-            except Exception:
-                pass
+            # ✅ SSOT로 결정된 persist를 그대로 사용(덮어쓰기 제거)
             _step_set(1, "ok", str(used_persist))
             _log(f"persist={used_persist}")
 
@@ -938,6 +914,7 @@ def _render_admin_index_panel() -> None:
             st.text("\n".join(buf))
         else:
             st.caption("표시할 로그가 없습니다.")
+# =================== [13] ADMIN: Index Panel (prepared 전용) ==============
 
 
 # ========== [13A] ADMIN: Panels (legacy aggregator, no-op) ==========
