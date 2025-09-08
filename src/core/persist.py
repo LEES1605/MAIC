@@ -23,7 +23,7 @@ from typing import Optional
 try:
     import streamlit as st
 except Exception:  # noqa: BLE001
-    st = None  # type: ignore[assignment]
+    st = None  # Streamlit 미설치/런타임 예외 대비
 
 __all__ = ["effective_persist_dir", "share_persist_dir_to_session"]
 
@@ -78,7 +78,7 @@ def effective_persist_dir() -> Path:
 
     # 4) 레거시 상수(있을 때만; lazy import로 의존 최소화)
     try:
-        from src.rag.index_build import PERSIST_DIR as _pp  # type: ignore
+        from src.rag.index_build import PERSIST_DIR as _pp
         p = _normalize_path(str(_pp))
         if p is not None:
             return p
