@@ -1,0 +1,46 @@
+# ============== [01] SSOT Pointer CI — START ==============
+name: SSOT Pointer CI
+
+on:
+  pull_request:
+    paths:
+      - "WORKSPACE_INDEX.md"
+      - "docs/_gpt/**"    # SSOT 내 문서가 바뀌는 PR에도 함께 동작
+
+jobs:
+  check-ssot-pointer:
+    name: Validate WORKSPACE_INDEX.md pointer
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run pointer checker
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python -m pip install --upgrade pip
+          python scripts/check_ssot_pointer.py \
+            --file WORKSPACE_INDEX.md \
+            --allow-refs main,release/* \
+            --require-docs-root docs/_gpt/
+
+  # (선택) 이미 보유한 'No-Ellipsis Gate'를 SSOT 문서에도 적용하려면 아래 주석 해제
+  # no-ellipsis-gate:
+  #   name: No-Ellipsis Gate (docs/_gpt/)
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: actions/setup-python@v5
+  #       with:
+  #         python-version: "3.11"
+  #     - name: Scan
+  #       run: |
+  #         python scripts/no_ellipsis_gate.py --root docs/_gpt/
+# ============== [01] SSOT Pointer CI — END ==============
