@@ -112,17 +112,30 @@ def _try_import(modname: str, names: list[str]) -> Dict[str, Any]:
 
 # [06] Decision tree: choose best available indexer =============================
 def _pick_reindex_fn() -> Tuple[Optional[Any], str]:
-    """가능한 인덱싱 함수 후보 중 첫 번째로 발견되는 함수를 반환."""
-    cand = _try_import(
-        "src.rag.index_build",
-        ["rebuild_index", "build_index", "rebuild", "index_all", "build_all", "build_index_with_checkpoint"],
+    """
+    가능한 인덱싱 함수 후보 중 첫 번째로 발견되는 함수를 반환.
+    반환: (callable | None, name)
+    """
+    # 긴 리스트를 상수 튜플로 분리해 E501(100자 제한) 위반 방지
+    candidates: tuple[str, ...] = (
+        "rebuild_index",
+        "build_index",
+        "rebuild",
+        "index_all",
+        "build_all",
+        "build_index_with_checkpoint",
     )
-    order = ["rebuild_index", "build_index", "rebuild", "index_all", "build_all", "build_index_with_checkpoint"]
-    for name in order:
+
+    # _try_import는 list[str]을 받으므로 변환
+    cand = _try_import("src.rag.index_build", list(candidates))
+
+    for name in candidates:
         fn = cand.get(name)
         if callable(fn):
             return fn, name
     return None, ""
+# ============================ [06] END =========================================
+
 
 
 # ========================== [07] Public API: reindex() — START ==========================
