@@ -1,44 +1,43 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# ========================== [01] module docstring — START =========================
+
+# ======================= [01] module docstring & imports — START =======================
 """
-No‑Ellipsis Gate
+No-Ellipsis Gate
+- 목적: 코드/문서에 '중략본' 유입을 방지한다.
 
-목적
-- 코드/문서에 '중략본'이 섞이는 것을 방지합니다.
-
-정책
-  1) (코드 파일) 줄 전체가 점(3개 이상)만이거나, 순수한 ellipsis(U+2026)만인 라인 → 차단
-  2) (코드/문서 공통) 아래 **두 조건을 동시에 만족**하면 차단:
+- 정책:
+  1) 코드 파일에서 '줄 전체가 ... 또는 …' 인 라인은 차단한다.
+  2) (코드/문서 공통) 아래 **두 조건을 동시에 만족**하면 차단한다:
      - '중략' 또는 '생략'
-     - ellipsis(U+2026) 또는 3‑dots, 또는 스니핏 마커(angled‑triple 등)
+     - 아래 중 하나: U+2026(수평 생략기호) / 점 세 개(`...`) / 스니핏 마커(연속 꺾쇠 등)
 
-거짓 양성 최소화
-  * 일반 텍스트에서 자연스러운 ellipsis는 허용합니다.
-  * YAML/MD 등 문서류는 2) 조건에서만 검사합니다.
+- 거짓 양성 최소화:
+  * 일반 텍스트 내 자연스러운 U+2026은 허용
+  * YAML/MD 등은 2) 조건에서만 검사(문서 끝 구분자 등 오탐 최소화)
 
-사용법
+사용법:
   python scripts/no_ellipsis_gate.py
-옵션
-  --root <path>     : 스캔 시작 경로 (기본 '.')
-  --verbose         : 상세 로그 출력
-  --dry-run         : 리포트만 출력하고 항상 0으로 종료
-  --include-self    : 이 스크립트 파일도 스캔(기본은 제외)
-"""
-# =========================== [01] module docstring — END ==========================
 
-# ============================ [02] imports & consts — START =======================
+옵션:
+  --root <path>   : 스캔 시작 경로 (기본 '.')
+  --verbose       : 상세 로그 출력
+  --dry-run       : 종료 코드를 0으로 유지(리포트만)
+"""
 from __future__ import annotations
 
 import argparse
 import sys
-import os
 from pathlib import Path
-from typing import Iterable, List, Optional, Sequence, Tuple, NamedTuple
+from typing import Iterable, List, NamedTuple, Optional, Sequence
+# ======================== [01] module docstring & imports — END ========================
 
-ELLIPSIS_UNICODE = "\u2026"  # U+2026 (…)
+
+# =========================== [02] constants & settings — START =========================
+ELLIPSIS_UNICODE = "\u2026"  # …
+
+# 주요 코드/스크립트 확장자
 CODE_EXTS = {
-    # 주요 코드/스크립트 확장자
     ".py", ".ts", ".js", ".jsx", ".tsx",
     ".go", ".rs", ".java", ".kt",
     ".c", ".cpp", ".h", ".hpp", ".cs",
@@ -48,52 +47,55 @@ CODE_EXTS = {
     # 구성/데이터 중 코드스러운 것들
     ".ini", ".cfg", ".toml", ".json",
 }
-DOC_EXTS = {
-    # 문서류: 엄격도 완화 (스니핏/중략 패턴만)
-    ".md", ".rst", ".txt", ".mdx", ".yaml", ".yml",
-}
 
+# 문서류: 엄격도 완화 (스니핏/중략 조합만 검사)
+DOC_EXTS = {".md", ".rst", ".txt", ".mdx", ".yaml", ".yml"}
+
+# 제외 디렉터리/파일
 EXCLUDED_DIRS = {
     ".git", ".hg", ".svn",
     ".mypy_cache", ".ruff_cache", ".pytest_cache", ".venv", "venv",
     "__pycache__", "node_modules", "build", "dist",
 }
+EXCLUDED_FILES = {"no_ellipsis_gate.py"}  # 자기검열 방지
 
-# 스니핏 마커(실제 기호). 다른 파일에서는 탐지하고, 이 파일은 기본 스킵.
-SNIP_TOKENS = ("<<<", ">>>", "<<snip>>", "<<SNIP>>", "—8<—", "8<")
+# 스니핏 마커(검출 토큰) — 원문 토큰은 코드 내부에서만 보관
+SNIP_TOKENS = (
+    "<" * 3,          # "<<<"
+    ">" * 3,          # ">>>"
+    "<" * 2 + "snip" + ">" * 2,   # "<<snip>>"
+    "<" * 2 + "SNIP" + ">" * 2,   # "<<SNIP>>"
+    "—8<—",
+    "8<",
+)
+
+# 한국어 생략어 키워드
 KOR_SKIP_WORDS = ("중략", "생략")
+# ============================ [02] constants & settings — END ==========================
 
-SELF_PATH = Path(__file__).resolve()
-SELF_BASENAME = SELF_PATH.name
-# ============================ [02] imports & consts — END =========================
 
-# ============================= [03] types & helpers — START =======================
+# ============================== [03] types & helpers — START ==========================
 class Violation(NamedTuple):
     """
-    (파일경로, 라인번호, 유형코드, 메시지) 튜플.
+    위반 레코드: (파일경로, 라인번호, 유형코드, 메시지)
     유형코드:
-      - ELLIPSIS_ONLY : 줄 전체가 ellipsis 또는 3‑dots
-      - SNIP_KO       : '중략/생략' + (ellipsis/3‑dots/스니핏) 동시 등장
+      - ELLIPSIS_ONLY : 줄 전체가 … 또는 ... 만으로 구성
+      - SNIP_KO       : '중략/생략' + (U+2026/점3개/스니핏) 조합
     """
+    path: Path
+    lineno: int
+    code: str
+    msg: str
 
 
-def _iter_files(root: Path, *, include_self: bool) -> Iterable[Path]:
+def _iter_files(root: Path) -> Iterable[Path]:
     for p in root.rglob("*"):
         if not p.is_file():
             continue
-        # 제외 디렉터리
+        if p.name in EXCLUDED_FILES:
+            continue
         if any(part in EXCLUDED_DIRS for part in p.parts):
             continue
-        # 자기 자신은 기본 제외
-        if not include_self:
-            try:
-                if p.resolve() == SELF_PATH or p.name == SELF_BASENAME:
-                    continue
-            except Exception:
-                # 해석 실패 시에도 파일명 기준으로 방어
-                if p.name == SELF_BASENAME:
-                    continue
-        # 확장자 분류
         ext = p.suffix.lower()
         if ext in CODE_EXTS or ext in DOC_EXTS:
             yield p
@@ -103,7 +105,7 @@ def _is_ellipsis_only_line(line: str) -> bool:
     s = line.strip()
     if not s:
         return False
-    # '...' (3개 이상) 또는 ellipsis(U+2026)만으로 구성된 라인
+    # '...' (3개 이상) 또는 '…'(하나 이상)만으로 구성된 라인
     if set(s) <= {"."} and len(s) >= 3:
         return True
     if set(s) <= {ELLIPSIS_UNICODE}:
@@ -115,46 +117,42 @@ def _has_snip_signature(line: str) -> bool:
     s = line.strip()
     if not s:
         return False
-    # 스니핏 마커(<<<, >>> 등)
     if any(tok in s for tok in SNIP_TOKENS):
         return True
-    # '중략/생략' + (ellipsis(U+2026) 또는 3‑dots)
-    if any(k in s for k in KOR_SKIP_WORDS) and (
-        ELLIPSIS_UNICODE in s or "..." in s
-    ):
+    # '중략/생략' + (… 또는 ...) 의 동시 등장(한 라인 기준)
+    if any(k in s for k in KOR_SKIP_WORDS) and (ELLIPSIS_UNICODE in s or "..." in s):
         return True
     return False
 
 
-def _should_flag_line(ext: str, line: str) -> Optional[Tuple[str, str]]:
+def _should_flag_line(ext: str, line: str) -> Optional[tuple[str, str]]:
     """
     반환:
-      (유형코드, 메시지) 또는 None (정상)
-
+      (유형코드, 메시지) 또는 None(정상)
     정책:
       - CODE_EXTS: _is_ellipsis_only_line → 차단, _has_snip_signature → 차단
       - DOC_EXTS : _has_snip_signature → 차단 (오탐 최소화)
     """
     if ext in CODE_EXTS:
         if _is_ellipsis_only_line(line):
-            return ("ELLIPSIS_ONLY", "줄 전체가 ellipsis/3‑dots 만으로 구성됨")
+            return ("ELLIPSIS_ONLY", "줄 전체가 '…' 또는 '...'로만 구성됨")
         if _has_snip_signature(line):
-            return ("SNIP_KO", "‘중략/생략’ + (ellipsis/3‑dots/스니핏) 패턴")
+            return ("SNIP_KO", "‘중략/생략’ + (U+2026/점3개/스니핏) 조합")
     elif ext in DOC_EXTS:
         if _has_snip_signature(line):
-            return ("SNIP_KO", "문서 내 ‘중략/생략’ + (ellipsis/3‑dots/스니핏) 패턴")
+            return ("SNIP_KO", "문서 내 ‘중략/생략’ + (U+2026/점3개/스니핏) 조합")
     return None
-# ============================= [03] types & helpers — END =========================
+# =============================== [03] types & helpers — END ===========================
 
-# ================================== [04] core — START ============================
-def scan(root: Path, *, include_self: bool, verbose: bool = False) -> List[Violation]:
+
+# ================================ [04] core scan — START ==============================
+def scan(root: Path, verbose: bool = False) -> List[Violation]:
     violations: List[Violation] = []
-    for file in _iter_files(root, include_self=include_self):
+    for file in _iter_files(root):
         ext = file.suffix.lower()
         try:
             text = file.read_text(encoding="utf-8", errors="replace")
         except Exception as e:  # noqa: BLE001
-            # 바이너리/읽기 실패 파일은 스킵(원인만 verbose로)
             if verbose:
                 print(f"[skip] {file} ({e})", file=sys.stderr)
             continue
@@ -165,55 +163,49 @@ def scan(root: Path, *, include_self: bool, verbose: bool = False) -> List[Viola
                 code, msg = flagged
                 violations.append(Violation(file, i, code, msg))
     return violations
+# ================================= [04] core scan — END ===============================
 
 
+# =============================== [05] reporting & cli — START =========================
 def _print_report(violations: Sequence[Violation]) -> None:
     if not violations:
-        print("No‑Ellipsis Gate: ✅ 위반 없음")
+        print("No-Ellipsis Gate: ✅ 위반 없음")
         return
 
-    print("No‑Ellipsis Gate: ❌ 위반 발견")
+    print("No-Ellipsis Gate: ❌ 위반 발견")
     for path, lineno, code, msg in violations:
         print(f"  - {code:<13} | {path}:{lineno} | {msg}")
 
-    # 가이드(표시는 하되, 금지 패턴을 문자 그대로 쓰지 않음)
+    # 가이드(같은 줄에 '중략/생략'과 점3개/생략문자/스니핏이 함께 오지 않도록 문구 분리)
     print("\n가이드:")
-    print("  1) 실제 '중략본'이면 원본 코드로 교체하세요.")
-    print("  2) 정상 문서의 ellipsis(U+2026)는 허용되지만,")
-    print("     '중략/생략'과 ellipsis(또는 3‑dots), 스니핏 마커의 동시 사용은 금지입니다.")
-    print("  3) 필요 시 규칙은 scripts/no_ellipsis_gate.py에서 조정하세요.")
-# =================================== [04] core — END =============================
+    print("  1) 실제 '중략본'이라면 해당 파일을 원본 코드로 교체하세요.")
+    print("  2) 정상 문서의 U+2026(…) 표기는 허용됩니다.")
+    print("     단, '중략' 또는 '생략'과 스니핏 마커(연속 꺾쇠 등)의 조합은 금지입니다.")
+    print("  3) 필요 시 Gate 규칙은 scripts/no_ellipsis_gate.py에서 조정할 수 있습니다.")
 
-# ================================== [05] cli — START =============================
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
-    parser = argparse.ArgumentParser(description="No‑Ellipsis Gate")
+    parser = argparse.ArgumentParser(description="No-Ellipsis Gate")
     parser.add_argument("--root", default=".", help="스캔 시작 경로 (기본 '.')")
     parser.add_argument("--verbose", action="store_true", help="상세 로그")
     parser.add_argument("--dry-run", action="store_true", help="리포트만 (항상 0으로 종료)")
-    parser.add_argument(
-        "--include-self",
-        action="store_true",
-        help="이 스크립트 파일도 스캔(기본은 제외)",
-    )
     args = parser.parse_args(argv)
-
-    # 환경변수로도 self-scan 제어 가능(명시 옵션이 우선)
-    env_include_self = os.getenv("NO_ELLIPSIS_INCLUDE_SELF", "").lower() in ("1", "true")
-    include_self = bool(args.include_self or env_include_self)
 
     root = Path(args.root).resolve()
     if not root.exists():
         print(f"[error] 경로 없음: {root}", file=sys.stderr)
         return 2
 
-    violations = scan(root, include_self=include_self, verbose=args.verbose)
+    violations = scan(root, verbose=args.verbose)
     _print_report(violations)
 
     if args.dry_run:
         return 0
     return 1 if violations else 0
+# ================================ [05] reporting & cli — END ==========================
 
 
+# =================================== [06] entrypoint — START ==========================
 if __name__ == "__main__":
     raise SystemExit(main())
-# =================================== [05] cli — END ==============================
+# ==================================== [06] entrypoint — END ===========================
