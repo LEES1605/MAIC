@@ -11,24 +11,19 @@ import shutil
 import tempfile
 import traceback
 
-# ===== [02] Persist path resolution (IDX → CFG → ~/.maic/persist) — START =====
+# ===== [02] Persist path resolution (SSOT: core.persist) — START =====
 def _persist_dir() -> Path:
-    """우선순위: src.rag.index_build.PERSIST_DIR → src.config.PERSIST_DIR → ~/.maic/persist"""
-    # 1) 인덱서가 노출하는 경로
+    """SSOT: core.persist.effective_persist_dir()만 사용.
+    실패 시 홈 기본(~/.maic/persist)로 안전 폴백.
+    """
     try:
-        from src.rag.index_build import PERSIST_DIR as IDX
-        return Path(IDX).expanduser()
+        from src.core.persist import effective_persist_dir as _ssot  # lazy import
+        p = _ssot()
+        return p if isinstance(p, Path) else Path(str(p)).expanduser()
     except Exception:
-        pass
-    # 2) 전역 설정
-    try:
-        from src.config import PERSIST_DIR as CFG
-        return Path(CFG).expanduser()
-    except Exception:
-        pass
-    # 3) 폴백
-    return Path.home() / ".maic" / "persist"
-# ===== [02] Persist path resolution (IDX → CFG → ~/.maic/persist) — END =====
+        return Path.home() / ".maic" / "persist"
+# ===== [02] Persist path resolution (SSOT: core.persist) — END =====
+
 
 
 # [03] SSOT helpers (.ready + chunks.jsonl) =====================================
@@ -156,38 +151,31 @@ def _pick_reindex_fn() -> Tuple[Optional[Any], str]:
 # ========================== [07] Public API: reindex() — START ==========================
 def reindex(dest_dir=None) -> bool:
     """
-    SSOT: src.rag.index_build.rebuild_index()만 호출한다.
-    - dest_dir가 주어지면 해당 경로에 빌드(테스트/임시용)
-    - 성공 시 .ready + chunks.jsonl이 생성되어야 True
+    SSOT: core.persist.effective_persist_dir() 기준으로 인덱싱.
+    - dest_dir가 주어지면 해당 경로에 빌드(테스트/임시용).
+    - 성공 기준: chunks.jsonl > 0B && .ready 존재.
     """
     from pathlib import Path
     import importlib
 
-    base = Path(dest_dir).expanduser() if dest_dir else None
+    base = Path(dest_dir).expanduser() if dest_dir else _persist_dir()
     try:
         mod = importlib.import_module("src.rag.index_build")
         fn = getattr(mod, "rebuild_index", None)
         if not callable(fn):
             return False
-        fn(output_dir=base) if base else fn()
+        # 인덱서에 명시적 출력 경로 전달(SSOT 경로 보장)
+        fn(output_dir=base)
     except Exception:
         return False
 
+    # 산출물 검증 + .ready 멱등 보정
+    _ensure_ready_signal(base)
     try:
-        from src.rag.index_build import PERSIST_DIR as IDX
-        p = Path(IDX).expanduser()
-    except Exception:
-        try:
-            from src.config import PERSIST_DIR as CFG
-            p = Path(CFG).expanduser()
-        except Exception:
-            p = Path.home() / ".maic" / "persist"
-
-    try:
-        cj = p / "chunks.jsonl"
-        ready = (p / ".ready").exists()
+        cj = base / "chunks.jsonl"
         size = cj.stat().st_size if cj.exists() else 0
-        return bool(ready and cj.exists() and size > 0)
+        ok = bool((base / ".ready").exists() and cj.exists() and size > 0)
+        return ok
     except Exception:
         return False
 # =========================== [07] Public API: reindex() — END ===========================
