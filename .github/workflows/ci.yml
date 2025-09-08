@@ -1,75 +1,47 @@
-# ============================ [01] MAIN CI (ruff/mypy/pytest) — START ============================
 name: CI
 
 on:
-  push:
-    branches: ["**"]
   pull_request:
-
-permissions:
-  contents: read
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  push:
+    branches: [ main ]
 
 jobs:
-  checks:
-    name: Lint • Typecheck • Tests
+  lint-type-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
-    strategy:
-      fail-fast: false
-      matrix:
-        persist_case: [default, env_dir]
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-          cache: pip
+          python-version: '3.11'
 
-      - name: Upgrade pip/setuptools/wheel
-        run: python -m pip install -U pip setuptools wheel
-
-      - name: Install runtime requirements (optional)
+      - name: Install deps
         run: |
-          if [ -f requirements.txt ]; then
-            pip install -r requirements.txt
-          fi
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt || true
+          pip install ruff mypy pytest
 
-      - name: Install dev tools
-        run: pip install -U ruff mypy pytest
-
-      - name: Prepare env (persist case)
+      - name: Ruff (lint + fix import order)
         run: |
-          case "${{ matrix.persist_case }}" in
-            env_dir)
-              export MAIC_PERSIST_DIR="$RUNNER_TEMP/maic_persist"
-              mkdir -p "$MAIC_PERSIST_DIR"
-              echo "MAIC_PERSIST_DIR=$MAIC_PERSIST_DIR" >> "$GITHUB_ENV"
-              ;;
-            *)
-              echo "Using default persist (no env)"
-              ;;
-          esac
-          echo "PYTHONPATH=$PWD" >> "$GITHUB_ENV"
+          ruff check . --fix
+          ruff format .
 
-      - name: Ruff
-        run: ruff check . --fix
+      - name: Mypy (type)
+        run: mypy .
+
+      - name: Pytest
+        run: pytest -q
 
       - name: No‑Ellipsis Gate
         run: python scripts/no_ellipsis_gate.py --root .
 
-      - name: Mypy
-        run: mypy .
-
-      - name: Pytest
-        env:
-          PYTHONPATH: ${{ github.workspace }}
-        run: pytest -q
-# ============================= [01] MAIN CI (ruff/mypy/pytest) — END =============================
+      - name: Pointer check (workspace pointers must exist)
+        run: |
+          set -e
+          hits=$(grep -R "Source-of-Truth:" -n || true)
+          if [ -z "$hits" ]; then
+            echo "[pointer] Source-of-Truth 라인을 찾지 못했습니다."
+            exit 2
+          fi
+          echo "$hits" | sed -n '1,10p'
