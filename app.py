@@ -7,23 +7,18 @@ import json
 import time
 import traceback
 import importlib
-import importlib.util
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 # Streamlit은 없는 환경도 있으므로 방어적 로드
 try:
     import streamlit as st
 except Exception:
-    st = None
+    st = None  # Streamlit 미설치 환경(예: CI) 대비
 
-# ⛳️ SSOT 코어 임포트는 최상단에 정리 (E402 예방)
-from src.core.secret import promote_env as _promote_env
-from src.core.secret import get as _secret_get
-from src.core.persist import (
-    effective_persist_dir,
-    share_persist_dir_to_session,
-)
+# ⛳️ SSOT 코어 임포트(상단 고정: E402 예방)
+from src.core.secret import promote_env as _promote_env, get as _secret_get
+from src.core.persist import effective_persist_dir, share_persist_dir_to_session
 from src.core.index_probe import (
     get_brain_status as core_status,
     is_brain_ready as core_is_ready,
@@ -65,49 +60,35 @@ def _effective_persist_dir() -> Path:
 
 
 # ================== [04] secrets → env 승격 & 페이지 설정(안정 옵션) =================
-def _from_secrets(name: str, default: Optional[str] = None) -> Optional[str]:
-    """Streamlit secrets 우선, 없으면 os.environ. dict/list는 JSON 문자열화."""
-    try:
-        if st is None or not hasattr(st, "secrets"):
-            return os.getenv(name, default)
-        val = st.secrets.get(name, None)
-        if val is None:
-            return os.getenv(name, default)
-        if isinstance(val, str):
-            return val
-        return json.dumps(val, ensure_ascii=False)
-    except Exception:
-        return os.getenv(name, default)
-
-
 def _bootstrap_env() -> None:
     """필요 시 secrets 값을 환경변수로 승격 + 서버 안정화 옵션."""
-    # ⛳️ 코어 유틸을 사용해 공통 키 승격
     try:
         _promote_env(
             keys=[
+                # 모델/키
                 "OPENAI_API_KEY",
                 "OPENAI_MODEL",
                 "GEMINI_API_KEY",
                 "GEMINI_MODEL",
+                # GitHub (둘 중 아무거나)
                 "GH_TOKEN",
+                "GITHUB_TOKEN",
+                "GH_OWNER",
                 "GH_REPO",
-                "GH_BRANCH",
-                "GH_PROMPTS_PATH",
-                "GDRIVE_PREPARED_FOLDER_ID",
-                "GDRIVE_BACKUP_FOLDER_ID",
+                "GITHUB_OWNER",
+                "GITHUB_REPO_NAME",
+                "GITHUB_REPO",
+                # 앱 모드
                 "APP_MODE",
                 "AUTO_START_MODE",
                 "LOCK_MODE_FOR_STUDENTS",
                 "APP_ADMIN_PASSWORD",
                 "DISABLE_BG",
+                # 인덱스 경로
                 "MAIC_PERSIST_DIR",
-                "GITHUB_TOKEN",
-                "GITHUB_OWNER",
-                "GITHUB_REPO_NAME",
-                "GITHUB_REPO",
-                "GH_OWNER",
-                "GH_REPO",
+                # 선택: 백업/드라이브
+                "GDRIVE_PREPARED_FOLDER_ID",
+                "GDRIVE_BACKUP_FOLDER_ID",
             ]
         )
     except Exception:
@@ -117,9 +98,7 @@ def _bootstrap_env() -> None:
     os.environ.setdefault("STREAMLIT_SERVER_FILE_WATCHER_TYPE", "none")
     os.environ.setdefault("STREAMLIT_RUN_ON_SAVE", "false")
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
-    os.environ.setdefault(
-        "STREAMLIT_SERVER_ENABLE_WEBSOCKET_COMPRESSION", "false"
-    )
+    os.environ.setdefault("STREAMLIT_SERVER_ENABLE_WEBSOCKET_COMPRESSION", "false")
 
 
 _bootstrap_env()
@@ -131,20 +110,10 @@ if st:
         pass
 
 
-
 # ======================= [05] 경로/상태 & 에러 로거 — START =======================
-# NOTE:
-# - 이 구획은 SSOT(코어)만 참조하도록 단순화했습니다.
-# - 기존 함수명(_mark_ready/_is_brain_ready/_get_brain_status)은 유지합니다.
+# SSOT 결정값만 사용(코어에 위임). 중복 임포트/함수 제거됨.
 
-from pathlib import Path
-import traceback
-
-# SSOT: persist / status
-from src.core.persist import effective_persist_dir, share_persist_dir_to_session, PERSIST_DIR as CORE_PERSIST_DIR
-from src.core.index_probe import probe_index_health, mark_ready as core_mark_ready, is_brain_ready as core_is_ready, get_brain_status as core_status
-
-# 1) Persist 경로 상수: 코어 결정값 사용
+# 1) Persist 경로 상수
 PERSIST_DIR: Path = effective_persist_dir()
 try:
     PERSIST_DIR.mkdir(parents=True, exist_ok=True)
@@ -217,9 +186,7 @@ def _get_brain_status() -> Dict[str, str]:
 
 # ========================= [06] ACCESS: Admin Gate ============================
 def _is_admin_view() -> bool:
-    """관리자 패널 표시 여부(학생 화면 완전 차단).
-    - 오직 세션 로그인 플래그로만 허용: admin_mode | is_admin
-    """
+    """관리자 패널 표시 여부(학생 화면 완전 차단)."""
     if st is None:
         return False
     try:
@@ -228,14 +195,15 @@ def _is_admin_view() -> bool:
     except Exception:
         return False
 
+
 # ======================= [07] RERUN GUARD utils ==============================
 def _safe_rerun(tag: str, ttl: int = 1) -> None:
     """Streamlit rerun을 '태그별 최대 ttl회'로 제한."""
-    st_mod = globals().get("st", None)
-    if st_mod is None:
+    s = globals().get("st", None)
+    if s is None:
         return
     try:
-        ss = getattr(st_mod, "session_state", None)
+        ss = getattr(s, "session_state", None)
         if not isinstance(ss, dict):
             return
         key = "__rerun_counts__"
@@ -247,7 +215,7 @@ def _safe_rerun(tag: str, ttl: int = 1) -> None:
             return
         counts[tag] = cnt + 1
         ss[key] = counts
-        st_mod.rerun()
+        s.rerun()
     except Exception:
         pass
 
@@ -258,11 +226,12 @@ def _header() -> None:
     try:
         from src.ui.header import render as _render_header  # lazy import
         _render_header()
-    except Exception as e:
+    except Exception:
         # fallback: 최소 타이틀
         if st is not None:
             st.markdown("### LEES AI Teacher")
 # ================= [08] 헤더(배지·타이틀·로그인/아웃) — END ===============
+
 
 # ======================= [09] 배경(비활성: No-Op) ===========================
 def _inject_modern_bg_lib() -> None:
@@ -292,6 +261,7 @@ def _mount_background(
     """배경 렌더 OFF(호출 시 즉시 return)."""
     return
 
+
 # =================== [10] 부팅 훅: 인덱스 자동 복원 =======================
 def _boot_auto_restore_index() -> None:
     """부팅 시 인덱스 자동 복원(한 세션 1회).
@@ -318,17 +288,19 @@ def _boot_auto_restore_index() -> None:
         return
 
     # ---- SSOT 시크릿 로더 사용 ----
-    from src.core.secret import token as _gh_token, resolve_owner_repo as _resolve_owner_repo
+    try:
+        from src.core.secret import token as _gh_token, resolve_owner_repo as _resolve_owner_repo
+        token = _gh_token() or ""
+        owner, repo = _resolve_owner_repo()
+    except Exception:
+        token, owner, repo = "", "", ""
 
-    token = _gh_token() or ""
-    owner, repo = _resolve_owner_repo()
     if not (token and owner and repo):
         return  # 복원 불가(시크릿 미설정)
 
     # ---- 최신 릴리스의 index_*.zip 다운로드 ----
     from urllib import request as _rq, error as _er
     import zipfile
-    import time
     import json as _json
 
     api_latest = f"https://api.github.com/repos/{owner}/{repo}/releases/latest"
@@ -390,9 +362,8 @@ def _boot_auto_restore_index() -> None:
         return
 # =================== [10] 부팅 훅: 인덱스 자동 복원 — END =====================
 
-# =================== [11] 부팅 오토플로우 & 자동 복원 모드 ==================
-from src.core.secret import get as _secret_get
 
+# =================== [11] 부팅 오토플로우 & 자동 복원 모드 ==================
 def _boot_autoflow_hook() -> None:
     """앱 부팅 시 1회 오토 플로우 실행(관리자=대화형, 학생=자동)."""
     try:
@@ -425,10 +396,7 @@ def _set_brain_status(
 
 
 def _auto_start_once() -> None:
-    """AUTO_START_MODE에 따른 1회성 자동 복원.
-    - restore|on 이면 최신 Release에서 인덱스 복구 시도
-    - 성공 시 READY로 상태 업데이트 및 1회 rerun
-    """
+    """AUTO_START_MODE에 따른 1회성 자동 복원."""
     try:
         if st is None or not hasattr(st, "session_state"):
             return
@@ -476,6 +444,7 @@ def _auto_start_once() -> None:
         _safe_rerun("auto_start", ttl=1)
 # =================== [11] 부팅 오토플로우 & 자동 복원 모드 — END ==================
 
+
 # =================== [12] DIAG: Orchestrator Header ======================
 def _render_index_orchestrator_header() -> None:
     """상단 진단 헤더(미니멀): Persist 경로, 상태칩만 간결 표기."""
@@ -487,9 +456,7 @@ def _render_index_orchestrator_header() -> None:
     def _persist_dir_safe() -> Path:
         """SSOT persist 경로. 코어 모듈 우선, 실패 시 기본값."""
         try:
-            # lazy import: Actions/로컬 모두 안전
-            from src.core.persist import effective_persist_dir as _epd
-            return Path(str(_epd())).expanduser()
+            return Path(str(effective_persist_dir())).expanduser()
         except Exception:
             return Path.home() / ".maic" / "persist"
 
@@ -520,12 +487,12 @@ def _render_index_orchestrator_header() -> None:
     st.markdown("<span id='idx-admin-panel'></span>", unsafe_allow_html=True)
 # =================== [12] DIAG: Orchestrator Header — END ======================
 
+
 # =================== [13] ADMIN: Index Panel (prepared 전용) ==============
 def _render_admin_index_panel() -> None:
     if "st" not in globals() or st is None or not _is_admin_view():
         return
 
-    from typing import List, Dict, Any, Optional, Tuple
     import importlib as _imp
 
     st.markdown("<h3>🧭 인덱싱(관리자: prepared 전용)</h3>", unsafe_allow_html=True)
@@ -813,21 +780,20 @@ def _render_admin_index_panel() -> None:
                     return None, None, tried2
 
                 chk, mark, dbg2 = _load_prepared_api()
-                persist_for_seen = used_persist
                 info: Dict[str, Any] = {}
                 new_files: List[str] = []
                 if callable(chk):
                     try:
-                        info = chk(persist_for_seen, files_list) or {}
+                        info = chk(used_persist, files_list) or {}
                     except TypeError:
-                        info = chk(persist_for_seen) or {}
+                        info = chk(used_persist) or {}
                     new_files = list(info.get("files") or [])
                 else:
                     for m in dbg2:
                         _log("• " + m, "warn")
                 if new_files and callable(mark):
                     try:
-                        mark(persist_for_seen, new_files)
+                        mark(used_persist, new_files)
                     except TypeError:
                         mark(new_files)
                     _log(f"소비(seen) {len(new_files)}건")
@@ -861,16 +827,12 @@ def _render_admin_index_panel() -> None:
                     return os.getenv(name, default)
 
                 def _resolve_owner_repo() -> Tuple[str, str]:
-                    owner = _secret("GH_OWNER")
-                    repo = _secret("GH_REPO")
-                    if owner and repo:
-                        return owner, repo
+                    owner = _secret("GH_OWNER") or _secret("GITHUB_OWNER")
+                    repo = _secret("GH_REPO") or _secret("GITHUB_REPO_NAME")
                     combo = _secret("GITHUB_REPO")
                     if combo and "/" in combo:
                         o, r = combo.split("/", 1)
-                        return o.strip(), r.strip()
-                    owner = owner or _secret("GITHUB_OWNER")
-                    repo = repo or _secret("GITHUB_REPO_NAME")
+                        owner, repo = o.strip(), r.strip()
                     return owner or "", repo or ""
 
                 tok = _secret("GH_TOKEN") or _secret("GITHUB_TOKEN")
@@ -982,6 +944,8 @@ def _render_admin_index_panel() -> None:
 def _render_admin_panels() -> None:
     """과거 집계 렌더러 호환용(현재는 사용 안함)."""
     return None
+
+
 # =================== [13B] ADMIN: Prepared Scan — START ====================
 def _render_admin_prepared_scan_panel() -> None:
     """prepared 폴더의 '새 파일 유무'만 확인하는 경량 스캐너.
@@ -992,7 +956,6 @@ def _render_admin_prepared_scan_panel() -> None:
         return
 
     import importlib as _imp
-    from typing import Any, Dict, List, Optional, Tuple
 
     st.markdown("<h4>🔍 새 파일 스캔(인덱싱 없이)</h4>", unsafe_allow_html=True)
 
@@ -1290,26 +1253,6 @@ def _inject_chat_styles_once() -> None:
     """,
         unsafe_allow_html=True,
     )
-
-
-def _render_mode_controls_pills() -> str:
-    """질문 모드 pill (ChatPane 상단). 반환: '문법'|'문장'|'지문'"""
-    _inject_chat_styles_once()
-    if st is None:
-        return "문법"
-    ss = st.session_state
-    labels = ["문법", "문장", "지문"]
-    cur = ss.get("qa_mode_radio") or "문법"
-    idx = labels.index(cur) if cur in labels else 0
-    sel = st.radio(
-        "질문 모드",
-        options=labels,
-        index=idx,
-        horizontal=True,
-        label_visibility="collapsed",
-    )
-    ss["qa_mode_radio"] = sel
-    return sel
 
 
 # ========================== [16] 채팅 패널 ===============================
