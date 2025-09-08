@@ -13,6 +13,7 @@ Persist path resolver (SSOT).
 - 이 모듈은 "경로만 결정"합니다. 디렉터리 생성 등 부수효과는 없습니다.
 - 반환값은 항상 expanduser()가 적용된 pathlib.Path 입니다.
 """
+
 from __future__ import annotations
 
 import os
@@ -62,6 +63,7 @@ def effective_persist_dir() -> Path:
             if p is not None:
                 return p
     except Exception:  # noqa: BLE001
+        # 세션 예외는 무시(순수 결정 함수 유지)
         pass
 
     # 2) 신규 환경변수
