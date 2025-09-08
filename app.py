@@ -1306,9 +1306,11 @@ def _render_chat_panel() -> None:
             _label_mod = _imp.import_module("label")
         _decide_label = getattr(_label_mod, "decide_label", None)
         _search_hits = getattr(_label_mod, "search_hits", None)
+        _make_chip = getattr(_label_mod, "make_source_chip", None)
     except Exception:
         _decide_label = None
         _search_hits = None
+        _make_chip = None
 
     def _esc(t: str) -> str:
         s = html.escape(t or "").replace("\n", "<br/>")
@@ -1348,24 +1350,40 @@ def _render_chat_panel() -> None:
     if not question:
         return
 
+    # --- 검색 → 라벨 → 칩 문자열
     src_label = "[AI지식]"
-    if callable(_search_hits) and callable(_decide_label):
+    hits = []
+    if callable(_search_hits):
         try:
             hits = _search_hits(question, top_k=5)
+        except Exception:
+            hits = []
+
+    if callable(_decide_label):
+        try:
             src_label = _decide_label(hits, default_if_none="[AI지식]")
         except Exception:
             src_label = "[AI지식]"
 
+    chip_text = src_label
+    if callable(_make_chip):
+        try:
+            chip_text = _make_chip(hits, src_label)
+        except Exception:
+            chip_text = src_label
+
+    # --- 사용자 버블
     ph_user = st.empty()
     _emit_bubble(ph_user, "나", question, source=None, align_right=True)
 
+    # --- 답변 스트리밍
     ph_ans = st.empty()
     acc_ans = ""
 
     def _on_emit_ans(chunk: str) -> None:
         nonlocal acc_ans
         acc_ans += str(chunk or "")
-        _emit_bubble(ph_ans, "피티쌤", acc_ans, source=src_label, align_right=False)
+        _emit_bubble(ph_ans, "피티쌤", acc_ans, source=chip_text, align_right=False)
 
     emit_chunk_ans, close_stream_ans = make_stream_handler(
         on_emit=_on_emit_ans,
@@ -1382,13 +1400,14 @@ def _render_chat_panel() -> None:
     close_stream_ans()
     full_answer = acc_ans.strip() or "(응답이 비어있어요)"
 
+    # --- 평가 스트리밍
     ph_eval = st.empty()
     acc_eval = ""
 
     def _on_emit_eval(chunk: str) -> None:
         nonlocal acc_eval
         acc_eval += str(chunk or "")
-        _emit_bubble(ph_eval, "미나쌤", acc_eval, source=src_label, align_right=False)
+        _emit_bubble(ph_eval, "미나쌤", acc_eval, source=chip_text, align_right=False)
 
     emit_chunk_eval, close_stream_eval = make_stream_handler(
         on_emit=_on_emit_eval,
@@ -1408,6 +1427,7 @@ def _render_chat_panel() -> None:
 
     ss["last_q"] = question
     ss["inpane_q"] = ""
+# ========================== [16] 채팅 패널 ===============================
 
 
 # ========================== [17] 본문 렌더 ===============================
