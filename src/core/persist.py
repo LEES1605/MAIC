@@ -1,4 +1,19 @@
-# =============================== [01] imports ===============================
+# ============== [01] imports & module docstring — START ==============
+"""
+Persist path resolver (SSOT).
+
+우선순위(높음 → 낮음):
+  1) 세션: st.session_state["_PERSIST_DIR"]
+  2) 환경변수(신규): MAIC_PERSIST
+  3) 환경변수(레거시): MAIC_PERSIST_DIR
+  4) 레거시 상수: src.rag.index_build.PERSIST_DIR (가능할 때만)
+  5) 기본값: ~/.maic/persist
+
+주의:
+- 이 모듈은 "경로만 결정"합니다. 디렉터리 생성 등 부수효과는 없습니다.
+- 반환값은 항상 expanduser()가 적용된 pathlib.Path 입니다.
+"""
+
 from __future__ import annotations
 
 import os
@@ -7,66 +22,82 @@ from typing import Optional
 
 try:
     import streamlit as st
-except Exception:
-    st = None
+except Exception:  # noqa: BLE001
+    st = None  # type: ignore[assignment]
 
-# =========================== [02] effective dir — START =============================
+__all__ = ["effective_persist_dir", "share_persist_dir_to_session"]
+
+# 기본 Persist 경로(최후의 보루)
+_DEFAULT_PERSIST_DIR: Path = Path.home() / ".maic" / "persist"
+# ============== [01] imports & module docstring — END ================
+
+
+# =========================== [02] effective dir — START ===========================
+def _normalize_path(value: Optional[str]) -> Optional[Path]:
+    """문자열 경로를 정규화하여 Path로 반환. 공백/빈값은 None."""
+    if not value:
+        return None
+    s = value.strip()
+    if not s:
+        return None
+    return Path(s).expanduser()
+
+
 def effective_persist_dir() -> Path:
     """
     Persist 경로의 단일 소스(SSOT).
 
-    우선순위(상위 → 하위):
-      1) 세션: st.session_state["_PERSIST_DIR"]
-      2) 환경변수(신규): MAIC_PERSIST               # 마스터플랜 권고
-      3) 환경변수(레거시): MAIC_PERSIST_DIR        # 하위 호환
-      4) 상수(레거시): src.rag.index_build.PERSIST_DIR  # 최후의 보조
-      5) 기본값: ~/.maic/persist
+    Precedence (high→low):
+      1) st.session_state["_PERSIST_DIR"]
+      2) env "MAIC_PERSIST"
+      3) env "MAIC_PERSIST_DIR"  # legacy
+      4) src.rag.index_build.PERSIST_DIR  # legacy helper
+      5) _DEFAULT_PERSIST_DIR (~/.maic/persist)
 
-    주의:
-    - 부수효과 없음(디렉터리 생성 X)
-    - '~' 등은 expanduser()로 정규화하여 Path로 반환
+    Side effects: None (no directory creation).
     """
     # 1) 세션 우선
     try:
         if st is not None and "_PERSIST_DIR" in st.session_state:
-            raw = str(st.session_state["_PERSIST_DIR"]).strip()
-            if raw:
-                return Path(raw).expanduser()
-    except Exception:
-        # 세션 관련 예외는 무시(순수 결정 함수 유지)
+            p = _normalize_path(str(st.session_state["_PERSIST_DIR"]))
+            if p is not None:
+                return p
+    except Exception:  # noqa: BLE001
+        # 세션 예외는 무시(순수 결정 함수 유지)
         pass
 
-    # 2) 신규 환경변수(우선)
-    envp = os.getenv("MAIC_PERSIST")
-    if envp:
-        envp = envp.strip()
-        if envp:
-            return Path(envp).expanduser()
+    # 2) 신규 환경변수
+    p = _normalize_path(os.getenv("MAIC_PERSIST"))
+    if p is not None:
+        return p
 
     # 3) 레거시 환경변수(하위 호환)
-    legacy_envp = os.getenv("MAIC_PERSIST_DIR")
-    if legacy_envp:
-        legacy_envp = legacy_envp.strip()
-        if legacy_envp:
-            return Path(legacy_envp).expanduser()
+    p = _normalize_path(os.getenv("MAIC_PERSIST_DIR"))
+    if p is not None:
+        return p
 
-    # 4) 레거시 상수(옵션, lazy import)
+    # 4) 레거시 상수(있을 때만; lazy import로 의존 최소화)
     try:
-        from src.rag.index_build import PERSIST_DIR as _pp  # lazy import
-        if _pp:
-            return Path(str(_pp)).expanduser()
-    except Exception:
+        from src.rag.index_build import PERSIST_DIR as _pp  # type: ignore
+        p = _normalize_path(str(_pp))
+        if p is not None:
+            return p
+    except Exception:  # noqa: BLE001
         pass
 
     # 5) 기본 경로
-    return Path.home() / ".maic" / "persist"
-# =========================== [02] effective dir — END ===============================
+    return _DEFAULT_PERSIST_DIR
+# =========================== [02] effective dir — END =============================
 
-# ===================== [03] share to session (optional) =====================
+
+# ===================== [03] share to session (optional) — START ===================
 def share_persist_dir_to_session(p: Path) -> None:
-    """세션과 persist 경로를 공유(있으면). 실패시 무해."""
+    """
+    Persist 경로를 세션에 공유(있을 때만). 실패해도 무해(no-op).
+    """
     try:
         if st is not None:
             st.session_state["_PERSIST_DIR"] = Path(str(p)).expanduser()
-    except Exception:
+    except Exception:  # noqa: BLE001
         pass
+# ===================== [03] share to session (optional) — END =====================
