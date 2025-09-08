@@ -1,18 +1,12 @@
 # ============================== [01] RAG LABELER — START ==============================
 """
-src.rag.label
+src.rag.label — 라벨러(단일 규칙)
 
-- search_hits: RAG(search.py) 인덱스를 캐시/지속화(get_or_build_index)로 확보하여 검색.
-- decide_label: 히트의 파일명/확장자 규칙으로 라벨을 결정.
-
-라벨 규칙(안정성/호환성 강화):
+규칙(우선순위):
   1) 파일명이 '이유문법*' 또는 '[깨알문법]*' → [이유문법]
-  2) 파일명이 '문법서적*' → [문법서적]
-  3) 파일명이 '문법책*'   → [문법책]
-  4) 확장자가 .pdf        → [문법책]   # 기존 기본값 유지
-  5) 그 외(히트가 있으면) → [문법책]   # 기존 기본값 유지
+  2) 책류(확장자 .pdf, 또는 파일명에 '문법서적'/'문법책' 포함) → [문법책]
+  3) 히트가 없으면 → [AI지식]
 """
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -35,16 +29,12 @@ except Exception:  # pragma: no cover
 
 __all__ = ["search_hits", "decide_label"]
 
+_BOOK_LABEL = "[문법책]"
+_BOOK_HINTS = ("문법서적", "문법책")
 
-# ── 데이터셋 경로 해석 ────────────────────────────────────────────────────────────
+
 def _resolve_dataset_dir(dataset_dir: Optional[str]) -> Path:
-    """
-    우선순위:
-      1) 인자 dataset_dir
-      2) ENV: MAIC_DATASET_DIR 또는 RAG_DATASET_DIR
-      3) <repo>/prepared (있으면)
-      4) <repo>/knowledge (폴백)
-    """
+    """dataset_dir → ENV(MAIC_DATASET_DIR/RAG_DATASET_DIR) → prepared → knowledge"""
     if dataset_dir:
         return Path(dataset_dir).expanduser()
 
@@ -60,7 +50,7 @@ def _resolve_dataset_dir(dataset_dir: Optional[str]) -> Path:
     return (repo_root / "knowledge").resolve()
 
 
-# ── 모듈 레벨 TTL 캐시 (불필요한 재인덱싱 방지) ───────────────────────────────────
+# ── TTL 캐시 (불필요 재인덱싱 방지) ─────────────────────────────────────────
 _CACHED_INDEX: Optional[Dict[str, Any]] = None
 _CACHED_DIR: Optional[str] = None
 _CACHED_AT: float = 0.0
@@ -68,10 +58,7 @@ _TTL_SECS: int = 30
 
 
 def _ensure_index(base_dir: Path) -> Optional[Dict[str, Any]]:
-    """
-    캐시된 인덱스를 반환. TTL 내에는 재검사/재빌드 생략.
-    get_or_build_index가 있으면 디스크 캐시도 활용.
-    """
+    """get_or_build_index가 있으면 디스크 캐시도 활용."""
     global _CACHED_INDEX, _CACHED_DIR, _CACHED_AT
     now = time.time()
     ds = str(base_dir.resolve())
@@ -96,17 +83,14 @@ def _ensure_index(base_dir: Path) -> Optional[Dict[str, Any]]:
     return _CACHED_INDEX
 
 
-# ── Public API ───────────────────────────────────────────────────────────────────
+# ── Public API ─────────────────────────────────────────────────────────────────
 def search_hits(
     query: str,
     *,
     dataset_dir: Optional[str] = None,
     top_k: int = 5,
 ) -> List[Dict[str, Any]]:
-    """
-    질의어에 대한 상위 히트를 반환합니다.
-    반환 예: [{"path","title","score","snippet","source"} ...]
-    """
+    """질의어에 대한 상위 히트 반환."""
     q = (query or "").strip()
     if not q:
         return []
@@ -143,12 +127,10 @@ def decide_label(
     default_if_none: str = "[AI지식]",
 ) -> str:
     """
-    라벨 규칙(호환성 강화):
+    라벨 규칙:
       - 파일명이 '이유문법*' 또는 '[깨알문법]*' → [이유문법]
-      - 파일명이 '문법서적*' → [문법서적]
-      - 파일명이 '문법책*'   → [문법책]
-      - 확장자가 .pdf        → [문법책]
-      - 그 외(히트가 있으면) → [문법책]
+      - .pdf 또는 파일명에 '문법서적'/'문법책' 포함 → [문법책]
+      - 히트가 없으면 → [AI지식]
     """
     items = list(hits or [])
     if not items:
@@ -168,17 +150,12 @@ def decide_label(
     if name_lower.startswith("iyu") or name_lower.startswith("reason-grammar"):
         return "[이유문법]"
 
-    # 2) 문법 자료 접두어(두 표현 모두 지원)
-    if name.startswith("문법서적"):
-        return "[문법서적]"
-    if name.startswith("문법책"):
-        return "[문법책]"
-
-    # 3) PDF → 문법책(기본값 유지)
+    # 2) 책류 판단
     if Path(path).suffix.lower() == ".pdf" or name_lower.endswith(".pdf"):
-        return "[문법책]"
+        return _BOOK_LABEL
+    if any(hint in name for hint in _BOOK_HINTS):
+        return _BOOK_LABEL
 
-    # 4) 나머지(히트가 존재하는 경우)는 문법 자료로 간주
-    return "[문법책]"
+    # 3) 기본
+    return _BOOK_LABEL
 # =============================== [01] RAG LABELER — END ===============================
-
