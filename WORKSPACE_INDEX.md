@@ -1,10 +1,10 @@
-# ============== [01] Workspace Pointer — START ==============
-# 이 파일은 워크스페이스 사용자에게 **정본(SSOT)** 위치를 안내합니다.
-# 코드나 문서의 **원문 수정은 SSOT에서만** 진행하세요. (이 파일은 포인터 전용)
+## Workspace Pointer
 
-**Source-of-Truth:** github://LEES1605/MAIC@main/docs/_gpt/
-**Owner:** @LEES1605
-**Last-Updated:** 2025-09-08
+Source-of-Truth: github://LEES1605/MAIC@main/docs/_gpt/MAIC_refactor_report.md
+SSOT Root: docs/_gpt/
+Owner: @LEES1605
+Version: 2025-09-08
+Last-Updated: 2025-09-08T00:00:00Z
 
 ## Files (대표)
 - Masterplan: docs/_gpt/MASTERPLAN.md
