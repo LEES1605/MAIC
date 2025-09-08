@@ -3,20 +3,22 @@
 src.rag.label
 
 - search_hits: RAG(search.py) 인덱스를 캐시/지속화(get_or_build_index)로 확보하여 검색.
-- decide_label: 히트의 파일명/확장자 규칙으로 라벨을 결정하고, 반드시 SSOT 정규화(canon).
-  * 파일명이 '이유문법*' 또는 '[깨알문법]*' → [이유문법]
-  * 그 외 .pdf 파일 → [문법책]
-  * 히트가 없을 때만 → [AI지식]
+- decide_label: 히트의 파일명/확장자 규칙으로 라벨을 결정.
+
+라벨 규칙(안정성/호환성 강화):
+  1) 파일명이 '이유문법*' 또는 '[깨알문법]*' → [이유문법]
+  2) 파일명이 '문법서적*' → [문법서적]
+  3) 파일명이 '문법책*'   → [문법책]
+  4) 확장자가 .pdf        → [문법책]   # 기존 기본값 유지
+  5) 그 외(히트가 있으면) → [문법책]   # 기존 기본값 유지
 """
+
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 import os
 import time
-
-# SSOT: 라벨 상수 + 정규화
-from src.rag.labels import BOOK_LABEL, REASON_LABEL, AI_LABEL, canon_label
 
 # RAG 검색기 (패키지 기준)
 try:
@@ -25,7 +27,6 @@ try:
         get_or_build_index as _get_or_build_index,
     )
 except Exception:  # pragma: no cover
-    # 최소 폴백(프로젝트 구조에 따라 필요 없을 수 있음)
     from search import search as _search  # type: ignore
     try:
         from search import get_or_build_index as _get_or_build_index  # type: ignore
@@ -35,7 +36,7 @@ except Exception:  # pragma: no cover
 __all__ = ["search_hits", "decide_label"]
 
 
-# ------------------------ dataset dir resolver ---------------------------
+# ── 데이터셋 경로 해석 ────────────────────────────────────────────────────────────
 def _resolve_dataset_dir(dataset_dir: Optional[str]) -> Path:
     """
     우선순위:
@@ -59,7 +60,7 @@ def _resolve_dataset_dir(dataset_dir: Optional[str]) -> Path:
     return (repo_root / "knowledge").resolve()
 
 
-# ------------------------ module-level TTL cache -------------------------
+# ── 모듈 레벨 TTL 캐시 (불필요한 재인덱싱 방지) ───────────────────────────────────
 _CACHED_INDEX: Optional[Dict[str, Any]] = None
 _CACHED_DIR: Optional[str] = None
 _CACHED_AT: float = 0.0
@@ -95,7 +96,7 @@ def _ensure_index(base_dir: Path) -> Optional[Dict[str, Any]]:
     return _CACHED_INDEX
 
 
-# ----------------------------- Public API --------------------------------
+# ── Public API ───────────────────────────────────────────────────────────────────
 def search_hits(
     query: str,
     *,
@@ -139,18 +140,19 @@ def search_hits(
 
 def decide_label(
     hits: Iterable[Dict[str, Any]] | None,
-    default_if_none: str = AI_LABEL,
+    default_if_none: str = "[AI지식]",
 ) -> str:
     """
-    라벨 규칙:
+    라벨 규칙(호환성 강화):
       - 파일명이 '이유문법*' 또는 '[깨알문법]*' → [이유문법]
-      - 그 외 .pdf → [문법책]
-      - 히트가 없으면 → [AI지식]
-    항상 canon_label()로 표준화하여 반환한다.
+      - 파일명이 '문법서적*' → [문법서적]
+      - 파일명이 '문법책*'   → [문법책]
+      - 확장자가 .pdf        → [문법책]
+      - 그 외(히트가 있으면) → [문법책]
     """
     items = list(hits or [])
     if not items:
-        return canon_label(default_if_none)
+        return default_if_none
 
     top = items[0]
     path = str(top.get("path", "")).strip()
@@ -162,14 +164,21 @@ def decide_label(
 
     # 1) 이유문법/깨알문법 패턴
     if name.startswith("이유문법") or name.startswith("[깨알문법"):
-        return canon_label(REASON_LABEL)
+        return "[이유문법]"
     if name_lower.startswith("iyu") or name_lower.startswith("reason-grammar"):
-        return canon_label(REASON_LABEL)
+        return "[이유문법]"
 
-    # 2) PDF → 문법책
+    # 2) 문법 자료 접두어(두 표현 모두 지원)
+    if name.startswith("문법서적"):
+        return "[문법서적]"
+    if name.startswith("문법책"):
+        return "[문법책]"
+
+    # 3) PDF → 문법책(기본값 유지)
     if Path(path).suffix.lower() == ".pdf" or name_lower.endswith(".pdf"):
-        return canon_label(BOOK_LABEL)
+        return "[문법책]"
 
-    # 3) 나머지(히트 존재 시)는 문법 자료로 간주 → 문법책
-    return canon_label(BOOK_LABEL)
+    # 4) 나머지(히트가 존재하는 경우)는 문법 자료로 간주
+    return "[문법책]"
 # =============================== [01] RAG LABELER — END ===============================
+
