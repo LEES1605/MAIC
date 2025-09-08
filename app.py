@@ -166,12 +166,21 @@ def _get_brain_status() -> Dict[str, str]:
 
 # ========================= [06] ACCESS: Admin Gate ============================
 def _is_admin_view() -> bool:
-    """관리자 패널 표시 여부(학생 화면 완전 차단)."""
+    """관리자 패널 표시 여부(학생 화면 완전 차단).
+    단일 키 'admin_mode'만 사용. (하위호환: is_admin → admin_mode 승격 1회)
+    """
     if st is None:
         return False
     try:
         ss = st.session_state
-        return bool(ss.get("admin_mode") or ss.get("is_admin"))
+        # 하위호환: 과거 키를 한 번만 승격하고 제거
+        if ss.get("is_admin") and not ss.get("admin_mode"):
+            ss["admin_mode"] = True
+            try:
+                del ss["is_admin"]
+            except Exception:
+                pass
+        return bool(ss.get("admin_mode"))
     except Exception:
         return False
 
