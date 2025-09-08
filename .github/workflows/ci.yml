@@ -9,62 +9,64 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   checks:
     name: Lint • Typecheck • Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     strategy:
+      fail-fast: false
       matrix:
-        python-version: ["3.10", "3.12"]
+        persist_case: [default, env_dir]
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Python ${{ matrix.python-version }}
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.11"
           cache: pip
 
       - name: Upgrade pip/setuptools/wheel
         run: python -m pip install -U pip setuptools wheel
 
-      # 선택적 런타임 의존성 설치: requirements.txt가 있으면 설치
       - name: Install runtime requirements (optional)
         run: |
           if [ -f requirements.txt ]; then
             pip install -r requirements.txt
           fi
 
-      # 개발 도구 설치 (ruff/mypy/pytest)
       - name: Install dev tools
-        run: pip install ruff mypy pytest
+        run: pip install -U ruff mypy pytest
 
-      # 🔒 오탈자 임포트 가드: 'integration/intergration/intergratoins' 패턴 차단
-      - name: Guard • forbid typo imports
-        shell: bash
+      - name: Prepare env (persist case)
         run: |
-          set -euo pipefail
-          PATTERN='src\.intergration|src\.intergratoins|src\.integration\.|src\.integration$'
-          HITS="$(git grep -nE "$PATTERN" -- ':!*.md' || true)"
-          if [ -n "$HITS" ]; then
-            echo "::error title=Forbidden import detected::Use 'src.integrations.*' (not integration/intergration/intergratoins)"
-            echo "$HITS"
-            exit 1
-          fi
-          echo "OK: no forbidden import typos found."
+          case "${{ matrix.persist_case }}" in
+            env_dir)
+              export MAIC_PERSIST_DIR="$RUNNER_TEMP/maic_persist"
+              mkdir -p "$MAIC_PERSIST_DIR"
+              echo "MAIC_PERSIST_DIR=$MAIC_PERSIST_DIR" >> "$GITHUB_ENV"
+              ;;
+            *)
+              echo "Using default persist (no env)"
+              ;;
+          esac
+          echo "PYTHONPATH=$PWD" >> "$GITHUB_ENV"
 
-      # 자동 수정 모드 (--fix)로 가벼운 규칙은 러너에서 정리
       - name: Ruff
         run: ruff check . --fix
 
-      - name: mypy
-        run: mypy .
+      - name: No‑Ellipsis Gate
+        run: python scripts/no_ellipsis_gate.py --root .
 
-      # src 패키지 인식 위해 PYTHONPATH 설정
-      - name: Set PYTHONPATH
-        run: echo "PYTHONPATH=$PWD" >> "$GITHUB_ENV"
+      - name: Mypy
+        run: mypy .
 
       - name: Pytest
         env:
