@@ -34,7 +34,7 @@ import argparse
 import sys
 import os
 from pathlib import Path
-from typing import Iterable, List, Optional, Sequence, Tuple
+from typing import Iterable, List, Optional, Sequence, Tuple, NamedTuple
 
 ELLIPSIS_UNICODE = "\u2026"  # U+2026 (…)
 CODE_EXTS = {
