@@ -1,0 +1,25 @@
+name: no-ellipsis-gate
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  gate:
+    name: No-Ellipsis Gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run No-Ellipsis Gate
+        run: |
+          python -V
+          python scripts/no_ellipsis_gate.py --root . --verbose
