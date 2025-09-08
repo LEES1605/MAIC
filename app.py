@@ -1294,7 +1294,7 @@ def _render_mode_controls_pills() -> str:
     # 라벨→key 매핑
     try:
         if "src.core.modes" in globals():
-            from src.core.modes import find_mode_by_label  # type: ignore
+            from src.core.modes import find_mode_by_label
         spec = find_mode_by_label(sel_label) if callable(find_mode_by_label) else None
         cur_key = spec.key if spec else keys[labels.index(sel_label)]
     except Exception:
@@ -1303,7 +1303,6 @@ def _render_mode_controls_pills() -> str:
     ss["qa_mode_radio"] = sel_label
     ss["__mode"] = cur_key
     return cur_key
-
 
 # ========================== [16] 채팅 패널 ===============================
 def _render_chat_panel() -> None:
