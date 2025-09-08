@@ -38,7 +38,6 @@ def _effective_persist_dir() -> Path:
         return Path.home() / ".maic" / "persist"
 # =========================== [03] CORE: Persist Resolver ==========================
 
-
 # ================== [04] secrets → env 승격 & 페이지 설정(안정 옵션) =================
 def _bootstrap_env() -> None:
     """필요 시 secrets 값을 환경변수로 승격 + 서버 안정화 옵션."""
