@@ -1,4 +1,4 @@
-# [01] START: src/modes/types.py (NEW FILE)
+# [01] START: src/modes/types.py (FULL REPLACEMENT)
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -62,10 +62,11 @@ class PromptBundle:
 
 
 def sanitize_source_label(label: Optional[str]) -> str:
+    """Normalize/guard source label. Defaults to [AI지식] if invalid."""
     if not label:
         return "[AI지식]"
-    l = label.strip()
-    return l if l in ALLOWED_SOURCE_LABELS else "[AI지식]"
+    normalized = label.strip()
+    return normalized if normalized in ALLOWED_SOURCE_LABELS else "[AI지식]"
 
 
 def clamp_fragments(
@@ -74,6 +75,7 @@ def clamp_fragments(
     max_items: int = 5,
     max_chars_each: int = 500,
 ) -> List[str]:
+    """Prevent prompt bloat / prompt-injection via overly long context."""
     if not frags:
         return []
     safe: List[str] = []
