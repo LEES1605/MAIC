@@ -1,23 +1,36 @@
-# [01] imports & doc START
-from __future__ import annotations
+# ============== [01] imports & module docstring — START ==============
 """
 Persist path resolver (SSOT).
-우선순위: 세션 → env MAIC_PERSIST → env MAIC_PERSIST_DIR(레거시)
-        → src.rag.index_build.PERSIST_DIR(레거시) → ~/.maic/persist
-이 모듈은 경로만 결정합니다(부수효과 없음).
+
+우선순위(높음 → 낮음):
+  1) 세션: st.session_state["_PERSIST_DIR"]
+  2) 환경변수(신규): MAIC_PERSIST
+  3) 환경변수(레거시): MAIC_PERSIST_DIR
+  4) 레거시 상수: src.rag.index_build.PERSIST_DIR (가능할 때만)
+  5) 기본값: ~/.maic/persist
+
+주의:
+- 이 모듈은 "경로만 결정"합니다. 디렉터리 생성 등 부수효과는 없습니다.
+- 반환값은 항상 expanduser()가 적용된 pathlib.Path 입니다.
 """
+
+from __future__ import annotations
+
 import os
 from pathlib import Path
 from typing import Optional
 
 try:
     import streamlit as st
-except Exception:
-    st = None
+except Exception:  # noqa: BLE001
+    st = None  # Streamlit 미설치/런타임 예외 대비
 
 __all__ = ["effective_persist_dir", "share_persist_dir_to_session"]
-_DEFAULT = Path.home() / ".maic" / "persist"
-# [01] END
+
+# 기본 Persist 경로(최후의 보루)
+_DEFAULT_PERSIST_DIR: Path = Path.home() / ".maic" / "persist"
+# ============== [01] imports & module docstring — END ==============
+
 
 
 # [02] resolver START
