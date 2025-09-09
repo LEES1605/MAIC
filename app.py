@@ -26,19 +26,16 @@ from src.core.index_probe import (
 )
 
 # =========================== [03] CORE: Persist Resolver ==========================
+from pathlib import Path
+from src.core.persist import effective_persist_dir, share_persist_dir_to_session
+
 def _effective_persist_dir() -> Path:
-    """앱 전역 Persist 경로 해석기(SSOT 위임).
-    코어 정책을 그대로 따릅니다:
-      세션 → env MAIC_PERSIST → env MAIC_PERSIST_DIR(레거시) → 인덱서 상수 → 기본
-    실패 시 기본(~/.maic/persist)로 안전 폴백합니다.
-    """
+    """앱 전역 Persist 경로(코어 SSOT 위임). 실패 시 안전 폴백."""
     try:
-        from src.core.persist import effective_persist_dir
         return effective_persist_dir()
     except Exception:
         return Path.home() / ".maic" / "persist"
-# =========================== [03] CORE: Persist Resolver ==========================
-
+# =========================== [03] END =============================================
 
 # ================== [04] secrets → env 승격 & 페이지 설정(안정 옵션) =================
 def _bootstrap_env() -> None:
@@ -92,76 +89,45 @@ if st:
 
 
 # ======================= [05] 경로/상태 & 에러 로거 — START =======================
-# SSOT 결정값만 사용(코어에 위임). 중복 임포트/함수 제거됨.
+from pathlib import Path
+import traceback
 
-# 1) Persist 경로 상수
+# SSOT 결정값만 사용
 PERSIST_DIR: Path = effective_persist_dir()
 try:
     PERSIST_DIR.mkdir(parents=True, exist_ok=True)
 except Exception:
     pass
 
-# 세션에도 공유(있을 때만)
+# 세션 공유(있을 때만)
 try:
     share_persist_dir_to_session(PERSIST_DIR)
 except Exception:
     pass
 
-
 def _errlog(msg: str, where: str = "", exc: Exception | None = None) -> None:
-    """표준 에러 로깅(콘솔 + Streamlit 노출). 민감정보 금지, 실패 무해화."""
+    """표준 에러 로깅(민감정보 금지, 실패 무해화)."""
     try:
         prefix = f"{where} " if where else ""
         print(f"[ERR] {prefix}{msg}")
         if exc:
             traceback.print_exception(exc)
-        if st is not None:
-            try:
-                with st.expander("자세한 오류 로그", expanded=False):
-                    detail = ""
-                    if exc:
-                        try:
-                            detail = "".join(
-                                traceback.format_exception(type(exc), exc, exc.__traceback__)
-                            )
-                        except Exception:
-                            detail = "traceback 사용 불가"
-                    st.code(f"{prefix}{msg}\n{detail}")
-            except Exception:
-                pass
+        try:
+            import streamlit as st  # lazy
+            with st.expander("자세한 오류 로그", expanded=False):
+                detail = ""
+                if exc:
+                    try:
+                        detail = "".join(
+                            traceback.format_exception(type(exc), exc, exc.__traceback__)
+                        )
+                    except Exception:
+                        detail = "traceback 사용 불가"
+                st.code(f"{prefix}{msg}\n{detail}")
+        except Exception:
+            pass
     except Exception:
         pass
-
-
-def _mark_ready() -> None:
-    """준비 신호 파일(.ready) 생성 — 코어 위임."""
-    try:
-        core_mark_ready(PERSIST_DIR)
-    except Exception:
-        pass
-
-
-def _is_brain_ready() -> bool:
-    """코어 기준으로 인덱스 준비 여부."""
-    try:
-        return bool(core_is_ready(PERSIST_DIR))
-    except Exception:
-        return False
-
-
-def _get_brain_status() -> Dict[str, str]:
-    """앱 전역 상위 상태(SSOT). 세션 오버라이드가 있으면 코어 결과를 덮지 않음."""
-    try:
-        if st is not None:
-            ss = st.session_state
-            code = ss.get("brain_status_code")
-            msg = ss.get("brain_status_msg")
-            if code and msg:
-                return {"code": str(code), "msg": str(msg)}
-        return core_status(PERSIST_DIR)
-    except Exception as e:
-        _errlog("상태 계산 실패", where="[05]_get_brain_status", exc=e)
-        return {"code": "MISSING", "msg": "상태 계산 실패"}
 # ======================= [05] 경로/상태 & 에러 로거 — END =========================
 
 
