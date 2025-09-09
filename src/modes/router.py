@@ -10,21 +10,12 @@ from .types import Mode, PromptBundle, clamp_fragments, sanitize_source_label
 
 
 class ModeRouter:
-    """
-    Single entry for:
-      mode(enum) -> profile(SSOT or builtin) -> rendered prompt(bundle)
-    This keeps UI/Services thin and testable.
-    """
+    """mode(enum) -> profile(SSOT or builtin) -> rendered prompt(bundle)"""
 
     def __init__(self, *, ssot_root: Optional[Path] = None) -> None:
         self._ssot_root = ssot_root
 
-    # ---- Public API -----------------------------------------------------
     def select_profile(self, mode: Mode) -> PromptBundle:
-        """
-        Return an 'empty' bundle carrying the selected profile.
-        Prompt text is not built in this step.
-        """
         profile = get_profile(mode, ssot_root=self._ssot_root)
         return PromptBundle(
             mode=mode,
@@ -43,13 +34,6 @@ class ModeRouter:
         context_fragments: Optional[Sequence[str]] = None,
         source_label: Optional[str] = None,
     ) -> PromptBundle:
-        """
-        Build a mode-consistent prompt. This method does NOT call any LLM.
-        Security/robustness:
-          - clamps number/length of context fragments
-          - guards/normalizes source label
-          - produces deterministic section headers for snapshot testing
-        """
         profile = get_profile(mode, ssot_root=self._ssot_root)
         label = sanitize_source_label(source_label)
         frags = clamp_fragments(context_fragments, max_items=5, max_chars_each=500)
@@ -59,7 +43,6 @@ class ModeRouter:
             mode_kr=profile.extras.get("mode_kr", mode.value),
         )
 
-        # Deterministic, mode-stable structure (helps snapshot tests)
         lines = []
         lines.append(f"# {header}")
         lines.append("")
@@ -70,7 +53,7 @@ class ModeRouter:
         lines.append("")
 
         if frags:
-            lines.append("## 자료 컨텍스트 (최대 5개, 일부 생략 가능)")
+            lines.append("## 자료 컨텍스트 (최대 5개)")
             for i, s in enumerate(frags, 1):
                 lines.append(f"- ({i}) {s}")
             lines.append("")
@@ -96,7 +79,6 @@ class ModeRouter:
                 lines.append(f"{i}. {sec}")
             lines.append("")
 
-        # Implementation hint to downstream:
         lines.append("> 위 스키마를 **순서대로** 준수하고, 각 섹션은 간결한 소제목으로 시작하세요.")
         prompt = "\n".join(lines).strip()
 
@@ -109,7 +91,6 @@ class ModeRouter:
             context_fragments=tuple(frags),
         )
 
-    # ---- Introspection (useful for logging/QA) -------------------------
     def debug_dict(self, bundle: PromptBundle) -> dict:
         return {
             "mode": bundle.mode.value,
