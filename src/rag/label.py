@@ -1,19 +1,29 @@
-# [01] doc & imports START
+# ================= [01] module docstring & imports — START =================
+"""
+src.rag.label — 출처 라벨러(표준화)
+
+- search_hits(): RAG 인덱스를 캐시/지속화로 확보하여 검색.
+- decide_label(): 히트의 파일명/확장자/경로 규칙으로 라벨 결정.
+  * 파일명이 '이유문법*' 또는 '[깨알문법]*' → [이유문법]
+  * 그 외 .pdf 또는 (book/grammar 힌트) → [문법서적]  # 표준화 방침
+  * 히트가 없을 때만 → [AI지식]
+"""
+
 from __future__ import annotations
-"""
-RAG 라벨러(표준): [문법서적] / [이유문법] / [AI지식]
-- search_hits(): 인덱스 확보 후 검색
-- decide_label(): 파일명/확장자/경로 힌트로 라벨 결정
-"""
-from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Callable, Tuple
-import importlib
+
 import os
 import time
+from pathlib import Path
+from typing import Any, Callable, Dict, Iterable, List, Optional
 
-__all__ = ["search_hits", "decide_label"]
-# [01] END
+# RAG 검색기 (패키지 기준; mypy 친화적으로 단일 경로만 사용)
+from src.rag.search import (
+    search as _search,
+    get_or_build_index as _get_or_build_index,
+)
 
+__all__ = ["search_hits", "decide_label", "canonicalize_label"]
+# ================== [01] module docstring & imports — END ==================
 
 # [02] dataset path resolver START
 def _resolve_dataset_dir(dataset_dir: Optional[str]) -> Path:
