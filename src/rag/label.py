@@ -1,99 +1,133 @@
-# ================= [01] module docstring & imports — START =================
+# =================== [01] Module docstring — START ===================
 """
-src.rag.label — 출처 라벨러(표준화)
+RAG 라벨러
 
-- search_hits(): RAG 인덱스를 캐시/지속화로 확보하여 검색.
-- decide_label(): 히트의 파일명/확장자/경로 규칙으로 라벨 결정.
+- search_hits(): 인덱스 확보(캐시/지속화) 후 검색
+- decide_label(): 파일명/확장자/경로 힌트로 라벨 결정
+
+라벨 규칙(운영 최소 규칙):
   * 파일명이 '이유문법*' 또는 '[깨알문법]*' → [이유문법]
-  * 그 외 .pdf 또는 (book/grammar 힌트) → [문법서적]  # 표준화 방침
-  * 히트가 없을 때만 → [AI지식]
+  * 그 외(히트 존재 시) → [문법서적]   # 운영 일관성 유지
+  * 히트가 없으면 → default_if_none
 """
+# ==================== [01] Module docstring — END ====================
 
 from __future__ import annotations
 
+# ===================== [02] Imports & exports — START =====================
 import os
 import time
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
-# RAG 검색기 (패키지 기준; mypy 친화적으로 단일 경로만 사용)
-from src.rag.search import (
-    search as _search,
-    get_or_build_index as _get_or_build_index,
-)
+__all__ = ["search_hits", "decide_label"]
+# ====================== [02] Imports & exports — END ======================
 
-__all__ = ["search_hits", "decide_label", "canonicalize_label"]
-# ================== [01] module docstring & imports — END ==================
 
-# [02] dataset path resolver START
+# =================== [03] RAG search handles — START =====================
+try:
+    # 표준 경로(프로젝트 내부)
+    from src.rag.search import (  # type: ignore
+        search as _search,
+        get_or_build_index as _get_or_build_index,
+    )
+except Exception:
+    # 런타임 폴백(테스트/임시 환경)
+    def _search(*_a: Any, **_k: Any) -> List[Dict[str, Any]]:
+        return []
+
+    _get_or_build_index = None  # type: ignore
+# ==================== [03] RAG search handles — END ======================
+
+
+# =================== [04] Dataset resolver — START ======================
 def _resolve_dataset_dir(dataset_dir: Optional[str]) -> Path:
+    """
+    우선순위:
+      1) 인자 dataset_dir
+      2) ENV: MAIC_DATASET_DIR 또는 RAG_DATASET_DIR
+      3) <repo>/prepared (있으면)
+      4) <repo>/knowledge (폴백)
+    """
     if dataset_dir:
         return Path(dataset_dir).expanduser()
-    env = os.getenv("MAIC_DATASET_DIR") or os.getenv("RAG_DATASET_DIR")
+
+    env = os.environ.get("MAIC_DATASET_DIR") or os.environ.get("RAG_DATASET_DIR")
     if env:
         return Path(env).expanduser()
+
     repo_root = Path(__file__).resolve().parents[2]
     prepared = (repo_root / "prepared").resolve()
-    return prepared if prepared.exists() else (repo_root / "knowledge").resolve()
-# [02] END
+    if prepared.exists():
+        return prepared
+
+    return (repo_root / "knowledge").resolve()
+# ==================== [04] Dataset resolver — END =======================
 
 
-# [03] index TTL cache START
+# =================== [05] Index TTL cache — START =======================
 _CACHED_INDEX: Optional[Dict[str, Any]] = None
 _CACHED_DIR: Optional[str] = None
 _CACHED_AT: float = 0.0
 _TTL_SECS: int = 30
 
-SearchFn = Callable[..., List[Dict[str, Any]]]
-GetIdxFn = Callable[..., Optional[Dict[str, Any]]]
-
-
-def _get_search_handles() -> Tuple[SearchFn, Optional[GetIdxFn]]:
-    mod = importlib.import_module("src.rag.search")
-    search: SearchFn = getattr(mod, "search")
-    get_idx: Optional[GetIdxFn] = getattr(mod, "get_or_build_index", None)
-    return search, get_idx
-
 
 def _ensure_index(base_dir: Path) -> Optional[Dict[str, Any]]:
+    """
+    캐시된 인덱스를 반환. TTL 내에는 재검사/재빌드 생략.
+    get_or_build_index가 있으면 디스크 캐시도 활용.
+    """
     global _CACHED_INDEX, _CACHED_DIR, _CACHED_AT
     now = time.time()
     ds = str(base_dir.resolve())
-    if _CACHED_INDEX is not None and _CACHED_DIR == ds and (now - _CACHED_AT) < _TTL_SECS:
+
+    if (
+        _CACHED_INDEX is not None
+        and _CACHED_DIR == ds
+        and (now - _CACHED_AT) < _TTL_SECS
+    ):
         return _CACHED_INDEX
-    index: Optional[Dict[str, Any]] = None
+
+    idx: Optional[Dict[str, Any]] = None
     try:
-        _, get_idx = _get_search_handles()
-        if callable(get_idx):
-            index = get_idx(ds, use_cache=True)
+        if callable(_get_or_build_index):
+            idx = _get_or_build_index(ds, use_cache=True)  # type: ignore[call-arg]
     except Exception:
-        index = None
-    _CACHED_INDEX = index
+        idx = None
+
+    _CACHED_INDEX = idx
     _CACHED_DIR = ds
     _CACHED_AT = now
     return _CACHED_INDEX
-# [03] END
+# ==================== [05] Index TTL cache — END ========================
 
 
-# [04] search_hits START
+# ===================== [06] search_hits — START =========================
 def search_hits(
     query: str,
     *,
     dataset_dir: Optional[str] = None,
     top_k: int = 5,
 ) -> List[Dict[str, Any]]:
+    """
+    질의어에 대한 상위 히트를 반환합니다.
+    반환 예: [{"path","title","score","snippet","source"} ...]
+    """
     q = (query or "").strip()
     if not q:
         return []
+
     base = _resolve_dataset_dir(dataset_dir)
     if not base.exists():
         return []
-    search, _ = _get_search_handles()
+
     idx = _ensure_index(base)
+
     try:
-        hits = search(q, dataset_dir=str(base), index=idx, top_k=int(top_k))
+        hits = _search(q, dataset_dir=str(base), index=idx, top_k=int(top_k))
     except TypeError:
-        hits = search(q, dataset_dir=str(base), top_k=int(top_k))
+        hits = _search(q, dataset_dir=str(base), top_k=int(top_k))
+
     out: List[Dict[str, Any]] = []
     for h in hits:
         out.append(
@@ -106,57 +140,33 @@ def search_hits(
             }
         )
     return out
-# [04] END
+# ====================== [06] search_hits — END ==========================
 
 
-# [05] helpers START
-_BOOK_HINTS = ("문법서", "문법서적", "문법책")
-_DIR_HINTS = ("book", "grammar")
-
-
-def _is_reason_grammar(name: str) -> bool:
-    n = name.strip()
-    low = n.lower()
-    return (
-        n.startswith("이유문법")
-        or n.startswith("[깨알문법")
-        or low.startswith("iyu")
-        or low.startswith("reason-grammar")
-    )
-
-
-def _is_book_material(path: str, title: str) -> bool:
-    file_name = Path(path).name if path else title
-    low_path = str(path).lower()
-    low_title = title.lower()
-    ext = Path(file_name).suffix.lower()
-    if ext == ".pdf":
-        return True
-    if any(tok in file_name for tok in _BOOK_HINTS):
-        return True
-    if any(tok in low_path for tok in _DIR_HINTS):
-        return True
-    if any(tok in low_title for tok in _BOOK_HINTS):
-        return True
-    return False
-# [05] END
-
-
-# [06] decide_label START
+# ===================== [07] decide_label — START ========================
 def decide_label(
     hits: Iterable[Dict[str, Any]] | None,
     default_if_none: str = "[AI지식]",
 ) -> str:
+    """
+    라벨 규칙:
+      - '이유문법*' 또는 '[깨알문법]*' → [이유문법]
+      - 그 외(히트 존재 시) → [문법서적]
+      - 히트가 없으면 → default_if_none
+    """
     items = list(hits or [])
     if not items:
         return default_if_none
+
     top = items[0]
     path = str(top.get("path", "")).strip()
     title = str(top.get("title", "")).strip()
     name = Path(path).name if path else title
-    if _is_reason_grammar(name):
+
+    # 1) 이유문법/깨알문법 패턴
+    if name.startswith("이유문법") or name.startswith("[깨알문법"):
         return "[이유문법]"
-    if _is_book_material(path, title):
-        return "[문법서적]"
-    return default_if_none
-# [06] END
+
+    # 2) 그 외는 운영 규칙에 따라 문법서적으로 통일
+    return "[문법서적]"
+# ====================== [07] decide_label — END =========================
