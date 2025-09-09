@@ -1,4 +1,4 @@
-# [01] START: src/modes/profiles.py (NEW FILE)
+# [01] START: src/modes/profiles.py (FULL REPLACEMENT)
 from __future__ import annotations
 
 from pathlib import Path
@@ -11,7 +11,7 @@ _BUILTIN: Dict[Mode, ModeProfile] = {
     Mode.GRAMMAR: ModeProfile(
         id="grammar.v1",
         title="문법 설명 모드",
-        objective="중학생도 이해할 수 있도록 핵심 규칙과 예외를 단계적으로 설명",
+        objective="핵심 규칙과 예외를 단계적으로 설명",
         must_do=("용어는 풀어서 설명", "규칙→예시→반례→요약 순서"),
         must_avoid=("근거 없는 단정",),
         sections=("핵심 규칙", "예문", "자주 하는 실수", "간단 요약"),
@@ -47,7 +47,7 @@ def _try_load_yaml(path: Path) -> Optional[dict]:
         return None
     try:
         with path.open("r", encoding="utf-8") as f:
-            return yaml.safe_load(f)  # type: ignore
+            return yaml.safe_load(f)
     except Exception:
         return None
 
