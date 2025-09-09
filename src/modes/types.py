@@ -8,24 +8,21 @@ from typing import Dict, List, Optional, Sequence
 
 class Mode(str, Enum):
     """App-wide canonical modes. Keep names stable across UI/Services/LLM."""
-    GRAMMAR = "grammar"   # 문법설명
-    SENTENCE = "sentence" # 문장분석
-    PASSAGE = "passage"   # 지문설명
+    GRAMMAR = "grammar"    # 문법설명
+    SENTENCE = "sentence"  # 문장분석
+    PASSAGE = "passage"    # 지문설명
 
     @staticmethod
     def from_str(value: str) -> "Mode":
-        """Robust, user-facing conversion (case-insensitive, Korean aliases)."""
         if value is None:
             raise ValueError("mode value is required")
         v = value.strip().lower()
-        # Korean aliases
         if v in {"문법", "문법설명"}:
             return Mode.GRAMMAR
         if v in {"문장", "문장분석"}:
             return Mode.SENTENCE
         if v in {"지문", "지문설명"}:
             return Mode.PASSAGE
-        # English/enum values
         try:
             return Mode(v)
         except ValueError as e:
@@ -50,7 +47,6 @@ class ModeProfile:
     tone: str = "친절하고 명확하며 단계적인 설명"
     sections: Sequence[str] = field(default_factory=tuple)
     header_template: str = "{title} — {mode_kr}"
-    # Optional extensibility fields (kept generic to avoid hard-coding)
     extras: Dict[str, str] = field(default_factory=dict)
 
 
@@ -61,13 +57,11 @@ class PromptBundle:
     profile: ModeProfile
     source_label: str
     prompt: str
-    # Help logging/testing without re-parsing:
     sections: Sequence[str] = field(default_factory=tuple)
     context_fragments: Sequence[str] = field(default_factory=tuple)
 
 
 def sanitize_source_label(label: Optional[str]) -> str:
-    """Normalize/guard source label. Defaults to [AI지식] if invalid."""
     if not label:
         return "[AI지식]"
     l = label.strip()
@@ -80,12 +74,10 @@ def clamp_fragments(
     max_items: int = 5,
     max_chars_each: int = 500,
 ) -> List[str]:
-    """Prevent prompt bloat / prompt-injection via overly long context."""
     if not frags:
         return []
     safe: List[str] = []
     for s in list(frags)[:max_items]:
-        # naive clamp; PR-A3 can add more robust sanitization
         s = (s or "").strip()
         if max_chars_each > 0 and len(s) > max_chars_each:
             s = s[: max_chars_each] + "…"
