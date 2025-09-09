@@ -1,8 +1,11 @@
-# ============================ prompt_modes.py — START ============================
+# [01] START: src/prompt_modes.py (FULL REPLACEMENT)
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict
+from typing import Dict, Optional, Sequence
+
+from modes.router import ModeRouter
+from modes.types import Mode
 
 
 @dataclass(frozen=True)
@@ -13,60 +16,70 @@ class PromptSpec:
     user_prefix: str
 
 
-# 모드 정의(필요시 확장: 'grammar' | 'sentence' | 'passage' ...)
-_PROMPTS: Dict[str, PromptSpec] = {
-    "grammar": PromptSpec(
-        key="grammar",
-        title="어법 모드",
-        system=(
-            "당신은 영어 문법 교사입니다. 학생이 올린 문장을 분석하여 "
-            "문법적 오류를 짚고 근거를 간명하게 제시하세요. "
-            "가능하면 중학생도 이해할 표현을 사용합니다."
-        ),
-        user_prefix="문장:",
+# 모드 메타(타이틀/시스템 최소 가이드) — 본문 프롬프트는 ModeRouter가 생성
+_MODES_META: Dict[Mode, PromptSpec] = {
+    Mode.GRAMMAR: PromptSpec(
+        key=Mode.GRAMMAR.value,
+        title="어법(문법설명) 모드",
+        system="규칙→예시→반례→요약 순으로 간결명확하게. 용어는 풀어서 설명.",
+        user_prefix="질의:",
     ),
-    "sentence": PromptSpec(
-        key="sentence",
-        title="문장 모드",
+    Mode.SENTENCE: PromptSpec(
+        key=Mode.SENTENCE.value,
+        title="문장분석 모드",
         system=(
-            "당신은 영작 코치입니다. 학생의 목적과 톤에 맞는 자연스러운 문장을 "
-            "여러 안으로 제시하고, 선택 이유를 짧게 덧붙이세요."
+            "문장 구조를 괄호 규칙으로 분석하고 근거를 제시하세요. "
+            "섹션 순서를 반드시 고정 유지."
         ),
-        user_prefix="의도/문맥:",
+        user_prefix="질의:",
     ),
-    "passage": PromptSpec(
-        key="passage",
-        title="지문 모드",
-        system=(
-            "당신은 독해 코치입니다. 학생이 제공한 지문을 요약하고, "
-            "핵심 어휘/문법 포인트를 뽑은 뒤, 핵심질문 3개를 제시하세요."
-        ),
-        user_prefix="지문:",
+    Mode.PASSAGE: PromptSpec(
+        key=Mode.PASSAGE.value,
+        title="지문설명 모드",
+        system="문단별 요지→핵심문장→어휘·표현→한줄요약 순서를 고정.",
+        user_prefix="질의:",
     ),
 }
 
 
+_router = ModeRouter()
+
+
 def get_prompt_spec(mode: str, default: str = "sentence") -> PromptSpec:
     """
-    모드 키로 PromptSpec 반환. 모르는 값이면 default로 폴백.
+    기존 시그니처 유지. title/system은 최소 가이드만 제공하고,
+    실제 user 프롬프트 본문은 build_user_prompt()에서 ModeRouter로 생성합니다.
     """
-    key = (mode or "").strip().lower()
-    return _PROMPTS.get(key) or _PROMPTS[default]
+    try:
+        m = Mode.from_str(mode)
+    except Exception:
+        m = Mode.from_str(default)
+    return _MODES_META[m]
 
 
 def list_modes() -> Dict[str, str]:
     """UI 라디오/셀렉트에 쓰기 좋은 (key -> title) 매핑."""
-    return {k: v.title for k, v in _PROMPTS.items()}
+    return {m.value: meta.title for m, meta in _MODES_META.items()}
 
 
-def build_user_prompt(mode: str, user_text: str) -> str:
+def build_user_prompt(
+    mode: str,
+    user_text: str,
+    *,
+    context_fragments: Optional[Sequence[str]] = None,
+    source_label: Optional[str] = None,
+) -> str:
     """
-    모드별 user 프리픽스를 붙여 단순 프롬프트를 구성.
-    (상위 레이어에서 system 프롬프트는 별도로 사용)
+    (변경) 기존에는 단순 prefix만 붙였지만,
+    이제 ModeRouter가 만든 '전체 프롬프트(섹션/규칙 포함)'를 반환합니다.
+    호출부는 기존대로 system=spec.system, user=build_user_prompt(...)로 사용해도 됩니다.
     """
-    spec = get_prompt_spec(mode)
-    t = (user_text or "").strip()
-    return f"{spec.user_prefix} {t}" if t else spec.user_prefix
-
-
-# ============================= prompt_modes.py — END =============================
+    m = Mode.from_str(mode)
+    bundle = _router.render_prompt(
+        mode=m,
+        question=(user_text or "").strip(),
+        context_fragments=context_fragments,
+        source_label=source_label,
+    )
+    return bundle.prompt
+# [01] END: src/prompt_modes.py
