@@ -1,12 +1,15 @@
-# [01] START: tests/test_modes_router.py (NEW FILE)
-import pathlib, sys
-ROOT = pathlib.Path(__file__).resolve().parents[1]
-SRC = ROOT / "src"
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
-
+# [01] START: tests/test_modes_router.py (FULL REPLACEMENT)
 from modes.types import Mode
 from modes.router import ModeRouter
+
+
+def test_mode_from_str_aliases():
+    assert Mode.from_str("문법") is Mode.GRAMMAR
+    assert Mode.from_str("문장분석") is Mode.SENTENCE
+    assert Mode.from_str("지문설명") is Mode.PASSAGE
+    assert Mode.from_str("grammar") is Mode.GRAMMAR
+    assert Mode.from_str("sentence") is Mode.SENTENCE
+    assert Mode.from_str("passage") is Mode.PASSAGE
 
 
 def test_sentence_prompt_sections_and_label():
