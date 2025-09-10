@@ -26,10 +26,12 @@ from src.core.index_probe import (
 )
 
 # =========================== [03] CORE: Persist Resolver ==========================
-# (Wave‑1.3) 이 구획은 제거되었습니다.
-# - 레거시 래퍼 'effective_persist_dir' (app-내 래퍼) 표기는 더 이상 사용하지 않습니다.
-# - UI/관리자 레이어는 '_persist_dir_safe' 공용 헬퍼를 사용하세요.
-# - 부팅/저수준 경로 계산은 'src.core.persist.effective_persist_dir'를 직접 호출하세요.
+def _effective_persist_dir() -> Path:
+    """앱 전역 Persist 경로(코어 SSOT 위임). 실패 시 안전 폴백."""
+    try:
+        return effective_persist_dir()
+    except Exception:
+        return Path.home() / ".maic" / "persist"
 # =========================== [03] END =============================================
 
 # ====================== [03B] COMMON: Prepared Helpers ======================
@@ -47,6 +49,7 @@ def _load_prepared_lister():
     반환: (callable | None, tried_logs: List[str])
     """
     tried = []
+
     def _try(modname: str):
         try:
             m = importlib.import_module(modname)
@@ -73,6 +76,7 @@ def _load_prepared_api():
     반환: (chk_fn | None, mark_fn | None, tried_logs: List[str])
     """
     tried2 = []
+
     def _try(modname: str):
         try:
             m = importlib.import_module(modname)
@@ -204,9 +208,6 @@ def _is_admin_view() -> bool:
         return bool(ss.get("admin_mode"))
     except Exception:
         return False
-
-
-
 
 
 # ======================= [07] RERUN GUARD utils ==============================
@@ -456,9 +457,11 @@ def _auto_start_once() -> None:
         _set_brain_status("READY", "자동 복원 완료", "release", attached=True)
         _safe_rerun("auto_start", ttl=1)
 # =================== [11] 부팅 오토플로우 & 자동 복원 모드 — END ==================
+
+
 # =================== [12] DIAG: Orchestrator Header ======================
 def _render_index_orchestrator_header() -> None:
-    """상단 진단 헤더(미니멀): Persist 경로, 상태칩, 관리자 퀵액션."""
+    """상단 진단 헤더(미니멀): Persist 경로, 상태칩만 간결 표기."""
     if "st" not in globals() or st is None:
         return
 
@@ -482,16 +485,6 @@ def _render_index_orchestrator_header() -> None:
     badge = "🟩 READY" if status_text == "READY" else "🟨 MISSING"
     st.markdown(f"**상태**\n\n{badge}")
 
-    # 관리자 퀵액션: Release에서 최신 인덱스 복원
-    if _is_admin_view():
-        cols = st.columns([1, 3])
-        if cols[0].button("⬇️ Release에서 최신 인덱스 복원", use_container_width=True):
-            try:
-                _boot_auto_restore_index()
-                st.success("Release 복원을 시도했습니다. 상태를 확인하세요.")
-            except Exception as e:
-                st.error(f"복원 실행 실패: {e}")
-
     st.info(
         "강제 인덱싱(HQ, 느림)·백업과 인덱싱 파일 미리보기는 **관리자 인덱싱 패널**에서 합니다. "
         "관리자 모드 진입 후 아래 섹션으로 이동하세요.",
@@ -500,6 +493,7 @@ def _render_index_orchestrator_header() -> None:
 
     st.markdown("<span id='idx-admin-panel'></span>", unsafe_allow_html=True)
 # =================== [12] DIAG: Orchestrator Header — END ======================
+
 
 # =================== [13] ADMIN: Index Panel (prepared 전용) ==============
 def _render_admin_index_panel() -> None:
@@ -998,16 +992,13 @@ def _render_admin_prepared_scan_panel() -> None:
 # =================== [13B] ADMIN: Prepared Scan — END ====================
 
 
-
 # ============= [14] 인덱싱된 소스 목록(읽기 전용 대시보드) ==============
 def _render_admin_indexed_sources_panel() -> None:
     """현재 인덱스(chunks.jsonl)를 읽어 문서 단위로 집계/표시."""
     if st is None or not _is_admin_view():
         return
 
-    # ✅ 표준화: persist 경로는 공통 헬퍼로 일원화
-    chunks_path = _persist_dir_safe() / "chunks.jsonl"
-
+    chunks_path = _effective_persist_dir() / "chunks.jsonl"
     with st.container(border=True):
         st.subheader("📄 인덱싱된 파일 목록 (읽기 전용)")
         st.caption(f"경로: `{str(chunks_path)}`")
@@ -1066,7 +1057,7 @@ def _render_admin_indexed_sources_panel() -> None:
             for r in table
         ]
         st.dataframe(rows2, hide_index=True, use_container_width=True)
-# ============= [14] 인덱싱된 소스 목록(읽기 전용 대시보드) ==============
+
 
 # ===================== [15] 채팅 UI(스타일/모드) ==========================
 def _inject_chat_styles_once() -> None:
@@ -1111,12 +1102,6 @@ def _inject_chat_styles_once() -> None:
         position:absolute; right:14px; top:50%; transform:translateY(-50%);
         z-index:2; margin:0!important; padding:0!important;
       }
-      form[data-testid="stForm"]:has(input[placeholder='질문을 입력하세요…']) .stButton > button,
-      form[data-testid="stForm"]:has(input[placeholder='질문을 입력하세요…']) .row-widget.stButton > button{
-        width:38px; height:38px; border-radius:50%; border:0; background:#0a2540; color:#fff;
-        font-size:18px; line-height:1; cursor:pointer; box-shadow:0 2px 6px rgba(0,0,0,.15);
-        padding:0; min-height:0;
-      }
 
       .msg-row{ display:flex; margin:8px 0; }
       .msg-row.left{ justify-content:flex-start; }
@@ -1135,6 +1120,7 @@ def _inject_chat_styles_once() -> None:
       .chip.me{ background:#059669; }   /* 나 */
       .chip.pt{ background:#2563eb; }   /* 피티쌤 */
       .chip.mn{ background:#7c3aed; }   /* 미나쌤 */
+
       .chip-src{
         display:inline-block; margin-left:6px; padding:2px 8px; border-radius:10px;
         background:#eef2ff; color:#3730a3; font-size:12px; font-weight:600; line-height:1;
@@ -1203,7 +1189,6 @@ def _render_mode_controls_pills() -> str:
     ss["__mode"] = cur_key
     return cur_key
 # [15B] END
-
 
 
 # [16] START: 채팅 패널 (FULL REPLACEMENT)
