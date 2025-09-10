@@ -5,11 +5,13 @@ Co-teacher(미나쌤) — '비평'이 아니라 '보완' 설명을 스트리밍�
 """
 from __future__ import annotations
 
-from typing import Dict, Iterator, Optional, Any, List, Mapping
+from typing import Dict, Iterator, Optional, Any, Mapping
 import inspect
-import re
 from queue import Queue, Empty
 from threading import Thread
+
+# 공통 문장분리기(중복 제거)
+from src.agents._common import _split_sentences
 
 
 def _system_prompt(mode: str) -> str:
@@ -45,13 +47,6 @@ def _user_prompt(question: str, answer: Optional[str]) -> str:
             "- 질문 의도에 맞는 보완 설명"
         )
     return head + body
-
-
-def _split_sentences(text: str) -> List[str]:
-    if not text:
-        return []
-    parts = re.split(r"(?<=[\.!\?。！？])\s+", text.strip())
-    return [p for p in parts if p]
 
 
 def _build_io_kwargs(
