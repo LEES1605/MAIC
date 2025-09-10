@@ -27,9 +27,9 @@ from src.core.index_probe import (
 
 # =========================== [03] CORE: Persist Resolver ==========================
 # (Wave‑1.3) 이 구획은 제거되었습니다.
-# - 기존 래퍼 `_effective_persist_dir()`는 더 이상 사용하지 않습니다.
-# - UI/관리자 레이어는 `_persist_dir_safe()`를 사용하세요.
-# - 부팅/저수준 경로 계산은 `src.core.persist.effective_persist_dir()`를 직접 호출하세요.
+# - 레거시 래퍼 'effective_persist_dir' (app-내 래퍼) 표기는 더 이상 사용하지 않습니다.
+# - UI/관리자 레이어는 '_persist_dir_safe' 공용 헬퍼를 사용하세요.
+# - 부팅/저수준 경로 계산은 'src.core.persist.effective_persist_dir'를 직접 호출하세요.
 # =========================== [03] END =============================================
 
 # ====================== [03B] COMMON: Prepared Helpers ======================
