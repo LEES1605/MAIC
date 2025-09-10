@@ -1,30 +1,28 @@
 # ============================== [01] Co-Teacher Evaluator — START ==============================
-"""
-Co-teacher(미나쌤) — '비평'이 아니라 '보완' 설명을 스트리밍으로 제공합니다.
-가능하면 provider의 실스트리밍을 사용하고, 불가하면 최종 텍스트를 문장 단위로 나눠 yield합니다.
-"""
 from __future__ import annotations
 
-from typing import Dict, Iterator, Optional, Any, Mapping
-import inspect
-from queue import Queue, Empty
-from threading import Thread
+from typing import Dict, Iterator, Optional, Any
 
-# 공통 문장분리기(중복 제거)
-from src.agents._common import _split_sentences
+from src.agents._common import _split_sentences, stream_llm
+
+
+def _mode_hint(mode: str) -> str:
+    m = (mode or "").strip().lower()
+    if m in ("grammar", "문법", "문법설명"):
+        return "핵심 규칙 보완 + 쉬운 예시 + 한 줄 정리."
+    if m in ("sentence", "문장", "문장구조분석"):
+        return "품사/구문 역할 보완, 핵심 포인트 3개 보강."
+    if m in ("passage", "지문", "지문분석"):
+        return "근거 문장 보강, 요지/세부 차이 명확화."
+    return "핵심→예시→한 줄 정리로 간결히 보완."
 
 
 def _system_prompt(mode: str) -> str:
-    mode_hint = {
-        "문법설명": "핵심 규칙 → 간단 예시 → 흔한 오해 순서로 학생 눈높이에 맞춰 설명.",
-        "문장구조분석": "품사/구문 역할을 표처럼 정리, 핵심 포인트 3개 요약.",
-        "지문분석": "주제/요지/세부정보를 구분하고 근거 문장을 명확히 제시.",
-    }.get(mode, "핵심→예시→한 줄 정리 순으로 간결히 설명.")
     return (
-        "당신은 '미나쌤'이라는 보조 선생님(Co-teacher)입니다. "
+        "당신은 '미나쌤'이라는 보조 선생님(Co‑teacher)입니다. "
         "첫 번째 선생님(피티쌤)의 답변을 바탕으로, 학생이 더 쉽게 이해하도록 "
         "중복을 최소화하며 빠진 부분을 보충하고 쉬운 비유/예시 또는 심화 포인트를 추가하세요. "
-        "비평/채점/메타 피드백은 금지. " + mode_hint
+        "비평·채점·메타 피드백은 금지. " + _mode_hint(mode)
     )
 
 
@@ -49,112 +47,6 @@ def _user_prompt(question: str, answer: Optional[str]) -> str:
     return head + body
 
 
-def _build_io_kwargs(
-    params: Mapping[str, inspect.Parameter],
-    *,
-    system_prompt: str,
-    user_prompt: str,
-) -> Dict[str, Any]:
-    kwargs: Dict[str, Any] = {}
-    if "messages" in params:
-        kwargs["messages"] = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ]
-    else:
-        if "prompt" in params:
-            kwargs["prompt"] = system_prompt + "\n\n" + user_prompt
-        elif "user_prompt" in params:
-            kwargs["user_prompt"] = user_prompt
-        if "system_prompt" in params:
-            kwargs["system_prompt"] = system_prompt
-        elif "system" in params:
-            kwargs["system"] = system_prompt
-    return kwargs
-
-
-def _iter_provider_stream(*, system_prompt: str, user_prompt: str) -> Iterator[str]:
-    """가능하면 실스트리밍으로, 아니면 폴백."""
-    try:
-        from src.llm import providers as prov
-    except Exception as e:  # pragma: no cover
-        yield f"(오류) provider 로딩 실패: {type(e).__name__}: {e}"
-        return
-
-    # 1) stream_text 우선
-    st_fn = getattr(prov, "stream_text", None)
-    if callable(st_fn):
-        params = inspect.signature(st_fn).parameters
-        kwargs = _build_io_kwargs(
-            params, system_prompt=system_prompt, user_prompt=user_prompt
-        )
-        for piece in st_fn(**kwargs):
-            yield str(piece or "")
-        return
-
-    # 2) call_with_fallback + callbacks
-    call = getattr(prov, "call_with_fallback", None)
-    if callable(call):
-        params = inspect.signature(call).parameters
-        kwargs = _build_io_kwargs(
-            params, system_prompt=system_prompt, user_prompt=user_prompt
-        )
-
-        q: "Queue[Optional[str]]" = Queue()
-
-        # ⛳ 테스트 가드 회피: 금지된 함수명(_on_piece) 사용 금지
-        def _cb_piece(t: Any) -> None:
-            try:
-                q.put(str(t or ""))
-            except Exception:
-                pass
-
-        used_cb = False
-        for name in ("on_delta", "on_token", "yield_text"):
-            if name in params:
-                kwargs[name] = _cb_piece
-                used_cb = True
-        if "stream" in params:
-            kwargs["stream"] = True
-
-        if used_cb:
-            # ⛳ 테스트 가드 회피: 금지된 함수명(_runner) 사용 금지
-            def _run() -> None:
-                try:
-                    call(**kwargs)
-                except Exception as e:  # pragma: no cover
-                    q.put(f"(오류) {type(e).__name__}: {e}")
-                finally:
-                    q.put(None)
-
-            th = Thread(target=_run, daemon=True)
-            th.start()
-
-            while True:
-                try:
-                    item = q.get(timeout=0.1)
-                except Empty:
-                    if not th.is_alive() and q.empty():
-                        break
-                    continue
-                if item is None:
-                    break
-                yield str(item or "")
-            return
-
-        # 콜백 미지원 → 폴백(최종 텍스트 한 번에)
-        try:
-            res = call(**kwargs)
-            txt = res.get("text") if isinstance(res, dict) else str(res)
-            yield str(txt or "")
-            return
-        except Exception as e:  # pragma: no cover
-            yield f"(오류) {type(e).__name__}: {e}"
-            return
-
-    yield "(오류) LLM 어댑터를 찾을 수 없어요."
-
-
 def evaluate_stream(
     *,
     question: str,
@@ -164,8 +56,8 @@ def evaluate_stream(
 ) -> Iterator[str]:
     """
     미나쌤 보완 스트림.
-    - provider가 스트리밍을 지원하면 토막 단위로 yield
-    - 아니면 최종 텍스트를 문장 단위로 분할 후 여러 번 yield
+    - provider 스트리밍이면 그대로,
+    - 아니면 먼저 한 번에 방출(요약형), 그마저 없으면 문장 단위 폴백.
     """
     if not answer and ctx and isinstance(ctx, dict):
         maybe = ctx.get("answer")
@@ -175,16 +67,16 @@ def evaluate_stream(
     sys_p = _system_prompt(mode)
     usr_p = _user_prompt(question, answer)
 
-    # 실스트리밍 시도
+    # 1차: 스트리밍/폴백(한 번에) 시도
     got_any = False
-    for piece in _iter_provider_stream(system_prompt=sys_p, user_prompt=usr_p):
+    for piece in stream_llm(system_prompt=sys_p, user_input=usr_p, split_fallback=False):
         got_any = True
         yield str(piece or "")
 
     if got_any:
         return
 
-    # 폴백: 문장 분할 스트림
+    # 2차: 문장 분할 폴백
     try:
         from src.llm import providers as prov
         call = getattr(prov, "call_with_fallback", None)
@@ -192,10 +84,9 @@ def evaluate_stream(
         call = None
 
     if callable(call):
-        params = inspect.signature(call).parameters
-        kwargs = _build_io_kwargs(params, system_prompt=sys_p, user_prompt=usr_p)
         try:
-            res = call(**kwargs)
+            res = call(messages=[{"role": "system", "content": sys_p},
+                                 {"role": "user", "content": usr_p}])
         except Exception as e:  # pragma: no cover
             yield f"(오류) {type(e).__name__}: {e}"
             return
