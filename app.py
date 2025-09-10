@@ -36,6 +36,67 @@ def _effective_persist_dir() -> Path:
     except Exception:
         return Path.home() / ".maic" / "persist"
 # =========================== [03] END =============================================
+# ====================== [03B] COMMON: Prepared Helpers ======================
+def _persist_dir_safe() -> Path:
+    """SSOT persist 경로. 코어 모듈 우선, 실패 시 기본값."""
+    try:
+        # effective_persist_dir()은 src.core.persist에서 결정되며, side-effect-free여야 한다.
+        return Path(str(effective_persist_dir())).expanduser()
+    except Exception:
+        return Path.home() / ".maic" / "persist"
+
+
+def _load_prepared_lister():
+    """prepared 파일 나열 함수 로더.
+    반환: (callable | None, tried_logs: List[str])
+    """
+    tried = []
+    def _try(modname: str):
+        try:
+            m = importlib.import_module(modname)
+            fn = getattr(m, "list_prepared_files", None)
+            if callable(fn):
+                tried.append(f"ok: {modname}")
+                return fn
+            tried.append(f"miss func: {modname}")
+            return None
+        except Exception as e:
+            tried.append(f"fail: {modname} ({e})")
+            return None
+
+    # 우선순위: 정규 경로 → 짧은 별칭
+    for name in ("src.integrations.gdrive", "gdrive"):
+        fn = _try(name)
+        if fn:
+            return fn, tried
+    return None, tried
+
+
+def _load_prepared_api():
+    """prepared 소비 API(check_prepared_updates/mark_prepared_consumed) 로더.
+    반환: (chk_fn | None, mark_fn | None, tried_logs: List[str])
+    """
+    tried2 = []
+    def _try(modname: str):
+        try:
+            m = importlib.import_module(modname)
+            chk_fn = getattr(m, "check_prepared_updates", None)
+            mark_fn = getattr(m, "mark_prepared_consumed", None)
+            if callable(chk_fn) and callable(mark_fn):
+                tried2.append(f"ok: {modname}")
+                return chk_fn, mark_fn
+            tried2.append(f"miss attrs: {modname}")
+            return None, None
+        except Exception as e:
+            tried2.append(f"fail: {modname} ({e})")
+            return None, None
+
+    for name in ("prepared", "gdrive", "src.prepared", "src.drive.prepared", "src.integrations.gdrive"):
+        chk, mark = _try(name)
+        if chk and mark:
+            return chk, mark, tried2
+    return None, None, tried2
+# ====================== [03B] END ==========================================
 
 # ================== [04] secrets → env 승격 & 페이지 설정(안정 옵션) =================
 def _bootstrap_env() -> None:
@@ -410,13 +471,6 @@ def _render_index_orchestrator_header() -> None:
 
     st.markdown("### 🧪 인덱스 오케스트레이터")
 
-    def _persist_dir_safe() -> Path:
-        """SSOT persist 경로. 코어 모듈 우선, 실패 시 기본값."""
-        try:
-            return Path(str(effective_persist_dir())).expanduser()
-        except Exception:
-            return Path.home() / ".maic" / "persist"
-
     persist = _persist_dir_safe()
 
     with st.container():
@@ -450,17 +504,9 @@ def _render_admin_index_panel() -> None:
     if "st" not in globals() or st is None or not _is_admin_view():
         return
 
-    import importlib as _imp
-
     st.markdown("<h3>🧭 인덱싱(관리자: prepared 전용)</h3>", unsafe_allow_html=True)
 
     # ---------- 공용 헬퍼 ----------
-    def _persist_dir_safe() -> Path:
-        try:
-            return _effective_persist_dir()
-        except Exception:
-            return Path.home() / ".maic" / "persist"
-
     def _stamp_persist(p: Path) -> None:
         try:
             st.session_state["_PERSIST_DIR"] = p.resolve()
@@ -582,28 +628,6 @@ def _render_admin_index_panel() -> None:
     # ---------- prepared 목록 스캔 ----------
     st.caption("※ 이 패널은 Drive의 prepared만을 입력원으로 사용합니다.")
 
-    def _load_prepared_lister():
-        tried = []
-
-        def _try(modname: str):
-            try:
-                m = _imp.import_module(modname)
-                fn = getattr(m, "list_prepared_files", None)
-                if callable(fn):
-                    tried.append(f"ok: {modname}")
-                    return fn
-                tried.append(f"miss func: {modname}")
-                return None
-            except Exception as e:
-                tried.append(f"fail: {modname} ({e})")
-                return None
-
-        for name in ("src.integrations.gdrive", "gdrive"):
-            fn = _try(name)
-            if fn:
-                return fn, tried
-        return None, tried
-
     files_list: List[Dict[str, Any]] = []
     lister, dbg1 = _load_prepared_lister()
     if lister:
@@ -663,7 +687,7 @@ def _render_admin_index_panel() -> None:
     # ---------- 인덱싱 실행 ----------
     req = st.session_state.pop("_IDX_REQ", None)
     if req:
-        used_persist = _effective_persist_dir()
+        used_persist = _persist_dir_safe()
         _step_reset(step_names)
         _render_stepper()
         _render_status()
@@ -705,33 +729,6 @@ def _render_admin_index_panel() -> None:
             # prepared 소비
             _step_set(3, "run", "prepared 소비 중")
             try:
-                def _load_prepared_api():
-                    tried2 = []
-
-                    def _try(modname: str):
-                        try:
-                            m = _imp.import_module(modname)
-                            chk_fn = getattr(m, "check_prepared_updates", None)
-                            mark_fn = getattr(m, "mark_prepared_consumed", None)
-                            if callable(chk_fn) and callable(mark_fn):
-                                tried2.append(f"ok: {modname}")
-                                return chk_fn, mark_fn
-                            tried2.append(f"miss attrs: {modname}")
-                            return None, None
-                        except Exception as e:
-                            tried2.append(f"fail: {modname} ({e})")
-                            return None, None
-
-                    for name in ("prepared", "gdrive"):
-                        chk, mark = _try(name)
-                        if chk and mark:
-                            return chk, mark, tried2
-                    for name in ("src.prepared", "src.drive.prepared", "src.integrations.gdrive"):
-                        chk, mark = _try(name)
-                        if chk and mark:
-                            return chk, mark, tried2
-                    return None, None, tried2
-
                 chk, mark, dbg2 = _load_prepared_api()
                 info: Dict[str, Any] = {}
                 new_files: List[str] = []
@@ -863,8 +860,8 @@ def _render_admin_index_panel() -> None:
 
     # ---------- 인덱싱 후 요약/경로 ----------
     if bool(st.session_state.get("IDX_SHOW_AFTER", True)):
-        idx_persist = _effective_persist_dir()
-        glb_persist = _effective_persist_dir()
+        idx_persist = _persist_dir_safe()
+        glb_persist = _persist_dir_safe()
         st.write(f"**Persist(Indexer):** `{str(idx_persist)}`")
         st.write(f"**Persist(Global):** `{str(glb_persist)}`")
         try:
@@ -909,66 +906,7 @@ def _render_admin_prepared_scan_panel() -> None:
     if st is None or not _is_admin_view():
         return
 
-    import importlib as _imp
-
     st.markdown("<h4>🔍 새 파일 스캔(인덱싱 없이)</h4>", unsafe_allow_html=True)
-
-    def _persist_dir_safe() -> Path:
-        try:
-            return _effective_persist_dir()
-        except Exception:
-            return Path.home() / ".maic" / "persist"
-
-    # prepared 파일 나열 함수 로드
-    def _load_prepared_lister():
-        tried = []
-
-        def _try(modname: str):
-            try:
-                m = _imp.import_module(modname)
-                fn = getattr(m, "list_prepared_files", None)
-                if callable(fn):
-                    tried.append(f"ok: {modname}")
-                    return fn
-                tried.append(f"miss func: {modname}")
-                return None
-            except Exception as e:
-                tried.append(f"fail: {modname} ({e})")
-                return None
-
-        for name in ("src.integrations.gdrive", "gdrive"):
-            fn = _try(name)
-            if fn:
-                return fn, tried
-        return None, tried
-
-    # prepared 소비 API 로드(check/mark)
-    def _load_prepared_api():
-        tried2 = []
-
-        def _try(modname: str):
-            try:
-                m = _imp.import_module(modname)
-                chk_fn = getattr(m, "check_prepared_updates", None)
-                mark_fn = getattr(m, "mark_prepared_consumed", None)
-                if callable(chk_fn) and callable(mark_fn):
-                    tried2.append(f"ok: {modname}")
-                    return chk_fn, mark_fn
-                tried2.append(f"miss attrs: {modname}")
-                return None, None
-            except Exception as e:
-                tried2.append(f"fail: {modname} ({e})")
-                return None, None
-
-        for name in ("prepared", "gdrive"):
-            chk, mark = _try(name)
-            if chk and mark:
-                return chk, mark, tried2
-        for name in ("src.prepared", "src.drive.prepared", "src.integrations.gdrive"):
-            chk, mark = _try(name)
-            if chk and mark:
-                return chk, mark, tried2
-        return None, None, tried2
 
     # --- 실행 UI ---
     c1, c2, c3 = st.columns([1, 1, 2])
@@ -989,7 +927,7 @@ def _render_admin_prepared_scan_panel() -> None:
         return
 
     # --- 스캔 로직 ---
-    idx_persist = _effective_persist_dir()
+    idx_persist = _persist_dir_safe()
 
     lister, dbg1 = _load_prepared_lister()
     files_list: List[Dict[str, Any]] = []
@@ -1056,6 +994,7 @@ def _render_admin_prepared_scan_panel() -> None:
         "sample_new": new_files[:10] if isinstance(new_files, list) else [],
     }
 # =================== [13B] ADMIN: Prepared Scan — END ====================
+
 
 
 # ============= [14] 인덱싱된 소스 목록(읽기 전용 대시보드) ==============
