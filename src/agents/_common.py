@@ -7,7 +7,7 @@ import re
 from queue import Queue, Empty
 from threading import Thread
 
-__all__ = ["_split_sentences", "stream_llm", "_on_piece", "StreamState"]
+__all__ = ["_split_sentences", "stream_llm", "_on_piece", "_runner", "StreamState"]
 
 
 def _split_sentences(text: str) -> list[str]:
@@ -39,6 +39,7 @@ def _build_io_kwargs(
         ]
     else:
         if "prompt" in params:
+            # 일부 제공자는 단일 prompt만 받으므로 system/user 결합
             kwargs["prompt"] = user_input
         elif "user_prompt" in params:
             kwargs["user_prompt"] = user_input
@@ -62,30 +63,11 @@ class StreamState:
 
     def make_callback(self) -> Callable[[Any], None]:
         def cb(t: Any) -> None:
-            try:
-                self.q.put(str(t or ""))
-            except Exception:
-                pass
+            _on_piece(self, str(t or ""), None)
         return cb
 
     def start(self, call: Callable[..., Any], **kwargs: Any) -> None:
-        def _runner() -> None:
-            try:
-                call(**kwargs)
-            except Exception as e:  # pragma: no cover
-                try:
-                    self.q.put(f"(오류) {type(e).__name__}: {e}")
-                except Exception:
-                    pass
-            finally:
-                try:
-                    self.q.put(None)
-                except Exception:
-                    pass
-
-        th = Thread(target=_runner, daemon=True)
-        th.start()
-        self._th = th
+        _runner(call, self, **kwargs)
 
     def iter(self, timeout: float = 0.1) -> Iterator[str]:
         while True:
@@ -100,18 +82,47 @@ class StreamState:
             yield str(item or "")
 
 
-def _on_piece(t: Any, q: Optional["Queue[str]"] = None) -> None:
+def _on_piece(state: StreamState, text: str, emit: Optional[Callable[[str], None]] = None) -> None:
     """
-    테스트가 요구하는 공개 심볼.
-    - 실사용은 StreamState().make_callback()이 담당.
-    - 필요 시 외부에서 큐를 넘겨 호출할 수 있도록 시그니처를 개방.
+    공개 콜백 헬퍼(테스트 기대 시그니처).
+    - emit가 주어지면 먼저 emit(text)
+    - 그 다음 state.q에 text를 push
     """
-    if q is None:
-        return
     try:
-        q.put(str(t or ""))
+        if emit:
+            emit(text)
     except Exception:
         pass
+    try:
+        state.q.put(str(text or ""))
+    except Exception:
+        pass
+
+
+def _runner(call: Callable[..., Any], state: StreamState, **kwargs: Any) -> None:
+    """
+    공급자 호출 러너(테스트 노출용).
+    - 별도 스레드에서 call(**kwargs)를 실행
+    - 예외를 메시지로 큐잉
+    - 종료 시 None 센티넬을 큐잉
+    """
+    def _run() -> None:
+        try:
+            call(**kwargs)
+        except Exception as e:  # pragma: no cover
+            try:
+                state.q.put(f"(오류) {type(e).__name__}: {e}")
+            except Exception:
+                pass
+        finally:
+            try:
+                state.q.put(None)
+            except Exception:
+                pass
+
+    th = Thread(target=_run, daemon=True)
+    th.start()
+    state._th = th
 
 
 def stream_llm(
@@ -183,4 +194,4 @@ def stream_llm(
 
     # 3) provider 부재
     yield "(오류) LLM 어댑터를 찾을 수 없어요."
-# ================================ [01] Agents Common — END ================================
+# ================================ [01] Agents Common — END ===============================
