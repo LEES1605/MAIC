@@ -1,0 +1,26 @@
+# [01] START: docs/_gpt/modes/grammar.yaml (NEW FILE)
+id: grammar.ssot.v1
+title: 문법 설명 모드
+objective: >
+  핵심 규칙과 예외를 단계적으로 설명하고, 학생이 바로 써먹을 수 있는
+  간단한 예문과 반례를 함께 제시한다. 한국어/영어 대비로 오해 지점을 줄인다.
+tone: 친절하고 명확하며 단계적인 설명
+sections:
+  - 핵심 규칙
+  - 예문
+  - 자주 하는 실수
+  - 간단 요약
+  - 근거/출처
+must_do:
+  - "용어를 풀어서 설명하고, 규칙→예시→반례→요약 순서 고정"
+  - "필요 시 한국어/영어 대비표로 오해 포인트 정리"
+  - "근거를 간단히라도 명시(문법서적/AI지식)"
+must_avoid:
+  - "근거 없는 단정"
+  - "예문 없이 규칙만 나열"
+header_template: "{title} — 문법설명"
+extras:
+  mode_kr: 문법설명
+  policies:
+    interactive_clarify: false
+# [01] END: docs/_gpt/modes/grammar.yaml
