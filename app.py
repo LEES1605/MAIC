@@ -1219,14 +1219,18 @@ def _render_mode_controls_pills() -> str:
         return "grammar"
 
     try:
-        from src.core.modes import enabled_modes, find_mode_by_label
-        modes = enabled_modes()  # SSOT
+        from src.core.modes import enabled_modes, find_mode_by_label  # SSOT
+        modes = enabled_modes()
         labels = [m.label for m in modes]
         keys = [m.key for m in modes]
     except Exception:
         # 문제가 생겨도 최소 3모드는 유지
         labels = ["문법", "문장", "지문"]
         keys = ["grammar", "sentence", "passage"]
+        def find_mode_by_label(lbl: str):
+            class _S:  # 간단한 대체 스펙
+                def __init__(self, k): self.key = k
+            return _S(keys[labels.index(lbl)])
 
     # 마지막 선택 복원
     ss = st.session_state
@@ -1246,16 +1250,22 @@ def _render_mode_controls_pills() -> str:
 
     # 라벨→key 매핑
     try:
-        if "src.core.modes" in globals():
-            from src.core.modes import find_mode_by_label
-        spec = find_mode_by_label(sel_label) if callable(find_mode_by_label) else None
+        spec = find_mode_by_label(sel_label)
         cur_key = spec.key if spec else keys[labels.index(sel_label)]
     except Exception:
         cur_key = keys[labels.index(sel_label)]
 
+    # ✅ 안전 정규화: 한국어/영문 alias를 모두 허용
+    try:
+        from modes.types import Mode  # 이넘 정규화(우리 신규 패키지)
+        cur_key = Mode.from_str(cur_key).value
+    except Exception:
+        pass
+
     ss["qa_mode_radio"] = sel_label
     ss["__mode"] = cur_key
     return cur_key
+
 
 # ========================== [16] 채팅 패널 ===============================
 def _render_chat_panel() -> None:
@@ -1279,6 +1289,13 @@ def _render_chat_panel() -> None:
         _decide_label = None
         _search_hits = None
         _make_chip = None
+
+    # 신규: 라벨 가드 유틸(화이트리스트) — [이유문법]/[문법서적]/[AI지식] 외 금지
+    try:
+        from modes.types import sanitize_source_label
+    except Exception:
+        def sanitize_source_label(x):  # 폴백
+            return "[AI지식]"
 
     def _esc(t: str) -> str:
         s = html.escape(t or "").replace("\n", "<br/>")
@@ -1332,6 +1349,9 @@ def _render_chat_panel() -> None:
             src_label = _decide_label(hits, default_if_none="[AI지식]")
         except Exception:
             src_label = "[AI지식]"
+
+    # ✅ 최소 가드: 라벨 화이트리스트 강제
+    src_label = sanitize_source_label(src_label)
 
     chip_text = src_label
     if callable(_make_chip):
