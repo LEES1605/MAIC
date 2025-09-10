@@ -133,6 +133,8 @@ def search_hits(
 
 # ============== [05] labeling helpers — START ==============
 _KO_BOOK_HINTS = ("문법서", "문법서적", "문법책")
+_EN_BOOK_HINTS = ("grammar", "cambridge", "oxford", "longman", "macmillan", "pearson", "ets", "toefl", "ielts")
+_REASON_KEYS = ("이유문법", "깨알문법")
 
 
 def _is_reason_grammar(name: str) -> bool:
@@ -160,7 +162,55 @@ def _is_book_material(path: str, title: str) -> bool:
         return True
     if any(k in file_name for k in _KO_BOOK_HINTS):
         return True
+    # 출판사/시험기관 힌트(보수적으로)
+    if any(k in low_path for k in _EN_BOOK_HINTS) or any(k in low_title for k in _EN_BOOK_HINTS):
+        return True
     return False
+
+
+def _gather_text_fields(hit: Dict[str, Any]) -> str:
+    """path/title/source 및 메타 일부를 모아 휴리스틱에 활용."""
+    buf: List[str] = []
+    for k in ("title", "source", "path", "doc_id", "url", "file", "name"):
+        v = hit.get(k)
+        if isinstance(v, str) and v:
+            buf.append(v)
+    meta = hit.get("meta") or hit.get("metadata") or {}
+    if isinstance(meta, dict):
+        for k in ("title", "source", "path"):
+            v = meta.get(k)
+            if isinstance(v, str) and v:
+                buf.append(v)
+    return " ".join(buf).lower()
+
+
+def classify_hit(hit: Dict[str, Any]) -> str:
+    """
+    단일 히트를 'reason' | 'book' | 'other'로 분류.
+    우선순위:
+      1) 이유문법/깨알문법
+      2) 문법서적(경로·파일·키워드 힌트)
+    """
+    path = str(hit.get("path", "")).strip()
+    title = str(hit.get("title", "")).strip()
+    name = Path(path).name if path else title
+    text = _gather_text_fields(hit)
+
+    # 강한 규칙: 파일명/타이틀 접두
+    if _is_reason_grammar(name):
+        return "reason"
+
+    # prepared 경로 보정: prepared 하위 + 이유문법/깨알문법 단서
+    if "/prepared/" in text and any(k in text for k in _REASON_KEYS):
+        return "reason"
+
+    # 문법서/출판사/시험기관 힌트
+    if _is_book_material(path, title):
+        return "book"
+    if any(k in text for k in _KO_BOOK_HINTS) or any(k in text for k in _EN_BOOK_HINTS):
+        return "book"
+
+    return "other"
 
 
 def canonicalize_label(raw: str) -> str:
@@ -168,8 +218,9 @@ def canonicalize_label(raw: str) -> str:
     s = (raw or "").strip()
     if s in ("[문법서적]", "[문법책]", "[문법서]"):
         return "[문법서적]"
-    return s
+    return s or "[AI지식]"
 # ============== [05] labeling helpers — END ==============
+
 
 
 # ============== [06] decide_label — START ==============
@@ -178,23 +229,32 @@ def decide_label(
     default_if_none: str = "[AI지식]",
 ) -> str:
     """
-    Rules:
-      - name startswith '이유문법*' or '[깨알문법]*' → [이유문법]
-      - .pdf / 'book' folder / 'grammar' hint / KO book keywords → [문법서적]
-      - otherwise → default_if_none
+    우선순위(하드가드):
+      1) [이유문법] — filename/title/meta에 '이유문법'·'깨알문법' 단서 또는 prepared 경로
+      2) [문법서적] — .pdf, /book/ 경로, 'grammar'·출판사/시험기관 힌트
+      3) [AI지식] — 나머지(히트 없음/오류)
     """
     items = list(hits or [])
     if not items:
         return default_if_none
 
-    top = items[0]
-    path = str(top.get("path", "")).strip()
-    title = str(top.get("title", "")).strip()
-    name = Path(path).name if path else title
+    # 1st pass: reason
+    for h in items:
+        if classify_hit(h) == "reason":
+            return "[이유문법]"
 
-    if _is_reason_grammar(name):
-        return "[이유문법]"
-    if _is_book_material(path, title):
-        return "[문법서적]"
+    # 2nd pass: book
+    for h in items:
+        if classify_hit(h) == "book":
+            return "[문법서적]"
+
     return default_if_none
+
+
+def make_source_chip(hits: Iterable[Dict[str, Any]] | None, label: str) -> str:
+    """
+    UI 칩 텍스트: 과도한 길이 방지를 위해 라벨만 반환.
+    (필요 시 대표 문서명 1개를 덧붙일 수 있도록 확장 가능)
+    """
+    return canonicalize_label(label)
 # ============== [06] decide_label — END ==============
