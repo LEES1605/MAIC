@@ -146,9 +146,6 @@ if st:
 
 
 # ======================= [05] 경로/상태 & 에러 로거 — START =======================
-from pathlib import Path
-import traceback
-
 # SSOT 결정값만 사용
 PERSIST_DIR: Path = effective_persist_dir()
 try:
@@ -161,6 +158,7 @@ try:
     share_persist_dir_to_session(PERSIST_DIR)
 except Exception:
     pass
+
 
 def _errlog(msg: str, where: str = "", exc: Exception | None = None) -> None:
     """표준 에러 로깅(민감정보 금지, 실패 무해화)."""
@@ -186,6 +184,7 @@ def _errlog(msg: str, where: str = "", exc: Exception | None = None) -> None:
     except Exception:
         pass
 # ======================= [05] 경로/상태 & 에러 로거 — END =========================
+
 # ========================= [06] ACCESS: Admin Gate ============================
 def _is_admin_view() -> bool:
     """관리자 패널 표시 여부(학생 화면 완전 차단).
@@ -457,11 +456,9 @@ def _auto_start_once() -> None:
         _set_brain_status("READY", "자동 복원 완료", "release", attached=True)
         _safe_rerun("auto_start", ttl=1)
 # =================== [11] 부팅 오토플로우 & 자동 복원 모드 — END ==================
-
-
 # =================== [12] DIAG: Orchestrator Header ======================
 def _render_index_orchestrator_header() -> None:
-    """상단 진단 헤더(미니멀): Persist 경로, 상태칩만 간결 표기."""
+    """상단 진단 헤더(미니멀): Persist 경로, 상태칩, 관리자 퀵액션."""
     if "st" not in globals() or st is None:
         return
 
@@ -485,6 +482,16 @@ def _render_index_orchestrator_header() -> None:
     badge = "🟩 READY" if status_text == "READY" else "🟨 MISSING"
     st.markdown(f"**상태**\n\n{badge}")
 
+    # 관리자 퀵액션: Release에서 최신 인덱스 복원
+    if _is_admin_view():
+        cols = st.columns([1, 3])
+        if cols[0].button("⬇️ Release에서 최신 인덱스 복원", use_container_width=True):
+            try:
+                _boot_auto_restore_index()
+                st.success("Release 복원을 시도했습니다. 상태를 확인하세요.")
+            except Exception as e:
+                st.error(f"복원 실행 실패: {e}")
+
     st.info(
         "강제 인덱싱(HQ, 느림)·백업과 인덱싱 파일 미리보기는 **관리자 인덱싱 패널**에서 합니다. "
         "관리자 모드 진입 후 아래 섹션으로 이동하세요.",
@@ -493,7 +500,6 @@ def _render_index_orchestrator_header() -> None:
 
     st.markdown("<span id='idx-admin-panel'></span>", unsafe_allow_html=True)
 # =================== [12] DIAG: Orchestrator Header — END ======================
-
 
 # =================== [13] ADMIN: Index Panel (prepared 전용) ==============
 def _render_admin_index_panel() -> None:
