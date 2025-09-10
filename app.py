@@ -1263,12 +1263,13 @@ def _render_mode_controls_pills() -> str:
 
 
 
-# ========================== [16] 채팅 패널 ===============================
+# [16] START: 채팅 패널 (FULL REPLACEMENT)
 def _render_chat_panel() -> None:
     """질문(오른쪽) → 피티쌤(스트리밍) → 미나쌤(스트리밍)."""
     import importlib as _imp
     import html
     import re
+    from typing import Optional
     from src.agents.responder import answer_stream
     from src.agents.evaluator import evaluate_stream
     from src.llm.streaming import BufferOptions, make_stream_handler
@@ -1286,11 +1287,11 @@ def _render_chat_panel() -> None:
         _search_hits = None
         _make_chip = None
 
-    # 신규: 라벨 가드 유틸(화이트리스트) — [이유문법]/[문법서적]/[AI지식] 외 금지
+    # ✅ whitelist guard (fallback signature identical to original)
     try:
         from modes.types import sanitize_source_label
     except Exception:
-        def sanitize_source_label(label: Optional[str]) -> str:  # <-- 시그니처 통일
+        def sanitize_source_label(label: Optional[str]) -> str:
             return "[AI지식]"
 
     def _esc(t: str) -> str:
@@ -1346,7 +1347,7 @@ def _render_chat_panel() -> None:
         except Exception:
             src_label = "[AI지식]"
 
-    # ✅ 최소 가드: 라벨 화이트리스트 강제
+    # ✅ whitelist 강제: 3라벨 외 금지
     src_label = sanitize_source_label(src_label)
 
     chip_text = src_label
@@ -1411,7 +1412,7 @@ def _render_chat_panel() -> None:
 
     ss["last_q"] = question
     ss["inpane_q"] = ""
-# ========================== [16] 채팅 패널 ===============================
+# [16] END
 
 
 # ========================== [17] 본문 렌더 ===============================
