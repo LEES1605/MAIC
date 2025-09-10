@@ -1,14 +1,13 @@
 # =============================== [01] Agents Common — START ===============================
 from __future__ import annotations
 
-from typing import Iterator, Mapping, Dict, Any, Optional
+from typing import Iterator, Mapping, Dict, Any, Optional, Callable
 import inspect
 import re
 from queue import Queue, Empty
 from threading import Thread
 
-
-__all__ = ["_split_sentences", "stream_llm"]
+__all__ = ["_split_sentences", "stream_llm", "_on_piece", "StreamState"]
 
 
 def _split_sentences(text: str) -> list[str]:
@@ -39,7 +38,6 @@ def _build_io_kwargs(
             {"role": "user", "content": user_input},
         ]
     else:
-        # 프롬프트/시스템 분리 시그니처 대응
         if "prompt" in params:
             kwargs["prompt"] = user_input
         elif "user_prompt" in params:
@@ -51,6 +49,71 @@ def _build_io_kwargs(
     return kwargs
 
 
+class StreamState:
+    """
+    공급자 콜백 기반 스트리밍을 위한 상태/유틸 집합.
+    - make_callback(): 공급자에 전달할 콜백 생성
+    - start(call, **kwargs): 공급자 호출을 데몬 스레드에서 수행
+    - iter(timeout): 큐에서 토막을 꺼내어 yield
+    """
+    def __init__(self) -> None:
+        self.q: "Queue[Optional[str]]" = Queue()
+        self._th: Optional[Thread] = None
+
+    def make_callback(self) -> Callable[[Any], None]:
+        def cb(t: Any) -> None:
+            try:
+                self.q.put(str(t or ""))
+            except Exception:
+                pass
+        return cb
+
+    def start(self, call: Callable[..., Any], **kwargs: Any) -> None:
+        def _runner() -> None:
+            try:
+                call(**kwargs)
+            except Exception as e:  # pragma: no cover
+                try:
+                    self.q.put(f"(오류) {type(e).__name__}: {e}")
+                except Exception:
+                    pass
+            finally:
+                try:
+                    self.q.put(None)
+                except Exception:
+                    pass
+
+        th = Thread(target=_runner, daemon=True)
+        th.start()
+        self._th = th
+
+    def iter(self, timeout: float = 0.1) -> Iterator[str]:
+        while True:
+            try:
+                item = self.q.get(timeout=timeout)
+            except Empty:
+                if self._th is not None and (not self._th.is_alive()) and self.q.empty():
+                    break
+                continue
+            if item is None:
+                break
+            yield str(item or "")
+
+
+def _on_piece(t: Any, q: Optional["Queue[str]"] = None) -> None:
+    """
+    테스트가 요구하는 공개 심볼.
+    - 실사용은 StreamState().make_callback()이 담당.
+    - 필요 시 외부에서 큐를 넘겨 호출할 수 있도록 시그니처를 개방.
+    """
+    if q is None:
+        return
+    try:
+        q.put(str(t or ""))
+    except Exception:
+        pass
+
+
 def stream_llm(
     *,
     system_prompt: str,
@@ -60,11 +123,11 @@ def stream_llm(
     """
     공통 스트리밍 래퍼:
     1) providers.stream_text(**kwargs) 존재 → 그대로 스트림
-    2) call_with_fallback(stream+callbacks) → 콜백으로 청크 수신
+    2) call_with_fallback(stream+callbacks) → 콜백/스레드로 청크 스트림
     3) 미지원 시 call_with_fallback(non-stream) 결과를 문장 분할/직출력
 
     split_fallback=True  → 폴백 시 문장 단위로 여러 번 방출
-                    False → 폴백 시 한 번에 방출(필요 시 상위에서 후처리)
+                    False → 폴백 시 한 번만 방출
     """
     try:
         from src.llm import providers as prov
@@ -87,45 +150,21 @@ def stream_llm(
         params = inspect.signature(call).parameters
         kwargs = _build_io_kwargs(params, system_prompt=system_prompt, user_input=user_input)
 
-        q: "Queue[Optional[str]]" = Queue()
-
-        # 금지 네이밍(_on_piece/_runner) 피해서 정의
-        def _cb_piece(t: Any) -> None:
-            try:
-                q.put(str(t or ""))
-            except Exception:
-                pass
+        state = StreamState()
+        cb = state.make_callback()
 
         used_cb = False
         for name in ("on_delta", "on_token", "yield_text"):
             if name in params:
-                kwargs[name] = _cb_piece
+                kwargs[name] = cb
                 used_cb = True
         if "stream" in params:
             kwargs["stream"] = True
 
         if used_cb:
-            def _run() -> None:
-                try:
-                    call(**kwargs)
-                except Exception as e:  # pragma: no cover
-                    q.put(f"(오류) {type(e).__name__}: {e}")
-                finally:
-                    q.put(None)
-
-            th = Thread(target=_run, daemon=True)
-            th.start()
-
-            while True:
-                try:
-                    item = q.get(timeout=0.1)
-                except Empty:
-                    if not th.is_alive() and q.empty():
-                        break
-                    continue
-                if item is None:
-                    break
-                yield str(item or "")
+            state.start(call, **kwargs)
+            for piece in state.iter():
+                yield piece
             return
 
         # 콜백 미지원 → non-stream 폴백
