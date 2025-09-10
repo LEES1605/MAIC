@@ -6,12 +6,13 @@ def _read_app() -> str:
     return (root / "app.py").read_text(encoding="utf-8")
 
 
-def test_no_runtime_calls_to_legacy_effective_persist_dir() -> None:
+def test_no_legacy_effective_persist_dir_left() -> None:
     src = _read_app()
-    # 정의는 정확히 1회 존재해야 한다.
-    assert src.count("def _effective_persist_dir(") == 1, (
-        "Legacy helper definition should exist exactly once"
+    # 정의가 없어야 한다.
+    assert "def _effective_persist_dir(" not in src, (
+        "Legacy wrapper `_effective_persist_dir()` must be removed"
     )
-    # 호출은 0회(즉, 전체 카운트 == 1[정의 라인만])
-    total = src.count("_effective_persist_dir(")
-    assert total == 1, "Expected zero runtime calls to _effective_persist_dir()"
+    # 호출도 없어야 한다.
+    assert "_effective_persist_dir(" not in src, (
+        "No runtime calls to `_effective_persist_dir()` should remain"
+    )

@@ -26,16 +26,12 @@ from src.core.index_probe import (
 )
 
 # =========================== [03] CORE: Persist Resolver ==========================
-from pathlib import Path
-from src.core.persist import effective_persist_dir, share_persist_dir_to_session
-
-def _effective_persist_dir() -> Path:
-    """앱 전역 Persist 경로(코어 SSOT 위임). 실패 시 안전 폴백."""
-    try:
-        return effective_persist_dir()
-    except Exception:
-        return Path.home() / ".maic" / "persist"
+# (Wave‑1.3) 이 구획은 제거되었습니다.
+# - 레거시 래퍼 'effective_persist_dir' (app-내 래퍼) 표기는 더 이상 사용하지 않습니다.
+# - UI/관리자 레이어는 '_persist_dir_safe' 공용 헬퍼를 사용하세요.
+# - 부팅/저수준 경로 계산은 'src.core.persist.effective_persist_dir'를 직접 호출하세요.
 # =========================== [03] END =============================================
+
 # ====================== [03B] COMMON: Prepared Helpers ======================
 def _persist_dir_safe() -> Path:
     """SSOT persist 경로. 코어 모듈 우선, 실패 시 기본값."""
