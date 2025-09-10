@@ -131,25 +131,156 @@ def _errlog(msg: str, where: str = "", exc: Exception | None = None) -> None:
 # ======================= [05] 경로/상태 & 에러 로거 — END =========================
 
 
-# ========================= [06] ACCESS: Admin Gate ============================
-def _is_admin_view() -> bool:
-    """관리자 패널 표시 여부(학생 화면 완전 차단).
-    단일 키 'admin_mode'만 사용. (하위호환: is_admin → admin_mode 승격 1회)
-    """
-    if st is None:
-        return False
+# [16] START: 채팅 패널 (FULL REPLACEMENT)
+def _render_chat_panel() -> None:
+    """질문(오른쪽) → 피티쌤(스트리밍) → 미나쌤(스트리밍)."""
+    import importlib as _imp
+    import html
+    import re
+    from src.agents.responder import answer_stream
+    from src.agents.evaluator import evaluate_stream
+    from src.llm.streaming import BufferOptions, make_stream_handler
+
     try:
-        ss = st.session_state
-        # 하위호환: 과거 키를 한 번만 승격하고 제거
-        if ss.get("is_admin") and not ss.get("admin_mode"):
-            ss["admin_mode"] = True
-            try:
-                del ss["is_admin"]
-            except Exception:
-                pass
-        return bool(ss.get("admin_mode"))
+        try:
+            _label_mod = _imp.import_module("src.rag.label")
+        except Exception:
+            _label_mod = _imp.import_module("label")
+        _decide_label = getattr(_label_mod, "decide_label", None)
+        _search_hits = getattr(_label_mod, "search_hits", None)
+        _make_chip = getattr(_label_mod, "make_source_chip", None)
     except Exception:
-        return False
+        _decide_label = None
+        _search_hits = None
+        _make_chip = None
+
+    # ✅ 라벨 화이트리스트 가드(3종만 허용)
+    try:
+        from modes.types import sanitize_source_label
+    except Exception:
+        def sanitize_source_label(x):  # 폴백
+            return "[AI지식]"
+
+    def _esc(t: str) -> str:
+        s = html.escape(t or "").replace("\n", "<br/>")
+        return re.sub(r"  ", "&nbsp;&nbsp;", s)
+
+    def _chip_html(who: str) -> str:
+        klass = {"나": "me", "피티쌤": "pt", "미나쌤": "mn"}.get(who, "pt")
+        return f'<span class="chip {klass}">{html.escape(who)}</span>'
+
+    def _src_html(label: Optional[str]) -> str:
+        if not label:
+            return ""
+        return f'<span class="chip-src">{html.escape(label)}</span>'
+
+    def _emit_bubble(
+        placeholder,
+        who: str,
+        acc_text: str,
+        *,
+        source: Optional[str],
+        align_right: bool,
+    ) -> None:
+        side_cls = "right" if align_right else "left"
+        klass = "user" if align_right else "ai"
+        chips = _chip_html(who) + (_src_html(source) if not align_right else "")
+        html_block = (
+            f'<div class="msg-row {side_cls}">'
+            f'  <div class="bubble {klass}">{chips}<br/>{_esc(acc_text)}</div>'
+            f"</div>"
+        )
+        placeholder.markdown(html_block, unsafe_allow_html=True)
+
+    if st is None:
+        return
+    ss = st.session_state
+    question = str(ss.get("inpane_q", "") or "").strip()
+    if not question:
+        return
+
+    # --- 검색 → 라벨 → 칩 문자열
+    src_label = "[AI지식]"
+    hits = []
+    if callable(_search_hits):
+        try:
+            hits = _search_hits(question, top_k=5)
+        except Exception:
+            hits = []
+
+    if callable(_decide_label):
+        try:
+            src_label = _decide_label(hits, default_if_none="[AI지식]")
+        except Exception:
+            src_label = "[AI지식]"
+
+    # ✅ 최소 가드: 화이트리스트 강제
+    src_label = sanitize_source_label(src_label)
+
+    chip_text = src_label
+    if callable(_make_chip):
+        try:
+            chip_text = _make_chip(hits, src_label)
+        except Exception:
+            chip_text = src_label
+
+    # --- 사용자 버블
+    ph_user = st.empty()
+    _emit_bubble(ph_user, "나", question, source=None, align_right=True)
+
+    # --- 답변 스트리밍
+    ph_ans = st.empty()
+    acc_ans = ""
+
+    def _on_emit_ans(chunk: str) -> None:
+        nonlocal acc_ans
+        acc_ans += str(chunk or "")
+        _emit_bubble(ph_ans, "피티쌤", acc_ans, source=chip_text, align_right=False)
+
+    emit_chunk_ans, close_stream_ans = make_stream_handler(
+        on_emit=_on_emit_ans,
+        opts=BufferOptions(
+            min_emit_chars=8,
+            soft_emit_chars=24,
+            max_latency_ms=150,
+            flush_on_strong_punct=True,
+            flush_on_newline=True,
+        ),
+    )
+    for piece in answer_stream(question=question, mode=ss.get("__mode", "")):
+        emit_chunk_ans(str(piece or ""))
+    close_stream_ans()
+    full_answer = acc_ans.strip() or "(응답이 비어있어요)"
+
+    # --- 평가 스트리밍
+    ph_eval = st.empty()
+    acc_eval = ""
+
+    def _on_emit_eval(chunk: str) -> None:
+        nonlocal acc_eval
+        acc_eval += str(chunk or "")
+        _emit_bubble(ph_eval, "미나쌤", acc_eval, source=chip_text, align_right=False)
+
+    emit_chunk_eval, close_stream_eval = make_stream_handler(
+        on_emit=_on_emit_eval,
+        opts=BufferOptions(
+            min_emit_chars=8,
+            soft_emit_chars=24,
+            max_latency_ms=150,
+            flush_on_strong_punct=True,
+            flush_on_newline=True,
+        ),
+    )
+    for piece in evaluate_stream(
+        question=question, mode=ss.get("__mode", ""), answer=full_answer, ctx={"answer": full_answer}
+    ):
+        emit_chunk_eval(str(piece or ""))
+    close_stream_eval()
+
+    ss["last_q"] = question
+    ss["inpane_q"] = ""
+# [16] END
+
 
 
 # ======================= [07] RERUN GUARD utils ==============================
