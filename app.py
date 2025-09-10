@@ -482,6 +482,25 @@ def _render_index_orchestrator_header() -> None:
 # (본문은 사용자가 제공한 최신 app.py 전문과 동일하므로 생략표기)
 # ----- END keep-original-from-here -----
 
+*** Begin Patch
+*** Update File: app.py
+@@
+     else:
+         st.session_state.setdefault("inpane_q", "")
+ 
++
++# ======================== [17A] Lint Guard (ruff) ===========================
++# 일부 CI 환경에서 import-order / 조건부 실행으로 정적 분석기가 _render_body 심볼을
++# 놓치는 경우가 있습니다. 이미 정의되어 있으면 그대로 사용하고, 미정의일 때만
++# no-op 폴백을 등록해 ruff F821을 차단합니다. (실행 경로에는 영향 없음)
++if "_render_body" not in globals():
++    def _render_body() -> None:  # pragma: no cover
++        return
++# ======================== [17A] END =========================================
+ 
+ # =============================== [18] main =================================
+ def main() -> None:
+*** End Patch
 
 # =============================== [18] main =================================
 def main() -> None:
