@@ -1251,7 +1251,7 @@ def _render_mode_controls_pills() -> str:
             from src.core.modes import find_mode_by_label  # 재임포트 안전
         except Exception:
             find_mode_by_label = None  # type: ignore[assignment]
-        spec = find_mode_by_label(sel_label) if callable(find_mode_by_label) else None  # type: ignore[misc]
+        spec = find_mode_by_label(sel_label) if callable(find_mode_by_label) else None
         cur_key = spec.key if spec else keys[labels.index(sel_label)]
     except Exception:
         cur_key = keys[labels.index(sel_label)]
