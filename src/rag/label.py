@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 import importlib
 import os
 import time
@@ -15,7 +15,9 @@ __all__ = [
     "make_source_chip",
 ]
 
-# -------------------- dataset path resolver --------------------
+# =============================================================================
+# [02] Dataset resolver
+# =============================================================================
 def _resolve_dataset_dir(dataset_dir: Optional[str]) -> Path:
     """
     Priority:
@@ -38,9 +40,11 @@ def _resolve_dataset_dir(dataset_dir: Optional[str]) -> Path:
     return (repo_root / "knowledge").resolve()
 
 
-# -------------------- index TTL cache & handles --------------------
-SearchFn = Tuple[Any, ...].__class__  # just for type hint readability
-GetIdxFn = Tuple[Any, ...].__class__
+# =============================================================================
+# [03] Index TTL cache & search handles
+# =============================================================================
+SearchFn = Callable[..., List[Dict[str, Any]]]
+GetIdxFn = Callable[..., Dict[str, Any]]
 
 _CACHED_INDEX: Optional[Dict[str, Any]] = None
 _CACHED_DIR: Optional[str] = None
@@ -48,12 +52,12 @@ _CACHED_AT: float = 0.0
 _TTL_SECS: int = 30
 
 
-def _get_search_handles() -> Tuple[Any, Optional[Any]]:
+def _get_search_handles() -> Tuple[SearchFn, Optional[GetIdxFn]]:
     """Load search/get_or_build_index with safe fallbacks."""
     try:
         mod = importlib.import_module("src.rag.search")
-        search = getattr(mod, "search")  # required
-        get_idx = getattr(mod, "get_or_build_index", None)
+        search: SearchFn = getattr(mod, "search")  # required
+        get_idx: Optional[GetIdxFn] = getattr(mod, "get_or_build_index", None)
         return search, get_idx
     except Exception:
         def _search_stub(*_a: Any, **_k: Any) -> List[Dict[str, Any]]:
@@ -62,10 +66,14 @@ def _get_search_handles() -> Tuple[Any, Optional[Any]]:
 
 
 def _ensure_index(base_dir: Path) -> Optional[Dict[str, Any]]:
-    """Return cached index; within TTL avoid rebuild."""
+    """
+    Return cached index; within TTL avoid rebuild.
+    If get_or_build_index exists, reuse its cache on disk.
+    """
     global _CACHED_INDEX, _CACHED_DIR, _CACHED_AT
     now = time.time()
     ds = str(base_dir.resolve())
+
     if _CACHED_INDEX is not None and _CACHED_DIR == ds and (now - _CACHED_AT) < _TTL_SECS:
         return _CACHED_INDEX
 
@@ -81,14 +89,16 @@ def _ensure_index(base_dir: Path) -> Optional[Dict[str, Any]]:
     return _CACHED_INDEX
 
 
-# ------------------------------ search_hits ------------------------------
+# =============================================================================
+# [04] search_hits
+# =============================================================================
 def search_hits(
     query: str,
     *,
     dataset_dir: Optional[str] = None,
     top_k: int = 5,
 ) -> List[Dict[str, Any]]:
-    """Return top-k hits as list of dicts: path/title/score/snippet/source."""
+    """Return top-k hits as list of dicts: path/title/score/snippet/source/meta."""
     q = (query or "").strip()
     if not q:
         return []
@@ -119,7 +129,9 @@ def search_hits(
     return out
 
 
-# ------------------------------ labeling helpers ------------------------------
+# =============================================================================
+# [05] Labeling helpers & constants
+# =============================================================================
 _KO_BOOK_HINTS = ("문법서", "문법서적", "문법책")
 _EN_BOOK_HINTS = (
     "grammar",
@@ -136,7 +148,7 @@ _REASON_KEYS = ("이유문법", "깨알문법")
 
 
 def canonicalize_label(raw: str) -> str:
-    """Normalize synonyms to the project’s standard tag."""
+    """Normalize synonyms to the project's standard tag."""
     s = (raw or "").strip()
     if s in ("[문법서적]", "[문법책]", "[문법서]"):
         return "[문법서적]"
@@ -144,6 +156,7 @@ def canonicalize_label(raw: str) -> str:
 
 
 def _gather_text_fields(hit: Dict[str, Any]) -> str:
+    """Concatenate common text fields to help heuristics."""
     buf: List[str] = []
     for k in ("title", "source", "path", "doc_id", "url", "file", "name"):
         v = hit.get(k)
@@ -159,6 +172,7 @@ def _gather_text_fields(hit: Dict[str, Any]) -> str:
 
 
 def _is_reason_grammar(name: str) -> bool:
+    """File/title prefix strongly indicating 'reason grammar' assets."""
     n = (name or "").strip()
     return n.startswith("이유문법") or n.startswith("[깨알문법") or n.lower().startswith(
         ("reason-grammar", "iyu")
@@ -167,7 +181,7 @@ def _is_reason_grammar(name: str) -> bool:
 
 def _is_book_material(path: str, title: str) -> bool:
     """
-    Heuristics:
+    Heuristics for 'book/grammar' materials:
       - .pdf
       - any 'book' segment in path
       - 'grammar' hint in path/title
@@ -193,7 +207,7 @@ def _is_book_material(path: str, title: str) -> bool:
 
 def classify_hit(hit: Dict[str, Any]) -> str:
     """
-    Classify one hit: 'reason' | 'book' | 'other'
+    Classify a single hit: 'reason' | 'book' | 'other'
     Priority:
       1) 이유문법/깨알문법
       2) 문법서적
@@ -203,11 +217,11 @@ def classify_hit(hit: Dict[str, Any]) -> str:
     name = Path(path).name if path else title
     text = _gather_text_fields(hit)
 
-    # strong rule: filename/title prefix
+    # Strong rule: filename/title prefix for reason grammar
     if _is_reason_grammar(name):
         return "reason"
 
-    # prepared path + reason hints (mild boost)
+    # Prepared path + reason hints (mild boost)
     if "/prepared/" in text and any(k in text for k in _REASON_KEYS):
         return "reason"
 
@@ -221,14 +235,32 @@ def classify_hit(hit: Dict[str, Any]) -> str:
     return "other"
 
 
-# ------------------------------ label decision ------------------------------
+# =============================================================================
+# [06] Optional rerank import (safe no-op fallback)
+# =============================================================================
+try:
+    # Prefer modular reranker. If absent, fallback keeps original order.
+    from src.rag.rerank import rerank_hits
+except Exception:  # pragma: no cover
+    def rerank_hits(
+        hits: Iterable[Dict[str, Any]],
+        *,
+        top_k: int = 5,
+        classifier: Optional[Callable[[Dict[str, Any]], str]] = None,
+    ) -> List[Dict[str, Any]]:
+        return list(hits or [])[: max(1, int(top_k))]
+
+
+# =============================================================================
+# [07] decide_label (hard-guarded priority + full-scan + optional rerank)
+# =============================================================================
 def decide_label(
     hits: Iterable[Dict[str, Any]] | None,
     default_if_none: str = "[AI지식]",
 ) -> str:
     """
-    Hard-guarded priority:
-      1) [이유문법] — reason/깨알문법 단서가 1개라도 있으면 최우선
+    Hard-guarded priority (full-scan; rerank if available):
+      1) [이유문법] — reason/깨알문법 단서가 하나라도 있으면 최우선
       2) [문법서적] — pdf/book/grammar/출판사·시험기관 힌트
       3) [AI지식]  — 히트 없음/판단 불가
     """
@@ -236,21 +268,29 @@ def decide_label(
     if not items:
         return default_if_none
 
-    for h in items:
+    # Deduplicate & sort by evidence if reranker exists (no-op otherwise)
+    ranked = rerank_hits(items, top_k=min(len(items), 10), classifier=classify_hit)
+
+    # First pass: reason wins
+    for h in ranked:
         if classify_hit(h) == "reason":
             return "[이유문법]"
 
-    for h in items:
+    # Second pass: then book
+    for h in ranked:
         if classify_hit(h) == "book":
             return "[문법서적]"
 
     return default_if_none
 
 
+# =============================================================================
+# [08] Presentation helper
+# =============================================================================
 def make_source_chip(hits: Iterable[Dict[str, Any]] | None, label: str) -> str:
     """
-    UI chip text: keep concise. For now, return only the label.
-    (Can be extended to append a single representative title.)
+    UI chip text: keep concise → return only the canonicalized label.
+    (Extension: append a representative title if needed.)
     """
     return canonicalize_label(label)
 # [01] END: src/rag/label.py
