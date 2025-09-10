@@ -91,7 +91,13 @@ def _load_prepared_api():
             tried2.append(f"fail: {modname} ({e})")
             return None, None
 
-    for name in ("prepared", "gdrive", "src.prepared", "src.drive.prepared", "src.integrations.gdrive"):
+    for name in (
+        "prepared",
+        "gdrive",
+        "src.prepared",
+        "src.drive.prepared",
+        "src.integrations.gdrive",
+    ):
         chk, mark = _try(name)
         if chk and mark:
             return chk, mark, tried2
@@ -884,179 +890,12 @@ def _render_admin_index_panel() -> None:
             st.text("\n".join(buf))
         else:
             st.caption("표시할 로그가 없습니다.")
-# =================== [13] ADMIN: Index Panel (prepared 전용) ==============
 
 
 # ========== [13A] ADMIN: Panels (legacy aggregator, no-op) ==========
 def _render_admin_panels() -> None:
     """과거 집계 렌더러 호환용(현재는 사용 안함)."""
     return None
-
-
-# =================== [13B] ADMIN: Prepared Scan — START ====================
-def _render_admin_prepared_scan_panel() -> None:
-    """prepared 폴더의 '새 파일 유무'만 확인하는 경량 스캐너.
-    - 인덱싱은 수행하지 않고, check_prepared_updates()만 호출
-    - 결과: 새 파일 개수, 샘플 목록, 디버그 경로
-    """
-    if st is None or not _is_admin_view():
-        return
-
-    st.markdown("<h4>🔍 새 파일 스캔(인덱싱 없이)</h4>", unsafe_allow_html=True)
-
-    # --- 실행 UI ---
-    c1, c2, c3 = st.columns([1, 1, 2])
-    act_scan = c1.button("🔍 스캔 실행", use_container_width=True)
-    act_clear = c2.button("🧹 화면 지우기", use_container_width=True)
-
-    if act_clear:
-        st.session_state.pop("_PR_SCAN_RESULT", None)
-        st.experimental_rerun()
-
-    # 이전 결과 있으면 보여주기
-    prev = st.session_state.get("_PR_SCAN_RESULT")
-    if isinstance(prev, dict) and not act_scan:
-        st.caption("이전에 실행한 스캔 결과:")
-        st.json(prev)
-
-    if not act_scan:
-        return
-
-    # --- 스캔 로직 ---
-    idx_persist = _persist_dir_safe()
-
-    lister, dbg1 = _load_prepared_lister()
-    files_list: List[Dict[str, Any]] = []
-    if lister:
-        try:
-            files_list = lister() or []
-        except Exception as e:
-            st.error(f"prepared 목록 조회 실패: {e}")
-    else:
-        with st.expander("디버그(파일 나열 함수 로드 경로)"):
-            st.write("\n".join(dbg1) or "(정보 없음)")
-
-    chk, _mark, dbg2 = _load_prepared_api()
-    info: Dict[str, Any] = {}
-    new_files: List[str] = []
-    if callable(chk):
-        try:
-            # 새로운 인터페이스(파일목록 전달) 시도
-            info = chk(idx_persist, files_list) or {}
-        except TypeError:
-            # 구버전(경로만 전달)
-            info = chk(idx_persist) or {}
-        except Exception as e:
-            st.error(f"스캔 실행 실패: {e}")
-            info = {}
-        try:
-            # 표준 키: 'files' (없으면 fallback)
-            new_files = list(info.get("files") or info.get("new") or [])
-        except Exception:
-            new_files = []
-    else:
-        with st.expander("디버그(소비 API 로드 경로)"):
-            st.write("\n".join(dbg2) or "(정보 없음)")
-
-    # --- 결과 표시 ---
-    total_prepared = len(files_list)
-    total_new = len(new_files)
-    st.success(f"스캔 완료 · prepared 총 {total_prepared}건 · **새 파일 {total_new}건**")
-
-    if total_new:
-        with st.expander("새 파일 미리보기(최대 50개)"):
-            rows = []
-            for rec in (new_files[:50] if isinstance(new_files, list) else []):
-                # 항목이 문자열(경로/이름)일 수도 있고 dict일 수도 있으므로 방어적 처리
-                if isinstance(rec, str):
-                    rows.append({"name": rec})
-                elif isinstance(rec, dict):
-                    nm = str(rec.get("name") or rec.get("path") or rec.get("file") or "")
-                    fid = str(rec.get("id") or rec.get("fileId") or "")
-                    rows.append({"name": nm, "id": fid})
-            if rows:
-                st.dataframe(rows, hide_index=True, use_container_width=True)
-            else:
-                st.write("(표시할 항목이 없습니다.)")
-    else:
-        st.info("새 파일이 없습니다. 재인덱싱을 수행할 필요가 없습니다.")
-
-    # 세션에 저장(새로고침해도 유지)
-    st.session_state["_PR_SCAN_RESULT"] = {
-        "persist": str(idx_persist),
-        "prepared_total": total_prepared,
-        "new_total": total_new,
-        "timestamp": int(time.time()),
-        "sample_new": new_files[:10] if isinstance(new_files, list) else [],
-    }
-# =================== [13B] ADMIN: Prepared Scan — END ====================
-
-
-# ============= [14] 인덱싱된 소스 목록(읽기 전용 대시보드) ==============
-def _render_admin_indexed_sources_panel() -> None:
-    """현재 인덱스(chunks.jsonl)를 읽어 문서 단위로 집계/표시."""
-    if st is None or not _is_admin_view():
-        return
-
-    chunks_path = _effective_persist_dir() / "chunks.jsonl"
-    with st.container(border=True):
-        st.subheader("📄 인덱싱된 파일 목록 (읽기 전용)")
-        st.caption(f"경로: `{str(chunks_path)}`")
-
-        if not chunks_path.exists():
-            st.info("아직 인덱스가 없습니다. 먼저 인덱싱을 수행해 주세요.")
-            return
-
-        docs: Dict[str, Dict[str, Any]] = {}
-        total_lines: int = 0
-        parse_errors: int = 0
-
-        try:
-            with chunks_path.open("r", encoding="utf-8") as rf:
-                for line in rf:
-                    s = line.strip()
-                    if not s:
-                        continue
-                    total_lines += 1
-                    try:
-                        obj = json.loads(s)
-                    except Exception:
-                        parse_errors += 1
-                        continue
-                    doc_id = str(obj.get("doc_id") or obj.get("source") or "")
-                    title = str(obj.get("title") or "")
-                    source = str(obj.get("source") or "")
-                    if not doc_id:
-                        continue
-                    row = docs.setdefault(
-                        doc_id,
-                        {"doc_id": doc_id, "title": title, "source": source, "chunks": 0},
-                    )
-                    row["chunks"] += 1
-        except Exception as e:
-            _errlog(
-                f"read chunks.jsonl failed: {e}",
-                where="[indexed-sources.read]",
-                exc=e,
-            )
-            st.error("인덱스 파일을 읽는 중 오류가 발생했어요.")
-            return
-
-        table: List[Dict[str, Any]] = list(docs.values())
-        st.caption(
-            f"총 청크 수: **{total_lines}** · 문서 수: **{len(table)}** "
-            f"(파싱오류 {parse_errors}건)"
-        )
-        rows2 = [
-            {
-                "title": r["title"],
-                "path": r["source"],
-                "doc_id": r["doc_id"],
-                "chunks": r["chunks"],
-            }
-            for r in table
-        ]
-        st.dataframe(rows2, hide_index=True, use_container_width=True)
 
 
 # ===================== [15] 채팅 UI(스타일/모드) ==========================
@@ -1102,6 +941,12 @@ def _inject_chat_styles_once() -> None:
         position:absolute; right:14px; top:50%; transform:translateY(-50%);
         z-index:2; margin:0!important; padding:0!important;
       }
+      form[data-testid="stForm"]:has(input[placeholder='질문을 입력하세요…']) .stButton > button,
+      form[data-testid="stForm"]:has(input[placeholder='질문을 입력하세요…']) .row-widget.stButton > button{
+        width:38px; height:38px; border-radius:50%; border:0; background:#0a2540; color:#fff;
+        font-size:18px; line-height:1; cursor:pointer; box-shadow:0 2px 6px rgba(0,0,0,.15);
+        padding:0; min-height:0;
+      }
 
       .msg-row{ display:flex; margin:8px 0; }
       .msg-row.left{ justify-content:flex-start; }
@@ -1120,7 +965,6 @@ def _inject_chat_styles_once() -> None:
       .chip.me{ background:#059669; }   /* 나 */
       .chip.pt{ background:#2563eb; }   /* 피티쌤 */
       .chip.mn{ background:#7c3aed; }   /* 미나쌤 */
-
       .chip-src{
         display:inline-block; margin-left:6px; padding:2px 8px; border-radius:10px;
         background:#eef2ff; color:#3730a3; font-size:12px; font-weight:600; line-height:1;
@@ -1235,14 +1079,7 @@ def _render_chat_panel() -> None:
             return ""
         return f'<span class="chip-src">{html.escape(label)}</span>'
 
-    def _emit_bubble(
-        placeholder,
-        who: str,
-        acc_text: str,
-        *,
-        source: Optional[str],
-        align_right: bool,
-    ) -> None:
+    def _emit_bubble(placeholder, who: str, acc_text: str, *, source: Optional[str], align_right: bool) -> None:
         side_cls = "right" if align_right else "left"
         klass = "user" if align_right else "ai"
         chips = _chip_html(who) + (_src_html(source) if not align_right else "")
@@ -1340,7 +1177,6 @@ def _render_chat_panel() -> None:
 
     ss["last_q"] = question
     ss["inpane_q"] = ""
-# [16] END
 
 
 # ========================== [17] 본문 렌더 ===============================
