@@ -1003,7 +1003,9 @@ def _render_admin_indexed_sources_panel() -> None:
     if st is None or not _is_admin_view():
         return
 
-    chunks_path = _effective_persist_dir() / "chunks.jsonl"
+    # ✅ 표준화: persist 경로는 공통 헬퍼로 일원화
+    chunks_path = _persist_dir_safe() / "chunks.jsonl"
+
     with st.container(border=True):
         st.subheader("📄 인덱싱된 파일 목록 (읽기 전용)")
         st.caption(f"경로: `{str(chunks_path)}`")
@@ -1062,7 +1064,7 @@ def _render_admin_indexed_sources_panel() -> None:
             for r in table
         ]
         st.dataframe(rows2, hide_index=True, use_container_width=True)
-
+# ============= [14] 인덱싱된 소스 목록(읽기 전용 대시보드) ==============
 
 # ===================== [15] 채팅 UI(스타일/모드) ==========================
 def _inject_chat_styles_once() -> None:
