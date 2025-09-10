@@ -133,7 +133,17 @@ def search_hits(
 
 # ============== [05] labeling helpers — START ==============
 _KO_BOOK_HINTS = ("문법서", "문법서적", "문법책")
-_EN_BOOK_HINTS = ("grammar", "cambridge", "oxford", "longman", "macmillan", "pearson", "ets", "toefl", "ielts")
+_EN_BOOK_HINTS = (
+ "grammar",
+ "cambridge",
+ "oxford",
+ "longman",
+ "macmillan",
+ "pearson",
+ "ets",
+ "toefl",
+ "ielts"
+)
 _REASON_KEYS = ("이유문법", "깨알문법")
 
 
