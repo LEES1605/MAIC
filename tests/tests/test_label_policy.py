@@ -1,6 +1,6 @@
 # [01] START: tests/test_label_policy.py (NEW FILE)
 from typing import Dict
-from rag.label import decide_label, classify_hit  # src.rag.label is on sys.path via conftest
+from src.rag.label import decide_label, classify_hit
 
 
 def test_decide_label_priority() -> None:
