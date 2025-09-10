@@ -1,23 +1,28 @@
-# ========================= [backup/github_release.py] =========================
+# src/backup/github_release.py
+# =============================================================================
+# GitHub Release에서 최신 index_*.zip 받아 복원하는 유틸 (ruff/mypy 친화)
+# - 공개 API: restore_latest(dest_dir: Path | str) -> bool
+# - 사용처: app.py의 AUTO_START_MODE 경로 (우선 시도 대상)
+# =============================================================================
 from __future__ import annotations
 
-from typing import Any, Dict, Optional, Tuple, Union
 from pathlib import Path
-from urllib import request as _rq, error as _er, parse as _ps
+from typing import Any, Dict, Optional, Tuple
 import json
-import zipfile
-import tempfile
-import shutil
 import os
+import zipfile
+from urllib import request as rq, error as er, parse as ps
 
 
 __all__ = ["restore_latest"]
 
 
+# ------------------------------ secrets/owner/repo ----------------------------
 def _secret(name: str, default: str = "") -> str:
-    """st.secrets → env 순으로 조회."""
+    """st.secrets → env 순으로 조회(의존성 최소화)."""
     try:
-        import streamlit as st  # lazy
+        # streamlit 미설치 환경 고려
+        import streamlit as st  # type: ignore
         v = st.secrets.get(name)  # type: ignore[attr-defined]
         if isinstance(v, str) and v:
             return v
@@ -27,16 +32,12 @@ def _secret(name: str, default: str = "") -> str:
 
 
 def _resolve_owner_repo() -> Tuple[str, str]:
-    """
-    owner/repo 해석(우선순위):
-      1) src.core.secret.resolve_owner_repo()
-      2) secrets/env(GH_OWNER/GITHUB_OWNER + GH_REPO/GITHUB_REPO_NAME/GITHUB_REPO)
-    """
+    """src.core.secret 있으면 우선 사용, 없으면 env에서 추론."""
     try:
-        from src.core.secret import resolve_owner_repo as _rr  # type: ignore
-        ow, rp = _rr()
-        if ow and rp:
-            return ow, rp
+        from src.core.secret import resolve_owner_repo as _res  # type: ignore
+        owner, repo = _res()
+        if owner and repo:
+            return owner, repo
     except Exception:
         pass
 
@@ -46,122 +47,135 @@ def _resolve_owner_repo() -> Tuple[str, str]:
     if combo and "/" in combo:
         o, r = combo.split("/", 1)
         owner, repo = o.strip(), r.strip()
-
     return owner or "", repo or ""
 
 
-def _gh_api(url: str, token: str) -> Dict[str, Any]:
-    """GitHub API GET with token. 에러 시 {'_error': ...} 반환."""
-    req = _rq.Request(url, method="GET")
-    req.add_header("Accept", "application/vnd.github+json")
+def _resolve_token() -> str:
+    """src.core.secret.token() 우선, 없으면 env/secrets."""
+    try:
+        from src.core.secret import token as _tok  # type: ignore
+        t = _tok()
+        if t:
+            return t
+    except Exception:
+        pass
+    return _secret("GH_TOKEN") or _secret("GITHUB_TOKEN")
+
+
+# --------------------------------- HTTP helper --------------------------------
+def _gh_api(
+    url: str,
+    token: str,
+    *,
+    data: Optional[bytes] = None,
+    method: str = "GET",
+    ctype: str = "",
+    timeout: int = 30,
+) -> Dict[str, Any]:
+    """GitHub REST API 호출(간단 래퍼). 실패 시 {_error: ...} 반환."""
+    req = rq.Request(url, data=data, method=method)
     if token:
         req.add_header("Authorization", f"token {token}")
+    req.add_header("Accept", "application/vnd.github+json")
+    if ctype:
+        req.add_header("Content-Type", ctype)
+
     try:
-        with _rq.urlopen(req, timeout=30) as resp:
-            txt = resp.read().decode("utf-8", "ignore")
+        with rq.urlopen(req, timeout=timeout) as resp:
+            text = resp.read().decode("utf-8", "ignore")
             try:
-                return json.loads(txt)
+                return json.loads(text)
             except Exception:
-                return {"_raw": txt}
-    except _er.HTTPError as e:
-        return {"_error": f"HTTP {e.code}", "detail": e.read().decode()}
+                return {"_raw": text}
+    except er.HTTPError as e:
+        detail = ""
+        try:
+            detail = e.read().decode()
+        except Exception:
+            pass
+        return {"_error": f"HTTP {e.code}", "detail": detail}
     except Exception as e:
         return {"_error": f"net_error: {type(e).__name__}"}
 
 
+# ----------------------------- asset picking helper ---------------------------
 def _pick_index_asset(
     release: Dict[str, Any],
-    prefix: str,
-    suffix: str,
+    *,
+    prefix: str = "index_",
+    suffix: str = ".zip",
 ) -> Optional[Dict[str, Any]]:
     """
     릴리스의 assets에서 index_*zip를 선택.
-    - prefix: "index_"
-    - suffix: ".zip"
+    첫 매칭 1건을 반환(여러 개면 가장 먼저 나온 항목).
     """
-    for a in (release.get("assets") or []):
+    assets = release.get("assets") or []
+    for a in assets:
         name = str(a.get("name") or "")
         if name.startswith(prefix) and name.endswith(suffix):
             return a
     return None
 
 
-def _download(url: str, dest: Path, token: str = "") -> bool:
-    """URL을 dest로 다운로드. 성공 시 True."""
-    req = _rq.Request(url, method="GET")
-    req.add_header("Accept", "application/octet-stream")
-    if token:
-        req.add_header("Authorization", f"token {token}")
-    try:
-        with _rq.urlopen(req, timeout=180) as resp, open(dest, "wb") as wf:
-            shutil.copyfileobj(resp, wf)
-        return True
-    except Exception:
+# --------------------------- download & extract zip ---------------------------
+def _download_and_extract(url: str, dest_dir: Path) -> bool:
+    """브라우저 다운로드 URL의 zip을 받아 dest_dir에 해제."""
+    if not url:
         return False
 
-
-def _extract_zip(zip_path: Path, dest_dir: Path) -> bool:
-    """zip_path를 dest_dir로 풀기. 성공 시 True."""
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    tmp = dest_dir / "__release_restore__.zip"
     try:
-        with zipfile.ZipFile(zip_path, "r") as zf:
+        rq.urlretrieve(url, tmp)
+        with zipfile.ZipFile(tmp, "r") as zf:
             zf.extractall(dest_dir)
         return True
     except Exception:
         return False
-
-
-def restore_latest(dest_dir: Union[str, Path]) -> bool:
-    """
-    최신 릴리스에서 'index_*.zip'을 찾아 dest_dir에 복원.
-    성공 시 True, 아니면 False.
-    """
-    token = (
-        _secret("GH_TOKEN")
-        or _secret("GITHUB_TOKEN")
-        or ""
-    )
-    owner, repo = _resolve_owner_repo()
-    if not (token and owner and repo):
-        # 토큰/owner/repo 중 누락 → 복원 불가
-        return False
-
-    api = f"https://api.github.com/repos/{_ps.quote(owner)}/{_ps.quote(repo)}/releases/latest"
-    data = _gh_api(api, token)
-    if "_error" in data:
-        return False
-
-    asset = _pick_index_asset(data, prefix="index_", suffix=".zip")
-    if not asset:
-        return False
-
-    url = str(asset.get("browser_download_url") or "")
-    if not url:
-        return False
-
-    dest = Path(dest_dir).expanduser().resolve()
-    try:
-        dest.mkdir(parents=True, exist_ok=True)
-    except Exception:
-        return False
-
-    # 임시 파일로 받은 뒤 추출
-    with tempfile.TemporaryDirectory(prefix="maic_dl_") as td:
-        tmp_zip = Path(td) / "index.zip"
-        if not _download(url, tmp_zip, token):
-            return False
-        if not _extract_zip(tmp_zip, dest):
-            return False
-
-    # 코어 레디마킹 시도(있으면 사용)
-    try:
-        from src.core.index_probe import mark_ready as _mark_ready  # type: ignore
-        _mark_ready(dest)
-    except Exception:
-        # 폴백: .ready 생성
+    finally:
         try:
-            (dest / ".ready").write_text("ok", encoding="utf-8")
+            if tmp.exists():
+                tmp.unlink()
         except Exception:
             pass
 
+
+# ---------------------------------- public API --------------------------------
+def restore_latest(dest_dir: Path | str) -> bool:
+    """
+    최신 Release의 index_*.zip을 다운로드해 dest_dir에 복원.
+    성공 시 True, 실패 시 False.
+    """
+    token = _resolve_token()
+    owner, repo = _resolve_owner_repo()
+    if not (owner and repo and token):
+        return False
+
+    api = f"https://api.github.com/repos/{owner}/{repo}/releases/latest"
+    rel = _gh_api(api, token)
+    if "_error" in rel:
+        return False
+
+    asset = _pick_index_asset(rel)
+    if not asset:
+        return False
+
+    dl = asset.get("browser_download_url")
+    if not isinstance(dl, str) or not dl:
+        return False
+
+    p = Path(dest_dir).expanduser()
+    ok = _download_and_extract(dl, p)
+    if not ok:
+        return False
+
+    # 인덱스 준비 완료 마킹
+    try:
+        from src.core.index_probe import mark_ready as _mark  # type: ignore
+        _mark(p)
+    except Exception:
+        try:
+            (p / ".ready").write_text("ok", encoding="utf-8")
+        except Exception:
+            pass
     return True
-# ======================= [backup/github_release.py] END =======================
