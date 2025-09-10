@@ -240,7 +240,7 @@ def classify_hit(hit: Dict[str, Any]) -> str:
 # =============================================================================
 try:
     # Prefer modular reranker. If absent, fallback keeps original order.
-    from src.rag.rerank import rerank_hits  # type: ignore
+    from src.rag.rerank import rerank_hits
 except Exception:  # pragma: no cover
     def rerank_hits(
         hits: Iterable[Dict[str, Any]],
