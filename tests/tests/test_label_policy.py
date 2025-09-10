@@ -14,7 +14,10 @@ def test_decide_label_priority() -> None:
         "source": "/books/grammar/Oxford.pdf",
         "path": "/books/grammar/Oxford.pdf",
     }
-    hit_other: Dict[str, str] = {"title": "블로그 글", "source": "/web/blog.html", "path": "/web/blog.html"}
+    hit_other: Dict[str, str] = {
+        "title": "블로그 글", 
+        "source": "/web/blog.html", 
+        "path": "/web/blog.html"}
 
     # 이유문법이 하나라도 있으면 최우선
     assert decide_label([hit_book, hit_reason, hit_other]) == "[이유문법]"
