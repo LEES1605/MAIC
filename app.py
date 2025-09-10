@@ -129,8 +129,6 @@ def _errlog(msg: str, where: str = "", exc: Exception | None = None) -> None:
     except Exception:
         pass
 # ======================= [05] 경로/상태 & 에러 로거 — END =========================
-
-
 # ========================= [06] ACCESS: Admin Gate ============================
 def _is_admin_view() -> bool:
     """관리자 패널 표시 여부(학생 화면 완전 차단).
@@ -150,6 +148,9 @@ def _is_admin_view() -> bool:
         return bool(ss.get("admin_mode"))
     except Exception:
         return False
+
+
+
 
 
 # ======================= [07] RERUN GUARD utils ==============================
@@ -1207,7 +1208,7 @@ def _inject_chat_styles_once() -> None:
         unsafe_allow_html=True,
     )
 
-# [15B] 모드 라디오 — SSOT 연결 (전체 교체)
+# [15B] START: _render_mode_controls_pills (FULL REPLACEMENT)
 def _render_mode_controls_pills() -> str:
     """
     질문 모드 선택(문법·문장·지문[·이야기]).
@@ -1219,12 +1220,12 @@ def _render_mode_controls_pills() -> str:
         return "grammar"
 
     try:
-        from src.core.modes import enabled_modes, find_mode_by_label
-        modes = enabled_modes()  # SSOT
+        from src.core.modes import enabled_modes, find_mode_by_label  # SSOT
+        modes = enabled_modes()
         labels = [m.label for m in modes]
         keys = [m.key for m in modes]
     except Exception:
-        # 문제가 생겨도 최소 3모드는 유지
+        # 문제가 생겨도 최소 3모드는 유지(폴백 함수 정의는 금지)
         labels = ["문법", "문장", "지문"]
         keys = ["grammar", "sentence", "passage"]
 
@@ -1244,10 +1245,12 @@ def _render_mode_controls_pills() -> str:
         label_visibility="collapsed",
     )
 
-    # 라벨→key 매핑
+    # 라벨→key 매핑(임포트 가능하면 사용, 아니면 키 매핑)
     try:
-        if "src.core.modes" in globals():
-            from src.core.modes import find_mode_by_label
+        try:
+            from src.core.modes import find_mode_by_label  # 재임포트 안전
+        except Exception:
+            find_mode_by_label = None  # type: ignore[assignment]
         spec = find_mode_by_label(sel_label) if callable(find_mode_by_label) else None
         cur_key = spec.key if spec else keys[labels.index(sel_label)]
     except Exception:
@@ -1256,6 +1259,9 @@ def _render_mode_controls_pills() -> str:
     ss["qa_mode_radio"] = sel_label
     ss["__mode"] = cur_key
     return cur_key
+# [15B] END
+
+
 
 # ========================== [16] 채팅 패널 ===============================
 def _render_chat_panel() -> None:
@@ -1279,6 +1285,13 @@ def _render_chat_panel() -> None:
         _decide_label = None
         _search_hits = None
         _make_chip = None
+
+    # 신규: 라벨 가드 유틸(화이트리스트) — [이유문법]/[문법서적]/[AI지식] 외 금지
+    try:
+        from modes.types import sanitize_source_label
+    except Exception:
+        def sanitize_source_label(label: Optional[str]) -> str:  # <-- 시그니처 통일
+            return "[AI지식]"
 
     def _esc(t: str) -> str:
         s = html.escape(t or "").replace("\n", "<br/>")
@@ -1332,6 +1345,9 @@ def _render_chat_panel() -> None:
             src_label = _decide_label(hits, default_if_none="[AI지식]")
         except Exception:
             src_label = "[AI지식]"
+
+    # ✅ 최소 가드: 라벨 화이트리스트 강제
+    src_label = sanitize_source_label(src_label)
 
     chip_text = src_label
     if callable(_make_chip):

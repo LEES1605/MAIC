@@ -14,7 +14,8 @@ _BUILTIN: Dict[Mode, ModeProfile] = {
         objective="핵심 규칙과 예외를 단계적으로 설명",
         must_do=("용어는 풀어서 설명", "규칙→예시→반례→요약 순서"),
         must_avoid=("근거 없는 단정",),
-        sections=("핵심 규칙", "예문", "자주 하는 실수", "간단 요약"),
+        # ✅ 테스트 기대치 반영: '근거/출처' 섹션 포함
+        sections=("핵심 규칙", "예문", "자주 하는 실수", "간단 요약", "근거/출처"),
         extras={"mode_kr": "문법설명"},
     ),
     Mode.SENTENCE: ModeProfile(

@@ -1,0 +1,25 @@
+# [01] START: docs/_gpt/modes/passage.yaml (NEW FILE)
+id: passage.ssot.v1
+title: 지문 설명 모드
+objective: >
+  지문의 주제·논지를 짚고, 문단 관계를 명확히 하며,
+  핵심 문장과 어휘·표현을 근거와 함께 간결히 정리한다.
+tone: 친절하고 명확하며 단계적인 설명
+sections:
+  - 요지/주제
+  - 문단별 핵심
+  - 어휘·표현
+  - 한줄 요약
+  - 근거/출처
+must_do:
+  - "문단별 요지 도출"
+  - "핵심 문장 인용 후 의미 설명"
+  - "어휘·표현 주석을 간결히 제공"
+must_avoid:
+  - "근거 없는 추정/과도한 해석 주입"
+header_template: "{title} — 지문설명"
+extras:
+  mode_kr: 지문설명
+  policies:
+    interactive_clarify: false
+# [01] END: docs/_gpt/modes/passage.yaml
