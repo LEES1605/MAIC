@@ -1208,7 +1208,7 @@ def _inject_chat_styles_once() -> None:
         unsafe_allow_html=True,
     )
 
-# [15B] 모드 라디오 — SSOT 연결 (전체 교체)
+# [15B] START: _render_mode_controls_pills (FULL REPLACEMENT)
 def _render_mode_controls_pills() -> str:
     """
     질문 모드 선택(문법·문장·지문[·이야기]).
@@ -1225,13 +1225,9 @@ def _render_mode_controls_pills() -> str:
         labels = [m.label for m in modes]
         keys = [m.key for m in modes]
     except Exception:
-        # 문제가 생겨도 최소 3모드는 유지
+        # 문제가 생겨도 최소 3모드는 유지(폴백 함수 정의는 금지)
         labels = ["문법", "문장", "지문"]
         keys = ["grammar", "sentence", "passage"]
-        def find_mode_by_label(lbl: str):
-            class _S:  # 간단한 대체 스펙
-                def __init__(self, k): self.key = k
-            return _S(keys[labels.index(lbl)])
 
     # 마지막 선택 복원
     ss = st.session_state
@@ -1249,23 +1245,22 @@ def _render_mode_controls_pills() -> str:
         label_visibility="collapsed",
     )
 
-    # 라벨→key 매핑
+    # 라벨→key 매핑(임포트 가능하면 사용, 아니면 키 매핑)
     try:
-        spec = find_mode_by_label(sel_label)
+        try:
+            from src.core.modes import find_mode_by_label  # 재임포트 안전
+        except Exception:
+            find_mode_by_label = None  # type: ignore[assignment]
+        spec = find_mode_by_label(sel_label) if callable(find_mode_by_label) else None  # type: ignore[misc]
         cur_key = spec.key if spec else keys[labels.index(sel_label)]
     except Exception:
         cur_key = keys[labels.index(sel_label)]
 
-    # ✅ 안전 정규화: 한국어/영문 alias를 모두 허용
-    try:
-        from modes.types import Mode  # 이넘 정규화(우리 신규 패키지)
-        cur_key = Mode.from_str(cur_key).value
-    except Exception:
-        pass
-
     ss["qa_mode_radio"] = sel_label
     ss["__mode"] = cur_key
     return cur_key
+# [15B] END
+
 
 
 # ========================== [16] 채팅 패널 ===============================
@@ -1295,7 +1290,7 @@ def _render_chat_panel() -> None:
     try:
         from modes.types import sanitize_source_label
     except Exception:
-        def sanitize_source_label(x):  # 폴백
+        def sanitize_source_label(label: Optional[str]) -> str:  # <-- 시그니처 통일
             return "[AI지식]"
 
     def _esc(t: str) -> str:
