@@ -14,6 +14,7 @@ from threading import Thread
 from typing import Any, Callable, Iterable, Iterator, List, Mapping, Optional
 
 
+
 __all__ = [
     "_split_sentences",
     "_on_piece",
@@ -59,13 +60,12 @@ def _on_piece(
     """
     조각(piece)을 누적하고 emitter로 전달.
     - piece가 None/공백이면 무시
-    - emit 예외는 상위에서 처리(여기서는 전파)
     """
     if not piece:
         return
-    s = str(piece)
-    state.buffer += s
-    emit(s)
+    state.buffer += str(piece)
+    emit(str(piece))
+
 
 
 def _runner(chunks: Iterable[str], on_piece: Callable[[str], None]) -> None:
@@ -76,7 +76,6 @@ def _runner(chunks: Iterable[str], on_piece: Callable[[str], None]) -> None:
     """
     for c in chunks:
         on_piece(str(c))
-
 
 # ---------------------------- provider adapter ------------------------------
 def _build_io_kwargs(
@@ -90,6 +89,7 @@ def _build_io_kwargs(
     안전하게 kwargs를 생성한다.
     """
     kwargs: dict = {}
+
     if "messages" in params:
         kwargs["messages"] = [
             {"role": "system", "content": system_prompt},
@@ -150,7 +150,6 @@ def stream_llm(
         except Exception as e:  # pragma: no cover
             yield f"(오류) {type(e).__name__}: {e}"
             return
-
     # 3) call_with_fallback 시도(콜백 기반 스트리밍)
     call = getattr(prov, "call_with_fallback", None)
     if callable(call):
@@ -160,7 +159,6 @@ def stream_llm(
             system_prompt=system_prompt,
             user_text=user_input,
         )
-
         q: "Queue[Optional[str]]" = Queue()
 
         def _enqueue(t: Any) -> None:
@@ -208,7 +206,6 @@ def stream_llm(
         except Exception as e:  # pragma: no cover
             yield f"(오류) {type(e).__name__}: {e}"
             return
-
         text = res.get("text") if isinstance(res, dict) else str(res)
         if not text:
             return
