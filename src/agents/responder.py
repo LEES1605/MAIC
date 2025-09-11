@@ -1,9 +1,11 @@
 # src/agents/responder.py
-# ================================ Answer Stream ================================
+# ================================= [Answer Agent] ==============================
 from __future__ import annotations
 
-from typing import Iterator, Optional, Dict
-from src.agents._common import stream_llm
+from typing import Dict, Iterator, Optional
+
+from src.agents._common import stream_llm  # 표준 파사드만 사용
+
 
 def _system_prompt(mode: str) -> str:
     hint = {
@@ -16,17 +18,17 @@ def _system_prompt(mode: str) -> str:
         "짧은 문장과 단계적 설명을 사용하세요. " + hint
     )
 
+
 def answer_stream(
-    *, question: str, mode: str, ctx: Optional[Dict[str, str]] = None
+    *,
+    question: str,
+    mode: str,
+    ctx: Optional[Dict[str, any]] = None,
 ) -> Iterator[str]:
     """
     주답변(피티쌤) 스트리밍 제너레이터.
-    - 공통 SSOT(stream_llm)만 호출하여 중복 제거
-    - split_fallback=True: 콜백 미지원 provider에서 문장단위로 의사 스트리밍
+    - 공용 파사드(stream_llm)만 호출 → mypy/테스트 일관성
     """
     sys_p = _system_prompt(mode)
-    yield from stream_llm(
-        system_prompt=sys_p,
-        user_prompt=question,
-        split_fallback=True,
-    )
+    # 최종 방출 단위를 읽기 좋게 하려면 split_fallback=True 유지
+    yield from stream_llm(system_prompt=sys_p, user_prompt=question, split_fallback=True)
