@@ -1,33 +1,38 @@
 # src/agents/_common.py
 # -----------------------------------------------------------------------------
-# Agents common helpers: sentence split + streaming building blocks
-# - 테스트 호환 보장: _split_sentences, _on_piece, _runner, StreamState
-# - 향후 통합 대비: stream_llm (provider 브릿지)
+# Wave‑2.x: Agents common helpers (unify streaming + remove duplication)
+# - 목적: responder.py / evaluator.py가 공통으로 사용하는 스트리밍 헬퍼의 단일 소스화
+# - API 보장:
+#   * _split_sentences(text) -> List[str]
+#   * class StreamState(buffer: str)
+#   * _on_piece(state, piece, emit)  # state.buffer 누적 + emit 호출
+#   * _runner(chunks, on_piece)      # iterable에서 on_piece로 전달
+#   * stream_llm(system_prompt=..., user_input=...|user_prompt=..., split_fallback=True)
+#       - 에이전트들이 user_input, split_fallback을 인자로 넘겨도 mypy 통과
 # -----------------------------------------------------------------------------
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Callable, Dict, Iterable, Iterator, List, Mapping, Optional
 import inspect
 import re
-from queue import Queue, Empty
+from dataclasses import dataclass
+from queue import Empty, Queue
 from threading import Thread
-
+from typing import Any, Callable, Dict, Iterable, Iterator, List, Mapping, Optional
 
 __all__ = [
-    "_split_sentences",  # (str) -> List[str]
-    "_on_piece",         # (state, piece, emit) -> None
-    "_runner",           # (chunks, on_piece) -> None
-    "StreamState",       # dataclass with .buffer
-    "stream_llm",        # optional provider bridge
+    "_split_sentences",
+    "StreamState",
+    "_on_piece",
+    "_runner",
+    "stream_llm",
 ]
 
 # -------------------------- sentence segmentation ---------------------------
-# EN/KO 문장부호 + 줄바꿈 기준의 간단하고 견고한 분리기
+# 문장 경계: 영/한 문장부호 + 줄바꿈/공백 기준
 _SENT_SEP = re.compile(
-    r"(?<=[\.\?!。？！…])\s+|"      # 일반 문장부호 + 공백
-    r"(?<=\n)\s*|"                  # 줄바꿈
-    r"(?<=[;:])\s+"                 # 세미콜론/콜론
+    r"(?<=[\.\?!。？！…])\s+|"  # 일반 문장부호 + 공백
+    r"(?<=\n)\s*|"              # 줄바꿈
+    r"(?<=[;:])\s+"             # 세미콜론/콜론
 )
 
 
@@ -39,9 +44,9 @@ def _split_sentences(text: str) -> List[str]:
     """
     if not isinstance(text, str) or not text.strip():
         return []
-    raw = re.sub(r"\s+", " ", text.strip())         # 연속 공백 정규화
+    raw = re.sub(r"\s+", " ", text.strip())
     parts = [p.strip() for p in _SENT_SEP.split(raw)]
-    return [p for p in parts if p]                  # 빈 항목 제거
+    return [p for p in parts if p]
 
 
 # ---------------------------- streaming helpers -----------------------------
@@ -51,7 +56,11 @@ class StreamState:
     buffer: str = ""
 
 
-def _on_piece(state: StreamState, piece: Optional[str], emit: Callable[[str], None]) -> None:
+def _on_piece(
+    state: StreamState,
+    piece: Optional[str],
+    emit: Callable[[str], None],
+) -> None:
     """
     조각(piece)을 누적하고 emitter로 전달.
     - piece가 None/공백이면 무시
@@ -74,84 +83,75 @@ def _runner(chunks: Iterable[str], on_piece: Callable[[str], None]) -> None:
         on_piece(str(c))
 
 
-# -------------------------- provider streaming bridge -----------------------
+# --------------------------- provider integration ---------------------------
 def _build_io_kwargs(
     params: Mapping[str, inspect.Parameter],
     *,
-    system_prompt: Optional[str] = None,
-    user_prompt: Optional[str] = None,
-    question: Optional[str] = None,
+    system_prompt: str,
+    user_text: str,
 ) -> Dict[str, Any]:
     """
-    providers.* 함수 시그니처에 맞춰 안전하게 kwargs 구성.
-    - messages / prompt / (system|system_prompt) / user_prompt 등을 폭넓게 지원
+    providers API 시그니처에 맞춰 kwargs 구성.
+    - messages 또는 prompt/user_prompt + system/system_prompt 모두 대응
     """
     kwargs: Dict[str, Any] = {}
-    # 우선순위: (messages) -> (prompt/user_prompt + system)
     if "messages" in params:
-        up = (user_prompt if user_prompt is not None else question) or ""
         kwargs["messages"] = [
-            {"role": "system", "content": system_prompt or ""},
-            {"role": "user", "content": up},
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_text},
         ]
     else:
-        # user 텍스트
-        up = (user_prompt if user_prompt is not None else question) or ""
         if "prompt" in params:
-            kwargs["prompt"] = up
+            # 일부 구현은 prompt 하나만 받기도 함
+            kwargs["prompt"] = user_text
         elif "user_prompt" in params:
-            kwargs["user_prompt"] = up
-        # system 텍스트
+            kwargs["user_prompt"] = user_text
         if "system_prompt" in params:
-            kwargs["system_prompt"] = system_prompt or ""
+            kwargs["system_prompt"] = system_prompt
         elif "system" in params:
-            kwargs["system"] = system_prompt or ""
+            kwargs["system"] = system_prompt
     return kwargs
 
 
 def stream_llm(
     *,
-    system_prompt: Optional[str] = None,
+    system_prompt: str,
     user_prompt: Optional[str] = None,
-    question: Optional[str] = None,
+    user_input: Optional[str] = None,
+    split_fallback: bool = True,
 ) -> Iterator[str]:
     """
-    통합 스트리밍 브릿지:
-    - providers.stream_text(...)가 있으면 직접 스트림
-    - 아니면 providers.call_with_fallback(stream+callbacks) 시도
-    - 전부 불가하면 providers.call_with_fallback(...) 반환 텍스트를 문장 단위로 분할
+    LLM 스트림 통합 제너레이터.
+    - 우선순위: providers.stream_text → providers.call_with_fallback(stream+callbacks)
+    - 콜백 미지원이면: call_with_fallback() 결과를
+        * split_fallback=True  → 문장 단위로 나눠 여러 번 yield
+        * split_fallback=False → 한 번에 yield
+    - 파라미터 호환: responder/evaluator가 넘기는 user_input/split_fallback을 그대로 수용
     """
+    user_text = (user_prompt if user_prompt is not None else user_input) or ""
+
     try:
-        from src.llm import providers as prov  # 런타임 의존(테스트 환경에서도 안전)
+        from src.llm import providers as prov  # 런타임 의존 (테스트 환경 포함)
     except Exception as e:  # pragma: no cover
         yield f"(오류) provider 로딩 실패: {type(e).__name__}: {e}"
         return
 
-    # 1) stream_text 우선
-    st_fn = getattr(prov, "stream_text", None)
-    if callable(st_fn):
-        params = inspect.signature(st_fn).parameters
-        kwargs = _build_io_kwargs(
-            params,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            question=question,
-        )
-        for piece in st_fn(**kwargs):
+    # 1) 진짜 스트리밍 API
+    stream_fn = getattr(prov, "stream_text", None)
+    if callable(stream_fn):
+        params = inspect.signature(stream_fn).parameters
+        kwargs = _build_io_kwargs(params, system_prompt=system_prompt, user_text=user_text)
+        for piece in stream_fn(**kwargs):
             yield str(piece or "")
         return
 
-    # 2) call_with_fallback + 콜백(실스트리밍)
+    # 2) call_with_fallback + 콜백/stream 지원 시 의사-스트리밍
     call = getattr(prov, "call_with_fallback", None)
     if callable(call):
         params = inspect.signature(call).parameters
-        kwargs = _build_io_kwargs(
-            params,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            question=question,
-        )
+        kwargs = _build_io_kwargs(params, system_prompt=system_prompt, user_text=user_text)
 
+        # 콜백 지원 여부 확인
         q: "Queue[Optional[str]]" = Queue()
 
         def _cb(t: Any) -> None:
@@ -169,7 +169,8 @@ def stream_llm(
             kwargs["stream"] = True
 
         if used_cb:
-            def _runner_call() -> None:
+            # 별도 스레드에서 provider 호출 → 큐를 통해 조각 수신
+            def _runner_thread() -> None:
                 try:
                     call(**kwargs)
                 except Exception as e:  # pragma: no cover
@@ -177,7 +178,7 @@ def stream_llm(
                 finally:
                     q.put(None)
 
-            th = Thread(target=_runner_call, daemon=True)
+            th = Thread(target=_runner_thread, daemon=True)
             th.start()
 
             while True:
@@ -192,7 +193,7 @@ def stream_llm(
                 yield str(item or "")
             return
 
-        # 콜백 미지원 → 한 번에 받기
+        # 콜백 미지원 → 결과텍스트를 분리 또는 통으로 반환
         try:
             res = call(**kwargs)
             txt = res.get("text") if isinstance(res, dict) else str(res)
@@ -200,8 +201,17 @@ def stream_llm(
             yield f"(오류) {type(e).__name__}: {e}"
             return
 
-        for chunk in _split_sentences(txt or ""):
+        txt = str(txt or "")
+        if not split_fallback:
+            # 통으로 한 번만
+            if txt:
+                yield txt
+            return
+
+        # 문장 단위로 분할하여 여러 번
+        for chunk in _split_sentences(txt):
             yield chunk
         return
 
+    # 3) 어떤 provider도 없으면 메시지
     yield "(오류) LLM 어댑터를 찾을 수 없어요."
