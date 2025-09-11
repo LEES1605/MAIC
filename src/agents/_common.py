@@ -1,18 +1,22 @@
 # src/agents/_common.py
 # -----------------------------------------------------------------------------
-# Agents common helpers (single source of truth for streaming + helpers)
-# - 목적: responder.py / evaluator.py 가 공통 스트리밍 헬퍼를 사용하도록 통합
-# - 시그니처: stream_llm(system_prompt=..., user_input=..., split_fallback=True)
-#   * 호출자(responder/evaluator)의 키워드 인자와 정확히 일치
+# Agents common helpers (SSOT)
+# - 단일화 목적: responder.py / evaluator.py 의 모든 스트리밍/분절 보일러플레이트 제거
+# - 공개 API:
+#     _split_sentences(text) -> List[str]
+#     StreamState(buffer)
+#     _on_piece(state, piece, emit) -> None
+#     _runner(chunks, on_piece) -> None
+#     stream_llm(system_prompt=..., user_prompt=..., split_fallback=False) -> Iterator[str]
 # -----------------------------------------------------------------------------
 from __future__ import annotations
 
-import inspect
-import re
 from dataclasses import dataclass
-from queue import Empty, Queue
-from threading import Thread
-from typing import Any, Callable, Dict, Iterable, Iterator, List, Mapping, Optional
+from typing import Callable, Iterable, Iterator, List, Optional, Dict, Any, Mapping
+import inspect
+import queue
+import re
+import threading
 
 __all__ = [
     "_split_sentences",
@@ -24,11 +28,10 @@ __all__ = [
 
 # -------------------------- sentence segmentation ---------------------------
 _SENT_SEP = re.compile(
-    r"(?<=[\.\?!。？！…])\s+|"  # 일반 문장부호 + 공백
-    r"(?<=\n)\s*|"              # 줄바꿈
-    r"(?<=[;:])\s+"             # 세미콜론/콜론
+    r"(?<=[\.\?!。？！…])\s+|"      # 일반 문장부호 + 공백
+    r"(?<=\n)\s*|"                  # 줄바꿈
+    r"(?<=[;:])\s+"                 # 세미콜론/콜론
 )
-
 
 def _split_sentences(text: str) -> List[str]:
     """
@@ -42,13 +45,11 @@ def _split_sentences(text: str) -> List[str]:
     parts = [p.strip() for p in _SENT_SEP.split(raw)]
     return [p for p in parts if p]
 
-
 # ---------------------------- streaming helpers -----------------------------
 @dataclass
 class StreamState:
     """스트리밍 누적 버퍼 상태."""
     buffer: str = ""
-
 
 def _on_piece(state: StreamState, piece: Optional[str], emit: Callable[[str], None]) -> None:
     """
@@ -62,107 +63,102 @@ def _on_piece(state: StreamState, piece: Optional[str], emit: Callable[[str], No
     state.buffer += s
     emit(s)
 
-
 def _runner(chunks: Iterable[str], on_piece: Callable[[str], None]) -> None:
     """
-    제너레이터/이터러블에서 조각을 꺼내 콜백(on_piece)에 전달.
+    이터러블/제너레이터에서 조각을 꺼내 콜백(on_piece)에 전달.
     - pieces가 문자열이 아닐 수도 있어 str() 강제
     - StopIteration 이외 예외는 상위에서 처리
     """
     for c in chunks:
         on_piece(str(c))
 
-
-# ---------------------------- providers adapter -----------------------------
-def _build_io_kwargs(
+# --------------------------- providers adapter (SSOT) ------------------------
+def _build_kwargs_for_provider(
     params: Mapping[str, inspect.Parameter],
     *,
     system_prompt: str,
-    user_input: str,
+    user_prompt: str,
 ) -> Dict[str, Any]:
     """
-    providers API 시그니처에 맞춰 안전하게 kwargs 구성.
-    - messages/(prompt|user_prompt) + (system_prompt|system) 모두 대응
+    provider 함수 시그니처(messages|prompt|user_prompt, system|system_prompt) 적응
     """
     kwargs: Dict[str, Any] = {}
     if "messages" in params:
         kwargs["messages"] = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_input},
+            {"role": "user", "content": user_prompt},
         ]
-    else:
-        # user 입력
-        if "prompt" in params:
-            kwargs["prompt"] = user_input
-        elif "user_prompt" in params:
-            kwargs["user_prompt"] = user_input
-        # system 입력
-        if "system_prompt" in params:
-            kwargs["system_prompt"] = system_prompt
-        elif "system" in params:
-            kwargs["system"] = system_prompt
-    return kwargs
+        return kwargs
 
+    # messages 미지원 → 각 단일 파라미터 조합 대응
+    if "prompt" in params:
+        kwargs["prompt"] = user_prompt
+    elif "user_prompt" in params:
+        kwargs["user_prompt"] = user_prompt
+
+    if "system_prompt" in params:
+        kwargs["system_prompt"] = system_prompt
+    elif "system" in params:
+        kwargs["system"] = system_prompt
+
+    return kwargs
 
 def stream_llm(
     *,
     system_prompt: str,
-    user_input: str,
-    split_fallback: bool = True,
+    user_prompt: str,
+    split_fallback: bool = False,
 ) -> Iterator[str]:
     """
-    공통 LLM 스트리밍 제너레이터.
+    통합 스트리밍 제너레이터(SSOT).
     우선순위:
-      1) providers.stream_text()가 있으면 그대로 사용
-      2) providers.call_with_fallback() + callbacks(on_delta/on_token/yield_text)
-         - 콜백 지원 시: Thread + Queue 로 실제 스트리밍
-         - 콜백 미지원 시: 최종 텍스트 반환 → 필요 시 문장 단위 분할
-      3) 전부 실패하면 에러 메시지
+      1) providers.stream_text(messages|prompt…) 실스트리밍
+      2) providers.call_with_fallback(stream+callbacks) 콜백 스트리밍
+      3) call_with_fallback 반환 텍스트: split_fallback=True면 문장 분할, 아니면 한 번에 방출
     """
     try:
-        from src.llm import providers as prov  # lazy import
+        from src.llm import providers as prov  # 런타임 의존
     except Exception as e:  # pragma: no cover
         yield f"(오류) provider 로딩 실패: {type(e).__name__}: {e}"
         return
 
-    # 1) stream_text(...)
-    stream_fn = getattr(prov, "stream_text", None)
-    if callable(stream_fn):
-        params = inspect.signature(stream_fn).parameters
-        kwargs = _build_io_kwargs(
-            params, system_prompt=system_prompt, user_input=user_input
+    # 1) stream_text
+    st_fn = getattr(prov, "stream_text", None)
+    if callable(st_fn):
+        params = inspect.signature(st_fn).parameters
+        kwargs = _build_kwargs_for_provider(
+            params, system_prompt=system_prompt, user_prompt=user_prompt
         )
-        for piece in stream_fn(**kwargs):
+        for piece in st_fn(**kwargs):
             yield str(piece or "")
         return
 
-    # 2) call_with_fallback(..., stream=True, callbacks=...)
+    # 2) call_with_fallback + callbacks
     call = getattr(prov, "call_with_fallback", None)
     if callable(call):
         params = inspect.signature(call).parameters
-        kwargs = _build_io_kwargs(
-            params, system_prompt=system_prompt, user_input=user_input
+        kwargs = _build_kwargs_for_provider(
+            params, system_prompt=system_prompt, user_prompt=user_prompt
         )
 
-        q: "Queue[Optional[str]]" = Queue()
+        q: "queue.Queue[Optional[str]]" = queue.Queue()
 
-        def _cb_on_piece(t: Any) -> None:
+        def _enqueue(t: Any) -> None:
             try:
                 q.put(str(t or ""))
             except Exception:
-                # 콜백 예외는 무시(안전)
                 pass
 
         used_cb = False
         for name in ("on_delta", "on_token", "yield_text"):
             if name in params:
-                kwargs[name] = _cb_on_piece
+                kwargs[name] = _enqueue
                 used_cb = True
         if "stream" in params:
             kwargs["stream"] = True
 
         if used_cb:
-            def _runner_call() -> None:
+            def _runner_thread() -> None:
                 try:
                     call(**kwargs)
                 except Exception as e:  # pragma: no cover
@@ -170,13 +166,13 @@ def stream_llm(
                 finally:
                     q.put(None)
 
-            th = Thread(target=_runner_call, daemon=True)
+            th = threading.Thread(target=_runner_thread, daemon=True)
             th.start()
 
             while True:
                 try:
                     item = q.get(timeout=0.1)
-                except Empty:
+                except queue.Empty:
                     if not th.is_alive() and q.empty():
                         break
                     continue
@@ -185,21 +181,20 @@ def stream_llm(
                 yield str(item or "")
             return
 
-        # 콜백 미지원 → 단발 호출
+        # 콜백 미지원 → 단발 텍스트
         try:
             res = call(**kwargs)
         except Exception as e:  # pragma: no cover
             yield f"(오류) {type(e).__name__}: {e}"
             return
-
         txt = res.get("text") if isinstance(res, dict) else str(res)
-        if not split_fallback:
-            yield str(txt or "")
-            return
-        # 문장 단위 분할
-        for chunk in _split_sentences(str(txt or "")):
-            yield chunk
+        txt = str(txt or "")
+        if split_fallback:
+            for chunk in _split_sentences(txt):
+                yield chunk
+        else:
+            yield txt
         return
 
-    # 3) provider 부재
+    # 3) 어떠한 provider도 사용 불가
     yield "(오류) LLM 어댑터를 찾을 수 없어요."
