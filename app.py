@@ -16,45 +16,10 @@ try:
 except Exception:
     st = None  # Streamlit 미설치 환경(예: CI) 대비
 
-
-# ======================= [02B] 표준 에러 로거(전역, 선정의) =======================
-def _errlog(msg: str, where: str = "", exc: Exception | None = None) -> None:
-    """
-    표준 에러 로깅(민감정보 금지, 실패 무해화).
-    - 콘솔: 요약 + traceback
-    - Streamlit: 접이식(expander) 코드 블럭으로 상세 표시
-    """
-    try:
-        prefix = f"{where} " if where else ""
-        print(f"[ERR] {prefix}{msg}")
-        if exc:
-            traceback.print_exception(exc)
-        try:
-            # lazy import로 Streamlit UI에도 상세 로그 노출 (있을 때만)
-            import streamlit as _st  # noqa: WPS433 (local import)
-            with _st.expander("자세한 오류 로그", expanded=False):
-                detail = ""
-                if exc:
-                    try:
-                        detail = "".join(
-                            traceback.format_exception(
-                                type(exc), exc, exc.__traceback__
-                            )
-                        )
-                    except Exception:
-                        detail = "traceback 사용 불가"
-                _st.code(f"{prefix}{msg}\n{detail}")
-        except Exception:
-            pass
-    except Exception:
-        # 로거 자체 실패 무해화
-        pass
-
-
 # ⛳️ SSOT 코어 임포트(상단 고정: E402 예방)
-from src.core.secret import promote_env as _promote_env, get as _secret_get  # noqa: E402
-from src.core.persist import effective_persist_dir, share_persist_dir_to_session  # noqa: E402
-from src.core.index_probe import (  # noqa: E402
+from src.core.secret import promote_env as _promote_env, get as _secret_get
+from src.core.persist import effective_persist_dir, share_persist_dir_to_session
+from src.core.index_probe import (
     is_brain_ready as core_is_ready,
     mark_ready as core_mark_ready,
 )
@@ -64,27 +29,25 @@ def _effective_persist_dir() -> Path:
     """앱 전역 Persist 경로(코어 SSOT 위임). 실패 시 안전 폴백."""
     try:
         return effective_persist_dir()
-    except Exception as e:
-        _errlog("effective_persist_dir 실패", where="[persist.resolver]", exc=e)
+    except Exception:
         return Path.home() / ".maic" / "persist"
-
+# =========================== [03] END =============================================
 
 # ====================== [03B] COMMON: Prepared Helpers ======================
 def _persist_dir_safe() -> Path:
     """SSOT persist 경로. 코어 모듈 우선, 실패 시 기본값."""
     try:
+        # effective_persist_dir()은 src.core.persist에서 결정되며, side-effect-free여야 한다.
         return Path(str(effective_persist_dir())).expanduser()
-    except Exception as e:
-        _errlog("persist 경로 확인 실패", where="[persist.safe]", exc=e)
+    except Exception:
         return Path.home() / ".maic" / "persist"
 
 
 def _load_prepared_lister():
-    """
-    prepared 파일 나열 함수 로더.
+    """prepared 파일 나열 함수 로더.
     반환: (callable | None, tried_logs: List[str])
     """
-    tried: List[str] = []
+    tried = []
 
     def _try(modname: str):
         try:
@@ -108,11 +71,10 @@ def _load_prepared_lister():
 
 
 def _load_prepared_api():
-    """
-    prepared 소비 API(check_prepared_updates/mark_prepared_consumed) 로더.
+    """prepared 소비 API(check_prepared_updates/mark_prepared_consumed) 로더.
     반환: (chk_fn | None, mark_fn | None, tried_logs: List[str])
     """
-    tried2: List[str] = []
+    tried2 = []
 
     def _try(modname: str):
         try:
@@ -139,7 +101,7 @@ def _load_prepared_api():
         if chk and mark:
             return chk, mark, tried2
     return None, None, tried2
-
+# ====================== [03B] END ==========================================
 
 # ================== [04] secrets → env 승격 & 페이지 설정(안정 옵션) =================
 def _bootstrap_env() -> None:
@@ -173,10 +135,10 @@ def _bootstrap_env() -> None:
                 "GDRIVE_BACKUP_FOLDER_ID",
             ]
         )
-    except Exception as e:
-        _errlog("secrets → env 승격 실패", where="[bootstrap.env]", exc=e)
+    except Exception:
+        pass
 
-    # Streamlit 안정화 (환경변수 기반)
+    # Streamlit 안정화
     os.environ.setdefault("STREAMLIT_SERVER_FILE_WATCHER_TYPE", "none")
     os.environ.setdefault("STREAMLIT_RUN_ON_SAVE", "false")
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
@@ -188,39 +150,62 @@ _bootstrap_env()
 if st:
     try:
         st.set_page_config(page_title="LEES AI Teacher", layout="wide")
-    except Exception as e:
-        _errlog(
-            "set_page_config 실패(권한/중복 호출 가능)",
-            where="[st]",
-            exc=e,
-        )
+    except Exception:
+        # _errlog는 아직 정의 전이므로 여기서는 조용히 패스(로그는 아래 공용 로거 사용)
+        pass
 
 
-# ======================= [05] 경로/상태 & 세션 공유 =======================
-PERSIST_DIR: Path = _effective_persist_dir()
+# ======================= [05] 경로/상태 & 에러 로거 — START =======================
+# SSOT 결정값만 사용
+PERSIST_DIR: Path = effective_persist_dir()
 try:
     PERSIST_DIR.mkdir(parents=True, exist_ok=True)
-except Exception as e:
-    _errlog("persist 디렉토리 생성 실패", where="[persist.mkdir]", exc=e)
+except Exception:
+    # 여기서도 _errlog는 아직 정의 전일 수 있으므로 조용히 패스
+    pass
 
 # 세션 공유(있을 때만)
 try:
     share_persist_dir_to_session(PERSIST_DIR)
-except Exception as e:
-    _errlog("persist 경로 세션 공유 실패", where="[persist.share]", exc=e)
+except Exception:
+    pass
 
+
+def _errlog(msg: str, where: str = "", exc: Exception | None = None) -> None:
+    """표준 에러 로깅(민감정보 금지, 실패 무해화)."""
+    try:
+        prefix = f"{where} " if where else ""
+        print(f"[ERR] {prefix}{msg}")
+        if exc:
+            traceback.print_exception(exc)
+        try:
+            import streamlit as st  # lazy
+            with st.expander("자세한 오류 로그", expanded=False):
+                detail = ""
+                if exc:
+                    try:
+                        detail = "".join(
+                            traceback.format_exception(type(exc), exc, exc.__traceback__)
+                        )
+                    except Exception:
+                        detail = "traceback 사용 불가"
+                st.code(f"{prefix}{msg}\n{detail}")
+        except Exception:
+            pass
+    except Exception:
+        pass
+# ======================= [05] 경로/상태 & 에러 로거 — END =========================
 
 # ========================= [06] ACCESS: Admin Gate ============================
 def _is_admin_view() -> bool:
-    """
-    관리자 패널 표시 여부(학생 화면 완전 차단).
+    """관리자 패널 표시 여부(학생 화면 완전 차단).
     단일 키 'admin_mode'만 사용. (하위호환: is_admin → admin_mode 승격 1회)
     """
     if st is None:
         return False
     try:
         ss = st.session_state
-        # 하위호환: 과거 키 승격
+        # 하위호환: 과거 키를 한 번만 승격하고 제거
         if ss.get("is_admin") and not ss.get("admin_mode"):
             ss["admin_mode"] = True
             try:
@@ -243,7 +228,9 @@ def _safe_rerun(tag: str, ttl: int = 1) -> None:
         if not isinstance(ss, dict):
             return
         key = "__rerun_counts__"
-        counts = ss.get(key) or {}
+        counts = ss.get(key)
+        if not isinstance(counts, dict):
+            counts = {}
         cnt = int(counts.get(tag, 0))
         if cnt >= int(ttl):
             return
@@ -264,6 +251,7 @@ def _header() -> None:
         # fallback: 최소 타이틀
         if st is not None:
             st.markdown("### LEES AI Teacher")
+# ================= [08] 헤더(배지·타이틀·로그인/아웃) — END ===============
 
 
 # ======================= [09] 배경(비활성: No-Op) ===========================
@@ -297,8 +285,7 @@ def _mount_background(
 
 # =================== [10] 부팅 훅: 인덱스 자동 복원 =======================
 def _boot_auto_restore_index() -> None:
-    """
-    부팅 시 인덱스 자동 복원(한 세션 1회).
+    """부팅 시 인덱스 자동 복원(한 세션 1회).
     - 조건: chunks.jsonl==0B 또는 미존재, 또는 .ready 미존재
     - 동작: GH Releases에서 최신 index_*.zip 받아서 복원
     - SSOT: persist는 core.persist.effective_persist_dir()만 사용
@@ -310,7 +297,7 @@ def _boot_auto_restore_index() -> None:
     except Exception:
         pass
 
-    p = _effective_persist_dir()
+    p = effective_persist_dir()
     cj = p / "chunks.jsonl"
     ready = (p / ".ready").exists()
     if cj.exists() and cj.stat().st_size > 0 and ready:
@@ -333,8 +320,7 @@ def _boot_auto_restore_index() -> None:
         token, owner, repo = "", "", ""
 
     if not (token and owner and repo):
-        # 복원 불가(시크릿 미설정)
-        return
+        return  # 복원 불가(시크릿 미설정)
 
     # ---- 최신 릴리스의 index_*.zip 다운로드 ----
     from urllib import request as _rq
@@ -352,8 +338,7 @@ def _boot_auto_restore_index() -> None:
         )
         with _rq.urlopen(req, timeout=20) as resp:
             data = _json.loads(resp.read().decode("utf-8", "ignore"))
-    except Exception as e:
-        _errlog("릴리스 메타 조회 실패", where="[restore.latest]", exc=e)
+    except Exception:
         return
 
     asset = None
@@ -397,9 +382,9 @@ def _boot_auto_restore_index() -> None:
                 st.session_state["_BOOT_RESTORE_DONE"] = True
         except Exception:
             pass
-    except Exception as e:
-        _errlog("index zip 복원 실패", where="[restore.unzip]", exc=e)
+    except Exception:
         return
+# =================== [10] 부팅 훅: 인덱스 자동 복원 — END =====================
 
 
 # =================== [11] 부팅 오토플로우 & 자동 복원 모드 ==================
@@ -459,13 +444,13 @@ def _auto_start_once() -> None:
     except Exception:
         fn = None
 
-    used_persist = _effective_persist_dir()
+    used_persist = effective_persist_dir()
     ok = False
     if callable(fn):
         try:
             ok = bool(fn(dest_dir=used_persist))
         except Exception as e:
-            _errlog("restore_latest 실패", where="[auto_start]", exc=e)
+            _errlog(f"restore_latest failed: {e}", where="[auto_start]", exc=e)
             ok = False
     else:
         try:
@@ -485,6 +470,7 @@ def _auto_start_once() -> None:
             st.success("자동 복원 완료")
         _set_brain_status("READY", "자동 복원 완료", "release", attached=True)
         _safe_rerun("auto_start", ttl=1)
+# =================== [11] 부팅 오토플로우 & 자동 복원 모드 — END ==================
 
 
 # =================== [12] DIAG: Orchestrator Header ======================
@@ -520,6 +506,7 @@ def _render_index_orchestrator_header() -> None:
     )
 
     st.markdown("<span id='idx-admin-panel'></span>", unsafe_allow_html=True)
+# =================== [12] DIAG: Orchestrator Header — END ======================
 
 
 # =================== [13] ADMIN: Index Panel (prepared 전용) ==============
@@ -616,13 +603,9 @@ def _render_admin_index_panel() -> None:
         running = any(s["state"] == "run" for s in _steps())
         stalled = running and since_last >= stall_threshold_sec
         if stalled:
-            text = (
-                f"🟥 **STALLED** · 마지막 업데이트 {since_last}s 전 · 총 경과 {since_start}s"
-            )
+            text = f"🟥 **STALLED** · 마지막 업데이트 {since_last}s 전 · 총 경과 {since_start}s"
         elif running:
-            text = (
-                f"🟦 RUNNING · 마지막 업데이트 {since_last}s 전 · 총 경과 {since_start}s"
-            )
+            text = f"🟦 RUNNING · 마지막 업데이트 {since_last}s 전 · 총 경과 {since_start}s"
         else:
             text = f"🟩 IDLE/COMPLETE · 총 경과 {since_start}s"
         st.session_state["_IDX_PH_STATUS"].markdown(text)
@@ -744,6 +727,7 @@ def _render_admin_index_panel() -> None:
             from src.rag import index_build as _idx  # 내부 인덱서
 
             _step_set(1, "run", "persist 확인 중")
+            # ✅ SSOT로 결정된 persist를 그대로 사용(덮어쓰기 제거)
             _step_set(1, "ok", str(used_persist))
             _log(f"persist={used_persist}")
 
@@ -972,6 +956,7 @@ def _render_admin_index_panel() -> None:
             st.text("\n".join(buf))
         else:
             st.caption("표시할 로그가 없습니다.")
+# =================== [13] ADMIN: Index Panel (prepared 전용) ==============
 
 
 # ========== [13A] ADMIN: Panels (legacy aggregator, no-op) ==========
@@ -982,8 +967,7 @@ def _render_admin_panels() -> None:
 
 # =================== [13B] ADMIN: Prepared Scan — START ====================
 def _render_admin_prepared_scan_panel() -> None:
-    """
-    prepared 폴더의 '새 파일 유무'만 확인하는 경량 스캐너.
+    """prepared 폴더의 '새 파일 유무'만 확인하는 경량 스캐너.
     - 인덱싱은 수행하지 않고, check_prepared_updates()만 호출
     - 결과: 새 파일 개수, 샘플 목록, 디버그 경로
     """
@@ -1055,11 +1039,13 @@ def _render_admin_prepared_scan_panel() -> None:
         with st.expander("새 파일 미리보기(최대 50개)"):
             rows = []
             for rec in (new_files[:50] if isinstance(new_files, list) else []):
-                # 항목이 문자열 또는 dict일 수 있으므로 방어적 처리
+                # 항목이 문자열(경로/이름)일 수도 있고 dict일 수도 있으므로 방어적 처리
                 if isinstance(rec, str):
                     rows.append({"name": rec})
                 elif isinstance(rec, dict):
-                    nm = str(rec.get("name") or rec.get("path") or rec.get("file") or "")
+                    nm = str(
+                        rec.get("name") or rec.get("path") or rec.get("file") or ""
+                    )
                     fid = str(rec.get("id") or rec.get("fileId") or "")
                     rows.append({"name": nm, "id": fid})
             if rows:
@@ -1077,6 +1063,7 @@ def _render_admin_prepared_scan_panel() -> None:
         "timestamp": int(time.time()),
         "sample_new": new_files[:10] if isinstance(new_files, list) else [],
     }
+# =================== [13B] ADMIN: Prepared Scan — END ====================
 
 
 # ============= [14] 인덱싱된 소스 목록(읽기 전용 대시보드) ==============
@@ -1189,6 +1176,13 @@ def _inject_chat_styles_once() -> None:
         position:absolute; right:14px; top:50%; transform:translateY(-50%);
         z-index:2; margin:0!important; padding:0!important;
       }
+      form[data-testid="stForm"]:has(input[placeholder='질문을 입력하세요…']) .stButton > button,
+      form[data-testid="stForm"]:has(input[placeholder='질문을 입력하세요…']) .row-widget.stButton > button{
+        width:38px; height:38px; border-radius:50%; border:0; background:#0a2540; color:#fff;
+        font-size:18px; line-height:1; cursor:pointer; box-shadow:0 2px 6px rgba(0,0,0,.15);
+        padding:0; min-height:0;
+      }
+
       .msg-row{ display:flex; margin:8px 0; }
       .msg-row.left{ justify-content:flex-start; }
       .msg-row.right{ justify-content:flex-end; }
@@ -1221,7 +1215,6 @@ def _inject_chat_styles_once() -> None:
     """,
         unsafe_allow_html=True,
     )
-
 
 # [15B] START: _render_mode_controls_pills (FULL REPLACEMENT)
 def _render_mode_controls_pills() -> str:
@@ -1427,8 +1420,6 @@ def _render_chat_panel() -> None:
 
     ss["last_q"] = question
     ss["inpane_q"] = ""
-
-
 # [16] END
 
 
@@ -1493,8 +1484,8 @@ def _render_body() -> None:
 
     with st.container(border=True, key="chatpane_container"):
         st.markdown('<div class="chatpane">', unsafe_allow_html=True)
-        st.session_state["__mode"] = (
-            _render_mode_controls_pills() or st.session_state.get("__mode", "")
+        st.session_state["__mode"] = _render_mode_controls_pills() or st.session_state.get(
+            "__mode", ""
         )
         with st.form("chat_form", clear_on_submit=False):
             q: str = st.text_input("질문", placeholder="질문을 입력하세요…", key="q_text")
@@ -1519,6 +1510,8 @@ def main() -> None:
 if __name__ == "__main__":
     try:
         main()
-    except Exception as _e:
-        _errlog("Unhandled error in main", where="[main]", exc=_e)
+    except Exception as e:  # 안전망: CI에서 실제 trace를 볼 수 있게 함
+        print("Unhandled error in main:", e)
+        traceback.print_exc()
+        _errlog("Unhandled error in main", where="[main]", exc=e)
         raise
