@@ -37,7 +37,7 @@ def _effective_persist_dir() -> Path:
 def _persist_dir_safe() -> Path:
     """SSOT persist 경로. 코어 모듈 우선, 실패 시 기본값."""
     try:
-        # effective_persist_dir()은 src.core.persist에서 결정되며, side-effect-free여야 한다.
+        # effective_persist_dir()은 src.core.persist에서 결정, side-effect-free 전제
         return Path(str(effective_persist_dir())).expanduser()
     except Exception:
         return Path.home() / ".maic" / "persist"
@@ -47,7 +47,7 @@ def _load_prepared_lister():
     """prepared 파일 나열 함수 로더.
     반환: (callable | None, tried_logs: List[str])
     """
-    tried = []
+    tried: List[str] = []
 
     def _try(modname: str):
         try:
@@ -58,7 +58,7 @@ def _load_prepared_lister():
                 return fn
             tried.append(f"miss func: {modname}")
             return None
-        except Exception as e:
+        except Exception as e:  # pragma: no cover (경로 탐색 보조)
             tried.append(f"fail: {modname} ({e})")
             return None
 
@@ -74,7 +74,7 @@ def _load_prepared_api():
     """prepared 소비 API(check_prepared_updates/mark_prepared_consumed) 로더.
     반환: (chk_fn | None, mark_fn | None, tried_logs: List[str])
     """
-    tried2 = []
+    tried2: List[str] = []
 
     def _try(modname: str):
         try:
@@ -86,7 +86,7 @@ def _load_prepared_api():
                 return chk_fn, mark_fn
             tried2.append(f"miss attrs: {modname}")
             return None, None
-        except Exception as e:
+        except Exception as e:  # pragma: no cover (경로 탐색 보조)
             tried2.append(f"fail: {modname} ({e})")
             return None, None
 
@@ -169,37 +169,43 @@ except Exception:
     pass
 
 
-def _errlog(msg: str, where: str = "", exc: Exception | None = None) -> None:
-    """표준 에러 로깅(민감정보 금지, 실패 무해화)."""
+def _errlog(
+    msg: str,
+    where: str = "",
+    exc: Exception | None = None,
+    *,
+    fatal: bool = False,
+) -> None:
+    """표준 에러 로깅(민감정보 제외) + 필요 시 fail-fast."""
+    prefix = f"{where} " if where else ""
+    print(f"[ERR] {prefix}{msg}")
+    if exc:
+        traceback.print_exception(exc)
     try:
-        prefix = f"{where} " if where else ""
-        print(f"[ERR] {prefix}{msg}")
-        if exc:
-            traceback.print_exception(exc)
-        try:
-            import streamlit as st  # lazy
-            with st.expander("자세한 오류 로그", expanded=False):
-                detail = ""
-                if exc:
-                    try:
-                        detail = "".join(
-                            traceback.format_exception(type(exc), exc, exc.__traceback__)
-                        )
-                    except Exception:
-                        detail = "traceback 사용 불가"
-                st.code(f"{prefix}{msg}\n{detail}")
-        except Exception:
-            pass
+        import streamlit as st  # lazy
+        with st.expander("자세한 오류 로그", expanded=False):
+            detail = ""
+            if exc:
+                try:
+                    detail = "".join(
+                        traceback.format_exception(type(exc), exc, exc.__traceback__)
+                    )
+                except Exception:
+                    detail = "traceback 사용 불가"
+            st.code(f"{prefix}{msg}\n{detail}")
     except Exception:
+        # UI가 없거나 실패해도 로깅은 stdout에 남음
         pass
+    if fatal:
+        if exc:
+            raise exc
+        raise RuntimeError(msg)
 
 
 # ======================= [05] 경로/상태 & 에러 로거 — END =========================
 # ========================= [06] ACCESS: Admin Gate ============================
 def _is_admin_view() -> bool:
-    """관리자 패널 표시 여부(학생 화면 완전 차단).
-    단일 키 'admin_mode'만 사용. (하위호환: is_admin → admin_mode 승격 1회)
-    """
+    """관리자 패널 표시 여부(학생 화면 완전 차단)."""
     if st is None:
         return False
     try:
@@ -285,9 +291,8 @@ def _mount_background(
 # =================== [10] 부팅 훅: 인덱스 자동 복원 =======================
 def _boot_auto_restore_index() -> None:
     """부팅 시 인덱스 자동 복원(한 세션 1회).
-    - 조건: chunks.jsonl==0B 또는 미존재, 또는 .ready 미존재
-    - 동작: GH Releases에서 최신 index_*.zip 받아서 복원
-    - SSOT: persist는 core.persist.effective_persist_dir()만 사용
+    조건: chunks.jsonl==0B/미존재 또는 .ready 미존재
+    동작: GH Releases에서 최신 index_*.zip 받아서 복원
     """
     try:
         if "st" in globals() and st is not None:
@@ -307,7 +312,7 @@ def _boot_auto_restore_index() -> None:
             pass
         return
 
-    # ---- SSOT 시크릿 로더 사용 ----
+    # ---- 시크릿 로더 ----
     try:
         from src.core.secret import (
             token as _gh_token,
@@ -315,11 +320,16 @@ def _boot_auto_restore_index() -> None:
         )
         token = _gh_token() or ""
         owner, repo = _resolve_owner_repo()
-    except Exception:
+    except Exception as e:
+        _errlog("github secrets resolve failed", where="[boot.restore]", exc=e)
         token, owner, repo = "", "", ""
 
     if not (token and owner and repo):
-        return  # 복원 불가(시크릿 미설정)
+        _errlog(
+            "auto-restore skipped: missing GH token/owner/repo",
+            where="[boot.restore]",
+        )
+        return
 
     # ---- 최신 릴리스의 index_*.zip 다운로드 ----
     from urllib import request as _rq
@@ -337,7 +347,8 @@ def _boot_auto_restore_index() -> None:
         )
         with _rq.urlopen(req, timeout=20) as resp:
             data = _json.loads(resp.read().decode("utf-8", "ignore"))
-    except Exception:
+    except Exception as e:
+        _errlog("latest release fetch failed", where="[boot.restore]", exc=e)
         return
 
     asset = None
@@ -347,10 +358,12 @@ def _boot_auto_restore_index() -> None:
             asset = a
             break
     if not asset:
+        _errlog("no index_*.zip asset in latest release", where="[boot.restore]")
         return
 
     dl = asset.get("browser_download_url")
     if not dl:
+        _errlog("release asset has no download URL", where="[boot.restore]")
         return
 
     # ---- 저장 후 압축 해제 ----
@@ -381,7 +394,8 @@ def _boot_auto_restore_index() -> None:
                 st.session_state["_BOOT_RESTORE_DONE"] = True
         except Exception:
             pass
-    except Exception:
+    except Exception as e:
+        _errlog("download/extract failed", where="[boot.restore]", exc=e)
         return
 # =================== [10] 부팅 훅: 인덱스 자동 복원 — END =====================
 
@@ -400,7 +414,7 @@ def _boot_autoflow_hook() -> None:
         if mod and hasattr(mod, "autoflow_boot_check"):
             mod.autoflow_boot_check(interactive=_is_admin_view())
     except Exception as e:
-        _errlog(f"boot_autoflow_hook: {e}", where="[boot_hook]", exc=e)
+        _errlog("boot_autoflow_hook failed", where="[boot_hook]", exc=e)
 
 
 def _set_brain_status(
@@ -449,13 +463,14 @@ def _auto_start_once() -> None:
         try:
             ok = bool(fn(dest_dir=used_persist))
         except Exception as e:
-            _errlog(f"restore_latest failed: {e}", where="[auto_start]", exc=e)
+            _errlog("restore_latest failed", where="[auto_start]", exc=e)
             ok = False
     else:
         try:
             _boot_auto_restore_index()
             ok = core_is_ready(used_persist)
-        except Exception:
+        except Exception as e:
+            _errlog("boot_auto_restore_index failed", where="[auto_start]", exc=e)
             ok = False
 
     if ok:
@@ -656,6 +671,7 @@ def _render_admin_index_panel() -> None:
             files_list = lister() or []
         except Exception as e:
             _log(f"prepared list failed: {e}", "err")
+            _errlog("prepared listing failed", where="[admin.index.prepared]", exc=e)
     else:
         for m in dbg1:
             _log("• " + m, "warn")
@@ -772,6 +788,7 @@ def _render_admin_index_panel() -> None:
             except Exception as e:
                 _step_set(3, "fail", "소비 실패")
                 _log(f"prepared 소비 실패: {e}", "err")
+                _errlog("prepared consume failed", where="[admin.index.consume]", exc=e)
 
             # 요약
             _step_set(4, "run", "요약 계산")
@@ -997,6 +1014,7 @@ def _render_admin_prepared_scan_panel() -> None:
             files_list = lister() or []
         except Exception as e:
             st.error(f"prepared 목록 조회 실패: {e}")
+            _errlog("prepared listing failed", where="[admin.scan.prepared]", exc=e)
     else:
         with st.expander("디버그(파일 나열 함수 로드 경로)"):
             st.write("\n".join(dbg1) or "(정보 없음)")
@@ -1013,6 +1031,7 @@ def _render_admin_prepared_scan_panel() -> None:
             info = chk(idx_persist) or {}
         except Exception as e:
             st.error(f"스캔 실행 실패: {e}")
+            _errlog("prepared scan run failed", where="[admin.scan.run]", exc=e)
             info = {}
         try:
             # 표준 키: 'files' (없으면 fallback)
@@ -1032,13 +1051,11 @@ def _render_admin_prepared_scan_panel() -> None:
         with st.expander("새 파일 미리보기(최대 50개)"):
             rows = []
             for rec in (new_files[:50] if isinstance(new_files, list) else []):
-                # 항목이 문자열(경로/이름)일 수도 있고 dict일 수도 있으므로 방어적 처리
+                # 항목이 문자열/딕셔너리일 수 있으므로 방어적 처리
                 if isinstance(rec, str):
                     rows.append({"name": rec})
                 elif isinstance(rec, dict):
-                    nm = str(
-                        rec.get("name") or rec.get("path") or rec.get("file") or ""
-                    )
+                    nm = str(rec.get("name") or rec.get("path") or rec.get("file") or "")
                     fid = str(rec.get("id") or rec.get("fileId") or "")
                     rows.append({"name": nm, "id": fid})
             if rows:
@@ -1102,7 +1119,7 @@ def _render_admin_indexed_sources_panel() -> None:
                     row["chunks"] += 1
         except Exception as e:
             _errlog(
-                f"read chunks.jsonl failed: {e}",
+                "read chunks.jsonl failed",
                 where="[indexed-sources.read]",
                 exc=e,
             )
@@ -1202,7 +1219,7 @@ def _inject_chat_styles_once() -> None:
 
       @media (max-width:480px){
         .bubble{ max-width:96%; }
-        .chip-src{ max-width:160px; }
+        .chip-src{ max_width:160px; }
       }
     </style>
     """,
@@ -1336,7 +1353,7 @@ def _render_chat_panel() -> None:
 
     # --- 검색 → 라벨 → 칩 문자열
     src_label = "[AI지식]"
-    hits = []
+    hits: List[Any] = []
     if callable(_search_hits):
         try:
             hits = _search_hits(question, top_k=5)
@@ -1428,7 +1445,7 @@ def _render_body() -> None:
             _boot_auto_restore_index()
             _boot_autoflow_hook()
         except Exception as e:
-            _errlog(f"boot check failed: {e}", where="[render_body.boot]", exc=e)
+            _errlog("boot check failed", where="[render_body.boot]", exc=e)
         finally:
             st.session_state["_boot_checked"] = True
 
@@ -1474,7 +1491,7 @@ def _render_body() -> None:
         try:
             _render_chat_panel()
         except Exception as e:
-            _errlog(f"chat panel failed: {e}", where="[render_body.chat]", exc=e)
+            _errlog("chat panel failed", where="[render_body.chat]", exc=e)
         st.markdown("</div></div>", unsafe_allow_html=True)
 
     with st.container(border=True, key="chatpane_container"):
@@ -1503,4 +1520,7 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        _errlog("Unhandled error in main", where="[main]", exc=e, fatal=True)
