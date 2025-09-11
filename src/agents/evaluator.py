@@ -25,7 +25,7 @@ def evaluate_stream(
 
     # SSOT prompts (존재하면 사용, 없으면 안전 폴백)
     try:
-        from src.core.prompts import (  # type: ignore
+        from src.core.prompts import (
             system_prompt_for_evaluator as _spe,
             user_prompt_for_evaluator as _upe,
         )
