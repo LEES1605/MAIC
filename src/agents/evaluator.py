@@ -10,7 +10,6 @@ from typing import Any, Dict, Iterator, Optional
 
 from src.agents._common import stream_llm  # 공용 파사드
 
-
 def _system_prompt(mode: str) -> str:
     mode_hint = {
         "문법설명": "핵심 규칙 → 간단 예시 → 흔한 오해 순서로 학생 눈높이에 맞춰 설명.",
@@ -23,7 +22,6 @@ def _system_prompt(mode: str) -> str:
         "중복을 최소화하며 빠진 부분을 보충하고 쉬운 비유/예시 또는 심화 포인트를 추가하세요. "
         "비평/채점/메타 피드백은 금지. " + mode_hint
     )
-
 
 def _user_prompt(question: str, answer: Optional[str]) -> str:
     a = (answer or "").strip()
@@ -45,15 +43,15 @@ def _user_prompt(question: str, answer: Optional[str]) -> str:
         )
     return head + body
 
-
 def evaluate_stream(
     *,
     question: str,
     mode: str,
     answer: Optional[str] = None,
-    ctx: Optional[Dict[str, Any]] = None,
+    ctx: Optional[Dict[str, str]] = None,
 ) -> Iterator[str]:
     """
+
     미나쌤 보완 스트림(공용 파사드 사용).
     - provider가 스트리밍을 지원하면 토막 단위로 yield
     - 아니면 최종 텍스트를 문장 단위로 분할 후 여러 번 yield

@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import inspect
+import queue
 import re
 from dataclasses import dataclass
 from queue import Empty, Queue
@@ -18,6 +19,7 @@ __all__ = [
     "_on_piece",
     "_runner",
     "StreamState",
+
     "stream_llm",
 ]
 
@@ -60,7 +62,7 @@ def _on_piece(state: StreamState, piece: Optional[str], emit: Callable[[str], No
 
 def _runner(chunks: Iterable[str], on_piece: Callable[[str], None]) -> None:
     """
-    제너레이터/이터러블에서 조각을 꺼내 콜백(on_piece)에 전달.
+    이터러블/제너레이터에서 조각을 꺼내 콜백(on_piece)에 전달.
     - pieces가 문자열이 아닐 수도 있어 str() 강제
     - StopIteration 이외 예외는 상위에서 처리
     """
@@ -69,6 +71,7 @@ def _runner(chunks: Iterable[str], on_piece: Callable[[str], None]) -> None:
 
 # ---------------------------- provider plumbing -----------------------------
 def _build_io_kwargs(
+
     params: Mapping[str, inspect.Parameter],
     *,
     system_prompt: str,
@@ -113,7 +116,7 @@ def stream_llm(
         yield f"(오류) provider 로딩 실패: {type(e).__name__}: {e}"
         return
 
-    # 1) stream_text 우선
+    # 1) stream_text
     st_fn = getattr(prov, "stream_text", None)
     if callable(st_fn):
         params = inspect.signature(st_fn).parameters
@@ -126,9 +129,9 @@ def stream_llm(
     call = getattr(prov, "call_with_fallback", None)
     if callable(call):
         params = inspect.signature(call).parameters
-        kwargs = _build_io_kwargs(params, system_prompt=system_prompt, user_prompt=user_prompt)
 
-        q: "Queue[Optional[str]]" = Queue()
+        kwargs = _build_io_kwargs(params, system_prompt=system_prompt, user_prompt=user_prompt)
+        q: "queue.Queue[Optional[str]]" = queue.Queue()
 
         # 지역 콜백(이름을 _on_piece로 하지 않음: 에이전트 파일 테스트와 혼동 방지)
         def _cb(t: Any) -> None:
@@ -140,7 +143,7 @@ def stream_llm(
         used_cb = False
         for name in ("on_delta", "on_token", "yield_text"):
             if name in params:
-                kwargs[name] = _cb
+                kwargs[name] = _enqueue
                 used_cb = True
         if "stream" in params:
             kwargs["stream"] = True
@@ -160,7 +163,7 @@ def stream_llm(
             while True:
                 try:
                     item = q.get(timeout=0.1)
-                except Empty:
+                except queue.Empty:
                     if not th.is_alive() and q.empty():
                         break
                     continue
@@ -172,7 +175,6 @@ def stream_llm(
         # 콜백 미지원 → 단발 호출
         try:
             res = call(**kwargs)
-            txt = res.get("text") if isinstance(res, dict) else str(res)
         except Exception as e:  # pragma: no cover
             yield f"(오류) {type(e).__name__}: {e}"
             return

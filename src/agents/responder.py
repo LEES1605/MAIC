@@ -6,7 +6,6 @@ from typing import Dict, Iterator, Optional
 
 from src.agents._common import stream_llm  # 표준 파사드만 사용
 
-
 def _system_prompt(mode: str) -> str:
     hint = {
         "문법설명": "핵심 규칙 → 간단 예시 → 흔한 오해 순서로 쉽게 설명하세요.",
@@ -17,7 +16,6 @@ def _system_prompt(mode: str) -> str:
         "당신은 학생을 돕는 영어 선생님입니다. 불필요한 말은 줄이고, "
         "짧은 문장과 단계적 설명을 사용하세요. " + hint
     )
-
 
 def answer_stream(
     *,
