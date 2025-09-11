@@ -1,10 +1,12 @@
 # src/agents/responder.py
-# ================================= [Answer Agent] ==============================
+# ================================ [01] Answer Stream — START =================
 from __future__ import annotations
 
-from typing import Dict, Iterator, Optional
+from typing import Iterator, Dict, Any, Optional
+import re
 
-from src.agents._common import stream_llm  # 표준 파사드만 사용
+from src.agents._common import stream_llm, _split_sentences  # public helpers
+
 
 def _system_prompt(mode: str) -> str:
     hint = {
@@ -17,16 +19,30 @@ def _system_prompt(mode: str) -> str:
         "짧은 문장과 단계적 설명을 사용하세요. " + hint
     )
 
+
 def answer_stream(
     *,
     question: str,
     mode: str,
-    ctx: Optional[Dict[str, any]] = None,
+    ctx: Optional[Dict[str, Any]] = None,
 ) -> Iterator[str]:
     """
     주답변(피티쌤) 스트리밍 제너레이터.
-    - 공용 파사드(stream_llm)만 호출 → mypy/테스트 일관성
+    - providers.stream_text → call_with_fallback(stream/callback) 순으로 시도
+    - 전부 불가하면 문장 분리 기반 의사-스트리밍
     """
     sys_p = _system_prompt(mode)
-    # 최종 방출 단위를 읽기 좋게 하려면 split_fallback=True 유지
-    yield from stream_llm(system_prompt=sys_p, user_prompt=question, split_fallback=True)
+
+    # 1) 공용 스트리머 사용: 호출 키는 user_text로 통일
+    got_any = False
+    for piece in stream_llm(system_prompt=sys_p, user_text=question, split_fallback=True):
+        got_any = True
+        yield str(piece or "")
+
+    if got_any:
+        return
+
+    # 2) 폴백 (이론상 도달 X): 안전망
+    for seg in _split_sentences(str(question or "")):
+        yield seg
+# ================================ [01] Answer Stream — END ===================
