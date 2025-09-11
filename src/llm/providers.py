@@ -5,7 +5,7 @@ import importlib
 import json
 import os
 import traceback
-from typing import Any, Dict, Optional, Callable
+from typing import Any, Dict, Optional, Callable, Iterator, List
 
 # streamlit은 있을 수도/없을 수도 있다.
 # - mypy 충돌 방지: st를 먼저 Any로 선언한 뒤, 런타임에 모듈 또는 None을 대입
@@ -20,7 +20,10 @@ except Exception:
 
 
 def _secret(name: str, default: Optional[str] = None) -> Optional[str]:
-    """Streamlit secrets 우선 → 환경변수. 실패 시 default."""
+    """
+    Streamlit secrets 우선 → 환경변수. 실패 시 default.
+    - 반환은 문자열(딕셔너리/리스트면 JSON 문자열)로 통일
+    """
     try:
         if st is not None and hasattr(st, "secrets"):
             v = st.secrets.get(name)
@@ -70,6 +73,7 @@ def call_openai_raw(
 
     try:
         client: Any = OpenAI(api_key=api_key)
+        # v1 client (python-openai>=1.0) 기준
         res: Any = client.chat.completions.create(
             model=mdl,
             temperature=float(temperature),
@@ -81,6 +85,7 @@ def call_openai_raw(
         txt = res.choices[0].message.content or ""
         return {"ok": True, "provider": "openai", "text": str(txt), "error": None}
     except Exception as e:
+        # 구버전 등 다양한 케이스를 안전하게 포착
         return {
             "ok": False,
             "provider": "openai",
@@ -126,7 +131,7 @@ def call_gemini_raw(
     )
 
     # Gemini request body (text-only)
-    contents = []
+    contents: list[dict] = []
     if system:
         contents.append({"role": "user", "parts": [{"text": f"[SYSTEM]\n{system}"}]})
     contents.append({"role": "user", "parts": [{"text": prompt}]})
@@ -134,12 +139,12 @@ def call_gemini_raw(
     try:
         r = requests_mod.post(
             url,
-            timeout=45,
             headers={"Content-Type": "application/json"},
             json={
                 "contents": contents,
                 "generationConfig": {"temperature": float(temperature)},
             },
+            timeout=30,
         )
         status = getattr(r, "status_code", 500)
         if status != 200:
@@ -151,6 +156,7 @@ def call_gemini_raw(
                 "text": "",
             }
         data = r.json()
+
         text = ""
         if isinstance(data, dict):
             cands = data.get("candidates") or []
@@ -172,7 +178,7 @@ def call_gemini_raw(
 # =============== [LLM-04] call_with_fallback — START =================
 def call_with_fallback(
     *,
-    # 기본 인자 (app.py가 검사하는 시그니처와 하위호환)
+    # 기본 인자 (소비자 시그니처와 하위호환)
     system: str = "",
     prompt: str = "",
     # 우선순위
@@ -234,3 +240,86 @@ def call_with_fallback(
 
     return last or {"ok": False, "provider": "unknown", "error": "all_failed", "text": ""}
 # ================ [LLM-04] call_with_fallback — END =================
+
+
+# =========================== [LLM-05] stream_text — START ===========================
+def stream_text(
+    *,
+    # 메신저 스타일
+    messages: Optional[List[Dict[str, str]]] = None,
+    # 단문 스타일
+    prompt: str = "",
+    user_prompt: str = "",
+    # 시스템 입력
+    system_prompt: str = "",
+    system: str = "",
+    # 선택: 라우팅/온도
+    prefer: str = "gemini",
+    temperature: float = 0.2,
+    # 알 수 없는 추가 인자는 무시
+    **kwargs: Any,
+) -> Iterator[str]:
+    """
+    소비자 우선 경로. 입력을 정규화하여 call_with_fallback(stream+콜백)로 연결.
+    - messages가 있으면 마지막 user.content를 우선
+    - 없으면 prompt → user_prompt 순으로 사용자 입력을 결정
+    - 시스템 프롬프트는 system_prompt → system 순
+    """
+    sys_txt = (system_prompt or system or "").strip()
+
+    user_txt = ""
+    if messages:
+        try:
+            # 마지막 user role content 사용(없으면 전체 messages를 이어붙임)
+            users = [m.get("content", "") for m in messages if (m.get("role") == "user")]
+            user_txt = users[-1] if users else ""
+            if not user_txt:
+                user_txt = " ".join(m.get("content", "") for m in messages)
+        except Exception:
+            user_txt = ""
+    if not user_txt:
+        user_txt = (prompt or user_prompt or "").strip()
+
+    # 콜백 기반 실스트리밍 → 안전한 큐-스레드 패턴
+    from queue import Queue, Empty
+    from threading import Thread
+
+    q: "Queue[Optional[str]]" = Queue()
+
+    def _cb(piece: str) -> None:
+        try:
+            q.put(str(piece or ""))
+        except Exception:
+            pass
+
+    def _runner() -> None:
+        try:
+            # stream=True + 콜백 등록
+            _ = call_with_fallback(
+                system=sys_txt,
+                prompt=user_txt,
+                prefer=prefer,
+                temperature=temperature,
+                stream=True,
+                on_token=_cb,  # 소비자 쪽 호환: on_delta/yield_text 도 수용하므로 on_token 사용
+            )
+        except Exception:
+            # 콜백 기반 스트림 실패 시에도 종료 신호는 보장
+            pass
+        finally:
+            q.put(None)
+
+    th = Thread(target=_runner, daemon=True)
+    th.start()
+
+    while True:
+        try:
+            item = q.get(timeout=0.2)
+        except Empty:
+            if not th.is_alive() and q.empty():
+                break
+            continue
+        if item is None:
+            break
+        yield str(item or "")
+# =========================== [LLM-05] stream_text — END ===========================
