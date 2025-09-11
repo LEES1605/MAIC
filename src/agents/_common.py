@@ -1,9 +1,4 @@
-# src/agents/_common.py
-# -----------------------------------------------------------------------------
-# Agents common helpers: sentence split, streaming state, and LLM streaming.
-# - 유지: _split_sentences, StreamState, _on_piece, _runner
-# - 추가: stream_llm(system_prompt, user_text|user_prompt, split_fallback)
-# -----------------------------------------------------------------------------
+# Wave‑2.1: Agents common helpers & streaming shim (contract-stable)
 from __future__ import annotations
 
 import inspect
@@ -23,17 +18,15 @@ __all__ = [
 
 # -------------------------- sentence segmentation ---------------------------
 _SENT_SEP = re.compile(
-    r"(?<=[\.\?!。？！…])\s+|"  # 일반 문장부호 + 공백
-    r"(?<=\n)\s*|"              # 줄바꿈
-    r"(?<=[;:])\s+"             # 세미콜론/콜론
+    r"(?<=[\.\?!。？！…])\s+|"      # 종결부호 + 공백
+    r"(?<=\n)\s*|"                  # 줄바꿈
+    r"(?<=[;:])\s+"                 # 세미콜론/콜론
 )
-
 
 def _split_sentences(text: str) -> List[str]:
     """
-    간단·견고한 문장 분리기.
-    - 한국어/영어 혼합 입력에서도 작동
-    - 공백 정리 및 빈 토큰 제거
+    간단하고 견고한 문장 분리기.
+    한국어/영어 혼합 입력에서도 동작. 빈 토큰 제거.
     """
     if not isinstance(text, str) or not text.strip():
         return []
@@ -41,42 +34,42 @@ def _split_sentences(text: str) -> List[str]:
     parts = [p.strip() for p in _SENT_SEP.split(raw)]
     return [p for p in parts if p]
 
-
 # ---------------------------- streaming helpers -----------------------------
 @dataclass
 class StreamState:
     """스트리밍 누적 버퍼 상태."""
     buffer: str = ""
 
-
 def _on_piece(state: StreamState, piece: Optional[str], emit: Callable[[str], None]) -> None:
     """
     조각(piece)을 누적하고 emitter로 전달.
-    - piece가 None/공백이면 무시
+    piece가 None/공백이면 무시. emit 예외는 상위로 전파.
     """
     if not piece:
         return
-    state.buffer += str(piece)
-    emit(str(piece))
-
+    s = str(piece)
+    state.buffer += s
+    emit(s)
 
 def _runner(chunks: Iterable[str], on_piece: Callable[[str], None]) -> None:
     """
-    제너레이터/이터러블에서 조각을 꺼내 콜백(on_piece)에 전달.
-    - StopIteration 이외 예외는 상위에서 처리
+    제너레이터/이터러블에서 조각을 꺼내 콜백에 전달.
+    StopIteration 외 예외는 상위에서 처리.
     """
     for c in chunks:
         on_piece(str(c))
 
-
-# --------------------------- providers I/O helpers --------------------------
+# ------------------------ providers I/O normalization ------------------------
 def _build_io_kwargs(
     params: Mapping[str, inspect.Parameter],
     *,
     system_prompt: str,
     user_text: str,
 ) -> Dict[str, Any]:
-    """providers API 시그니처(messages/prompt/user_prompt/system/...) 정합 생성."""
+    """
+    providers API 시그니처(messages/prompt/user_prompt/system/...)에
+    맞춰 안전하게 kwargs를 생성한다.
+    """
     kwargs: Dict[str, Any] = {}
     if "messages" in params:
         kwargs["messages"] = [
@@ -85,7 +78,7 @@ def _build_io_kwargs(
         ]
     else:
         if "prompt" in params:
-            kwargs["prompt"] = user_text
+            kwargs["prompt"] = system_prompt + "\n\n" + user_text
         elif "user_prompt" in params:
             kwargs["user_prompt"] = user_text
         if "system_prompt" in params:
@@ -94,32 +87,27 @@ def _build_io_kwargs(
             kwargs["system"] = system_prompt
     return kwargs
 
-
 # ------------------------------ public streaming ----------------------------
 def stream_llm(
     *,
     system_prompt: str,
-    user_text: Optional[str] = None,
     user_prompt: Optional[str] = None,
+    user_input: Optional[str] = None,
     split_fallback: bool = False,
 ) -> Iterator[str]:
     """
-    LLM 스트리밍 공용 진입점.
-    - 우선: providers.stream_text(...)
-    - 차선: providers.call_with_fallback(stream+callbacks)
-    - 폴백: 단발 호출 결과를 문장 단위(split_fallback=True)로 분할
+    LLM 스트림 통합 진입점.
+    우선 providers.stream_text → 콜백 기반 call_with_fallback → 단발 호출.
+    단발 호출 시 split_fallback=True면 문장 단위로 분할하여 의사-스트리밍.
     """
-    # alias: user_prompt → user_text
-    text = (user_text if user_text is not None else user_prompt) or ""
-
+    text = user_prompt if user_prompt is not None else (user_input or "")
     try:
-        # 동적 import로 mypy와 런타임 안정성 모두 확보
         from src.llm import providers as prov
     except Exception as e:  # pragma: no cover
         yield f"(오류) provider 로딩 실패: {type(e).__name__}: {e}"
         return
 
-    # 1) stream_text
+    # 1) stream_text(messages|prompt)를 지원하면 그대로 사용
     st_fn = getattr(prov, "stream_text", None)
     if callable(st_fn):
         params = inspect.signature(st_fn).parameters
@@ -128,7 +116,7 @@ def stream_llm(
             yield str(piece or "")
         return
 
-    # 2) call_with_fallback + callbacks
+    # 2) call_with_fallback + callbacks(on_delta / on_token / yield_text)
     call = getattr(prov, "call_with_fallback", None)
     if callable(call):
         params = inspect.signature(call).parameters
@@ -136,9 +124,9 @@ def stream_llm(
 
         q: "Queue[Optional[str]]" = Queue()
 
-        def _enqueue(t: Any) -> None:
+        def _enqueue(tok: Any) -> None:
             try:
-                q.put(str(t or ""))
+                q.put(str(tok or ""))
             except Exception:
                 pass
 
@@ -151,7 +139,7 @@ def stream_llm(
             kwargs["stream"] = True
 
         if used_cb:
-            def _runner_call() -> None:
+            def _bg() -> None:
                 try:
                     call(**kwargs)
                 except Exception as e:  # pragma: no cover
@@ -159,7 +147,7 @@ def stream_llm(
                 finally:
                     q.put(None)
 
-            th = Thread(target=_runner_call, daemon=True)
+            th = Thread(target=_bg, daemon=True)
             th.start()
 
             while True:
@@ -176,15 +164,14 @@ def stream_llm(
 
         # 콜백 미지원 → 단발 호출
         try:
-            res = call(**kwargs)
+            result = call(**kwargs)
         except Exception as e:  # pragma: no cover
             yield f"(오류) {type(e).__name__}: {e}"
             return
 
-        txt = res.get("text") if isinstance(res, dict) else str(res)
+        txt = result.get("text") if isinstance(result, dict) else str(result)
         if not txt:
             return
-
         if split_fallback:
             for seg in _split_sentences(txt):
                 yield seg
