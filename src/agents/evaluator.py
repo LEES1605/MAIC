@@ -1,9 +1,8 @@
 # src/agents/evaluator.py
-# ============================== Co-Teacher Evaluator ==========================
+# ============================ Co-Teacher Evaluator ============================
 from __future__ import annotations
 
-from typing import Any, Dict, Iterator, Optional
-
+from typing import Dict, Iterator, Optional
 from src.agents._common import stream_llm
 
 def _system_prompt(mode: str) -> str:
@@ -44,11 +43,12 @@ def evaluate_stream(
     question: str,
     mode: str,
     answer: Optional[str] = None,
-    ctx: Optional[Dict[str, Any]] = None,
+    ctx: Optional[Dict[str, str]] = None,
 ) -> Iterator[str]:
     """
-    미나쌤 보완 스트림.
-    - 공통 스트리머(stream_llm)만 사용 (로컬 헬퍼 없음)
+    보완 설명(미나쌤) 스트림.
+    - 공통 SSOT(stream_llm)만 호출하여 중복 제거
+    - split_fallback=True: 콜백 미지원 provider에서 문장단위로 의사 스트리밍
     """
     if not answer and ctx and isinstance(ctx, dict):
         maybe = ctx.get("answer")
@@ -59,6 +59,6 @@ def evaluate_stream(
     usr_p = _user_prompt(question, answer)
     yield from stream_llm(
         system_prompt=sys_p,
-        user_input=usr_p,
+        user_prompt=usr_p,
         split_fallback=True,
     )
