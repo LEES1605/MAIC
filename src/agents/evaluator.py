@@ -1,9 +1,15 @@
 # src/agents/evaluator.py
-# ============================ Co-Teacher Evaluator ============================
+# ============================== [Co-Teacher] ==================================
+"""
+Co-teacher(미나쌤) — '비평'이 아니라 '보완' 설명을 스트리밍으로 제공합니다.
+가능하면 provider의 실스트리밍을 사용하고, 불가하면 문장 단위로 나눠 yield합니다.
+"""
 from __future__ import annotations
 
-from typing import Dict, Iterator, Optional
-from src.agents._common import stream_llm
+from typing import Any, Dict, Iterator, Optional
+
+from src.agents._common import stream_llm  # 공용 파사드
+
 
 def _system_prompt(mode: str) -> str:
     mode_hint = {
@@ -17,6 +23,7 @@ def _system_prompt(mode: str) -> str:
         "중복을 최소화하며 빠진 부분을 보충하고 쉬운 비유/예시 또는 심화 포인트를 추가하세요. "
         "비평/채점/메타 피드백은 금지. " + mode_hint
     )
+
 
 def _user_prompt(question: str, answer: Optional[str]) -> str:
     a = (answer or "").strip()
@@ -38,17 +45,18 @@ def _user_prompt(question: str, answer: Optional[str]) -> str:
         )
     return head + body
 
+
 def evaluate_stream(
     *,
     question: str,
     mode: str,
     answer: Optional[str] = None,
-    ctx: Optional[Dict[str, str]] = None,
+    ctx: Optional[Dict[str, Any]] = None,
 ) -> Iterator[str]:
     """
-    보완 설명(미나쌤) 스트림.
-    - 공통 SSOT(stream_llm)만 호출하여 중복 제거
-    - split_fallback=True: 콜백 미지원 provider에서 문장단위로 의사 스트리밍
+    미나쌤 보완 스트림(공용 파사드 사용).
+    - provider가 스트리밍을 지원하면 토막 단위로 yield
+    - 아니면 최종 텍스트를 문장 단위로 분할 후 여러 번 yield
     """
     if not answer and ctx and isinstance(ctx, dict):
         maybe = ctx.get("answer")
@@ -57,8 +65,4 @@ def evaluate_stream(
 
     sys_p = _system_prompt(mode)
     usr_p = _user_prompt(question, answer)
-    yield from stream_llm(
-        system_prompt=sys_p,
-        user_prompt=usr_p,
-        split_fallback=True,
-    )
+    yield from stream_llm(system_prompt=sys_p, user_prompt=usr_p, split_fallback=True)
