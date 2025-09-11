@@ -1,125 +1,98 @@
-# src/backup/github_release.py
-# =============================================================================
-# GitHub Release에서 최신 index_*.zip을 내려받아 dest_dir에 복원
-# - Ruff E402/E501 준수: import 최상단, 100자 래핑
-# - 네트워크/IO 실패 시 False 반환(예외 삼킴)
-# - 외부 의존: (선택) src.core.secret, src.core.index_probe
-# =============================================================================
+"""
+GitHub Release helper for MAIC index backups.
+
+- Clear logging on every failure path.
+- No silent pass: return False with reason or re-raise where appropriate.
+- Keep imports at top to satisfy ruff E402.
+"""
 from __future__ import annotations
 
 import json
 import os
+import traceback
 import zipfile
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 from urllib import error as er
 from urllib import request as rq
+from urllib import parse as ps
 
 
 __all__ = ["restore_latest", "resolve_owner_repo", "token"]
 
 
-# ============================== [01] Secrets & Repo ==============================
+def _log(msg: str) -> None:
+    print(f"[github_release] {msg}")
+
+
+def _log_exc(msg: str, e: Exception) -> None:
+    print(f"[github_release] {msg}: {type(e).__name__}: {e}")
+    traceback.print_exc()
+
+
 def token() -> str:
     """
-    GitHub 토큰 조회:
-      1) src.core.secret.token() (있으면)
-      2) env: GH_TOKEN / GITHUB_TOKEN
+    Resolve GH token from env/secrets consistently.
+    Returns empty string if not present.
     """
-    try:
-        # 지연 임포트: 순환 의존/환경 없는 테스트에서 안전
-        from src.core.secret import token as _tok  # type: ignore
-        t = _tok() or ""
-        if isinstance(t, str) and t.strip():
-            return t.strip()
-    except Exception:
-        pass
-    for k in ("GH_TOKEN", "GITHUB_TOKEN"):
-        v = os.getenv(k, "")
+    # Prefer env; streamlit secrets may not be available on CI.
+    for name in ("GH_TOKEN", "GITHUB_TOKEN"):
+        v = os.getenv(name, "")
         if v:
-            return v.strip()
+            return v
     return ""
 
 
 def resolve_owner_repo() -> Tuple[str, str]:
     """
-    owner/repo 결정:
-      1) src.core.secret.resolve_owner_repo() (있으면)
-      2) env: (GH_OWNER|GITHUB_OWNER) + (GH_REPO|GITHUB_REPO_NAME)
-      3) env: GITHUB_REPO="owner/repo"
+    Return (owner, repo) from env.
+    Accepted variables:
+      - GH_OWNER / GITHUB_OWNER
+      - GH_REPO / GITHUB_REPO_NAME
+      - GITHUB_REPO (format: owner/repo)
     """
-    try:
-        from src.core.secret import (  # type: ignore
-            resolve_owner_repo as _res,
-        )
-        ow, rp = _res()
-        if ow and rp:
-            return ow.strip(), rp.strip()
-    except Exception:
-        pass
+    owner = os.getenv("GH_OWNER") or os.getenv("GITHUB_OWNER") or ""
+    repo = os.getenv("GH_REPO") or os.getenv("GITHUB_REPO_NAME") or ""
 
-    owner = (os.getenv("GH_OWNER") or os.getenv("GITHUB_OWNER") or "").strip()
-    repo = (os.getenv("GH_REPO") or os.getenv("GITHUB_REPO_NAME") or "").strip()
-    if owner and repo:
-        return owner, repo
-
-    combo = (os.getenv("GITHUB_REPO") or "").strip()
+    combo = os.getenv("GITHUB_REPO", "")
     if combo and "/" in combo:
         o, r = combo.split("/", 1)
-        return o.strip(), r.strip()
+        owner, repo = o.strip(), r.strip()
 
-    return "", ""
+    return (owner or ""), (repo or "")
 
 
-# ============================== [02] HTTP Utilities ==============================
-def _api_json(url: str, *, token_: str) -> Dict[str, Any]:
-    """GitHub API GET → JSON(dict). 실패 시 빈 dict."""
-    req = rq.Request(url)
+def _gh_api(url: str, token_: str, data: Optional[bytes],
+            method: str, ctype: str) -> Dict[str, Any]:
+    req = rq.Request(url, data=data, method=method)
     if token_:
         req.add_header("Authorization", f"token {token_}")
     req.add_header("Accept", "application/vnd.github+json")
+    if ctype:
+        req.add_header("Content-Type", ctype)
+    with rq.urlopen(req, timeout=30) as resp:
+        txt = resp.read().decode("utf-8", "ignore")
+        try:
+            return json.loads(txt)
+        except Exception:
+            return {"_raw": txt}
+
+
+def _latest_release(owner: str, repo: str, token_: str) -> Dict[str, Any]:
+    url = f"https://api.github.com/repos/{owner}/{repo}/releases/latest"
     try:
-        with rq.urlopen(req, timeout=30) as resp:
-            txt = resp.read().decode("utf-8", "ignore")
-            try:
-                return json.loads(txt)
-            except Exception:
-                return {}
-    except er.HTTPError:
-        return {}
-    except Exception:
-        return {}
+        return _gh_api(url, token_, None, "GET", "")
+    except er.HTTPError as e:
+        return {"_error": f"HTTP {e.code}", "detail": e.read().decode()}
+    except Exception as e:
+        _log_exc("latest release fetch failed", e)
+        return {"_error": "network_error"}
 
 
-def _download(url: str, dest: Path, *, token_: str) -> bool:
-    """파일 다운로드. 성공 시 True."""
-    req = rq.Request(url)
-    if token_:
-        req.add_header("Authorization", f"token {token_}")
-    req.add_header("Accept", "application/octet-stream")
-    try:
-        with rq.urlopen(req, timeout=180) as resp, open(dest, "wb") as wf:
-            while True:
-                chunk = resp.read(1024 * 64)
-                if not chunk:
-                    break
-                wf.write(chunk)
-        return True
-    except Exception:
-        return False
-
-
-# ============================== [03] Asset Picker ===============================
-def _pick_index_asset(
-    release: Dict[str, Any],
-    *,
-    prefix: str = "index_",
-    suffix: str = ".zip",
-) -> Optional[Dict[str, Any]]:
-    """
-    릴리스 assets에서 index_*.zip 선택(최초 매칭 1개).
-    """
-    assets = release.get("assets") or []
+def _pick_index_asset(rel: Dict[str, Any],
+                      prefix: str = "index_",
+                      suffix: str = ".zip") -> Optional[Dict[str, Any]]:
+    assets = rel.get("assets") or []
     for a in assets:
         name = str(a.get("name") or "")
         if name.startswith(prefix) and name.endswith(suffix):
@@ -127,94 +100,79 @@ def _pick_index_asset(
     return None
 
 
-# ============================== [04] Extractor =================================
-def _extract_zip(src_zip: Path, dest_dir: Path) -> bool:
-    """ZIP 압축 해제. 성공 시 True."""
+def _download(url: str, dest: Path) -> bool:
     try:
-        with zipfile.ZipFile(src_zip, "r") as zf:
+        rq.urlretrieve(url, dest)  # noqa: S310 (trusted URL from GitHub)
+        return True
+    except Exception as e:
+        _log_exc("download failed", e)
+        return False
+
+
+def _extract(zip_path: Path, dest_dir: Path) -> bool:
+    try:
+        with zipfile.ZipFile(zip_path, "r") as zf:
             zf.extractall(dest_dir)
         return True
-    except Exception:
+    except Exception as e:
+        _log_exc("zip extract failed", e)
         return False
 
 
-def _mark_ready(dest_dir: Path) -> None:
+def restore_latest(*, dest_dir: Path) -> bool:
     """
-    가능하면 코어 API로 ready 마킹. 실패 시 .ready 파일로 폴백.
-    (테스트 환경 안전성 위해 예외 삼킴)
+    Download latest index_*.zip from releases and extract into dest_dir.
+    Returns True on success, False on any error with logs printed.
     """
+    tok = token()
+    owner, repo = resolve_owner_repo()
+    if not owner or not repo:
+        _log("owner/repo not set. Set GH_OWNER/GH_REPO or GITHUB_REPO.")
+        return False
+    if not tok:
+        _log("token missing. Add GH_TOKEN or GITHUB_TOKEN in repository secrets.")
+        return False
+
+    rel = _latest_release(owner, repo, tok)
+    if "_error" in rel:
+        _log(f"latest release error: {rel.get('_error')}")
+        if "detail" in rel:
+            _log(rel["detail"][:300])
+        return False
+
+    asset = _pick_index_asset(rel)
+    if not asset:
+        _log("no index_*.zip asset in latest release.")
+        return False
+
+    dl = asset.get("browser_download_url")
+    if not dl:
+        _log("asset has no browser_download_url.")
+        return False
+
     try:
-        from src.core.index_probe import mark_ready as _mark  # type: ignore
-        _mark(dest_dir)
-        return
+        dest_dir.mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        _log_exc("cannot create dest_dir", e)
+        return False
+
+    tmp = dest_dir / f"__restore_{asset.get('id', 'unknown')}.zip"
+    if not _download(str(dl), tmp):
+        return False
+
+    ok = _extract(tmp, dest_dir)
+    try:
+        tmp.unlink(missing_ok=True)  # py>=3.8
     except Exception:
         pass
+    if not ok:
+        return False
+
+    # mark ready
     try:
         (dest_dir / ".ready").write_text("ok", encoding="utf-8")
-    except Exception:
-        pass
-
-
-# ============================== [05] Public API =================================
-def restore_latest(
-    *,
-    dest_dir: str | Path,
-    asset_prefix: str = "index_",
-    asset_suffix: str = ".zip",
-) -> bool:
-    """
-    최신 릴리스에서 index_*.zip을 내려받아 dest_dir에 복원.
-    성공 시 True, 실패 시 False.
-
-    동작 요건:
-      - token(): GH_TOKEN/GITHUB_TOKEN 또는 core.secret.token()
-      - resolve_owner_repo(): owner/repo
-    """
-    t = token()
-    ow, rp = resolve_owner_repo()
-    if not (t and ow and rp):
-        return False
-
-    dest = Path(dest_dir).expanduser().resolve()
-    try:
-        dest.mkdir(parents=True, exist_ok=True)
-    except Exception:
-        return False
-
-    api = f"https://api.github.com/repos/{ow}/{rp}/releases/latest"
-    rel = _api_json(api, token_=t)
-    if not rel:
-        return False
-
-    asset = _pick_index_asset(rel, prefix=asset_prefix, suffix=asset_suffix)
-    if not asset:
-        return False
-
-    dl = str(asset.get("browser_download_url") or "")
-    if not dl:
-        return False
-
-    tmp = dest / f"__restore_{asset.get('id') or 'latest'}.zip"
-    ok = _download(dl, tmp, token_=t)
-    if not ok:
-        try:
-            if tmp.exists():
-                tmp.unlink(missing_ok=True)  # type: ignore[arg-type]
-        except Exception:
-            pass
-        return False
-
-    if not _extract_zip(tmp, dest):
-        try:
-            tmp.unlink(missing_ok=True)  # type: ignore[arg-type]
-        except Exception:
-            pass
-        return False
-
-    try:
-        tmp.unlink(missing_ok=True)  # type: ignore[arg-type]
-    except Exception:
-        pass
-
-    _mark_ready(dest)
+    except Exception as e:
+        _log_exc("failed to mark .ready", e)
+        # still consider success; index extracted
+    _log("restore_latest: success")
     return True
