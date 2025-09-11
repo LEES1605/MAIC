@@ -2,8 +2,7 @@
 # ================================ Answer Stream ================================
 from __future__ import annotations
 
-from typing import Any, Dict, Iterator, Optional
-
+from typing import Iterator, Optional, Dict
 from src.agents._common import stream_llm
 
 def _system_prompt(mode: str) -> str:
@@ -18,18 +17,16 @@ def _system_prompt(mode: str) -> str:
     )
 
 def answer_stream(
-    *,
-    question: str,
-    mode: str,
-    ctx: Optional[Dict[str, Any]] = None,
+    *, question: str, mode: str, ctx: Optional[Dict[str, str]] = None
 ) -> Iterator[str]:
     """
     주답변(피티쌤) 스트리밍 제너레이터.
-    - 공통 스트리머(stream_llm)만 사용 (로컬 헬퍼 없음)
+    - 공통 SSOT(stream_llm)만 호출하여 중복 제거
+    - split_fallback=True: 콜백 미지원 provider에서 문장단위로 의사 스트리밍
     """
     sys_p = _system_prompt(mode)
     yield from stream_llm(
         system_prompt=sys_p,
-        user_input=question,
+        user_prompt=question,
         split_fallback=True,
     )
