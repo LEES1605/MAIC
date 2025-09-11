@@ -24,17 +24,25 @@ from src.core.index_probe import (
     mark_ready as core_mark_ready,
 )
 # ======================= [02C] Error logger (early) =======================
-def _errlog(msg: str, where: str = "", exc: Exception | None = None) -> None:
+def _errlog(
+    msg: str,
+    where: str = "",
+    exc: Exception | None = None,
+    *,
+    fatal: bool = False,  # ← mypy 에러 원인 해결: fatal 인자 추가(키워드 전용)
+) -> None:
     """표준 에러 로깅(민감정보 금지, 실패 무해화).
     - 앱 초기화 구간에서도 사용되므로 '최상단'에 위치.
     - Streamlit이 없거나 초기화 전이어도 안전하게 작동.
     """
     try:
         prefix = f"{where} " if where else ""
-        print(f"[ERR] {prefix}{msg}")
+        level = "FATAL" if fatal else "ERR"
+        print(f"[{level}] {prefix}{msg}")
         if exc:
-            # 콘솔/CI 에 풀 트레이스 출력
+            # 콘솔/CI에 풀 트레이스 출력
             traceback.print_exception(type(exc), exc, exc.__traceback__)
+
         # Streamlit UI에 선택적으로 상세 로그 표시 (있을 때만)
         try:
             import streamlit as _st  # lazy import: 초기화 전에도 안전
@@ -47,6 +55,9 @@ def _errlog(msg: str, where: str = "", exc: Exception | None = None) -> None:
                         )
                     except Exception:
                         detail = "traceback 사용 불가"
+                # 치명도에 따라 시각적 강조
+                if fatal:
+                    _st.error(f"{prefix}{msg}")
                 _st.code(f"{prefix}{msg}\n{detail}")
         except Exception:
             pass
