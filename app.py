@@ -151,7 +151,6 @@ if st:
     try:
         st.set_page_config(page_title="LEES AI Teacher", layout="wide")
     except Exception:
-        # _errlog는 아직 정의 전이므로 여기서는 조용히 패스(로그는 아래 공용 로거 사용)
         pass
 
 
@@ -161,7 +160,6 @@ PERSIST_DIR: Path = effective_persist_dir()
 try:
     PERSIST_DIR.mkdir(parents=True, exist_ok=True)
 except Exception:
-    # 여기서도 _errlog는 아직 정의 전일 수 있으므로 조용히 패스
     pass
 
 # 세션 공유(있을 때만)
@@ -194,8 +192,9 @@ def _errlog(msg: str, where: str = "", exc: Exception | None = None) -> None:
             pass
     except Exception:
         pass
-# ======================= [05] 경로/상태 & 에러 로거 — END =========================
 
+
+# ======================= [05] 경로/상태 & 에러 로거 — END =========================
 # ========================= [06] ACCESS: Admin Gate ============================
 def _is_admin_view() -> bool:
     """관리자 패널 표시 여부(학생 화면 완전 차단).
@@ -476,7 +475,9 @@ def _auto_start_once() -> None:
 # =================== [12] DIAG: Orchestrator Header ======================
 def _render_index_orchestrator_header() -> None:
     """상단 진단 헤더(미니멀): Persist 경로, 상태칩만 간결 표기."""
-    if "st" not in globals() or st is None:
+    if "st" in globals() and st is None:
+        return
+    if st is None:
         return
 
     st.markdown("### 🧪 인덱스 오케스트레이터")
@@ -535,14 +536,7 @@ def _render_admin_index_panel() -> None:
     if "_IDX_PH_S6" not in st.session_state:
         st.session_state["_IDX_PH_S6"] = st.empty()
 
-    step_names: List[str] = [
-        "스캔",
-        "Persist확정",
-        "인덱싱",
-        "prepared소비",
-        "요약/배지",
-        "ZIP/Release",
-    ]
+    step_names: List[str] = ["스캔", "Persist확정", "인덱싱", "prepared소비", "요약/배지", "ZIP/Release"]
     stall_threshold_sec = 60
 
     def _step_reset(names: List[str]) -> None:
@@ -956,8 +950,9 @@ def _render_admin_index_panel() -> None:
             st.text("\n".join(buf))
         else:
             st.caption("표시할 로그가 없습니다.")
-# =================== [13] ADMIN: Index Panel (prepared 전용) ==============
 
+
+# =================== [13] ADMIN: Index Panel (prepared 전용) ==============
 
 # ========== [13A] ADMIN: Panels (legacy aggregator, no-op) ==========
 def _render_admin_panels() -> None:
@@ -1216,6 +1211,7 @@ def _inject_chat_styles_once() -> None:
         unsafe_allow_html=True,
     )
 
+
 # [15B] START: _render_mode_controls_pills (FULL REPLACEMENT)
 def _render_mode_controls_pills() -> str:
     """
@@ -1420,8 +1416,9 @@ def _render_chat_panel() -> None:
 
     ss["last_q"] = question
     ss["inpane_q"] = ""
-# [16] END
 
+
+# [16] END
 
 # ========================== [17] 본문 렌더 ===============================
 def _render_body() -> None:
@@ -1508,10 +1505,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except Exception as e:  # 안전망: CI에서 실제 trace를 볼 수 있게 함
-        print("Unhandled error in main:", e)
-        traceback.print_exc()
-        _errlog("Unhandled error in main", where="[main]", exc=e)
-        raise
+    main()
