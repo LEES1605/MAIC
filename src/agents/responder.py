@@ -19,7 +19,7 @@ def answer_stream(
     """
     # SSOT system prompt (존재하면 사용, 없으면 안전 폴백)
     try:
-        from src.core.prompts import system_prompt_for_responder as _spr  # type: ignore
+        from src.core.prompts import system_prompt_for_responder as _spr
         sys_p = _spr(mode, ctx)
     except Exception:
         sys_p = (
