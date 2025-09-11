@@ -19,7 +19,6 @@ from queue import Empty, Queue
 from threading import Thread
 from typing import Any, Callable, Dict, Iterable, Iterator, List, Mapping, Optional
 
-
 __all__ = [
     "_split_sentences",
     "StreamState",
@@ -49,18 +48,19 @@ def _split_sentences(text: str) -> List[str]:
     parts = [p.strip() for p in _SENT_SEP.split(raw)]
     return [p for p in parts if p]
 
+
 # ---------------------------- streaming helpers -----------------------------
 @dataclass
 class StreamState:
     """스트리밍 누적 버퍼 상태."""
     buffer: str = ""
 
+
 def _on_piece(
     state: StreamState,
     piece: Optional[str],
     emit: Callable[[str], None],
 ) -> None:
-
     """
     조각(piece)을 누적하고 emitter로 전달.
     - piece가 None/공백이면 무시
@@ -82,6 +82,7 @@ def _runner(chunks: Iterable[str], on_piece: Callable[[str], None]) -> None:
     for c in chunks:
         on_piece(str(c))
 
+
 # --------------------------- provider integration ---------------------------
 def _build_io_kwargs(
     params: Mapping[str, inspect.Parameter],
@@ -94,9 +95,7 @@ def _build_io_kwargs(
     - messages 또는 prompt/user_prompt + system/system_prompt 모두 대응
     """
     kwargs: Dict[str, Any] = {}
-    # 우선순위: (messages) -> (prompt/user_prompt + system)
     if "messages" in params:
-        up = (user_prompt if user_prompt is not None else question) or ""
         kwargs["messages"] = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_text},
@@ -108,9 +107,9 @@ def _build_io_kwargs(
         elif "user_prompt" in params:
             kwargs["user_prompt"] = user_text
         if "system_prompt" in params:
-            kwargs["system_prompt"] = system_prompt or ""
+            kwargs["system_prompt"] = system_prompt
         elif "system" in params:
-            kwargs["system"] = system_prompt or ""
+            kwargs["system"] = system_prompt
     return kwargs
 
 
@@ -195,13 +194,13 @@ def stream_llm(
             return
 
         # 콜백 미지원 → 결과텍스트를 분리 또는 통으로 반환
-
         try:
             res = call(**kwargs)
             txt = res.get("text") if isinstance(res, dict) else str(res)
         except Exception as e:  # pragma: no cover
             yield f"(오류) {type(e).__name__}: {e}"
             return
+
         txt = str(txt or "")
         if not split_fallback:
             # 통으로 한 번만
