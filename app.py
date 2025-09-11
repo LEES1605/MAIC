@@ -2,11 +2,11 @@
 from __future__ import annotations
 
 # =============================== [02] module imports ==============================
-import importlib
-import json
 import os
+import json
 import time
 import traceback
+import importlib
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -16,7 +16,7 @@ try:
 except Exception:
     st = None  # Streamlit 미설치 환경(예: CI) 대비
 
-# 코어 임포트(모듈 최상단 유지: E402 예방)
+# ⛳️ SSOT 코어 임포트(상단 고정: E402 예방)
 from src.core.secret import promote_env as _promote_env, get as _secret_get
 from src.core.persist import effective_persist_dir, share_persist_dir_to_session
 from src.core.index_probe import (
@@ -24,66 +24,30 @@ from src.core.index_probe import (
     mark_ready as core_mark_ready,
 )
 
-
-# ====================== [02B] 공용 에러 로거 (정의 → 사용 순서 보장) ======================
-def _errlog(msg: str, where: str = "", exc: Exception | None = None) -> None:
-    """
-    표준 에러 로깅(민감정보 금지, 실패 무해화).
-    - 콘솔/워크플로우 로그에 남김
-    - Streamlit UI가 있으면, expandable에 traceback까지 노출
-    """
-    try:
-        prefix = f"{where} " if where else ""
-        print(f"[ERR] {prefix}{msg}")
-        if exc:
-            traceback.print_exception(exc)
-        # Streamlit UI 표시는 실패해도 앱에 영향 없게 감쌈
-        if st is not None:
-            try:
-                with st.expander("자세한 오류 로그", expanded=False):
-                    detail = ""
-                    if exc:
-                        try:
-                            detail = "".join(
-                                traceback.format_exception(
-                                    type(exc), exc, exc.__traceback__
-                                )
-                            )
-                        except Exception:
-                            detail = "traceback 사용 불가"
-                    st.code(f"{prefix}{msg}\n{detail}")
-            except Exception:
-                pass
-    except Exception:
-        pass
-
-
 # =========================== [03] CORE: Persist Resolver ==========================
 def _effective_persist_dir() -> Path:
     """앱 전역 Persist 경로(코어 SSOT 위임). 실패 시 안전 폴백."""
     try:
         return effective_persist_dir()
-    except Exception as e:
-        _errlog("effective_persist_dir 실패, 홈 디렉토리로 폴백", "[persist]", e)
+    except Exception:
         return Path.home() / ".maic" / "persist"
-
+# =========================== [03] END =============================================
 
 # ====================== [03B] COMMON: Prepared Helpers ======================
 def _persist_dir_safe() -> Path:
     """SSOT persist 경로. 코어 모듈 우선, 실패 시 기본값."""
     try:
+        # effective_persist_dir()은 src.core.persist에서 결정되며, side-effect-free여야 한다.
         return Path(str(effective_persist_dir())).expanduser()
-    except Exception as e:
-        _errlog("persist 경로 조회 실패, 홈 폴백", "[persist]", e)
+    except Exception:
         return Path.home() / ".maic" / "persist"
 
 
 def _load_prepared_lister():
-    """
-    prepared 파일 나열 함수 로더.
+    """prepared 파일 나열 함수 로더.
     반환: (callable | None, tried_logs: List[str])
     """
-    tried: List[str] = []
+    tried = []
 
     def _try(modname: str):
         try:
@@ -107,11 +71,10 @@ def _load_prepared_lister():
 
 
 def _load_prepared_api():
-    """
-    prepared 소비 API(check_prepared_updates/mark_prepared_consumed) 로더.
+    """prepared 소비 API(check_prepared_updates/mark_prepared_consumed) 로더.
     반환: (chk_fn | None, mark_fn | None, tried_logs: List[str])
     """
-    tried2: List[str] = []
+    tried2 = []
 
     def _try(modname: str):
         try:
@@ -138,7 +101,7 @@ def _load_prepared_api():
         if chk and mark:
             return chk, mark, tried2
     return None, None, tried2
-
+# ====================== [03B] END ==========================================
 
 # ================== [04] secrets → env 승격 & 페이지 설정(안정 옵션) =================
 def _bootstrap_env() -> None:
@@ -172,10 +135,10 @@ def _bootstrap_env() -> None:
                 "GDRIVE_BACKUP_FOLDER_ID",
             ]
         )
-    except Exception as e:
-        _errlog("secrets 승격 실패", "[bootstrap]", e)
+    except Exception:
+        pass
 
-    # Streamlit 안정화(환경변수 기반)
+    # Streamlit 안정화
     os.environ.setdefault("STREAMLIT_SERVER_FILE_WATCHER_TYPE", "none")
     os.environ.setdefault("STREAMLIT_RUN_ON_SAVE", "false")
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
@@ -187,28 +150,54 @@ _bootstrap_env()
 if st:
     try:
         st.set_page_config(page_title="LEES AI Teacher", layout="wide")
-    except Exception as e:
-        _errlog("set_page_config 실패(권한/중복 호출 가능)", "[st]", e)
+    except Exception:
+        pass
 
 
-# ======================= [05] 경로/상태 & 세션 공유 =======================
-PERSIST_DIR: Path = _effective_persist_dir()
+# ======================= [05] 경로/상태 & 에러 로거 — START =======================
+# SSOT 결정값만 사용
+PERSIST_DIR: Path = effective_persist_dir()
 try:
     PERSIST_DIR.mkdir(parents=True, exist_ok=True)
-except Exception as e:
-    _errlog("persist 디렉토리 생성 실패", "[persist.mkdir]", e)
+except Exception:
+    pass
 
 # 세션 공유(있을 때만)
 try:
     share_persist_dir_to_session(PERSIST_DIR)
-except Exception as e:
-    _errlog("persist 경로 세션 공유 실패", "[persist.share]", e)
+except Exception:
+    pass
 
 
+def _errlog(msg: str, where: str = "", exc: Exception | None = None) -> None:
+    """표준 에러 로깅(민감정보 금지, 실패 무해화)."""
+    try:
+        prefix = f"{where} " if where else ""
+        print(f"[ERR] {prefix}{msg}")
+        if exc:
+            traceback.print_exception(exc)
+        try:
+            import streamlit as st  # lazy
+            with st.expander("자세한 오류 로그", expanded=False):
+                detail = ""
+                if exc:
+                    try:
+                        detail = "".join(
+                            traceback.format_exception(type(exc), exc, exc.__traceback__)
+                        )
+                    except Exception:
+                        detail = "traceback 사용 불가"
+                st.code(f"{prefix}{msg}\n{detail}")
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
+# ======================= [05] 경로/상태 & 에러 로거 — END =========================
 # ========================= [06] ACCESS: Admin Gate ============================
 def _is_admin_view() -> bool:
-    """
-    관리자 패널 표시 여부(학생 화면 완전 차단).
+    """관리자 패널 표시 여부(학생 화면 완전 차단).
     단일 키 'admin_mode'만 사용. (하위호환: is_admin → admin_mode 승격 1회)
     """
     if st is None:
@@ -251,17 +240,17 @@ def _safe_rerun(tag: str, ttl: int = 1) -> None:
         pass
 
 
-# ================= [08] 헤더(배지·타이틀·로그인/아웃) =====================
+# ================= [08] 헤더(배지·타이틀·로그인/아웃) — START ==============
 def _header() -> None:
     """모듈화된 헤더 호출 래퍼(호환용)."""
     try:
         from src.ui.header import render as _render_header  # lazy import
         _render_header()
-    except Exception as e:
+    except Exception:
         # fallback: 최소 타이틀
         if st is not None:
             st.markdown("### LEES AI Teacher")
-        _errlog("헤더 렌더 실패, fallback 적용", "[header]", e)
+# ================= [08] 헤더(배지·타이틀·로그인/아웃) — END ===============
 
 
 # ======================= [09] 배경(비활성: No-Op) ===========================
@@ -295,8 +284,7 @@ def _mount_background(
 
 # =================== [10] 부팅 훅: 인덱스 자동 복원 =======================
 def _boot_auto_restore_index() -> None:
-    """
-    부팅 시 인덱스 자동 복원(한 세션 1회).
+    """부팅 시 인덱스 자동 복원(한 세션 1회).
     - 조건: chunks.jsonl==0B 또는 미존재, 또는 .ready 미존재
     - 동작: GH Releases에서 최신 index_*.zip 받아서 복원
     - SSOT: persist는 core.persist.effective_persist_dir()만 사용
@@ -308,7 +296,7 @@ def _boot_auto_restore_index() -> None:
     except Exception:
         pass
 
-    p = _effective_persist_dir()
+    p = effective_persist_dir()
     cj = p / "chunks.jsonl"
     ready = (p / ".ready").exists()
     if cj.exists() and cj.stat().st_size > 0 and ready:
@@ -327,13 +315,11 @@ def _boot_auto_restore_index() -> None:
         )
         token = _gh_token() or ""
         owner, repo = _resolve_owner_repo()
-    except Exception as e:
-        _errlog("GitHub 시크릿 해석 실패", "[auto-restore.secret]", e)
+    except Exception:
         token, owner, repo = "", "", ""
 
     if not (token and owner and repo):
-        # 복원 불가(시크릿 미설정) — 조용한 종료
-        return
+        return  # 복원 불가(시크릿 미설정)
 
     # ---- 최신 릴리스의 index_*.zip 다운로드 ----
     from urllib import request as _rq
@@ -351,8 +337,7 @@ def _boot_auto_restore_index() -> None:
         )
         with _rq.urlopen(req, timeout=20) as resp:
             data = _json.loads(resp.read().decode("utf-8", "ignore"))
-    except Exception as e:
-        _errlog("릴리스 메타 로드 실패", "[auto-restore.fetch]", e)
+    except Exception:
         return
 
     asset = None
@@ -396,9 +381,9 @@ def _boot_auto_restore_index() -> None:
                 st.session_state["_BOOT_RESTORE_DONE"] = True
         except Exception:
             pass
-    except Exception as e:
-        _errlog("인덱스 zip 복원 실패", "[auto-restore.unpack]", e)
+    except Exception:
         return
+# =================== [10] 부팅 훅: 인덱스 자동 복원 — END =====================
 
 
 # =================== [11] 부팅 오토플로우 & 자동 복원 모드 ==================
@@ -415,7 +400,7 @@ def _boot_autoflow_hook() -> None:
         if mod and hasattr(mod, "autoflow_boot_check"):
             mod.autoflow_boot_check(interactive=_is_admin_view())
     except Exception as e:
-        _errlog("autoflow 부트 훅 실패", "[boot_hook]", e)
+        _errlog(f"boot_autoflow_hook: {e}", where="[boot_hook]", exc=e)
 
 
 def _set_brain_status(
@@ -428,6 +413,7 @@ def _set_brain_status(
     ss["brain_status_msg"] = msg
     ss["brain_source"] = source
     ss["brain_attached"] = bool(attached)
+    ss["restore_recommend"] = code in ("MISSING", "ERROR")
     ss.setdefault("index_decision_needed", False)
     ss.setdefault("index_change_stats", {})
 
@@ -457,13 +443,13 @@ def _auto_start_once() -> None:
     except Exception:
         fn = None
 
-    used_persist = _effective_persist_dir()
+    used_persist = effective_persist_dir()
     ok = False
     if callable(fn):
         try:
             ok = bool(fn(dest_dir=used_persist))
         except Exception as e:
-            _errlog("restore_latest 실패", "[auto_start]", e)
+            _errlog(f"restore_latest failed: {e}", where="[auto_start]", exc=e)
             ok = False
     else:
         try:
@@ -483,6 +469,7 @@ def _auto_start_once() -> None:
             st.success("자동 복원 완료")
         _set_brain_status("READY", "자동 복원 완료", "release", attached=True)
         _safe_rerun("auto_start", ttl=1)
+# =================== [11] 부팅 오토플로우 & 자동 복원 모드 — END ==================
 
 
 # =================== [12] DIAG: Orchestrator Header ======================
@@ -512,12 +499,13 @@ def _render_index_orchestrator_header() -> None:
     st.markdown(f"**상태**\n\n{badge}")
 
     st.info(
-        "강제 인덱싱(HQ, 느림)·백업과 인덱싱 파일 미리보기는 "
-        "**관리자 인덱싱 패널**에서 합니다. 관리자 모드 진입 후 아래 섹션으로 이동하세요.",
+        "강제 인덱싱(HQ, 느림)·백업과 인덱싱 파일 미리보기는 **관리자 인덱싱 패널**에서 합니다. "
+        "관리자 모드 진입 후 아래 섹션으로 이동하세요.",
         icon="ℹ️",
     )
 
     st.markdown("<span id='idx-admin-panel'></span>", unsafe_allow_html=True)
+# =================== [12] DIAG: Orchestrator Header — END ======================
 
 
 # =================== [13] ADMIN: Index Panel (prepared 전용) ==============
@@ -546,14 +534,7 @@ def _render_admin_index_panel() -> None:
     if "_IDX_PH_S6" not in st.session_state:
         st.session_state["_IDX_PH_S6"] = st.empty()
 
-    step_names: List[str] = [
-        "스캔",
-        "Persist확정",
-        "인덱싱",
-        "prepared소비",
-        "요약/배지",
-        "ZIP/Release",
-    ]
+    step_names: List[str] = ["스캔", "Persist확정", "인덱싱", "prepared소비", "요약/배지", "ZIP/Release"]
     stall_threshold_sec = 60
 
     def _step_reset(names: List[str]) -> None:
@@ -586,9 +567,7 @@ def _render_admin_index_panel() -> None:
         for i, s in enumerate(_steps(), start=1):
             note = f" — {s.get('note','')}" if s.get("note") else ""
             lines.append(f"{_icon(s['state'])} {i}. {s['name']}{note}")
-        st.session_state["_IDX_PH_STEPS"].markdown(
-            "\n".join(f"- {ln}" for ln in lines)
-        )
+        st.session_state["_IDX_PH_STEPS"].markdown("\n".join(f"- {ln}" for ln in lines))
 
     def _update_progress() -> None:
         steps = _steps()
@@ -616,13 +595,9 @@ def _render_admin_index_panel() -> None:
         running = any(s["state"] == "run" for s in _steps())
         stalled = running and since_last >= stall_threshold_sec
         if stalled:
-            text = (
-                f"🟥 **STALLED** · 마지막 업데이트 {since_last}s 전 · 총 경과 {since_start}s"
-            )
+            text = f"🟥 **STALLED** · 마지막 업데이트 {since_last}s 전 · 총 경과 {since_start}s"
         elif running:
-            text = (
-                f"🟦 RUNNING · 마지막 업데이트 {since_last}s 전 · 총 경과 {since_start}s"
-            )
+            text = f"🟦 RUNNING · 마지막 업데이트 {since_last}s 전 · 총 경과 {since_start}s"
         else:
             text = f"🟩 IDLE/COMPLETE · 총 경과 {since_start}s"
         st.session_state["_IDX_PH_STATUS"].markdown(text)
@@ -975,16 +950,17 @@ def _render_admin_index_panel() -> None:
             st.caption("표시할 로그가 없습니다.")
 
 
+# =================== [13] ADMIN: Index Panel (prepared 전용) ==============
+
 # ========== [13A] ADMIN: Panels (legacy aggregator, no-op) ==========
 def _render_admin_panels() -> None:
     """과거 집계 렌더러 호환용(현재는 사용 안함)."""
     return None
 
 
-# =================== [13B] ADMIN: Prepared Scan ============================
+# =================== [13B] ADMIN: Prepared Scan — START ====================
 def _render_admin_prepared_scan_panel() -> None:
-    """
-    prepared 폴더의 '새 파일 유무'만 확인하는 경량 스캐너.
+    """prepared 폴더의 '새 파일 유무'만 확인하는 경량 스캐너.
     - 인덱싱은 수행하지 않고, check_prepared_updates()만 호출
     - 결과: 새 파일 개수, 샘플 목록, 디버그 경로
     """
@@ -1056,11 +1032,13 @@ def _render_admin_prepared_scan_panel() -> None:
         with st.expander("새 파일 미리보기(최대 50개)"):
             rows = []
             for rec in (new_files[:50] if isinstance(new_files, list) else []):
-                # 항목이 문자열/딕셔너리일 수 있으므로 방어적 처리
+                # 항목이 문자열(경로/이름)일 수도 있고 dict일 수도 있으므로 방어적 처리
                 if isinstance(rec, str):
                     rows.append({"name": rec})
                 elif isinstance(rec, dict):
-                    nm = str(rec.get("name") or rec.get("path") or rec.get("file") or "")
+                    nm = str(
+                        rec.get("name") or rec.get("path") or rec.get("file") or ""
+                    )
                     fid = str(rec.get("id") or rec.get("fileId") or "")
                     rows.append({"name": nm, "id": fid})
             if rows:
@@ -1078,6 +1056,7 @@ def _render_admin_prepared_scan_panel() -> None:
         "timestamp": int(time.time()),
         "sample_new": new_files[:10] if isinstance(new_files, list) else [],
     }
+# =================== [13B] ADMIN: Prepared Scan — END ====================
 
 
 # ============= [14] 인덱싱된 소스 목록(읽기 전용 대시보드) ==============
@@ -1122,13 +1101,18 @@ def _render_admin_indexed_sources_panel() -> None:
                     )
                     row["chunks"] += 1
         except Exception as e:
-            _errlog("chunks.jsonl 읽기 실패", "[indexed-sources.read]", e)
+            _errlog(
+                f"read chunks.jsonl failed: {e}",
+                where="[indexed-sources.read]",
+                exc=e,
+            )
             st.error("인덱스 파일을 읽는 중 오류가 발생했어요.")
             return
 
         table: List[Dict[str, Any]] = list(docs.values())
         st.caption(
-            f"총 청크 수: **{total_lines}** · 문서 수: **{len(table)}** (파싱오류 {parse_errors}건)"
+            f"총 청크 수: **{total_lines}** · 문서 수: **{len(table)}** "
+            f"(파싱오류 {parse_errors}건)"
         )
         rows2 = [
             {
@@ -1226,7 +1210,7 @@ def _inject_chat_styles_once() -> None:
     )
 
 
-# =================== [15B] 모드 선택 라디오 ===============================
+# [15B] START: _render_mode_controls_pills (FULL REPLACEMENT)
 def _render_mode_controls_pills() -> str:
     """
     질문 모드 선택(문법·문장·지문[·이야기]).
@@ -1243,7 +1227,7 @@ def _render_mode_controls_pills() -> str:
         labels = [m.label for m in modes]
         keys = [m.key for m in modes]
     except Exception:
-        # 문제가 생겨도 최소 3모드는 유지
+        # 문제가 생겨도 최소 3모드는 유지(폴백 함수 정의는 금지)
         labels = ["문법", "문장", "지문"]
         keys = ["grammar", "sentence", "passage"]
 
@@ -1277,14 +1261,15 @@ def _render_mode_controls_pills() -> str:
     ss["qa_mode_radio"] = sel_label
     ss["__mode"] = cur_key
     return cur_key
+# [15B] END
 
 
-# =================== [16] 채팅 패널 (스트리밍) ============================
+# [16] START: 채팅 패널 (FULL REPLACEMENT)
 def _render_chat_panel() -> None:
     """질문(오른쪽) → 피티쌤(스트리밍) → 미나쌤(스트리밍)."""
+    import importlib as _imp
     import html
     import re
-    import importlib as _imp
     from typing import Optional
     from src.agents.responder import answer_stream
     from src.agents.evaluator import evaluate_stream
@@ -1308,7 +1293,7 @@ def _render_chat_panel() -> None:
         from modes.types import sanitize_source_label
     except Exception:
 
-        def sanitize_source_label(label: Optional[str]) -> str:  # type: ignore
+        def sanitize_source_label(label: Optional[str]) -> str:
             return "[AI지식]"
 
     def _esc(t: str) -> str:
@@ -1351,7 +1336,7 @@ def _render_chat_panel() -> None:
 
     # --- 검색 → 라벨 → 칩 문자열
     src_label = "[AI지식]"
-    hits: List[Any] = []
+    hits = []
     if callable(_search_hits):
         try:
             hits = _search_hits(question, top_k=5)
@@ -1422,10 +1407,7 @@ def _render_chat_panel() -> None:
         ),
     )
     for piece in evaluate_stream(
-        question=question,
-        mode=ss.get("__mode", ""),
-        answer=full_answer,
-        ctx={"answer": full_answer},
+        question=question, mode=ss.get("__mode", ""), answer=full_answer, ctx={"answer": full_answer}
     ):
         emit_chunk_eval(str(piece or ""))
     close_stream_eval()
@@ -1433,6 +1415,8 @@ def _render_chat_panel() -> None:
     ss["last_q"] = question
     ss["inpane_q"] = ""
 
+
+# [16] END
 
 # ========================== [17] 본문 렌더 ===============================
 def _render_body() -> None:
@@ -1444,7 +1428,7 @@ def _render_body() -> None:
             _boot_auto_restore_index()
             _boot_autoflow_hook()
         except Exception as e:
-            _errlog("boot check 실패", "[render_body.boot]", e)
+            _errlog(f"boot check failed: {e}", where="[render_body.boot]", exc=e)
         finally:
             st.session_state["_boot_checked"] = True
 
@@ -1469,16 +1453,16 @@ def _render_body() -> None:
         _render_index_orchestrator_header()
         try:
             _render_admin_prepared_scan_panel()
-        except Exception as e:
-            _errlog("prepared 스캔 패널 실패", "[render_body.scan]", e)
+        except Exception:
+            pass
         try:
             _render_admin_index_panel()
-        except Exception as e:
-            _errlog("인덱싱 패널 실패", "[render_body.index]", e)
+        except Exception:
+            pass
         try:
             _render_admin_indexed_sources_panel()
-        except Exception as e:
-            _errlog("읽기전용 목록 패널 실패", "[render_body.sources]", e)
+        except Exception:
+            pass
 
     _auto_start_once()
 
@@ -1490,13 +1474,13 @@ def _render_body() -> None:
         try:
             _render_chat_panel()
         except Exception as e:
-            _errlog("chat panel 실패", "[render_body.chat]", e)
+            _errlog(f"chat panel failed: {e}", where="[render_body.chat]", exc=e)
         st.markdown("</div></div>", unsafe_allow_html=True)
 
     with st.container(border=True, key="chatpane_container"):
         st.markdown('<div class="chatpane">', unsafe_allow_html=True)
-        st.session_state["__mode"] = (
-            _render_mode_controls_pills() or st.session_state.get("__mode", "")
+        st.session_state["__mode"] = _render_mode_controls_pills() or st.session_state.get(
+            "__mode", ""
         )
         with st.form("chat_form", clear_on_submit=False):
             q: str = st.text_input("질문", placeholder="질문을 입력하세요…", key="q_text")
@@ -1519,11 +1503,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except Exception as e:
-        # 워크플로우에서 원인 파악 용이하게 전체 traceback 로그
-        print("Unhandled error in main:", e)
-        traceback.print_exc()
-        _errlog("Unhandled error in main", "[main]", e)
-        raise
+    main()
