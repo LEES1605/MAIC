@@ -23,6 +23,37 @@ from src.core.index_probe import (
     is_brain_ready as core_is_ready,
     mark_ready as core_mark_ready,
 )
+# ======================= [02C] Error logger (early) =======================
+def _errlog(msg: str, where: str = "", exc: Exception | None = None) -> None:
+    """표준 에러 로깅(민감정보 금지, 실패 무해화).
+    - 앱 초기화 구간에서도 사용되므로 '최상단'에 위치.
+    - Streamlit이 없거나 초기화 전이어도 안전하게 작동.
+    """
+    try:
+        prefix = f"{where} " if where else ""
+        print(f"[ERR] {prefix}{msg}")
+        if exc:
+            # 콘솔/CI 에 풀 트레이스 출력
+            traceback.print_exception(type(exc), exc, exc.__traceback__)
+        # Streamlit UI에 선택적으로 상세 로그 표시 (있을 때만)
+        try:
+            import streamlit as _st  # lazy import: 초기화 전에도 안전
+            with _st.expander("자세한 오류 로그", expanded=False):
+                detail = ""
+                if exc:
+                    try:
+                        detail = "".join(
+                            traceback.format_exception(type(exc), exc, exc.__traceback__)
+                        )
+                    except Exception:
+                        detail = "traceback 사용 불가"
+                _st.code(f"{prefix}{msg}\n{detail}")
+        except Exception:
+            pass
+    except Exception:
+        # 로거 자체 오류 무시
+        pass
+# ======================= [02C] END ========================================
 
 # =========================== [03] CORE: Persist Resolver ==========================
 def _effective_persist_dir() -> Path:
@@ -175,46 +206,6 @@ try:
     share_persist_dir_to_session(PERSIST_DIR)
 except Exception as e:
     _errlog("persist 경로 세션 공유 실패", where="[persist.share]", exc=e)
-
-
-def _errlog(
-    msg: str,
-    where: str = "",
-    exc: Exception | None = None,
-    fatal: bool = False,
-) -> None:
-    """
-    표준 에러 로깅(민감정보 금지, 실패 무해화).
-    - fatal=True: 치명적 상황 표시
-    """
-    try:
-        prefix = f"{where} " if where else ""
-        lvl = "FATAL" if fatal else "ERR"
-        print(f"[{lvl}] {prefix}{msg}")
-        if exc:
-            traceback.print_exception(exc)
-        try:
-            # Streamlit UI에 간략/상세 동시 표기
-            import streamlit as _st  # lazy
-            with _st.expander("자세한 오류 로그", expanded=False):
-                detail = ""
-                if exc:
-                    try:
-                        detail = "".join(
-                            traceback.format_exception(
-                                type(exc), exc, exc.__traceback__
-                            )
-                        )
-                    except Exception:
-                        detail = "traceback 사용 불가"
-                _st.code(f"{prefix}{msg}\n{detail}")
-        except Exception:
-            # UI 미사용 환경(CI)에서는 콘솔만 사용
-            pass
-    except Exception:
-        pass
-
-
 # ======================= [05] 경로/상태 & 에러 로거 — END =========================
 
 # ========================= [06] ACCESS: Admin Gate ============================
