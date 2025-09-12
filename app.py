@@ -604,7 +604,6 @@ def _render_index_orchestrator_header() -> None:
     st.markdown("<span id='idx-admin-panel'></span>", unsafe_allow_html=True)
 # =================== [12] DIAG: Orchestrator Header — END ======================
 
-# ===== REPLACE: app.py [13] ADMIN: Index Panel (prepared 전용) — START =====
 # =================== [13] ADMIN: Index Panel (prepared 전용) ==============
 def _render_admin_index_panel() -> None:
     if "st" not in globals() or st is None or not _is_admin_view():
@@ -788,7 +787,6 @@ def _render_admin_index_panel() -> None:
                 "show_after": show_after,
             }
             _log("인덱싱 요청 접수")
-            # ✅ 변경점: 직접 rerun → 태그/TTL 가드 적용
             _safe_rerun("idx_submit", ttl=1)
 
     # ---------- 인덱싱 실행 ----------
@@ -996,7 +994,6 @@ def _render_admin_index_panel() -> None:
         else:
             st.caption("표시할 로그가 없습니다.")
 # =================== [13] ADMIN: Index Panel (prepared 전용) ==============
-# ===== REPLACE: app.py [13] ADMIN: Index Panel (prepared 전용) — END =====
 
 # ========== [13A] ADMIN: Panels (legacy aggregator, no-op) ==========
 def _render_admin_panels() -> None:
@@ -1004,7 +1001,7 @@ def _render_admin_panels() -> None:
     return None
 
 
-# ===== REPLACE: app.py [13B] ADMIN: Prepared Scan — START =====
+# =================== [13B] ADMIN: Prepared Scan — START ====================
 def _render_admin_prepared_scan_panel() -> None:
     """prepared 폴더의 '새 파일 유무'만 확인하는 경량 스캐너.
     - 인덱싱은 수행하지 않고, check_prepared_updates()만 호출
@@ -1021,7 +1018,6 @@ def _render_admin_prepared_scan_panel() -> None:
     act_clear = c2.button("🧹 화면 지우기", use_container_width=True)
 
     if act_clear:
-        # 화면 상태만 비움 → 가드형 rerun(다중 실행 방지)
         st.session_state.pop("_PR_SCAN_RESULT", None)
         _safe_rerun("scan_clear", ttl=1)
 
@@ -1101,7 +1097,7 @@ def _render_admin_prepared_scan_panel() -> None:
         "timestamp": int(time.time()),
         "sample_new": new_files[:10] if isinstance(new_files, list) else [],
     }
-# ===== REPLACE: app.py [13B] ADMIN: Prepared Scan — END =====
+# =================== [13B] ADMIN: Prepared Scan — END ====================
 
 # ============= [14] 인덱싱된 소스 목록(읽기 전용 대시보드) ==============
 def _render_admin_indexed_sources_panel() -> None:
@@ -1308,8 +1304,6 @@ def _render_mode_controls_pills() -> str:
     return cur_key
 # [15B] END
 
-
-
 # [16] START: 채팅 패널 (FULL REPLACEMENT)
 def _render_chat_panel() -> None:
     """질문(오른쪽) → 피티쌤(스트리밍) → 미나쌤(스트리밍)."""
@@ -1394,7 +1388,7 @@ def _render_chat_panel() -> None:
         except Exception:
             src_label = "[AI지식]"
 
-    # ✅ whitelist 강제: 3라벨 외 금지
+    # ✅ whitelist 강제: 허용 외 라벨은 [AI지식]
     src_label = sanitize_source_label(src_label)
 
     chip_text = src_label
@@ -1521,12 +1515,9 @@ def _render_body() -> None:
 
     if submitted and isinstance(q, str) and q.strip():
         st.session_state["inpane_q"] = q.strip()
-        # ✅ 변경점: 직접 rerun → 태그/TTL 가드 적용
         _safe_rerun("chat_submit", ttl=1)
     else:
         st.session_state.setdefault("inpane_q", "")
-# ========================== [17] 본문 렌더 — END ===============================
-# ===== REPLACE: app.py [17] 본문 렌더 — END =====
 
 # =============================== [18] main =================================
 def main() -> None:
