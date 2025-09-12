@@ -312,7 +312,7 @@ def _mount_background(
 def _boot_auto_restore_index() -> None:
     """부팅 시 인덱스 자동 복원(한 세션 1회).
     - 조건: chunks.jsonl==0B 또는 미존재, 또는 .ready 미존재
-    - 동작: GH Releases에서 최신 index_*.zip 받아서 복원
+    - 동작: GH Releases에서 최신 index_*.zip 받아서 복원 (private repo 인증 지원)
     - SSOT: persist는 core.persist.effective_persist_dir()만 사용
     """
     try:
@@ -344,43 +344,83 @@ def _boot_auto_restore_index() -> None:
     if not (token and owner and repo):
         return  # 복원 불가(시크릿 미설정)
 
-    # ---- 최신 릴리스의 index_*.zip 다운로드 ----
     from urllib import request as _rq, error as _er
-    import zipfile
-    import json as _json
+    import zipfile, json as _json
 
-    api_latest = f"https://api.github.com/repos/{owner}/{repo}/releases/latest"
-    try:
-        req = _rq.Request(
-            api_latest,
-            headers={
+    API = f"https://api.github.com/repos/{owner}/{repo}"
+
+    def _get_json(url: str) -> dict:
+        req = _rq.Request(url, headers={
+            "Authorization": f"token {token}",
+            "Accept": "application/vnd.github+json",
+        })
+        with _rq.urlopen(req, timeout=25) as resp:
+            return _json.loads(resp.read().decode("utf-8", "ignore"))
+
+    def _download_asset_to(asset: dict, dst: Path) -> bool:
+        """Assets API로 인증 다운로드 (private repo 지원)."""
+        asset_api = str(asset.get("url") or "")
+        if asset_api:
+            req = _rq.Request(asset_api, headers={
                 "Authorization": f"token {token}",
-                "Accept": "application/vnd.github+json",
-            },
-        )
-        with _rq.urlopen(req, timeout=20) as resp:
-            data = _json.loads(resp.read().decode("utf-8", "ignore"))
-    except Exception:
-        return
+                "Accept": "application/octet-stream",
+            })
+            with _rq.urlopen(req, timeout=180) as resp:
+                dst.write_bytes(resp.read())
+                return True
+        bdl = str(asset.get("browser_download_url") or "")
+        if bdl:
+            req = _rq.Request(bdl, headers={
+                "Authorization": f"token {token}",
+                "Accept": "application/octet-stream",
+            })
+            with _rq.urlopen(req, timeout=180) as resp:
+                dst.write_bytes(resp.read())
+                return True
+        return False
 
-    asset = None
-    for a in data.get("assets") or []:
-        n = str(a.get("name") or "")
-        if n.startswith("index_") and n.endswith(".zip"):
-            asset = a
-            break
-    if not asset:
-        return
+    # 1) latest 시도 → 실패 시 목록 폴백
+    zip_asset = None
+    try:
+        data = _get_json(f"{API}/releases/latest")
+        for a in data.get("assets") or []:
+            n = str(a.get("name") or "")
+            if n.startswith("index_") and n.endswith(".zip"):
+                zip_asset = a
+                break
+    except Exception as e:
+        _errlog(f"releases/latest 조회 실패: {e}", where="[boot.restore]")
 
-    dl = asset.get("browser_download_url")
-    if not dl:
-        return
+    if zip_asset is None:
+        try:
+            rels = _get_json(f"{API}/releases")
+            for rel in rels or []:
+                for a in rel.get("assets") or []:
+                    n = str(a.get("name") or "")
+                    if n.startswith("index_") and n.endswith(".zip"):
+                        zip_asset = a
+                        break
+                if zip_asset:
+                    break
+        except Exception as e:
+            _errlog(f"releases 목록 조회 실패: {e}", where="[boot.restore]")
+            return
+        if zip_asset is None:
+            return
 
-    # ---- 저장 후 압축 해제 ----
+    # 2) 다운로드 및 복원
     try:
         p.mkdir(parents=True, exist_ok=True)
         tmp = p / f"__restore_{int(time.time())}.zip"
-        _rq.urlretrieve(dl, tmp)
+        ok = _download_asset_to(zip_asset, tmp)
+        if not ok or not tmp.exists() or tmp.stat().st_size == 0:
+            _errlog("asset 다운로드 실패 또는 0B", where="[boot.restore]")
+            try:
+                tmp.unlink()
+            except Exception:
+                pass
+            return
+
         with zipfile.ZipFile(tmp, "r") as zf:
             zf.extractall(p)
         try:
@@ -388,26 +428,38 @@ def _boot_auto_restore_index() -> None:
         except Exception:
             pass
 
-        # SSOT: 코어로 ready 마킹
+        # 3) ZIP 내부 하위 폴더에 있을 수 있는 chunks.jsonl 탐색
+        found = None
         try:
-            core_mark_ready(p)
+            for cand in p.rglob("chunks.jsonl"):
+                if cand.stat().st_size > 0:
+                    found = cand
+                    break
+        except Exception:
+            found = None
+
+        target_dir = found.parent if found else p
+
+        # ready 마킹 (SSOT 우선)
+        try:
+            core_mark_ready(target_dir)
         except Exception:
             try:
-                (p / ".ready").write_text("ok", encoding="utf-8")
+                (target_dir / ".ready").write_text("ok", encoding="utf-8")
             except Exception:
                 pass
 
         # 세션 플래그/경로 공유
         try:
             if "st" in globals() and st is not None:
-                st.session_state["_PERSIST_DIR"] = p.resolve()
+                st.session_state["_PERSIST_DIR"] = target_dir.resolve()
                 st.session_state["_BOOT_RESTORE_DONE"] = True
         except Exception:
             pass
-    except Exception:
+    except Exception as e:
+        _errlog(f"복원 실패: {e}", where="[boot.restore]", exc=e)
         return
-# =================== [10] 부팅 훅: 인덱스 자동 복원 — END =====================
-
+# =================== [10] 부팅 훅: 인덱스 자동 복원 — END =======================
 
 # =================== [11] 부팅 오토플로우 & 자동 복원 모드 ==================
 def _boot_autoflow_hook() -> None:
