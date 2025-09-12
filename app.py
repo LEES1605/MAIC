@@ -1289,15 +1289,18 @@ def _render_mode_controls_pills() -> str:
         label_visibility="collapsed",
     )
 
-    # 라벨→key 매핑(임포트 가능하면 정확 매핑, 실패 시 동일 인덱스)
-    _find = None  # Optional[Callable[[str], ModeSpec]]
+    # 라벨→key 매핑: 동적 import로 안전하게 처리(타입 충돌 회피)
+    from typing import Callable, Optional, Any
+    _find_fn: Optional[Callable[[str], Any]] = None
     try:
-        from src.core.modes import find_mode_by_label as _find
+        import importlib as _imp
+        _modes = _imp.import_module("src.core.modes")
+        _find_fn = getattr(_modes, "find_mode_by_label", None)
     except Exception:
-        _find = None
+        _find_fn = None
 
     try:
-        spec = _find(sel_label) if callable(_find) else None
+        spec = _find_fn(sel_label) if callable(_find_fn) else None
         cur_key = spec.key if spec else keys[labels.index(sel_label)]
     except Exception:
         cur_key = keys[labels.index(sel_label)]
@@ -1305,8 +1308,7 @@ def _render_mode_controls_pills() -> str:
     ss["qa_mode_radio"] = sel_label
     ss["__mode"] = cur_key
     return cur_key
-# [15B] END ===================================================
-
+# [15B] END
 
 # [16] START: 채팅 패널 (FULL REPLACEMENT)=============================
 def _render_chat_panel() -> None:
