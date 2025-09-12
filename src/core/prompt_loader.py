@@ -1,10 +1,9 @@
-# [22A] START: src/core/prompt_loader.py (FULL REPLACEMENT)
+# [23C] START: src/core/prompt_loader.py (FULL REPLACEMENT)
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Dict, Optional, List, TypedDict
 import os
-import re
 
 
 # ----------------------------- common utils ---------------------------------
@@ -21,7 +20,7 @@ def _read_text(path: Path) -> Optional[str]:
 
 def _safe_yaml_load(path: Path) -> Optional[dict]:
     try:
-        import yaml
+        import yaml  # type: ignore[import-not-found]
     except Exception:
         return None
     try:
@@ -31,10 +30,9 @@ def _safe_yaml_load(path: Path) -> Optional[dict]:
 
 
 def _clamp(text: str, *, max_chars: int = 4000) -> str:
-    """Prompt bloat / 주입 방지를 위한 길이 클램프."""
+    """Prompt 길이 제한(보안/성능 가드)."""
     try:
-        # 가능하면 SSOT 유틸 사용
-        from modes.types import clamp_fragments
+        from modes.types import clamp_fragments  # type: ignore
         arr = clamp_fragments([text], max_items=1, max_chars_each=max_chars)
         return (arr[0] if arr else "").strip()
     except Exception:
@@ -47,7 +45,7 @@ def _read_yaml_sentence_rules(path: Path) -> Optional[str]:
     기대 구조:
       sentence:
         bracket_rules: |-
-          ...여기에 규칙...
+          규칙 전문 텍스트
     """
     data = _safe_yaml_load(path)
     if not isinstance(data, dict):
@@ -71,7 +69,7 @@ def get_bracket_rules() -> str:
     """
     # 1) secrets
     try:
-        import streamlit as st
+        import streamlit as st  # type: ignore
         for k in ("BRACKET_RULES", "SENTENCE_BRACKET_PROMPT"):
             v = st.secrets.get(k)
             if isinstance(v, str) and v.strip():
@@ -110,7 +108,7 @@ def get_bracket_rules() -> str:
 
     # 4) fallback
     fallback = (
-        "※ 사용자 괄호규칙이 설정되지 않았습니다. 기본 라벨 세트 안내입니다.\n"
+        "기본 라벨 세트 안내:\n"
         "- 사용 라벨: S(주어), V(동사), O(목적어), C(보어), M(수식어), "
         "Sub(부사절), Rel(관계절), ToInf(to부정사), Ger(동명사), Part(분사), "
         "Appo(동격), Conj(접속)\n"
@@ -201,4 +199,4 @@ def get_custom_mode_prompts(mode_key: str) -> ModeText:
             return m[mode_key]
 
     return {}
-# [22A] END: src/core/prompt_loader.py
+# [23C] END: src/core/prompt_loader.py
