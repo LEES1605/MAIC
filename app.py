@@ -1302,11 +1302,10 @@ def _render_mode_controls_pills() -> str:
     ss["qa_mode_radio"] = sel_label
     ss["__mode"] = cur_key
     return cur_key
-# [15B] END
-
-# [16] START: 채팅 패널 (FULL REPLACEMENT)
+# [15B] END============================================================
+# [16] START: 채팅 패널 (FULL REPLACEMENT)=============================
 def _render_chat_panel() -> None:
-    """질문(오른쪽) → 피티쌤(스트리밍) → 미나쌤(스트리밍)."""
+    """질문(오른쪽) → 피티쌤(스트리밍) → 미나쌤(스트리밍) → 품질 배지."""
     import importlib as _imp
     import html
     import re
@@ -1365,6 +1364,64 @@ def _render_chat_panel() -> None:
             f"</div>"
         )
         placeholder.markdown(html_block, unsafe_allow_html=True)
+
+    def _parse_eval_block(text: str) -> dict:
+        """[형식 체크]·[한 줄 총평] 블록을 파싱해 상태/사유/요약을 반환."""
+        res = {
+            "sections": {"state": "", "reason": ""},
+            "bracket": {"state": "", "reason": ""},
+            "factual": {"state": "", "reason": ""},
+            "summary": "",
+        }
+        try:
+            m = re.search(
+                r"^-\\s*섹션:\\s*(OK|FAIL)\\s*(?:\\((.*?)\\))?",
+                text,
+                flags=re.MULTILINE,
+            )
+            if m:
+                res["sections"]["state"] = m.group(1)
+                res["sections"]["reason"] = (m.group(2) or "").strip()
+
+            m = re.search(
+                r"^-\\s*괄호규칙:\\s*(OK|FAIL)\\s*(?:\\((.*?)\\))?",
+                text,
+                flags=re.MULTILINE,
+            )
+            if m:
+                res["bracket"]["state"] = m.group(1)
+                res["bracket"]["reason"] = (m.group(2) or "").strip()
+
+            m = re.search(
+                r"^-\\s*사실성:\\s*(OK|WARN)\\s*(?:\\((.*?)\\))?",
+                text,
+                flags=re.MULTILINE,
+            )
+            if m:
+                res["factual"]["state"] = m.group(1)
+                res["factual"]["reason"] = (m.group(2) or "").strip()
+
+            m = re.search(
+                r"\\[한 줄 총평\\]\\s*\\n-?\\s*(.+)",
+                text,
+                flags=re.MULTILINE,
+            )
+            if m:
+                res["summary"] = (m.group(1) or "").strip()
+        except Exception:
+            # 파싱 실패 시 빈 결과 유지
+            pass
+        return res
+
+    def _badge(state: str, ok: str = "OK", bad: str = "FAIL", warn: str = "WARN") -> str:
+        s = (state or "").upper()
+        if s == ok:
+            return "🟢 OK"
+        if s == bad:
+            return "🔴 FAIL"
+        if s == warn:
+            return "🟨 WARN"
+        return "⬜︎ —"
 
     if st is None:
         return
@@ -1451,9 +1508,29 @@ def _render_chat_panel() -> None:
         emit_chunk_eval(str(piece or ""))
     close_stream_eval()
 
+    # --- 평가 결과 배지/총평
+    parsed = _parse_eval_block(acc_eval)
+    with st.container():
+        st.markdown("**품질 체크 요약**")
+        lines = []
+        sec = parsed.get("sections", {})
+        br = parsed.get("bracket", {})
+        fa = parsed.get("factual", {})
+        lines.append(f"- 섹션: {_badge(sec.get('state'))}"
+                     + (f" — {sec.get('reason')}" if sec.get("reason") else ""))
+        if br.get("state"):
+            lines.append(f"- 괄호규칙: {_badge(br.get('state'))}"
+                         + (f" — {br.get('reason')}" if br.get("reason") else ""))
+        if fa.get("state"):
+            lines.append(f"- 사실성: {_badge(fa.get('state'), warn='WARN')}"
+                         + (f" — {fa.get('reason')}" if fa.get("reason") else ""))
+        if parsed.get("summary"):
+            lines.append(f"- **한 줄 총평:** {parsed['summary']}")
+        st.markdown("\n".join(lines))
+
     ss["last_q"] = question
     ss["inpane_q"] = ""
-# [16] END
+# [16] END======================================================================
 
 
 # ===== REPLACE: app.py [17] 본문 렌더 — START =====
