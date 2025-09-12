@@ -1422,10 +1422,11 @@ def _render_body() -> None:
 
     if submitted and isinstance(q, str) and q.strip():
         st.session_state["inpane_q"] = q.strip()
-        st.rerun()
+        # 변경점: 직접 rerun → 태그/TTL 가드 적용
+        _safe_rerun("chat_submit", ttl=1)
     else:
         st.session_state.setdefault("inpane_q", "")
-
+# ========================== [17] 본문 렌더 — END ===============================
 
 # =============================== [18] main =================================
 def main() -> None:
