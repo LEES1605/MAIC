@@ -44,7 +44,7 @@ def _load_mode_spec(mode_key: str) -> Dict[str, List[str] | str]:
     return {
         "key": "grammar",
         "label": "문법",
-        "sections": ["핵심규칙", "근거", "예문", "역예문", "한 줄 요약"],
+        "sections": ["핵심규칙", "근거", "예문", "역예문(선택)", "한 줄 요약"],
         "eval_focus": ["정확도", "근거 제시", "간결성"],
     }
 
@@ -87,9 +87,9 @@ def evaluate_stream(
     미나쌤 평가 스트리밍 제너레이터.
     출력 형식(고정):
     [형식 체크]
-    - 섹션: OK|FAIL (누락/순서 문제 시 구체 표기)
-    - 괄호규칙: OK|FAIL (문장 모드 대상, 위반 라벨/예시)
-    - 사실성: OK|WARN (근거 취약/추정 표현 등)
+    - 섹션: OK|FAIL (사유)
+    - 괄호규칙: OK|FAIL (사유; 문장 모드만 표기)
+    - 사실성: OK|WARN (사유)
     [피드백]
     - 개선점 1
     - 개선점 2
