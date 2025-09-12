@@ -1,4 +1,4 @@
-# [27A] START: scripts/no_ellipsis_gate.py (FULL REPLACEMENT)
+# [27B] START: scripts/no_ellipsis_gate.py (FULL REPLACEMENT)
 from __future__ import annotations
 
 import argparse
@@ -59,6 +59,10 @@ SNIPPET_PATTERNS = [
     r"\.\.\.",            # ...
     r"…",                 # 단일 문자 줄임표
 ]
+
+# 메시지 상수(긴 문자열은 상수화해서 E501 회피)
+MSG_ELLIPSIS_ONLY = "줄 전체가 '…' 또는 '...'로만 구성됨"
+MSG_SNIP_KO = "‘중략/생략’ + 스니핏/…/... 패턴"
 
 
 class Violation(Tuple[str, str, int, str]):
@@ -133,28 +137,57 @@ def _scan_file(path: Path, root: Path) -> List[Violation]:
     # 1) ELLIPSIS_ONLY: 줄 전체가 ... 또는 … 인 경우
     for i, line in enumerate(txt, start=1):
         if _line_is_ellipsis_only(line):
-            vios.append(("ELLIPSIS_ONLY", str(path.relative_to(root)), i, "줄 전체가 '…' 또는 '...'로만 구성됨"))
+            vios.append((
+                "ELLIPSIS_ONLY",
+                str(path.relative_to(root)),
+                i,
+                MSG_ELLIPSIS_ONLY,
+            ))
 
     # 2) SNIP_KO: 같은 파일에서 '중략|생략'과 스니핏이 근접(±2줄)한 경우
     #    - 문서 내 실제 생략본/스니핏 혼용을 금지
     for i, line in enumerate(txt, start=1):
         if re.search(r"(중략|생략)", line):
-            for k, near in _window(txt, i - 1, radius=2):
+            for _k, near in _window(txt, i - 1, radius=2):
                 if _line_has_snippet(near) or _line_is_ellipsis_only(near):
-                    vios.append(("SNIP_KO", str(path.relative_to(root)), i, "‘중략/생략’ + 스니핏/…/... 패턴"))
+                    vios.append((
+                        "SNIP_KO",
+                        str(path.relative_to(root)),
+                        i,
+                        MSG_SNIP_KO,
+                    ))
                     break
 
     return vios
 
 
 def _parse_args() -> argparse.Namespace:
-    ap = argparse.ArgumentParser(description="No‑Ellipsis Gate (docs/prompts only by default)")
+    ap = argparse.ArgumentParser(
+        description="No‑Ellipsis Gate (docs/prompts only by default)"
+    )
     ap.add_argument("--root", default=".", help="project root")
-    ap.add_argument("--include", action="append", default=[], help="additional include glob (can repeat)")
-    ap.add_argument("--exclude", action="append", default=[], help="additional exclude glob (can repeat)")
-    ap.add_argument("--check-code", action="store_true", help="also scan code (*.py) — opt-in")
-    ap.add_argument("--allowed-markers", default=",".join(ALLOWED_MARKERS),
-                    help="comma-separated whitelist markers")
+    ap.add_argument(
+        "--include",
+        action="append",
+        default=[],
+        help="extra include glob (repeatable)",
+    )
+    ap.add_argument(
+        "--exclude",
+        action="append",
+        default=[],
+        help="extra exclude glob (repeatable)",
+    )
+    ap.add_argument(
+        "--check-code",
+        action="store_true",
+        help="also scan code (*.py) — opt-in",
+    )
+    ap.add_argument(
+        "--allowed-markers",
+        default=",".join(ALLOWED_MARKERS),
+        help="comma-separated whitelist markers",
+    )
     return ap.parse_args()
 
 
@@ -163,7 +196,10 @@ def main() -> int:
     root = Path(args.root).resolve()
 
     # allow runtime extension of allowed markers
-    markers = [m.strip() for m in str(args.allowed_markers or "").split(",") if m.strip()]
+    markers = [
+        m.strip() for m in str(args.allowed_markers or "").split(",") if m.strip()
+    ]
+    # 리스트 내부 변경(모듈 전역 상수 업데이트)
     ALLOWED_MARKERS[:] = markers  # type: ignore[index]
 
     includes = list(DEFAULT_INCLUDE)
@@ -206,4 +242,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-# [27A] END: scripts/no_ellipsis_gate.py
+# [27B] END: scripts/no_ellipsis_gate.py
