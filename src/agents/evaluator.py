@@ -14,7 +14,10 @@ def _load_mode_spec(mode_key: str) -> Dict[str, List[str] | str]:
     """
     key = (mode_key or "").strip().lower()
     try:
-        from src.core.modes import MODES  # type: ignore
+        # MODES: Dict[str, ModeSpec] (정적 타입 선언 존재)
+        # -> m.key / m.label / m.output_shape / m.eval_focus 접근이 타입 상 안전
+        from src.core.modes import MODES
+
         if key in MODES and getattr(MODES[key], "enabled", True):
             m = MODES[key]
             return {
@@ -24,9 +27,10 @@ def _load_mode_spec(mode_key: str) -> Dict[str, List[str] | str]:
                 "eval_focus": list(getattr(m, "eval_focus", []) or []),
             }
     except Exception:
+        # SSOT 로드 실패 시 폴백으로 진행
         pass
 
-    # Fallback (문법/문장/지문)
+    # --- Fallbacks (문법/문장/지문) ---
     if key == "sentence":
         return {
             "key": "sentence",
