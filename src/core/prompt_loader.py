@@ -26,7 +26,7 @@ def _read_yaml_sentence_rules(path: Path) -> Optional[str]:
           ...여기에 규칙...
     """
     try:
-        import yaml  # type: ignore[import-not-found]
+        import yaml
     except Exception:
         return None
 
@@ -45,7 +45,7 @@ def _read_yaml_sentence_rules(path: Path) -> Optional[str]:
 def _clamp(text: str, *, max_chars: int = 4000) -> str:
     # modes.types.clamp_fragments 가 있으면 사용(SSOT), 없으면 단순 절단
     try:
-        from modes.types import clamp_fragments  # type: ignore
+        from modes.types import clamp_fragments
         clamped = clamp_fragments([text], max_items=1, max_chars_each=max_chars)
         return (clamped[0] if clamped else "") or ""
     except Exception:
@@ -66,7 +66,7 @@ def get_bracket_rules() -> str:
     """
     # 1) secrets
     try:
-        import streamlit as st  # type: ignore
+        import streamlit as st
         for k in ("BRACKET_RULES", "SENTENCE_BRACKET_PROMPT"):
             v = st.secrets.get(k)
             if isinstance(v, str) and v.strip():
