@@ -920,15 +920,9 @@ def _render_admin_prepared_scan_panel() -> None:
     act_clear = c2.button("🧹 화면 지우기", use_container_width=True)
 
     if act_clear:
+        # 화면 상태만 비움 → 가드형 rerun(다중 실행 방지)
         st.session_state.pop("_PR_SCAN_RESULT", None)
-        try:
-            st.rerun()
-        except Exception:
-            try:
-                # backward-compat for older Streamlit
-                st.experimental_rerun()
-            except Exception:
-                pass
+        _safe_rerun("scan_clear", ttl=1)
 
     # 이전 결과 있으면 보여주기
     prev = st.session_state.get("_PR_SCAN_RESULT")
