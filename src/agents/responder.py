@@ -1,4 +1,4 @@
-# [23B] START: src/agents/responder.py (FULL REPLACEMENT)
+# [24B] START: src/agents/responder.py (FULL REPLACEMENT)
 from __future__ import annotations
 
 from typing import Iterator, Optional, Dict
@@ -112,4 +112,4 @@ def answer_stream(
         user_prompt=user_p,
         split_fallback=True,
     )
-# [23B] END: src/agents/responder.py
+# [24B] END: src/agents/responder.py
