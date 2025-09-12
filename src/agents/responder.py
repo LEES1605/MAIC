@@ -1,4 +1,4 @@
-# [22B] START: src/agents/responder.py (FULL REPLACEMENT)
+# [23B] START: src/agents/responder.py (FULL REPLACEMENT)
 from __future__ import annotations
 
 from typing import Iterator, Optional, Dict
@@ -31,11 +31,10 @@ def _default_system_by_mode(mode_key: str) -> str:
 
 def _maybe_append_bracket_rules(system_txt: str) -> str:
     """
-    문장 모드인데 사용자 system에 괄호 규칙 언급이 전혀 없으면
-    brackets 규칙 블록을 뒤에 부착한다.
+    문장 모드인데 사용자 system에 괄호 규칙 안내가 없으면
+    사용자 제공 괄호규칙 블록을 덧붙인다.
     """
     s = system_txt or ""
-    # '괄호', '표기 규칙' 등 힌트 키워드 탐지
     has_hint = bool(
         ("괄호" in s)
         or ("표기 규칙" in s)
@@ -71,8 +70,8 @@ def _compose_prompts(
 ) -> tuple[str, str]:
     """
     반환: (system_prompt, user_prompt)
-    - 사용자 정의(system/user)가 있으면 우선 사용
-    - 문장 모드는 괄호규칙 부착 보정
+    - prompts.yaml(modes.*)의 사용자 정의 system/user가 있으면 우선 사용
+    - 문장 모드는 괄호규칙 블록을 필요 시 부착
     """
     custom = get_custom_mode_prompts(mode_key)
     sys_txt = custom.get("system") or _default_system_by_mode(mode_key)
@@ -81,17 +80,15 @@ def _compose_prompts(
     if mode_key == "sentence":
         sys_txt = _maybe_append_bracket_rules(sys_txt)
 
-    # 사용자 user 템플릿이 존재하면 안전 치환, 없으면 질문만 전달
+    # user 템플릿이 있으면 안전 치환, 없으면 질문만 전달
     if usr_txt:
         mapping: Dict[str, str] = {
             "QUESTION": question,
             "question": question,
-            # 문법 모드 컨텍스트(있으면):
             "EVIDENCE_CLASS_NOTES": (ctx or {}).get("EVIDENCE_CLASS_NOTES", ""),
             "EVIDENCE_GRAMMAR_BOOKS": (ctx or {}).get("EVIDENCE_GRAMMAR_BOOKS", ""),
         }
         user_prompt = _safe_format(usr_txt, mapping)
-        # 템플릿에 질문 표기가 아예 없으면 하단에 질문을 추가
         if ("{QUESTION}" not in usr_txt) and ("{question}" not in usr_txt):
             user_prompt = user_prompt.rstrip() + "\n\n[질문]\n" + question
     else:
@@ -105,7 +102,7 @@ def answer_stream(
 ) -> Iterator[str]:
     """
     주답변(피티쌤) 스트리밍 제너레이터.
-    - 내부 모드 키(mode)는 app.py에서 전달되는 'grammar|sentence|passage'
+    - 내부 모드 키(mode)는 'grammar|sentence|passage'
     - 사용자 정의 prompts.yaml(modes.*)가 있으면 system/user를 우선 사용
     - split_fallback=True: 콜백 미지원 provider에서 문장 단위 의사 스트리밍
     """
@@ -115,4 +112,4 @@ def answer_stream(
         user_prompt=user_p,
         split_fallback=True,
     )
-# [22B] END: src/agents/responder.py
+# [23B] END: src/agents/responder.py
