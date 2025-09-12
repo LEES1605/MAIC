@@ -1,4 +1,4 @@
-# [23C] START: src/core/prompt_loader.py (FULL REPLACEMENT)
+# [24C] START: src/core/prompt_loader.py (FULL REPLACEMENT)
 from __future__ import annotations
 
 from pathlib import Path
@@ -20,7 +20,7 @@ def _read_text(path: Path) -> Optional[str]:
 
 def _safe_yaml_load(path: Path) -> Optional[dict]:
     try:
-        import yaml 
+        import yaml  # type: ignore[import-not-found]
     except Exception:
         return None
     try:
@@ -32,7 +32,7 @@ def _safe_yaml_load(path: Path) -> Optional[dict]:
 def _clamp(text: str, *, max_chars: int = 4000) -> str:
     """Prompt 길이 제한(보안/성능 가드)."""
     try:
-        from modes.types import clamp_fragments 
+        from modes.types import clamp_fragments  # type: ignore
         arr = clamp_fragments([text], max_items=1, max_chars_each=max_chars)
         return (arr[0] if arr else "").strip()
     except Exception:
@@ -69,7 +69,7 @@ def get_bracket_rules() -> str:
     """
     # 1) secrets
     try:
-        import streamlit as st 
+        import streamlit as st  # type: ignore
         for k in ("BRACKET_RULES", "SENTENCE_BRACKET_PROMPT"):
             v = st.secrets.get(k)
             if isinstance(v, str) and v.strip():
@@ -142,16 +142,28 @@ def _norm_mode_key(name: str) -> Optional[str]:
 
 def _load_modes_from_yaml(path: Path) -> Dict[str, ModeText]:
     """
-    prompts.yaml 의 구조:
+    prompts.yaml 의 구조 예시(줄임표 없이 예시 텍스트 사용):
+
       modes:
         문장구조분석:
           system: |-
-            ...
+            (여기에 시스템 프롬프트 전체 텍스트)
           user: |-
-            ...
-        문법설명: ...
-        지문분석: ...
-    를 읽어 내부 키로 매핑한다.
+            (여기에 사용자 프롬프트 전체 텍스트)
+
+        문법설명:
+          system: |-
+            (예시 텍스트)
+          user: |-
+            (예시 텍스트)
+
+        지문분석:
+          system: |-
+            (예시 텍스트)
+          user: |-
+            (예시 텍스트)
+
+    위 구조를 읽어 내부 키로 매핑한다.
     """
     data = _safe_yaml_load(path)
     out: Dict[str, ModeText] = {}
@@ -199,4 +211,4 @@ def get_custom_mode_prompts(mode_key: str) -> ModeText:
             return m[mode_key]
 
     return {}
-# [23C] END: src/core/prompt_loader.py
+# [24C] END: src/core/prompt_loader.py
