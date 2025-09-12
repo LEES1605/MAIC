@@ -1,4 +1,4 @@
-# [24A] START: src/agents/evaluator.py (FULL REPLACEMENT)
+# [26A] START: src/agents/evaluator.py (FULL REPLACEMENT)
 from __future__ import annotations
 
 from typing import Iterator, Optional, Dict, List
@@ -110,9 +110,9 @@ def evaluate_stream(
             from src.core.prompt_loader import get_bracket_rules
             add_rules = (
                 "\n[괄호규칙(사용자 제공)]\n"
-                "<<<BRACKET_RULES>>>\n"
+                "--BRACKET_RULES--\n"
                 f"{get_bracket_rules()}\n"
-                "<<<END_RULES>>>\n"
+                "--END_BRACKET_RULES--\n"
             )
         except Exception:
             add_rules = ""
@@ -121,9 +121,9 @@ def evaluate_stream(
         "[입력]\n"
         f"- 질문: {question}\n"
         f"- 모드: {spec['label']} ({spec['key']})\n"
-        "- 답변(피티쌤): <<START_ANSWER>>\n"
+        "- 답변(피티쌤): --START_ANSWER--\n"
         f"{answer}\n"
-        "<<END_ANSWER>>\n"
+        "--END_ANSWER--\n"
         f"{add_rules}"
         "[검토 기준]\n"
         f"1) 섹션 구성(순서={sections}) 및 누락 여부\n"
@@ -148,4 +148,4 @@ def evaluate_stream(
         user_prompt=user_prompt,
         split_fallback=True,
     )
-# [24A] END: src/agents/evaluator.py
+# [26A] END: src/agents/evaluator.py
