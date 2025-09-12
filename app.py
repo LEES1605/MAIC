@@ -418,13 +418,15 @@ def _boot_auto_restore_index() -> None:
         if not ok or not tmp.exists() or tmp.stat().st_size == 0:
             _errlog("asset 다운로드 실패 또는 0B", where="[boot.restore]")
             try: tmp.unlink()
-            except Exception: pass
+            except Exception: 
+                pass
             return
 
         with zipfile.ZipFile(tmp, "r") as zf:
             zf.extractall(p)
         try: tmp.unlink()
-        except Exception: pass
+        except Exception: 
+            pass
 
         # 3) ZIP 내부 하위 폴더에 있을 수 있는 chunks.jsonl 탐색
         found = None
