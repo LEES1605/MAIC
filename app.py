@@ -1250,8 +1250,8 @@ def _inject_chat_styles_once() -> None:
     """,
         unsafe_allow_html=True,
     )
-# ===============================================================================
-# [15B] START: _render_mode_controls_pills (FULL REPLACEMENT)
+
+# [15B] START: _render_mode_controls_pills (FULL REPLACEMENT)====================
 def _render_mode_controls_pills() -> str:
     """
     질문 모드 선택(문법·문장·지문[·이야기]).
@@ -1308,7 +1308,8 @@ def _render_mode_controls_pills() -> str:
     ss["qa_mode_radio"] = sel_label
     ss["__mode"] = cur_key
     return cur_key
-# [15B] END
+# [15B] END=======================================
+
 
 # [16] START: 채팅 패널 (FULL REPLACEMENT)
 def _render_chat_panel() -> None:
@@ -1549,10 +1550,9 @@ def _render_chat_panel() -> None:
 
     ss["last_q"] = question
     ss["inpane_q"] = ""
-# [16] END
+# [16] END========================================================
 
 
-# ===== REPLACE: app.py [17] 본문 렌더 — START =====
 # ========================== [17] 본문 렌더 ===============================
 def _render_body() -> None:
     if st is None:
