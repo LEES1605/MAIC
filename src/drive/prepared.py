@@ -1,93 +1,187 @@
-# ===== [FILE: src/drive/prepared.py] START =====
 # src/drive/prepared.py
 # -----------------------------------------------------------------------------
-# Google Drive의 prepared 폴더를 단일 소스로 가정한 어댑터.
-# 표준 인터페이스:
-#   - check_prepared_updates(persist_dir) -> dict
-#   - mark_prepared_consumed(persist_dir, files: list[dict] | list[str]) -> None
+# Prepared 소비(Seen) SSOT
+# - check_prepared_updates(persist_dir, files=None) -> dict
+# - mark_prepared_consumed(persist_dir, files) -> None
 #
-# 동작 개요
-# - src.integrations.gdrive.list_prepared_files()로 목록을 얻는다.
-# - persist_dir/prepared.seen.json에 '이미 소비(seen)한 식별자'를 저장/조회한다.
-# - 식별자 우선순위: id → fileId → name → path
+# 강화 포인트
+# 1) 원자적 저장(임시파일 → os.replace)
+# 2) 대용량 안전(최대 엔트리 초과 시 오래된 항목 정리)
+# 3) 입력 유연성(list[dict|str])과 하위호환(json 배열/대체 파일명) 지원
+# 4) files=None이면 동적 임포트로 list_prepared_files() 호출(하위호환)
 # -----------------------------------------------------------------------------
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 import json
+import os
+import time
+import importlib
 
-# -----------------------------------------------------------------------------
-# 내부 유틸
-# -----------------------------------------------------------------------------
+# 파일명: 기존과 동일(점(.) 없는 이름) 사용
+# - 과거 일부 분기에서 ".prepared_seen.json" 을 쓴 적이 있어, 읽기 시 폴백 허용
+_SEEN_NAME_PRIMARY = "prepared.seen.json"
+_SEEN_NAME_ALT = ".prepared_seen.json"
+_MAX_ENTRIES = 20_000
+
 
 def _persist_path(persist_dir: str | Path) -> Path:
-    """prepared.seen.json 저장 위치를 반환."""
-    p = Path(persist_dir)
+    p = Path(persist_dir).expanduser()
     p.mkdir(parents=True, exist_ok=True)
-    return p / "prepared.seen.json"
+    return p / _SEEN_NAME_PRIMARY
 
 
-def _load_seen(persist_dir: str | Path) -> Set[str]:
-    """이미 소비한 prepared 파일의 식별자 집합을 로드."""
-    fp = _persist_path(persist_dir)
-    if not fp.exists():
-        return set()
+def _read_json_any(path: Path) -> Any:
     try:
-        data = json.loads(fp.read_text(encoding="utf-8") or "[]")
-        if isinstance(data, list):
-            return set(map(str, data))
+        if path.exists() and path.stat().st_size > 0:
+            return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
-        # 손상되었거나 포맷이 바뀐 경우 초기화
-        return set()
-    return set()
-
-
-def _save_seen(persist_dir: str | Path, seen: Set[str]) -> None:
-    """소비한 식별자 집합을 저장."""
-    fp = _persist_path(persist_dir)
-    fp.write_text(json.dumps(sorted(seen)), encoding="utf-8")
-
-
-def _extract_id(rec: Any) -> Optional[str]:
-    """
-    dict/str 혼용 입력에서 식별자(id/fileId/name/path) 하나를 문자열로 추출.
-    우선순위: id → fileId → name → path
-    """
-    if rec is None:
         return None
-    if isinstance(rec, str):
-        s = rec.strip()
-        return s or None
-    if isinstance(rec, dict):
-        for k in ("id", "fileId", "name", "path"):
-            if k in rec and rec[k]:
-                v = str(rec[k]).strip()
-                if v:
-                    return v
     return None
 
 
-# -----------------------------------------------------------------------------
-# 공개 API: check_prepared_updates / mark_prepared_consumed
-# -----------------------------------------------------------------------------
-
-def check_prepared_updates(persist_dir: str | Path, files: List[Dict[str, Any]]) -> Dict[str, Any]:
+def _load_seen_db(persist_dir: str | Path) -> Dict[str, Dict[str, Any]]:
     """
-    prepared 목록(files)과 persist_dir 상태를 비교하여 새로 유입된 항목을 반환.
+    seen DB 로드.
+    - 신포맷: {"<id>": {"name": "...", "ts": 1725000000}}
+    - 구포맷: ["id1", "id2", ...]  → {"id1": {"name":"", "ts":0}, ...}
+    - 대체 파일명도 읽기 폴백
     """
-    seen: Set[str] = _load_seen(persist_dir)
+    primary = _persist_path(persist_dir)
+    alt = primary.with_name(_SEEN_NAME_ALT)
 
+    data = _read_json_any(primary)
+    if data is None:
+        data = _read_json_any(alt)
+
+    seen: Dict[str, Dict[str, Any]] = {}
+    if isinstance(data, dict):
+        # 이미 신포맷
+        for k, v in data.items():
+            if not isinstance(v, dict):
+                v = {}
+            name = str(v.get("name") or "")
+            ts = int(v.get("ts") or 0)
+            seen[str(k)] = {"name": name, "ts": ts}
+        return seen
+
+    if isinstance(data, list):
+        # 구포맷 배열 → 신포맷으로 승격
+        for item in data:
+            fid = str(item).strip()
+            if fid:
+                seen[fid] = {"name": "", "ts": 0}
+        return seen
+
+    return {}
+
+
+def _atomic_write_json(path: Path, obj: Dict[str, Dict[str, Any]]) -> None:
+    try:
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        txt = json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
+        tmp.write_text(txt, encoding="utf-8")
+        os.replace(tmp, path)
+    except Exception:
+        # 저장 실패는 무해화
+        pass
+
+
+def _extract_id_name(rec: Any) -> Tuple[str, str]:
+    """
+    dict/str 혼용 입력에서 (id, name) 추출.
+    우선순위(id): id → fileId → name → path
+    표시이름(name): name → path → file → id
+    """
+    if rec is None:
+        return "", ""
+    if isinstance(rec, str):
+        s = rec.strip()
+        return (s, s) if s else ("", "")
+    if isinstance(rec, dict):
+        # E731 회피: lambda 할당 대신 내부 함수 사용
+        def _get(k: str) -> str:
+            return str(rec.get(k) or "").strip()
+
+        fid = _get("id") or _get("fileId") or _get("name") or _get("path")
+        nm = _get("name") or _get("path") or _get("file") or fid
+        return (fid, nm) if fid else ("", "")
+    s = str(rec or "").strip()
+    return (s, s) if s else ("", "")
+
+
+def _prune_if_needed(db: Dict[str, Dict[str, Any]]) -> None:
+    try:
+        if len(db) <= _MAX_ENTRIES:
+            return
+        items = [(k, int(v.get("ts") or 0)) for k, v in db.items()]
+        items.sort(key=lambda kv: kv[1])  # 오래된 것부터
+        drop = len(items) - _MAX_ENTRIES
+        for k, _ in items[:drop]:
+            db.pop(k, None)
+    except Exception:
+        pass
+
+
+def _dynamic_list() -> List[Dict[str, Any]]:
+    """
+    files 인자가 None일 때 동적 임포트로 prepared 목록 취득.
+    - src.integrations.gdrive.list_prepared_files()
+    - 또는 gdrive.list_prepared_files()
+    """
+    for modname in ("src.integrations.gdrive", "gdrive"):
+        try:
+            m = importlib.import_module(modname)
+            fn = getattr(m, "list_prepared_files", None)
+            if callable(fn):
+                rows = fn() or []
+                if isinstance(rows, list):
+                    return rows
+        except Exception:
+            continue
+    return []
+
+
+# -----------------------------------------------------------------------------
+# 공개 API
+# -----------------------------------------------------------------------------
+def check_prepared_updates(
+    persist_dir: str | Path,
+    files: Optional[List[Any]] = None,
+) -> Dict[str, Any]:
+    """
+    prepared 목록과 persist_dir 상태를 비교하여 '새 파일' 목록을 계산.
+
+    Args:
+        persist_dir: 인덱스 persist 디렉토리
+        files: list[dict|str] prepared 목록.
+               None이면 동적으로 list_prepared_files() 호출(하위호환).
+    Returns:
+        {
+          "driver": "drive",
+          "total": 총 파일 수,
+          "new": 새 파일 수,
+          "files": ["id1", "id2", ...]  # 새 파일 id 리스트
+        }
+    """
+    rows = files if isinstance(files, list) else _dynamic_list()
+    total = len(rows)
+
+    db = _load_seen_db(persist_dir)
     new_ids: List[str] = []
-    for rec in files:
-        fid = _extract_id(rec)
-        if fid and fid not in seen:
+
+    for rec in rows:
+        fid, _nm = _extract_id_name(rec)
+        if not fid:
+            continue
+        if fid not in db:
             new_ids.append(fid)
 
     return {
         "driver": "drive",
-        "total": len(files),
+        "total": total,
         "new": len(new_ids),
         "files": new_ids,
     }
@@ -95,20 +189,24 @@ def check_prepared_updates(persist_dir: str | Path, files: List[Dict[str, Any]])
 
 def mark_prepared_consumed(
     persist_dir: str | Path,
-    files: List[Dict[str, Any]] | List[str],
+    files: Iterable[Any],
 ) -> None:
     """
-    files: list[dict] | list[str]
-    dict/str 혼용 입력을 수용. _extract_id()로 식별자를 추출해 seen에 추가한다.
+    전달된 파일들을 소비(Seen)로 기록.
+    - 문자열/사전 혼용 지원
+    - 이미 존재하면 ts/name 업데이트
     """
-    seen: Set[str] = _load_seen(persist_dir)
+    path = _persist_path(persist_dir)
+    db = _load_seen_db(persist_dir)
+    now = int(time.time())
 
-    if isinstance(files, list):
-        for rec in files:
-            fid = _extract_id(rec)
-            if fid:
-                seen.add(fid)
+    for rec in files or []:
+        fid, name = _extract_id_name(rec)
+        if not fid:
+            continue
+        cur = db.get(fid) or {}
+        nm = name or cur.get("name") or ""
+        db[fid] = {"name": nm, "ts": now}
 
-    _save_seen(persist_dir, seen)
-
-# ===== [FILE: src/drive/prepared.py] END =====
+    _prune_if_needed(db)
+    _atomic_write_json(path, db)
