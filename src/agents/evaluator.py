@@ -1,12 +1,16 @@
-# [20C] START: src/agents/evaluator.py (REPLACE OR ADD)
+# [23A] START: src/agents/evaluator.py (FULL REPLACEMENT)
 from __future__ import annotations
 
 from typing import Iterator, Optional, Dict, List
 from src.agents._common import stream_llm
-from src.core.prompt_loader import get_bracket_rules
 
 
 def _load_mode_spec(mode_key: str) -> Dict[str, List[str] | str]:
+    """
+    SSOT(src.core.modes)에서 모드 정보를 불러오고, 실패 시 폴백 사용.
+    반환:
+      {"key": ..., "label": ..., "sections": [...], "eval_focus": [...]}
+    """
     key = (mode_key or "").strip().lower()
     try:
         from src.core.modes import MODES
@@ -20,6 +24,8 @@ def _load_mode_spec(mode_key: str) -> Dict[str, List[str] | str]:
             }
     except Exception:
         pass
+
+    # --- Fallbacks (문법/문장/지문) ---
     if key == "sentence":
         return {
             "key": "sentence",
@@ -43,26 +49,29 @@ def _load_mode_spec(mode_key: str) -> Dict[str, List[str] | str]:
 
 
 def _system_prompt(mode_key: str) -> str:
+    """
+    미나쌤(품질 평가자) 시스템 프롬프트.
+    - 형식/규칙 준수 여부를 간결하게 진단하고, 개선 포인트를 3개 이내로 제시.
+    - 문장 모드에서는 괄호규칙 라벨 세트를 확인한다.
+    """
     spec = _load_mode_spec(mode_key)
     sections = "·".join(spec["sections"]) if spec["sections"] else "형식 미정"
     focus = "·".join(spec["eval_focus"]) if spec["eval_focus"] else "정확도"
 
-    br = ""
-    if spec["key"] == "sentence":
-        br_rules = get_bracket_rules()
-        br = (
-            "\n[사용자 괄호규칙 — 반드시 이 규칙으로만 판단]\n"
-            "<<<BRACKET_RULES>>>\n"
-            f"{br_rules}\n"
-            "<<<END_RULES>>>\n"
-        )
+    # 괄호규칙 라벨: S/V/O/C/M/Sub/Rel/ToInf/Ger/Part/Appo/Conj
+    bracket_rules = (
+        "문장 모드에서는 다음 라벨만 사용했는지 확인: "
+        "S,V,O,C,M,Sub,Rel,ToInf,Ger,Part,Appo,Conj. "
+        "예: [Sub because it rained], [S I] [V stayed] [M at home]"
+    )
 
     return (
         "당신은 '미나쌤' 품질 평가자입니다. 역할: 학생에게 친절하지만 정확한 피드백 제공. "
         "원칙: 과장 금지, 간결, 근거 제시, 번호 목록은 3개 이내.\n"
         f"- 모드: {spec['label']} / 필수 섹션: {sections}\n"
         f"- 평가 관점: {focus}\n"
-        f"- 형식 위반·사실 오류·모호함을 우선 지적" + br
+        f"- 형식 위반·사실 오류·모호함을 우선 지적\n"
+        f"- {bracket_rules}"
     )
 
 
@@ -74,30 +83,38 @@ def evaluate_stream(
     ctx: Optional[Dict[str, str]] = None,
 ) -> Iterator[str]:
     """
+    미나쌤 평가 스트리밍 제너레이터.
     출력 형식(고정):
+
     [형식 체크]
     - 섹션: OK|FAIL (사유)
     - 괄호규칙: OK|FAIL (사유; 문장 모드만 표기)
     - 사실성: OK|WARN (사유)
+
     [피드백]
     - 개선점 1
     - 개선점 2
     - (선택) 개선점 3
+
     [한 줄 총평]
     - 핵심 요약 한 문장
     """
     spec = _load_mode_spec(mode)
     sections = " · ".join(spec["sections"]) if spec["sections"] else "형식 미정"
 
-    # 사용자 규칙을 user_prompt에도 한번 더 박아 넣어 판단 기준을 명확화
+    # 사용자 규칙을 명확히 하려면 필요 시 추가 규칙을 함께 전달
     add_rules = ""
     if spec["key"] == "sentence":
-        add_rules = (
-            "\n[괄호규칙(사용자 제공)]\n"
-            "<<<BRACKET_RULES>>>\n"
-            f"{get_bracket_rules()}\n"
-            "<<<END_RULES>>>\n"
-        )
+        try:
+            from src.core.prompt_loader import get_bracket_rules
+            add_rules = (
+                "\n[괄호규칙(사용자 제공)]\n"
+                "<<<BRACKET_RULES>>>\n"
+                f"{get_bracket_rules()}\n"
+                "<<<END_RULES>>>\n"
+            )
+        except Exception:
+            add_rules = ""
 
     user_prompt = (
         "[입력]\n"
@@ -106,7 +123,7 @@ def evaluate_stream(
         "- 답변(피티쌤): <<START_ANSWER>>\n"
         f"{answer}\n"
         "<<END_ANSWER>>\n"
-        f"{add_rules}\n"
+        f"{add_rules}"
         "[검토 기준]\n"
         f"1) 섹션 구성(순서={sections}) 및 누락 여부\n"
         "2) 괄호규칙 준수(문장 모드일 때만)\n"
@@ -118,11 +135,11 @@ def evaluate_stream(
         "- 괄호규칙: OK|FAIL (사유; 문장 모드만 표기)\n"
         "- 사실성: OK|WARN (사유)\n"
         "[피드백]\n"
-        "- …\n"
-        "- …\n"
-        "- (선택) …\n"
+        "- 개선점 1\n"
+        "- 개선점 2\n"
+        "- (선택) 개선점 3\n"
         "[한 줄 총평]\n"
-        "- …"
+        "- 한 문장 요약"
     )
 
     yield from stream_llm(
@@ -130,4 +147,4 @@ def evaluate_stream(
         user_prompt=user_prompt,
         split_fallback=True,
     )
-# [20C] END: src/agents/evaluator.py
+# [23A] END: src/agents/evaluator.py
