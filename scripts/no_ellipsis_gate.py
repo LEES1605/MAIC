@@ -1,197 +1,209 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-# ============ [01] module docstring & imports — START ============
-"""
-No‑Ellipsis Gate
-- 목적: 코드/문서에 '중략본'이 섞이는 것을 방지합니다.
-
-정책(요약):
-  1) 코드 파일에서 '줄 전체가 ... 또는 …' 인 라인 → 차단
-  2) 코드/문서에서 '중략' 또는 '생략'과
-     '…' 또는 '...' 또는 스니핏 마커(<<<, >>>, <<snip>> 등)가
-     동시에 등장 → 차단
-
-거짓 양성 최소화:
-  * 일반 텍스트의 자연스러운 '…'는 허용
-  * 문서류(MD/RST/TXT/YAML)는 ② 규칙만 검사
-"""
+# [27A] START: scripts/no_ellipsis_gate.py (FULL REPLACEMENT)
 from __future__ import annotations
 
 import argparse
 import sys
+import os
+import re
 from pathlib import Path
-from typing import Iterable, List, Optional, Sequence, NamedTuple
-# ============ [01] module docstring & imports — END ==============
+from typing import List, Tuple, Iterable
 
 
-# =============== [02] constants & config — START =================
-ELLIPSIS_UNICODE = "\u2026"  # “…”
+# ==========================
+# 설정(기본값: 문서/프롬프트 전용)
+# ==========================
+DEFAULT_INCLUDE = [
+    "README.md",
+    "prompts.yaml",
+    "docs/**/*.md",
+    "docs/**/*.rst",
+    "docs/**/*.txt",
+    "prompts/**/*.md",
+    "prompts/**/*.txt",
+    "prompts/**/*.yaml",
+    "prompts/**/*.yml",
+]
 
-# 주요 코드/스크립트 확장자
-CODE_EXTS = {
-    ".py", ".ts", ".js", ".jsx", ".tsx",
-    ".go", ".rs", ".java", ".kt",
-    ".c", ".cpp", ".h", ".hpp", ".cs",
-    ".rb", ".php", ".swift", ".scala", ".dart",
-    ".r", ".m", ".sh", ".zsh", ".fish", ".ps1",
-    ".sql", ".html", ".css", ".scss",
-    ".ini", ".cfg", ".toml", ".json",
-}
+DEFAULT_EXCLUDE = [
+    ".git/**",
+    ".github/**",
+    "venv/**",
+    ".venv/**",
+    "node_modules/**",
+    "__pycache__/**",
+    "build/**",
+    "dist/**",
+]
 
-# 문서류: 엄격도 완화(스니핏/중략 패턴만 검사)
-DOC_EXTS = {".md", ".rst", ".txt", ".mdx", ".yaml", ".yml"}
+# 코드 파일은 기본적으로 제외(요청 시 --check-code로 opt-in)
+CODE_GLOBS = [
+    "**/*.py",
+    "src/**/*.py",
+    "tests/**/*.py",
+    "scripts/**/*.py",
+]
 
-EXCLUDED_DIRS = {
-    ".git", ".hg", ".svn",
-    ".mypy_cache", ".ruff_cache", ".pytest_cache",
-    ".venv", "venv", "__pycache__", "node_modules",
-    "build", "dist",
-}
+# 허용 마커(화이트리스트): 프롬프트 문맥에서 사용하는 내부 표식
+ALLOWED_MARKERS = [
+    "--START_ANSWER--",
+    "--END_ANSWER--",
+    "--BRACKET_RULES--",
+    "--END_BRACKET_RULES--",
+]
 
-# 🔒 자기 자신은 항상 제외(정책 설명 문자열 때문에 자가-오탐 방지)
-SELF_EXCLUDED_FILES = {Path(__file__).resolve()}
-SELF_EXCLUDED_NAMES = {"no_ellipsis_gate.py"}
-
-# 스니핏/중략 패턴
-SNIP_TOKENS = ("<<<", ">>>", "<<snip>>", "<<SNIP>>", "—8<—", "8<")
-KOR_SKIP_WORDS = ("중략", "생략")
-# =============== [02] constants & config — END ===================
-
-
-# =============== [03] types & helpers — START ====================
-class Violation(NamedTuple):
-    """(파일경로, 라인번호, 유형코드, 메시지)"""
-    path: Path
-    lineno: int
-    code: str
-    message: str
+# 스니핏/줄임표 패턴(화이트리스트 외에는 모두 ‘스니핏’으로 간주)
+SNIPPET_PATTERNS = [
+    r"<<<?",   # << 또는 <<< (LLM 표식류)
+    r">>>?",   # >> 또는 >>>
+    r"\[\s*\.\.\.\s*\]",  # [ ... ] 류
+    r"\.\.\.",            # ...
+    r"…",                 # 단일 문자 줄임표
+]
 
 
-def _iter_files(root: Path) -> Iterable[Path]:
-    for p in root.rglob("*"):
-        if not p.is_file():
+class Violation(Tuple[str, str, int, str]):
+    """(code, relpath, lineno, message)"""
+
+
+def _expand_braces(pattern: str) -> List[str]:
+    """'*.{md,txt}' 같은 브레이스 패턴을 fnmatch 용으로 풀어준다."""
+    m = re.search(r"\{([^}]+)\}", pattern)
+    if not m:
+        return [pattern]
+    head = pattern[:m.start()]
+    tail = pattern[m.end():]
+    alts = [x.strip() for x in m.group(1).split(",") if x.strip()]
+    out = []
+    for a in alts:
+        out.extend(_expand_braces(head + a + tail))
+    return out
+
+
+def _path_match_any(p: Path, patterns: Iterable[str], root: Path) -> bool:
+    from fnmatch import fnmatch
+    rp = str(p.relative_to(root).as_posix())
+    for pat in patterns:
+        for exp in _expand_braces(pat):
+            if fnmatch(rp, exp):
+                return True
+    return False
+
+
+def _collect_files(root: Path, includes: List[str], excludes: List[str]) -> List[Path]:
+    files: List[Path] = []
+    for pat in includes:
+        for exp in _expand_braces(pat):
+            files.extend(root.glob(exp))
+    uniq = []
+    seen = set()
+    for f in files:
+        if f.is_dir():
             continue
-        # 제외 디렉터리
-        if any(part in EXCLUDED_DIRS for part in p.parts):
+        rel = f.resolve()
+        if rel in seen:
             continue
-        # 자기 자신 제외
+        if _path_match_any(f, excludes, root):
+            continue
+        seen.add(rel)
+        uniq.append(f)
+    return sorted(uniq)
+
+
+def _line_is_ellipsis_only(s: str) -> bool:
+    t = s.strip()
+    return t in ("...", "…")
+
+
+def _line_has_snippet(s: str) -> bool:
+    if any(marker in s for marker in ALLOWED_MARKERS):
+        return False
+    return any(re.search(pat, s) for pat in SNIPPET_PATTERNS)
+
+
+def _window(lines: List[str], i: int, radius: int = 2) -> List[Tuple[int, str]]:
+    lo = max(0, i - radius)
+    hi = min(len(lines), i + radius + 1)
+    return [(k, lines[k]) for k in range(lo, hi)]
+
+
+def _scan_file(path: Path, root: Path) -> List[Violation]:
+    txt = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    vios: List[Violation] = []
+
+    # 1) ELLIPSIS_ONLY: 줄 전체가 ... 또는 … 인 경우
+    for i, line in enumerate(txt, start=1):
+        if _line_is_ellipsis_only(line):
+            vios.append(("ELLIPSIS_ONLY", str(path.relative_to(root)), i, "줄 전체가 '…' 또는 '...'로만 구성됨"))
+
+    # 2) SNIP_KO: 같은 파일에서 '중략|생략'과 스니핏이 근접(±2줄)한 경우
+    #    - 문서 내 실제 생략본/스니핏 혼용을 금지
+    for i, line in enumerate(txt, start=1):
+        if re.search(r"(중략|생략)", line):
+            for k, near in _window(txt, i - 1, radius=2):
+                if _line_has_snippet(near) or _line_is_ellipsis_only(near):
+                    vios.append(("SNIP_KO", str(path.relative_to(root)), i, "‘중략/생략’ + 스니핏/…/... 패턴"))
+                    break
+
+    return vios
+
+
+def _parse_args() -> argparse.Namespace:
+    ap = argparse.ArgumentParser(description="No‑Ellipsis Gate (docs/prompts only by default)")
+    ap.add_argument("--root", default=".", help="project root")
+    ap.add_argument("--include", action="append", default=[], help="additional include glob (can repeat)")
+    ap.add_argument("--exclude", action="append", default=[], help="additional exclude glob (can repeat)")
+    ap.add_argument("--check-code", action="store_true", help="also scan code (*.py) — opt-in")
+    ap.add_argument("--allowed-markers", default=",".join(ALLOWED_MARKERS),
+                    help="comma-separated whitelist markers")
+    return ap.parse_args()
+
+
+def main() -> int:
+    args = _parse_args()
+    root = Path(args.root).resolve()
+
+    # allow runtime extension of allowed markers
+    markers = [m.strip() for m in str(args.allowed_markers or "").split(",") if m.strip()]
+    ALLOWED_MARKERS[:] = markers  # type: ignore[index]
+
+    includes = list(DEFAULT_INCLUDE)
+    excludes = list(DEFAULT_EXCLUDE)
+
+    # user overrides
+    includes.extend(args.include or [])
+    excludes.extend(args.exclude or [])
+
+    # code scan opt-in
+    if args.check_code:
+        includes.extend(CODE_GLOBS)
+
+    files = _collect_files(root, includes, excludes)
+
+    all_vios: List[Violation] = []
+    for f in files:
         try:
-            if p.resolve() in SELF_EXCLUDED_FILES or p.name in SELF_EXCLUDED_NAMES:
-                continue
+            all_vios.extend(_scan_file(f, root))
         except Exception:
-            # resolve 실패 시 이름만으로 판단
-            if p.name in SELF_EXCLUDED_NAMES:
-                continue
-        # 확장자 분류
-        ext = p.suffix.lower()
-        if ext in CODE_EXTS or ext in DOC_EXTS:
-            yield p
-
-
-def _is_ellipsis_only_line(line: str) -> bool:
-    s = line.strip()
-    if not s:
-        return False
-    # '...' (3개 이상) 또는 '…'(하나 이상)만으로 구성된 라인
-    if set(s) <= {"."} and len(s) >= 3:
-        return True
-    if set(s) <= {ELLIPSIS_UNICODE}:
-        return True
-    return False
-
-
-def _has_snip_signature(line: str) -> bool:
-    s = line.strip()
-    if not s:
-        return False
-    if any(tok in s for tok in SNIP_TOKENS):
-        return True
-    # '중략/생략' + (… 또는 ...) 의 동시 등장
-    if any(k in s for k in KOR_SKIP_WORDS) and (ELLIPSIS_UNICODE in s or "..." in s):
-        return True
-    return False
-# =============== [03] types & helpers — END ======================
-
-
-# ============ [04] decision per line — START =====================
-def _should_flag_line(ext: str, line: str) -> Optional[tuple[str, str]]:
-    """
-    반환: (유형코드, 메시지) 또는 None(정상)
-
-    정책:
-      - CODE_EXTS: _is_ellipsis_only_line → 차단,
-                   _has_snip_signature → 차단
-      - DOC_EXTS : _has_snip_signature → 차단(오탐 최소화)
-    """
-    if ext in CODE_EXTS:
-        if _is_ellipsis_only_line(line):
-            return ("ELLIPSIS_ONLY", "줄 전체가 '…' 또는 '...'로만 구성됨")
-        if _has_snip_signature(line):
-            return ("SNIP_KO", "‘중략/생략’ + 스니핏/…/... 패턴")
-    elif ext in DOC_EXTS:
-        if _has_snip_signature(line):
-            return ("SNIP_KO", "문서 내 ‘중략/생략’ + 스니핏/…/... 패턴")
-    return None
-# ============ [04] decision per line — END =======================
-
-
-# ================= [05] scanner — START ==========================
-def scan(root: Path, verbose: bool = False) -> List[Violation]:
-    violations: List[Violation] = []
-    for file in _iter_files(root):
-        ext = file.suffix.lower()
-        try:
-            text = file.read_text(encoding="utf-8", errors="replace")
-        except Exception as e:
-            if verbose:
-                print(f"[skip] {file} ({e})", file=sys.stderr)
+            # 텍스트가 아닌 파일 등은 조용히 패스
             continue
 
-        for i, line in enumerate(text.splitlines(), start=1):
-            flagged = _should_flag_line(ext, line)
-            if flagged:
-                code, msg = flagged
-                violations.append(Violation(file, i, code, msg))
-    return violations
-# ================= [05] scanner — END ============================
-
-
-# ============== [06] CLI & report — START ========================
-def _print_report(violations: Sequence[Violation]) -> None:
-    if not violations:
-        print("No‑Ellipsis Gate: ✅ 위반 없음")
-        return
+    if not all_vios:
+        print("No‑Ellipsis Gate: ✅ 통과")
+        return 0
 
     print("No‑Ellipsis Gate: ❌ 위반 발견")
-    for path, lineno, code, msg in violations:
-        print(f"  - {code:<13} | {path}:{lineno} | {msg}")
+    for code, rel, ln, msg in all_vios:
+        print(f"  - {code:<12} | {root.joinpath(rel)}:{ln} | {msg}")
 
     print("\n가이드:")
-    print("  1) 실제 '중략본'이면 원본 코드로 교체하세요.")
+    print("  1) 실제 '중략본'이면 원본 텍스트로 교체하세요.")
     print("  2) 정상 문서의 줄임표는 허용되지만,")
-    print("     '중략/생략'과 스니핏 마커의 동시 사용은 금지입니다.")
-    print("  3) 필요 시 규칙은 scripts/no_ellipsis_gate.py에서 조정하세요.")
-
-
-def main(argv: Optional[Sequence[str]] = None) -> int:
-    parser = argparse.ArgumentParser(description="No‑Ellipsis Gate")
-    parser.add_argument("--root", default=".", help="스캔 시작 경로 (기본 '.')")
-    parser.add_argument("--verbose", action="store_true", help="상세 로그")
-    parser.add_argument("--dry-run", action="store_true", help="리포트만 (항상 0으로 종료)")
-    args = parser.parse_args(argv)
-
-    root = Path(args.root).resolve()
-    if not root.exists():
-        print(f"[error] 경로 없음: {root}", file=sys.stderr)
-        return 2
-
-    violations = scan(root, verbose=args.verbose)
-    _print_report(violations)
-    if args.dry_run:
-        return 0
-    return 1 if violations else 0
+    print("     '중략/생략'과 스니핏 마커의 근접 사용(±2줄)은 금지입니다.")
+    print("  3) 프롬프트 표식은 --allowed-markers 에 등록하면 제외됩니다.")
+    print("  4) 코드(.py)는 기본 제외이며, 필요 시 --check-code 로 포함하세요.")
+    return 1
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
-# ============== [06] CLI & report — END ==========================
+    sys.exit(main())
+# [27A] END: scripts/no_ellipsis_gate.py
