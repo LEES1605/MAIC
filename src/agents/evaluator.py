@@ -1,4 +1,4 @@
-# [23A] START: src/agents/evaluator.py (FULL REPLACEMENT)
+# [24A] START: src/agents/evaluator.py (FULL REPLACEMENT)
 from __future__ import annotations
 
 from typing import Iterator, Optional, Dict, List
@@ -84,6 +84,7 @@ def evaluate_stream(
 ) -> Iterator[str]:
     """
     미나쌤 평가 스트리밍 제너레이터.
+
     출력 형식(고정):
 
     [형식 체크]
@@ -97,7 +98,7 @@ def evaluate_stream(
     - (선택) 개선점 3
 
     [한 줄 총평]
-    - 핵심 요약 한 문장
+    - 한 문장 요약
     """
     spec = _load_mode_spec(mode)
     sections = " · ".join(spec["sections"]) if spec["sections"] else "형식 미정"
@@ -147,4 +148,4 @@ def evaluate_stream(
         user_prompt=user_prompt,
         split_fallback=True,
     )
-# [23A] END: src/agents/evaluator.py
+# [24A] END: src/agents/evaluator.py
