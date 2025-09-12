@@ -1250,8 +1250,8 @@ def _inject_chat_styles_once() -> None:
     """,
         unsafe_allow_html=True,
     )
-
-# [15B] START: _render_mode_controls_pills (FULL REPLACEMENT)
+==================================================================================
+# [15B] START: _render_mode_controls_pills (FULL REPLACEMENT)====================
 def _render_mode_controls_pills() -> str:
     """
     질문 모드 선택(문법·문장·지문[·이야기]).
@@ -1289,12 +1289,13 @@ def _render_mode_controls_pills() -> str:
     )
 
     # 라벨→key 매핑(임포트 가능하면 사용, 아니면 키 매핑)
+    _find = None  # 동적 임포트 실패 대비: Optional[Callable]로 동작
     try:
-        try:
-            from src.core.modes import find_mode_by_label  # 재임포트 안전
-        except Exception:
-            find_mode_by_label = None  # type: ignore[assignment]
-        spec = find_mode_by_label(sel_label) if callable(find_mode_by_label) else None
+        from src.core.modes import find_mode_by_label as _find  # 재임포트 안전
+    except Exception:
+        _find = None
+    try:
+        spec = _find(sel_label) if callable(_find) else None
         cur_key = spec.key if spec else keys[labels.index(sel_label)]
     except Exception:
         cur_key = keys[labels.index(sel_label)]
@@ -1302,7 +1303,8 @@ def _render_mode_controls_pills() -> str:
     ss["qa_mode_radio"] = sel_label
     ss["__mode"] = cur_key
     return cur_key
-# [15B] END============================================================
+# [15B] END=========================================================
+
 # [16] START: 채팅 패널 (FULL REPLACEMENT)=============================
 def _render_chat_panel() -> None:
     """질문(오른쪽) → 피티쌤(스트리밍) → 미나쌤(스트리밍) → 품질 배지."""
@@ -1585,14 +1587,15 @@ def _render_body() -> None:
     with st.container(border=True, key="chatpane_container"):
         st.markdown('<div class="chatpane">', unsafe_allow_html=True)
         st.session_state["__mode"] = _render_mode_controls_pills() or st.session_state.get("__mode", "")
+        submitted: bool = False  # ✅ mypy 엄격설정 대비 선제 초기화
         with st.form("chat_form", clear_on_submit=False):
             q: str = st.text_input("질문", placeholder="질문을 입력하세요…", key="q_text")
-            submitted: bool = st.form_submit_button("➤")
+            submitted = st.form_submit_button("➤")
         st.markdown("</div>", unsafe_allow_html=True)
 
     if submitted and isinstance(q, str) and q.strip():
         st.session_state["inpane_q"] = q.strip()
-        _safe_rerun("chat_submit", ttl=1)
+        st.rerun()
     else:
         st.session_state.setdefault("inpane_q", "")
 
