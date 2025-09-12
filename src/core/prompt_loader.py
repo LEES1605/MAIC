@@ -21,7 +21,7 @@ def _read_text(path: Path) -> Optional[str]:
 
 def _safe_yaml_load(path: Path) -> Optional[dict]:
     try:
-        import yaml  # type: ignore[import-not-found]
+        import yaml
     except Exception:
         return None
     try:
@@ -34,7 +34,7 @@ def _clamp(text: str, *, max_chars: int = 4000) -> str:
     """Prompt bloat / 주입 방지를 위한 길이 클램프."""
     try:
         # 가능하면 SSOT 유틸 사용
-        from modes.types import clamp_fragments  # type: ignore
+        from modes.types import clamp_fragments
         arr = clamp_fragments([text], max_items=1, max_chars_each=max_chars)
         return (arr[0] if arr else "").strip()
     except Exception:
@@ -71,7 +71,7 @@ def get_bracket_rules() -> str:
     """
     # 1) secrets
     try:
-        import streamlit as st  # type: ignore
+        import streamlit as st
         for k in ("BRACKET_RULES", "SENTENCE_BRACKET_PROMPT"):
             v = st.secrets.get(k)
             if isinstance(v, str) and v.strip():
