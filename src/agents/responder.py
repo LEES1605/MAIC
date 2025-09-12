@@ -1,39 +1,103 @@
-# [20B] START: src/agents/responder.py (FULL REPLACEMENT)
+# [22B] START: src/agents/responder.py (FULL REPLACEMENT)
 from __future__ import annotations
 
 from typing import Iterator, Optional, Dict
 from src.agents._common import stream_llm
-from src.core.prompt_loader import get_bracket_rules
+from src.core.prompt_loader import (
+    get_bracket_rules,
+    get_custom_mode_prompts,
+)
 
 
-def _system_prompt(mode: str) -> str:
-    """
-    피티쌤(주답변) 프롬프트.
-    - 문장 모드에서는 '사용자 제공 괄호규칙'을 우선 적용(문서/Secrets/ENV).
-    - 과장 금지, 짧은 문장, 단계적 설명.
-    """
-    m = (mode or "").strip().lower()
-
-    if m in ("sentence", "문장", "문장구조분석", "문장분석"):
-        rules = get_bracket_rules()
-        hint = (
-            "다음 '사용자 괄호규칙'을 반드시 따르세요.\n"
-            "<<<BRACKET_RULES>>>\n"
-            f"{rules}\n"
-            "<<<END_RULES>>>\n"
-            "출력 형식: [괄호분석] → [해석] → [핵심 포인트 3개]."
+def _default_system_by_mode(mode_key: str) -> str:
+    m = (mode_key or "").strip().lower()
+    if m == "sentence":
+        return (
+            "당신은 학생을 돕는 영어 선생님입니다. 불필요한 말은 줄이고, "
+            "짧고 명확한 단계적 설명을 사용하세요.\n"
+            "출력: 괄호분석 → 해석 → 핵심 포인트 3개."
         )
-    elif m in ("grammar", "문법", "문법설명"):
-        hint = "핵심 규칙 → 간단 예시 → 흔한 오해. 문장 짧게."
-    elif m in ("passage", "지문", "지문분석", "지문설명"):
-        hint = "요지→쉬운 예시→주제→제목. 근거 문장 인용."
-    else:
-        hint = "학생 눈높이: 핵심→예시→한 줄 정리."
-
+    if m == "passage":
+        return (
+            "당신은 학생을 돕는 영어 선생님입니다. 요지→쉬운 예시→주제→제목을 "
+            "간결하게 정리하세요."
+        )
+    # grammar
     return (
-        "당신은 학생을 돕는 영어 선생님입니다. 불필요한 수식은 줄이고, "
-        "짧고 명확한 단계적 설명을 사용하세요.\n" + hint
+        "당신은 학생을 돕는 영어 선생님입니다. 핵심 규칙→간단 예시→흔한 오해를 "
+        "짧게 설명하세요."
     )
+
+
+def _maybe_append_bracket_rules(system_txt: str) -> str:
+    """
+    문장 모드인데 사용자 system에 괄호 규칙 언급이 전혀 없으면
+    brackets 규칙 블록을 뒤에 부착한다.
+    """
+    s = system_txt or ""
+    # '괄호', '표기 규칙' 등 힌트 키워드 탐지
+    has_hint = bool(
+        ("괄호" in s)
+        or ("표기 규칙" in s)
+        or ("bracket" in s.lower())
+    )
+    if has_hint:
+        return s
+    rules = get_bracket_rules()
+    return (
+        s
+        + "\n\n[괄호/기호 표기 규칙 — 엄수]\n"
+        + "<<<BRACKET_RULES>>>\n"
+        + rules
+        + "\n<<<END_RULES>>>"
+    )
+
+
+def _safe_format(template: str, mapping: Dict[str, str]) -> str:
+    """
+    {PLACEHOLDER}를 안전하게 치환(미지 키는 빈 문자열).
+    """
+    import re
+
+    def repl(m):
+        key = (m.group(1) or "").strip()
+        return str(mapping.get(key, ""))
+
+    return re.sub(r"{\s*([A-Za-z0-9_]+)\s*}", repl, template)
+
+
+def _compose_prompts(
+    mode_key: str, question: str, ctx: Optional[Dict[str, str]]
+) -> tuple[str, str]:
+    """
+    반환: (system_prompt, user_prompt)
+    - 사용자 정의(system/user)가 있으면 우선 사용
+    - 문장 모드는 괄호규칙 부착 보정
+    """
+    custom = get_custom_mode_prompts(mode_key)
+    sys_txt = custom.get("system") or _default_system_by_mode(mode_key)
+    usr_txt = custom.get("user") or ""
+
+    if mode_key == "sentence":
+        sys_txt = _maybe_append_bracket_rules(sys_txt)
+
+    # 사용자 user 템플릿이 존재하면 안전 치환, 없으면 질문만 전달
+    if usr_txt:
+        mapping: Dict[str, str] = {
+            "QUESTION": question,
+            "question": question,
+            # 문법 모드 컨텍스트(있으면):
+            "EVIDENCE_CLASS_NOTES": (ctx or {}).get("EVIDENCE_CLASS_NOTES", ""),
+            "EVIDENCE_GRAMMAR_BOOKS": (ctx or {}).get("EVIDENCE_GRAMMAR_BOOKS", ""),
+        }
+        user_prompt = _safe_format(usr_txt, mapping)
+        # 템플릿에 질문 표기가 아예 없으면 하단에 질문을 추가
+        if ("{QUESTION}" not in usr_txt) and ("{question}" not in usr_txt):
+            user_prompt = user_prompt.rstrip() + "\n\n[질문]\n" + question
+    else:
+        user_prompt = question
+
+    return sys_txt, user_prompt
 
 
 def answer_stream(
@@ -41,13 +105,14 @@ def answer_stream(
 ) -> Iterator[str]:
     """
     주답변(피티쌤) 스트리밍 제너레이터.
-    - 공통 SSOT(stream_llm)만 호출하여 중복 제거
-    - split_fallback=True: 콜백 미지원 provider에서 문장단위 의사 스트리밍
+    - 내부 모드 키(mode)는 app.py에서 전달되는 'grammar|sentence|passage'
+    - 사용자 정의 prompts.yaml(modes.*)가 있으면 system/user를 우선 사용
+    - split_fallback=True: 콜백 미지원 provider에서 문장 단위 의사 스트리밍
     """
-    sys_p = _system_prompt(mode)
+    sys_p, user_p = _compose_prompts(mode, question, ctx)
     yield from stream_llm(
         system_prompt=sys_p,
-        user_prompt=question,
+        user_prompt=user_p,
         split_fallback=True,
     )
-# [20B] END: src/agents/responder.py
+# [22B] END: src/agents/responder.py
