@@ -502,6 +502,7 @@ def _render_index_orchestrator_header() -> None:
     st.markdown("<span id='idx-admin-panel'></span>", unsafe_allow_html=True)
 # =================== [12] DIAG: Orchestrator Header — END ======================
 
+# ===== REPLACE: app.py [13] ADMIN: Index Panel (prepared 전용) (L504–L893) — START =====
 # =================== [13] ADMIN: Index Panel (prepared 전용) ==============
 def _render_admin_index_panel() -> None:
     if "st" not in globals() or st is None or not _is_admin_view():
@@ -685,7 +686,8 @@ def _render_admin_index_panel() -> None:
                 "show_after": show_after,
             }
             _log("인덱싱 요청 접수")
-            st.rerun()
+            # 변경점: 직접 rerun → 태그/TTL 가드 적용
+            _safe_rerun("idx_submit", ttl=1)
 
     # ---------- 인덱싱 실행 ----------
     req = st.session_state.pop("_IDX_REQ", None)
@@ -892,6 +894,7 @@ def _render_admin_index_panel() -> None:
         else:
             st.caption("표시할 로그가 없습니다.")
 # =================== [13] ADMIN: Index Panel (prepared 전용) ==============
+# ===== REPLACE: app.py [13] ADMIN: Index Panel (prepared 전용) — END =====
 
 
 # ========== [13A] ADMIN: Panels (legacy aggregator, no-op) ==========
