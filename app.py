@@ -212,27 +212,61 @@ def _is_admin_view() -> bool:
 
 # ======================= [07] RERUN GUARD utils ==============================
 def _safe_rerun(tag: str, ttl: int = 1) -> None:
-    """Streamlit rerun을 '태그별 최대 ttl회'로 제한."""
+    """Streamlit rerun을 '태그별 최대 ttl회'로 제한.
+    - session_state는 dict가 아닐 수 있으므로 매핑으로 안전 처리
+    - st.rerun() 실패 시 experimental_rerun() 폴백
+    - 실패는 무해(no-op)
+    """
     s = globals().get("st", None)
     if s is None:
         return
     try:
-        ss = getattr(s, "session_state", None)
-        if not isinstance(ss, dict):
+        ss = getattr(s, "session_state", None)  # Mapping-like (dict 아님 가능)
+        if ss is None:
             return
-        key = "__rerun_counts__"
-        counts = ss.get(key)
-        if not isinstance(counts, dict):
-            counts = {}
-        cnt = int(counts.get(tag, 0))
-        if cnt >= int(ttl):
-            return
-        counts[tag] = cnt + 1
-        ss[key] = counts
-        s.rerun()
-    except Exception:
-        pass
 
+        # 입력 방어: tag/ttl 정규화
+        tag = str(tag or "rerun")
+        try:
+            ttl_int = int(ttl)
+        except Exception:
+            ttl_int = 1
+        if ttl_int <= 0:
+            ttl_int = 1
+
+        key = "__rerun_counts__"
+        # 다양한 매핑/객체를 dict로 유연 캐스팅
+        counts = ss.get(key, {})
+        if not isinstance(counts, dict):
+            try:
+                counts = dict(counts)
+            except Exception:
+                counts = {}
+
+        cnt = 0
+        try:
+            cnt = int(counts.get(tag, 0))
+        except Exception:
+            cnt = 0
+
+        if cnt >= ttl_int:
+            return
+
+        counts[tag] = cnt + 1
+        ss[key] = counts  # 매핑에 다시 저장
+
+        # 표준 → 레거시 순서로 호출
+        try:
+            s.rerun()
+        except Exception:
+            try:
+                s.experimental_rerun()
+            except Exception:
+                pass
+    except Exception:
+        # 모든 예외는 무해 처리
+        pass
+# ======================= [07] RERUN GUARD utils ==============================
 
 # ================= [08] 헤더(배지·타이틀·로그인/아웃) — START ==============
 def _header() -> None:
