@@ -308,7 +308,7 @@ def _mount_background(
     return
 
 
-# =================== [10] 부팅 훅: 인덱스 자동 복원 (REPLACE) =======================
+# =================== [10] 부팅 훅: 인덱스 자동 복원 =======================
 def _boot_auto_restore_index() -> None:
     """부팅 시 인덱스 자동 복원(한 세션 1회).
     - 조건: chunks.jsonl==0B 또는 미존재, 또는 .ready 미존재
@@ -359,7 +359,6 @@ def _boot_auto_restore_index() -> None:
 
     def _download_asset_to(asset: dict, dst: Path) -> bool:
         """Assets API로 인증 다운로드 (private repo 지원)."""
-        # 1) 권장: asset["url"] + Accept: application/octet-stream
         asset_api = str(asset.get("url") or "")
         if asset_api:
             req = _rq.Request(asset_api, headers={
@@ -369,7 +368,6 @@ def _boot_auto_restore_index() -> None:
             with _rq.urlopen(req, timeout=180) as resp:
                 dst.write_bytes(resp.read())
                 return True
-        # 2) 폴백: browser_download_url (public만 실질 지원)
         bdl = str(asset.get("browser_download_url") or "")
         if bdl:
             req = _rq.Request(bdl, headers={
@@ -395,7 +393,7 @@ def _boot_auto_restore_index() -> None:
 
     if zip_asset is None:
         try:
-            rels = _get_json(f"{API}/releases")  # 최신 → 과거 순
+            rels = _get_json(f"{API}/releases")
             for rel in rels or []:
                 for a in rel.get("assets") or []:
                     n = str(a.get("name") or "")
@@ -408,7 +406,7 @@ def _boot_auto_restore_index() -> None:
             _errlog(f"releases 목록 조회 실패: {e}", where="[boot.restore]")
             return
         if zip_asset is None:
-            return  # 적합한 자산 없음
+            return
 
     # 2) 다운로드 및 복원
     try:
@@ -417,15 +415,17 @@ def _boot_auto_restore_index() -> None:
         ok = _download_asset_to(zip_asset, tmp)
         if not ok or not tmp.exists() or tmp.stat().st_size == 0:
             _errlog("asset 다운로드 실패 또는 0B", where="[boot.restore]")
-            try: tmp.unlink()
-            except Exception: 
+            try:
+                tmp.unlink()
+            except Exception:
                 pass
             return
 
         with zipfile.ZipFile(tmp, "r") as zf:
             zf.extractall(p)
-        try: tmp.unlink()
-        except Exception: 
+        try:
+            tmp.unlink()
+        except Exception:
             pass
 
         # 3) ZIP 내부 하위 폴더에 있을 수 있는 chunks.jsonl 탐색
@@ -440,7 +440,7 @@ def _boot_auto_restore_index() -> None:
 
         target_dir = found.parent if found else p
 
-        # SSOT: ready 마킹
+        # ready 마킹 (SSOT 우선)
         try:
             core_mark_ready(target_dir)
         except Exception:
@@ -459,8 +459,7 @@ def _boot_auto_restore_index() -> None:
     except Exception as e:
         _errlog(f"복원 실패: {e}", where="[boot.restore]", exc=e)
         return
-# =================== [10] 부팅 훅: 인덱스 자동 복원 (REPLACE) — END =======================
-
+# =================== [10] 부팅 훅: 인덱스 자동 복원 — END =======================
 
 # =================== [11] 부팅 오토플로우 & 자동 복원 모드 ==================
 def _boot_autoflow_hook() -> None:
