@@ -918,7 +918,14 @@ def _render_admin_prepared_scan_panel() -> None:
 
     if act_clear:
         st.session_state.pop("_PR_SCAN_RESULT", None)
-        st.experimental_rerun()
+        try:
+            st.rerun()
+        except Exception:
+            try:
+                # backward-compat for older Streamlit
+                st.experimental_rerun()
+            except Exception:
+                pass
 
     # 이전 결과 있으면 보여주기
     prev = st.session_state.get("_PR_SCAN_RESULT")
@@ -997,8 +1004,6 @@ def _render_admin_prepared_scan_panel() -> None:
         "sample_new": new_files[:10] if isinstance(new_files, list) else [],
     }
 # =================== [13B] ADMIN: Prepared Scan — END ====================
-
-
 
 # ============= [14] 인덱싱된 소스 목록(읽기 전용 대시보드) ==============
 def _render_admin_indexed_sources_panel() -> None:
