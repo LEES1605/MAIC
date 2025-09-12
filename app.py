@@ -307,14 +307,14 @@ def _mount_background(
     """배경 렌더 OFF(호출 시 즉시 return)."""
     return
 
-
 # =================== [10] 부팅 훅: 인덱스 자동 복원 =======================
 def _boot_auto_restore_index() -> None:
     """부팅 시 인덱스 자동 복원(한 세션 1회).
     - 조건: chunks.jsonl==0B 또는 미존재, 또는 .ready 미존재
-    - 동작: GH Releases에서 최신 index_*.zip 받아서 복원 (private repo 인증 지원)
+    - 동작: GH Releases에서 최신 index_*.zip 받아서 복원(Private 인증 지원)
     - SSOT: persist는 core.persist.effective_persist_dir()만 사용
     """
+    # 세션 1회 가드
     try:
         if "st" in globals() and st is not None:
             if st.session_state.get("_BOOT_RESTORE_DONE"):
@@ -322,6 +322,7 @@ def _boot_auto_restore_index() -> None:
     except Exception:
         pass
 
+    # 현 상태 점검
     p = effective_persist_dir()
     cj = p / "chunks.jsonl"
     ready = (p / ".ready").exists()
@@ -333,47 +334,63 @@ def _boot_auto_restore_index() -> None:
             pass
         return
 
-    # ---- SSOT 시크릿 로더 사용 ----
+    # 시크릿 로드(SSOT)
     try:
-        from src.core.secret import token as _gh_token, resolve_owner_repo as _resolve_owner_repo
+        from src.core.secret import (
+            token as _gh_token,
+            resolve_owner_repo as _resolve_owner_repo,
+        )
         token = _gh_token() or ""
         owner, repo = _resolve_owner_repo()
     except Exception:
         token, owner, repo = "", "", ""
 
     if not (token and owner and repo):
-        return  # 복원 불가(시크릿 미설정)
+        # 시크릿 미설정 시 조용히 종료
+        return
 
-    from urllib import request as _rq, error as _er
-    import zipfile, json as _json
+    # GitHub API 헬퍼
+    from urllib import request as _rq
+    import zipfile
+    import json as _json
 
     API = f"https://api.github.com/repos/{owner}/{repo}"
 
     def _get_json(url: str) -> dict:
-        req = _rq.Request(url, headers={
-            "Authorization": f"token {token}",
-            "Accept": "application/vnd.github+json",
-        })
+        req = _rq.Request(
+            url,
+            headers={
+                "Authorization": f"token {token}",
+                "Accept": "application/vnd.github+json",
+            },
+        )
         with _rq.urlopen(req, timeout=25) as resp:
             return _json.loads(resp.read().decode("utf-8", "ignore"))
 
     def _download_asset_to(asset: dict, dst: Path) -> bool:
-        """Assets API로 인증 다운로드 (private repo 지원)."""
+        """Assets API로 인증 다운로드(Private 저장소 지원)."""
         asset_api = str(asset.get("url") or "")
         if asset_api:
-            req = _rq.Request(asset_api, headers={
-                "Authorization": f"token {token}",
-                "Accept": "application/octet-stream",
-            })
+            req = _rq.Request(
+                asset_api,
+                headers={
+                    "Authorization": f"token {token}",
+                    "Accept": "application/octet-stream",
+                },
+            )
             with _rq.urlopen(req, timeout=180) as resp:
                 dst.write_bytes(resp.read())
                 return True
+        # public 폴백
         bdl = str(asset.get("browser_download_url") or "")
         if bdl:
-            req = _rq.Request(bdl, headers={
-                "Authorization": f"token {token}",
-                "Accept": "application/octet-stream",
-            })
+            req = _rq.Request(
+                bdl,
+                headers={
+                    "Authorization": f"token {token}",
+                    "Accept": "application/octet-stream",
+                },
+            )
             with _rq.urlopen(req, timeout=180) as resp:
                 dst.write_bytes(resp.read())
                 return True
@@ -393,7 +410,7 @@ def _boot_auto_restore_index() -> None:
 
     if zip_asset is None:
         try:
-            rels = _get_json(f"{API}/releases")
+            rels = _get_json(f"{API}/releases")  # 최신 → 과거
             for rel in rels or []:
                 for a in rel.get("assets") or []:
                     n = str(a.get("name") or "")
@@ -406,6 +423,7 @@ def _boot_auto_restore_index() -> None:
             _errlog(f"releases 목록 조회 실패: {e}", where="[boot.restore]")
             return
         if zip_asset is None:
+            # 적합한 자산 없음
             return
 
     # 2) 다운로드 및 복원
@@ -440,7 +458,7 @@ def _boot_auto_restore_index() -> None:
 
         target_dir = found.parent if found else p
 
-        # ready 마킹 (SSOT 우선)
+        # ready 마킹(SSOT 우선)
         try:
             core_mark_ready(target_dir)
         except Exception:
