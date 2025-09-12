@@ -1,5 +1,4 @@
-# src/agents/evaluator.py
-# ============================== Evaluator Stream ===============================
+# [26A] START: src/agents/evaluator.py (FULL REPLACEMENT)
 from __future__ import annotations
 
 from typing import Iterator, Optional, Dict, List
@@ -8,9 +7,9 @@ from src.agents._common import stream_llm
 
 def _load_mode_spec(mode_key: str) -> Dict[str, List[str] | str]:
     """
-    SSOT(src.core.modes)을 우선하여 모드 정의를 불러오고, 실패 시 안전 폴백.
-    Returns:
-        {"key": ..., "label": ..., "sections": [...], "eval_focus": [...]}
+    SSOT(src.core.modes)에서 모드 정보를 불러오고, 실패 시 폴백 사용.
+    반환:
+      {"key": ..., "label": ..., "sections": [...], "eval_focus": [...]}
     """
     key = (mode_key or "").strip().lower()
     try:
@@ -44,7 +43,7 @@ def _load_mode_spec(mode_key: str) -> Dict[str, List[str] | str]:
     return {
         "key": "grammar",
         "label": "문법",
-        "sections": ["핵심규칙", "근거", "예문", "역예문(선택)", "한 줄 요약"],
+        "sections": ["핵심규칙", "근거", "예문", "역예문(선택)", "한 줄 총평"],
         "eval_focus": ["정확도", "근거 제시", "간결성"],
     }
 
@@ -53,7 +52,7 @@ def _system_prompt(mode_key: str) -> str:
     """
     미나쌤(품질 평가자) 시스템 프롬프트.
     - 형식/규칙 준수 여부를 간결하게 진단하고, 개선 포인트를 3개 이내로 제시.
-    - 문장 모드일 때 괄호규칙 라벨 세트 강제.
+    - 문장 모드에서는 괄호규칙 라벨 세트를 확인한다.
     """
     spec = _load_mode_spec(mode_key)
     sections = "·".join(spec["sections"]) if spec["sections"] else "형식 미정"
@@ -85,32 +84,50 @@ def evaluate_stream(
 ) -> Iterator[str]:
     """
     미나쌤 평가 스트리밍 제너레이터.
+
     출력 형식(고정):
+
     [형식 체크]
     - 섹션: OK|FAIL (사유)
     - 괄호규칙: OK|FAIL (사유; 문장 모드만 표기)
     - 사실성: OK|WARN (사유)
+
     [피드백]
     - 개선점 1
     - 개선점 2
     - (선택) 개선점 3
+
     [한 줄 총평]
-    - 핵심 요약 한 문장
+    - 한 문장 요약
     """
     spec = _load_mode_spec(mode)
     sections = " · ".join(spec["sections"]) if spec["sections"] else "형식 미정"
+
+    # 사용자 규칙을 명확히 하려면 필요 시 추가 규칙을 함께 전달
+    add_rules = ""
+    if spec["key"] == "sentence":
+        try:
+            from src.core.prompt_loader import get_bracket_rules
+            add_rules = (
+                "\n[괄호규칙(사용자 제공)]\n"
+                "--BRACKET_RULES--\n"
+                f"{get_bracket_rules()}\n"
+                "--END_BRACKET_RULES--\n"
+            )
+        except Exception:
+            add_rules = ""
 
     user_prompt = (
         "[입력]\n"
         f"- 질문: {question}\n"
         f"- 모드: {spec['label']} ({spec['key']})\n"
-        "- 답변(피티쌤): <<START_ANSWER>>\n"
+        "- 답변(피티쌤): --START_ANSWER--\n"
         f"{answer}\n"
-        "<<END_ANSWER>>\n\n"
+        "--END_ANSWER--\n"
+        f"{add_rules}"
         "[검토 기준]\n"
         f"1) 섹션 구성(순서={sections}) 및 누락 여부\n"
-        "2) 괄호규칙 준수(문장 모드일 때만): 라벨 세트는 고정 "
-        "(S,V,O,C,M,Sub,Rel,ToInf,Ger,Part,Appo,Conj)\n"
+        "2) 괄호규칙 준수(문장 모드일 때만)\n"
         "3) 사실성/근거 제시의 명확성\n"
         "4) 개선 포인트: 2~3개, 간결한 명사구로\n\n"
         "[출력 형식]\n"
@@ -119,11 +136,11 @@ def evaluate_stream(
         "- 괄호규칙: OK|FAIL (사유; 문장 모드만 표기)\n"
         "- 사실성: OK|WARN (사유)\n"
         "[피드백]\n"
-        "- …\n"
-        "- …\n"
-        "- (선택) …\n"
+        "- 개선점 1\n"
+        "- 개선점 2\n"
+        "- (선택) 개선점 3\n"
         "[한 줄 총평]\n"
-        "- …"
+        "- 한 문장 요약"
     )
 
     yield from stream_llm(
@@ -131,3 +148,4 @@ def evaluate_stream(
         user_prompt=user_prompt,
         split_fallback=True,
     )
+# [26A] END: src/agents/evaluator.py
