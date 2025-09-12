@@ -101,9 +101,12 @@ def _extract_id_name(rec: Any) -> Tuple[str, str]:
         s = rec.strip()
         return (s, s) if s else ("", "")
     if isinstance(rec, dict):
-        get = lambda k: str(rec.get(k) or "").strip()
-        fid = get("id") or get("fileId") or get("name") or get("path")
-        nm = get("name") or get("path") or get("file") or fid
+        # E731 회피: lambda 할당 대신 내부 함수 사용
+        def _get(k: str) -> str:
+            return str(rec.get(k) or "").strip()
+
+        fid = _get("id") or _get("fileId") or _get("name") or _get("path")
+        nm = _get("name") or _get("path") or _get("file") or fid
         return (fid, nm) if fid else ("", "")
     s = str(rec or "").strip()
     return (s, s) if s else ("", "")
