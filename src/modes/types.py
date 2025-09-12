@@ -32,6 +32,8 @@ class Mode(str, Enum):
 ALLOWED_SOURCE_LABELS: Dict[str, str] = {
     "[이유문법]": "Reason-based grammar materials",
     "[문법서적]": "Printed/official grammar books",
+    "[수업자료]": "Teacher-authored class materials",
+    "[검색]": "External search results",
     "[AI지식]": "Model-only fallback (no attached index)",
 }
 
