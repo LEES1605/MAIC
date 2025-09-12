@@ -1,6 +1,21 @@
-# [01] START: src/modes/__init__.py (NEW FILE)
-from .types import Mode, ModeProfile, PromptBundle
-from .router import ModeRouter
+# [02] START: src/modes/__init__.py (FULL REPLACEMENT)
+from __future__ import annotations
 
-__all__ = ["Mode", "ModeProfile", "PromptBundle", "ModeRouter"]
-# [01] END: src/modes/__init__.py
+from .types import (
+    Mode,
+    ModeProfile,
+    PromptBundle,
+    ALLOWED_SOURCE_LABELS,
+    sanitize_source_label,
+    clamp_fragments,
+)
+
+__all__ = [
+    "Mode",
+    "ModeProfile",
+    "PromptBundle",
+    "ALLOWED_SOURCE_LABELS",
+    "sanitize_source_label",
+    "clamp_fragments",
+]
+# [02] END: src/modes/__init__.py
