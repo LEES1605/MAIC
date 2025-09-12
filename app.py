@@ -1,7 +1,7 @@
 # =============================== [01] future import ===============================
 from __future__ import annotations
 
-# ===== REPLACE: app.py [02] module imports (L4–L27) — START =====
+# ===== REPLACE: app.py [02] module imports — START =====
 # =============================== [02] module imports ==============================
 import os
 import json
@@ -205,11 +205,8 @@ def _is_admin_view() -> bool:
         return bool(ss.get("admin_mode"))
     except Exception:
         return False
-
-
-
-
-
+# ========================= [06] ACCESS: Admin Gate - END ======================
+# ===== REPLACE: app.py [07] RERUN GUARD utils — START =====
 # ======================= [07] RERUN GUARD utils ==============================
 def _safe_rerun(tag: str, ttl: int = 1) -> None:
     """Streamlit rerun을 '태그별 최대 ttl회'로 제한.
@@ -221,7 +218,7 @@ def _safe_rerun(tag: str, ttl: int = 1) -> None:
     if s is None:
         return
     try:
-        ss = getattr(s, "session_state", None)  # Mapping-like (dict 아님 가능)
+        ss = getattr(s, "session_state", None)  # Mapping-like
         if ss is None:
             return
 
@@ -235,7 +232,6 @@ def _safe_rerun(tag: str, ttl: int = 1) -> None:
             ttl_int = 1
 
         key = "__rerun_counts__"
-        # 다양한 매핑/객체를 dict로 유연 캐스팅
         counts = ss.get(key, {})
         if not isinstance(counts, dict):
             try:
@@ -243,7 +239,6 @@ def _safe_rerun(tag: str, ttl: int = 1) -> None:
             except Exception:
                 counts = {}
 
-        cnt = 0
         try:
             cnt = int(counts.get(tag, 0))
         except Exception:
@@ -267,6 +262,9 @@ def _safe_rerun(tag: str, ttl: int = 1) -> None:
         # 모든 예외는 무해 처리
         pass
 # ======================= [07] RERUN GUARD utils ==============================
+# ===== REPLACE: app.py [07] RERUN GUARD utils — END =====
+
+
 
 # ================= [08] 헤더(배지·타이틀·로그인/아웃) — START ==============
 def _header() -> None:
@@ -536,7 +534,7 @@ def _render_index_orchestrator_header() -> None:
     st.markdown("<span id='idx-admin-panel'></span>", unsafe_allow_html=True)
 # =================== [12] DIAG: Orchestrator Header — END ======================
 
-# ===== REPLACE: app.py [13] ADMIN: Index Panel (prepared 전용) (L504–L893) — START =====
+# ===== REPLACE: app.py [13] ADMIN: Index Panel (prepared 전용) — START =====
 # =================== [13] ADMIN: Index Panel (prepared 전용) ==============
 def _render_admin_index_panel() -> None:
     if "st" not in globals() or st is None or not _is_admin_view():
@@ -720,7 +718,7 @@ def _render_admin_index_panel() -> None:
                 "show_after": show_after,
             }
             _log("인덱싱 요청 접수")
-            # 변경점: 직접 rerun → 태그/TTL 가드 적용
+            # ✅ 변경점: 직접 rerun → 태그/TTL 가드 적용
             _safe_rerun("idx_submit", ttl=1)
 
     # ---------- 인덱싱 실행 ----------
@@ -930,14 +928,13 @@ def _render_admin_index_panel() -> None:
 # =================== [13] ADMIN: Index Panel (prepared 전용) ==============
 # ===== REPLACE: app.py [13] ADMIN: Index Panel (prepared 전용) — END =====
 
-
 # ========== [13A] ADMIN: Panels (legacy aggregator, no-op) ==========
 def _render_admin_panels() -> None:
     """과거 집계 렌더러 호환용(현재는 사용 안함)."""
     return None
 
 
-# =================== [13B] ADMIN: Prepared Scan — START ====================
+# ===== REPLACE: app.py [13B] ADMIN: Prepared Scan — START =====
 def _render_admin_prepared_scan_panel() -> None:
     """prepared 폴더의 '새 파일 유무'만 확인하는 경량 스캐너.
     - 인덱싱은 수행하지 않고, check_prepared_updates()만 호출
@@ -1034,7 +1031,7 @@ def _render_admin_prepared_scan_panel() -> None:
         "timestamp": int(time.time()),
         "sample_new": new_files[:10] if isinstance(new_files, list) else [],
     }
-# =================== [13B] ADMIN: Prepared Scan — END ====================
+# ===== REPLACE: app.py [13B] ADMIN: Prepared Scan — END =====
 
 # ============= [14] 인덱싱된 소스 목록(읽기 전용 대시보드) ==============
 def _render_admin_indexed_sources_panel() -> None:
@@ -1395,6 +1392,7 @@ def _render_chat_panel() -> None:
 # [16] END
 
 
+# ===== REPLACE: app.py [17] 본문 렌더 — START =====
 # ========================== [17] 본문 렌더 ===============================
 def _render_body() -> None:
     if st is None:
@@ -1453,11 +1451,12 @@ def _render_body() -> None:
 
     if submitted and isinstance(q, str) and q.strip():
         st.session_state["inpane_q"] = q.strip()
-        # 변경점: 직접 rerun → 태그/TTL 가드 적용
+        # ✅ 변경점: 직접 rerun → 태그/TTL 가드 적용
         _safe_rerun("chat_submit", ttl=1)
     else:
         st.session_state.setdefault("inpane_q", "")
 # ========================== [17] 본문 렌더 — END ===============================
+# ===== REPLACE: app.py [17] 본문 렌더 — END =====
 
 # =============================== [18] main =================================
 def main() -> None:
