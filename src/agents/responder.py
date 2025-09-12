@@ -1,4 +1,4 @@
-# [24B] START: src/agents/responder.py (FULL REPLACEMENT)
+# [26B] START: src/agents/responder.py (FULL REPLACEMENT)
 from __future__ import annotations
 
 from typing import Iterator, Optional, Dict
@@ -46,9 +46,9 @@ def _maybe_append_bracket_rules(system_txt: str) -> str:
     return (
         s
         + "\n\n[괄호/기호 표기 규칙 — 엄수]\n"
-        + "<<<BRACKET_RULES>>>\n"
+        + "--BRACKET_RULES--\n"
         + rules
-        + "\n<<<END_RULES>>>"
+        + "\n--END_BRACKET_RULES--"
     )
 
 
@@ -112,4 +112,4 @@ def answer_stream(
         user_prompt=user_p,
         split_fallback=True,
     )
-# [24B] END: src/agents/responder.py
+# [26B] END: src/agents/responder.py
