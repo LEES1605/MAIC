@@ -1395,7 +1395,7 @@ def _render_chat_panel() -> None:
     try:
         from modes.types import sanitize_source_label
     except Exception:
-        def sanitize_source_label(label: Optional[str]) -> str:  # type: ignore[no-redef]
+        def sanitize_source_label(label: Optional[str]) -> str:
             return "[AI지식]"
 
     def _esc(t: str) -> str:
