@@ -1,6 +1,7 @@
 # =============================== [01] future import ===============================
 from __future__ import annotations
 
+# ===== REPLACE: app.py [02] module imports (L4–L27) — START =====
 # =============================== [02] module imports ==============================
 import os
 import json
@@ -8,7 +9,7 @@ import time
 import traceback
 import importlib
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 # Streamlit은 없는 환경도 있으므로 방어적 로드
 try:
@@ -20,10 +21,10 @@ except Exception:
 from src.core.secret import promote_env as _promote_env, get as _secret_get
 from src.core.persist import effective_persist_dir, share_persist_dir_to_session
 from src.core.index_probe import (
-    get_brain_status as core_status,
     is_brain_ready as core_is_ready,
     mark_ready as core_mark_ready,
 )
+# ===== REPLACE: app.py [02] module imports — END =====
 
 # =========================== [03] CORE: Persist Resolver ==========================
 # (Wave‑1.3) 이 구획은 제거되었습니다.
