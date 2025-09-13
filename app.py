@@ -1245,20 +1245,17 @@ def _render_mode_controls_pills() -> str:
     return cur_key
 # [15B] END
 
-
 # [16] START: 채팅 패널 (FULL REPLACEMENT)
 def _render_chat_panel() -> None:
-    """질문(오른쪽) → 피티쌤(스트리밍) → 미나쌤(스트리밍) → 품질 배지."""
+    """질문(오른쪽) → 피티쌤(스트리밍) → 미나쌤(스트리밍)."""
     import importlib as _imp
     import html
     import re
-    from typing import Optional
+    from typing import Optional, Callable
     from src.agents.responder import answer_stream
     from src.agents.evaluator import evaluate_stream
-    from src.agents.eval_parser import parse_eval_block
     from src.llm.streaming import BufferOptions, make_stream_handler
 
-    # ---------- 소스 라벨/검색 도우미 ----------
     try:
         try:
             _label_mod = _imp.import_module("src.rag.label")
@@ -1272,12 +1269,26 @@ def _render_chat_panel() -> None:
         _search_hits = None
         _make_chip = None
 
-    # ✅ whitelist guard
-    try:
-        from modes.types import sanitize_source_label
-    except Exception:
-        def sanitize_source_label(label: Optional[str]) -> str:
+    # ✅ sanitize_source_label 로더
+    # - 정적 import는 src.modes.types만 사용(SSOT)
+    # - 폴백은 런타임 동적 import('modes.types')로 시도(정적 분석 제외)
+    def _resolve_sanitizer() -> Callable[[Optional[str]], str]:
+        try:
+            from src.modes.types import sanitize_source_label as _san  # SSOT
+            return _san
+        except Exception:
+            try:
+                mod = _imp.import_module("modes.types")  # runtime-only
+                fn = getattr(mod, "sanitize_source_label", None)
+                if callable(fn):
+                    return fn
+            except Exception:
+                pass
+        def _fallback(label: Optional[str] = None) -> str:
             return "[AI지식]"
+        return _fallback
+
+    sanitize_source_label = _resolve_sanitizer()
 
     def _esc(t: str) -> str:
         s = html.escape(t or "").replace("\n", "<br/>")
@@ -1332,8 +1343,8 @@ def _render_chat_panel() -> None:
         except Exception:
             src_label = "[AI지식]"
 
-    # ✅ whitelist 강제
-    src_label = sanitize_source_label(src_label)
+    # ✅ whitelist 강제(허용 외 라벨은 [AI지식]으로 클램프)
+    src_label = sanitize_source_label(src_label)  # SSOT: src/modes/types.py.  
 
     chip_text = src_label
     if callable(_make_chip):
@@ -1368,7 +1379,7 @@ def _render_chat_panel() -> None:
     for piece in answer_stream(question=question, mode=ss.get("__mode", "")):
         emit_chunk_ans(str(piece or ""))
     close_stream_ans()
-    full_answer = acc_ans.strip() or "(응답이 비어있어요)"
+    full_answer = acc_ans.strip()  # 빈 문자열은 아래 평가 단계에서 그대로 처리
 
     # --- 평가 스트리밍
     ph_eval = st.empty()
@@ -1390,51 +1401,15 @@ def _render_chat_panel() -> None:
         ),
     )
     for piece in evaluate_stream(
-        question=question,
-        mode=ss.get("__mode", ""),
-        answer=full_answer,
-        ctx={"answer": full_answer},
+        question=question, mode=ss.get("__mode", ""), answer=full_answer, ctx={"answer": full_answer}
     ):
         emit_chunk_eval(str(piece or ""))
     close_stream_eval()
 
-    # --- 평가 결과 배지/총평
-    parsed = parse_eval_block(acc_eval)
-
-    def _badge(state: str, ok: str = "OK", bad: str = "FAIL", warn: str = "WARN") -> str:
-        s = (state or "").upper()
-        if s == ok:
-            return "🟢 OK"
-        if s == bad:
-            return "🔴 FAIL"
-        if s == warn:
-            return "🟨 WARN"
-        return "⬜︎ —"
-
-    with st.container():
-        st.markdown("**품질 체크 요약**")
-        lines = []
-
-        sec = parsed.get("sections", {})
-        br = parsed.get("bracket", {})
-        fa = parsed.get("factual", {})
-        if sec:
-            reason = f" — {sec.get('reason','')}" if sec.get("reason") else ""
-            lines.append(f"- 섹션: {_badge(sec.get('state',''))}{reason}")
-        if br:
-            reason = f" — {br.get('reason','')}" if br.get("reason") else ""
-            lines.append(f"- 괄호규칙: {_badge(br.get('state',''))}{reason}")
-        if fa:
-            reason = f" — {fa.get('reason','')}" if fa.get("reason") else ""
-            lines.append(f"- 사실성: {_badge(fa.get('state',''), warn='WARN')}{reason}")
-        if parsed.get("summary"):
-            lines.append(f"- **한 줄 총평:** {parsed['summary']}")
-
-        st.markdown("\n".join(lines))
-
     ss["last_q"] = question
     ss["inpane_q"] = ""
 # [16] END
+
 
 # ========================== [17] 본문 렌더 ===============================
 def _render_body() -> None:

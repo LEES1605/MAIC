@@ -1,3 +1,4 @@
+# src/modes/types.py
 # [01] START: src/modes/types.py (FULL REPLACEMENT)
 from __future__ import annotations
 
