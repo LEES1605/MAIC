@@ -9,6 +9,8 @@ from .types import (
     sanitize_source_label,
     clamp_fragments,
 )
+from .profiles import get_profile
+from .router import ModeRouter
 
 __all__ = [
     "Mode",
@@ -17,5 +19,7 @@ __all__ = [
     "ALLOWED_SOURCE_LABELS",
     "sanitize_source_label",
     "clamp_fragments",
+    "get_profile",
+    "ModeRouter",
 ]
-# [02] END: src/modes/__init__.py
+# [02] END: src/modes/__init__.py (FULL REPLACEMENT)
