@@ -1270,7 +1270,7 @@ def _render_chat_panel() -> None:
         _make_chip = None
 
     # ✅ sanitize_source_label 로더
-    # - 정적 import는 src.modes.types만 사용(SSOT).
+    # - 정적 import는 src.modes.types만 사용(SSOT: 단일 진실).
     # - 폴백은 런타임 동적 import('modes.types')로 시도(정적 분석 제외).
     def _resolve_sanitizer() -> Callable[[Optional[str]], str]:
         try:
