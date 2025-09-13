@@ -1,4 +1,4 @@
-# [27D] START: scripts/no_ellipsis_gate.py (FULL REPLACEMENT)
+# [27E] START: scripts/no_ellipsis_gate.py (FULL REPLACEMENT)
 from __future__ import annotations
 
 import argparse
@@ -139,9 +139,7 @@ def _scan_file(path: Path, root: Path) -> List[Violation]:
     # 1) ELLIPSIS_ONLY: 줄 전체가 ... 또는 … 인 경우
     for i, line in enumerate(txt, start=1):
         if _line_is_ellipsis_only(line):
-            vios.append(
-                ("ELLIPSIS_ONLY", str(path.relative_to(root)), i, MSG_ELLIPSIS_ONLY)
-            )
+            vios.append(("ELLIPSIS_ONLY", str(path.relative_to(root)), i, MSG_ELLIPSIS_ONLY))
 
     # 2) SNIP_KO: 같은 파일에서 '중략|생략'과 스니핏이 근접(±2줄)한 경우
     #    - 문서 내 실제 생략본/스니핏 혼용을 금지
@@ -149,9 +147,7 @@ def _scan_file(path: Path, root: Path) -> List[Violation]:
         if RE_KO_DIRECTIVE.search(line):
             for _k, near in _window(txt, i - 1, radius=2):
                 if _line_has_snippet(near) or _line_is_ellipsis_only(near):
-                    vios.append(
-                        ("SNIP_KO", str(path.relative_to(root)), i, MSG_SNIP_KO)
-                    )
+                    vios.append(("SNIP_KO", str(path.relative_to(root)), i, MSG_SNIP_KO))
                     break
 
     return vios
@@ -163,16 +159,10 @@ def _parse_args() -> argparse.Namespace:
     )
     ap.add_argument("--root", default=".", help="project root")
     ap.add_argument(
-        "--include",
-        action="append",
-        default=[],
-        help="extra include glob (repeatable)",
+        "--include", action="append", default=[], help="extra include glob (repeatable)"
     )
     ap.add_argument(
-        "--exclude",
-        action="append",
-        default=[],
-        help="extra exclude glob (repeatable)",
+        "--exclude", action="append", default=[], help="extra exclude glob (repeatable)"
     )
     ap.add_argument(
         "--check-code",
@@ -183,6 +173,12 @@ def _parse_args() -> argparse.Namespace:
         "--allowed-markers",
         default=",".join(ALLOWED_MARKERS),
         help="comma-separated whitelist markers",
+    )
+    ap.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="print debug info (paths, patterns, files)",
     )
     return ap.parse_args()
 
@@ -207,14 +203,28 @@ def main() -> int:
     if args.check_code:
         includes.extend(CODE_GLOBS)
 
+    if args.verbose:
+        print(f"[Gate] root={root}")
+        print(f"[Gate] includes={includes}")
+        print(f"[Gate] excludes={excludes}")
+        print(f"[Gate] check_code={args.check_code}")
+        print(f"[Gate] allowed_markers={ALLOWED_MARKERS}")
+
     files = _collect_files(root, includes, excludes)
+    if args.verbose:
+        print(f"[Gate] matched_files={len(files)}")
+        for f in files[:50]:
+            print(f"  - {f.relative_to(root)}")
+        if len(files) > 50:
+            print(f"  ... (+{len(files) - 50} more)")
 
     all_vios: List[Violation] = []
     for f in files:
         try:
             all_vios.extend(_scan_file(f, root))
-        except Exception:
-            # 텍스트가 아닌 파일 등은 조용히 패스
+        except Exception as e:
+            if args.verbose:
+                print(f"[Gate] skip {f}: {e}")
             continue
 
     if not all_vios:
@@ -237,4 +247,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-# [27D] END: scripts/no_ellipsis_gate.py
+# [27E] END: scripts/no_ellipsis_gate.py
