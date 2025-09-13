@@ -1,4 +1,4 @@
-# [31A] START: src/core/prompt_loader.py (FULL REPLACEMENT)
+# [32A] START: src/core/prompt_loader.py (FULL REPLACEMENT)
 from __future__ import annotations
 
 from pathlib import Path
@@ -127,7 +127,6 @@ def system_prompt_for(mode: str) -> str:
     except Exception:
         pass
 
-    # 안전 폴백(라이브러리/파일 미존재/형식 오류 등)
     hint = _FALLBACK_HINT.get(label, "학생 눈높이에 맞춰 핵심→예시→한 줄 정리로 설명하세요.")
     return (
         "당신은 학생을 돕는 영어 선생님입니다. 불필요한 말은 줄이고, "
@@ -165,12 +164,10 @@ def get_bracket_rules() -> str:
         if isinstance(modes, dict):
             node = modes.get(label)
             if isinstance(node, dict):
-                # 1) 명시 키가 있으면 최우선
                 br = node.get("bracket_rules")
                 if isinstance(br, str) and br.strip():
                     return br.strip()
 
-                # 2) system 안에서 섹션 자동 추출
                 sys_txt = node.get("system")
                 if isinstance(sys_txt, str) and sys_txt.strip():
                     pat = r"(?ms)^\s*\[(?:괄호|괄호/기호)[^\]]*\]\s*(.*?)\Z"
@@ -221,4 +218,111 @@ def user_prompt_for(mode: str, question: str, ctx: Optional[Dict[str, str]] = No
     except Exception:
         pass
     return question
-# [31A] END: src/core/prompt_loader.py
+
+
+# ----------------- evaluator 템플릿 로더 -----------------
+def _eval_fallback_instructions(mode_label: str) -> str:
+    """평가 지침 폴백 텍스트(모드별)."""
+    if mode_label == "문장구조분석":
+        return (
+            "너는 '미나쌤' 평가자다. 공정하고 구체적으로, 간결하게 피드백한다.\n"
+            "- 초점: 괄호 규칙 준수, 성분 식별 정확도, 일관성, 과잉 단정 금지\n"
+            "- 출력 형식:\n"
+            "  1) 한 줄 총평\n"
+            "  2) 잘한 점 2가지\n"
+            "  3) 보완점 2가지(왜/어떻게)\n"
+            "  4) 결론: 등급(A/B/C) + 한 문장 이유"
+        )
+    if mode_label == "지문분석":
+        return (
+            "너는 '미나쌤' 평가자다. 핵심 보존과 평이화를 중시한다.\n"
+            "- 초점: 요지 정확도, 구조 요약의 충실성, 핵심어 선정의 타당성\n"
+            "- 출력 형식:\n"
+            "  1) 한 줄 총평\n"
+            "  2) 강점 2가지\n"
+            "  3) 보완점 2가지\n"
+            "  4) 결론: 등급(A/B/C) + 한 문장 이유"
+        )
+    # 문법설명
+    return (
+        "너는 '미나쌤' 평가자다. 이유문법을 우선 근거로 평가한다.\n"
+        "- 초점: 규칙의 정확도, 근거 제시(이유문법/문법서), 설명의 간결성\n"
+        "- 출력 형식:\n"
+        "  1) 한 줄 총평\n"
+        "  2) 강점 2가지\n"
+        "  3) 보완점 2가지\n"
+        "  4) 결론: 등급(A/B/C) + 한 문장 이유"
+    )
+
+
+def eval_instructions_for(mode: str) -> str:
+    """
+    평가자(system) 프롬프트를 로드.
+    - 성공: prompts.yaml의 modes.<라벨>.eval
+    - 실패: _eval_fallback_instructions()
+    """
+    label = _label_for(mode)
+    data = load_prompts()
+    try:
+        modes = data.get("modes") if isinstance(data, dict) else None
+        if isinstance(modes, dict):
+            node = modes.get(label)
+            if isinstance(node, dict):
+                ev = node.get("eval")
+                if isinstance(ev, str) and ev.strip():
+                    return ev.strip()
+    except Exception:
+        pass
+    return _eval_fallback_instructions(label)
+
+
+def eval_user_prompt_for(
+    mode: str,
+    question: str,
+    answer: str,
+    ctx: Optional[Dict[str, str]] = None,
+) -> str:
+    """
+    평가자(user) 템플릿을 로드해 '{QUESTION}/{ANSWER}/ctx'를 삽입.
+    - 성공: prompts.yaml의 modes.<라벨>.eval_user
+    - 실패: 기본 템플릿으로 폴백
+    """
+    label = _label_for(mode)
+    data = load_prompts()
+
+    tpl: Optional[str] = None
+    try:
+        modes = data.get("modes") if isinstance(data, dict) else None
+        if isinstance(modes, dict):
+            node = modes.get(label)
+            if isinstance(node, dict):
+                cand = node.get("eval_user")
+                if isinstance(cand, str) and cand.strip():
+                    tpl = cand.strip()
+    except Exception:
+        tpl = None
+
+    if not tpl:
+        # 코어 SSOT에서 평가 항목을 가져와 보조로 사용
+        try:
+            from src.core.modes import MODES  # lazy import (순환 방지)
+            spec = MODES.get("sentence" if label == "문장구조분석" else
+                             "passage" if label == "지문분석" else "grammar")
+            focus = "·".join(spec.eval_focus) if spec and spec.eval_focus else ""
+        except Exception:
+            focus = ""
+
+        tpl = (
+            "[질문]\n{QUESTION}\n\n"
+            "[피티쌤 답변]\n{ANSWER}\n\n"
+            "[평가 지침]\n"
+            f"- 평가 초점: {focus}\n"
+            "- 출력 형식: 1) 한 줄 총평  2) 강점 2  3) 보완 2  4) 등급(A/B/C)+이유"
+        )
+
+    values: Dict[str, str] = {"QUESTION": question, "ANSWER": answer}
+    if isinstance(ctx, dict):
+        for k, v in ctx.items():
+            values[str(k)] = str(v)
+    return _fill_placeholders(tpl, values).strip()
+# [32A] END: src/core/prompt_loader.py
