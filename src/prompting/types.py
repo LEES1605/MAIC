@@ -1,3 +1,5 @@
+# src/prompting/types.py
+
 from dataclasses import dataclass
 from typing import Literal
 
