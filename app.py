@@ -1271,14 +1271,14 @@ def _render_chat_panel() -> None:
 
     # ✅ whitelist guard 로더
     # - 정적 import는 src.modes.types로만 (mypy의 이중 모듈명 방지)
-    # - 폴백은 런타임 동적 import('modes.types')로 시도(정적 분석 제외)
+    # - 폴백은 'modes.types'를 importlib로 런타임 로드(정적 분석 제외)
     def _resolve_sanitizer():
         try:
             from src.modes.types import sanitize_source_label as _san  # SSOT
             return _san
         except Exception:
             try:
-                _mod = _imp.import_module("modes.types")  # runtime fallback
+                _mod = _imp.import_module("modes.types")  # runtime-only
                 return getattr(_mod, "sanitize_source_label")
             except Exception:
                 return lambda _label=None: "[AI지식]"
@@ -1404,7 +1404,6 @@ def _render_chat_panel() -> None:
     ss["last_q"] = question
     ss["inpane_q"] = ""
 # [16] END
-
 
 # ========================== [17] 본문 렌더 ===============================
 def _render_body() -> None:
