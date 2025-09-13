@@ -14,8 +14,9 @@ class ModeRouter:
 
     def __init__(self, *, ssot_root: Optional[Union[Path, str]] = None) -> None:
         # 내부 표준 타입은 Optional[Path]
-        self._ssot_root: Optional[Path] = Path(ssot_root).expanduser() if isinstance(ssot_root, str) else ssot_root
-
+        if isinstance(ssot_root, str):
+            ssot_root = Path(ssot_root).expanduser()
+        self._ssot_root: Optional[Path] = ssot_root
     def select_profile(self, mode: Mode) -> PromptBundle:
         profile = get_profile(mode, ssot_root=self._ssot_root)
         return PromptBundle(
