@@ -1,8 +1,9 @@
-# [P4-02] START: src/modes/router.py (FULL REPLACEMENT)
+# [01] START: src/modes/router.py (FULL REPLACEMENT)
 from __future__ import annotations
 
 from dataclasses import asdict
-from typing import Optional, Sequence
+from pathlib import Path
+from typing import Optional, Sequence, Union
 
 from .profiles import get_profile
 from .types import Mode, PromptBundle, clamp_fragments, sanitize_source_label
@@ -11,8 +12,9 @@ from .types import Mode, PromptBundle, clamp_fragments, sanitize_source_label
 class ModeRouter:
     """mode(enum) -> profile(SSOT or builtin) -> rendered prompt(bundle)"""
 
-    def __init__(self, *, ssot_root: Optional[str] = None) -> None:
-        self._ssot_root = None if ssot_root is None else ssot_root  # path-like tolerated
+    def __init__(self, *, ssot_root: Optional[Union[Path, str]] = None) -> None:
+        # 내부 표준 타입은 Optional[Path]
+        self._ssot_root: Optional[Path] = Path(ssot_root).expanduser() if isinstance(ssot_root, str) else ssot_root
 
     def select_profile(self, mode: Mode) -> PromptBundle:
         profile = get_profile(mode, ssot_root=self._ssot_root)
@@ -42,7 +44,7 @@ class ModeRouter:
             mode_kr=profile.extras.get("mode_kr", mode.value),
         )
 
-        lines: list[str] = []
+        lines = []
         lines.append(f"# {header}")
         lines.append("")
         lines.append(f"**모드**: {mode.value}  |  **라벨**: {label}")
@@ -72,15 +74,6 @@ class ModeRouter:
                 lines.append(f"- {item}")
             lines.append("")
 
-        # ✅ Sentence 모드면 괄호 라벨 표준을 명시적으로 제공
-        if mode is Mode.SENTENCE:
-            labels = tuple(profile.extras.get("allowed_bracket_labels", ()))
-            if labels:
-                lines.append("## 괄호 규칙 라벨 표준")
-                lines.append("라벨: " + ", ".join(labels))
-                lines.append("예시: [S I] [V stayed] [M at home]")
-                lines.append("")
-
         if profile.sections:
             lines.append("## 출력 스키마(섹션 순서 고정)")
             for i, sec in enumerate(profile.sections, 1):
@@ -107,4 +100,4 @@ class ModeRouter:
             "context_count": len(bundle.context_fragments),
             "profile": asdict(bundle.profile),
         }
-# [P4-02] END: src/modes/router.py
+# [01] END: src/modes/router.py
