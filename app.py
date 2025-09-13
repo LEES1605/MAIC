@@ -307,6 +307,7 @@ def _mount_background(
     """배경 렌더 OFF(호출 시 즉시 return)."""
     return
 
+
 # =================== [10] 부팅 훅: 인덱스 자동 복원 =======================
 def _boot_auto_restore_index() -> None:
     """부팅 시 인덱스 자동 복원(한 세션 1회).
@@ -1189,7 +1190,6 @@ def _inject_chat_styles_once() -> None:
     """,
         unsafe_allow_html=True,
     )
-
 # [15B] START: _render_mode_controls_pills (FULL REPLACEMENT)
 def _render_mode_controls_pills() -> str:
     """
