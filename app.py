@@ -1269,8 +1269,8 @@ def _render_chat_panel() -> None:
         _search_hits = None
         _make_chip = None
 
-    # ✅ whitelist guard 로더
-    # - 정적 import는 src.modes.types만 사용(SSOT).   ←★ 핵심
+    # ✅ sanitize_source_label 로더
+    # - 정적 import는 src.modes.types만 사용(SSOT).  :contentReference[oaicite:4]{index=4}
     # - 폴백은 런타임 동적 import('modes.types')로 시도(정적 분석 제외)
     def _resolve_sanitizer() -> Callable[[Optional[str]], str]:
         try:
@@ -1344,8 +1344,8 @@ def _render_chat_panel() -> None:
         except Exception:
             src_label = "[AI지식]"
 
-    # ✅ whitelist 강제 (허용 외 라벨은 [AI지식]으로 클램프)
-    src_label = sanitize_source_label(src_label)  # SSOT: src/modes/types.py.  :contentReference[oaicite:3]{index=3}
+    # ✅ whitelist 강제(허용 외 라벨은 [AI지식]으로 클램프)
+    src_label = sanitize_source_label(src_label)  # SSOT: src/modes/types.py. :contentReference[oaicite:5]{index=5}
 
     chip_text = src_label
     if callable(_make_chip):
