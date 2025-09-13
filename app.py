@@ -1278,7 +1278,7 @@ def _render_chat_panel() -> None:
             return _san
         except Exception:
             try:
-                _mod = _imp.import_module("modes.types")  # runtime-only
+                _mod = _imp.import_module("modes.types")  # runtime-only fallback
                 return getattr(_mod, "sanitize_source_label")
             except Exception:
                 return lambda _label=None: "[AI지식]"
@@ -1339,7 +1339,7 @@ def _render_chat_panel() -> None:
             src_label = "[AI지식]"
 
     # ✅ whitelist 강제 (허용 외 라벨은 [AI지식]으로 클램프)
-    src_label = sanitize_source_label(src_label)  # SSOT: src/modes/types.py. :contentReference[oaicite:2]{index=2}
+    src_label = sanitize_source_label(src_label)  # SSOT: src/modes/types.py.  
 
     chip_text = src_label
     if callable(_make_chip):
@@ -1404,6 +1404,7 @@ def _render_chat_panel() -> None:
     ss["last_q"] = question
     ss["inpane_q"] = ""
 # [16] END
+
 
 # ========================== [17] 본문 렌더 ===============================
 def _render_body() -> None:
