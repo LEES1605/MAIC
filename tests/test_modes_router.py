@@ -1,6 +1,6 @@
 # [01] START: tests/test_modes_router.py (FULL REPLACEMENT)
-from modes.types import Mode
-from modes.router import ModeRouter
+from src.modes.types import Mode
+from src.modes.router import ModeRouter
 
 
 def test_mode_from_str_aliases():
