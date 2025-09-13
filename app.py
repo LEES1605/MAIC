@@ -1262,8 +1262,9 @@ def _render_mode_controls_pills() -> str:
     if st is None:
         return "grammar"
 
+    # SSOT에서 모드 목록(라벨/키)만 가져온다.
     try:
-        from src.core.modes import enabled_modes, find_mode_by_label  # SSOT
+        from src.core.modes import enabled_modes  # SSOT
         modes = enabled_modes()
         labels = [m.label for m in modes]
         keys = [m.key for m in modes]
@@ -1289,16 +1290,19 @@ def _render_mode_controls_pills() -> str:
     )
 
     # 라벨→key 매핑(임포트 가능하면 사용, 아니면 키 매핑)
-    _find = None  # 동적 임포트 실패 대비: Optional[Callable]로 동작
+    spec = None
     try:
-        from src.core.modes import find_mode_by_label as _find  # 재임포트 안전
+        import src.core.modes as _mcore  # 모듈 임포트로 이름 충돌 방지
+        # find_mode_by_label(label: str) -> ModeSpec | None
+        spec = _mcore.find_mode_by_label(sel_label)
     except Exception:
-        _find = None
+        spec = None
+
     try:
-        spec = _find(sel_label) if callable(_find) else None
         cur_key = spec.key if spec else keys[labels.index(sel_label)]
     except Exception:
-        cur_key = keys[labels.index(sel_label)]
+        # 비상 폴백
+        cur_key = "grammar"
 
     ss["qa_mode_radio"] = sel_label
     ss["__mode"] = cur_key
