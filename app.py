@@ -1269,19 +1269,22 @@ def _render_chat_panel() -> None:
         _search_hits = None
         _make_chip = None
 
-    # ✅ whitelist guard
-    # - 정적 import는 src.modes.types로만 (mypy 중복 모듈 방지)
-    # - 폴백은 importlib로 'modes.types'를 런타임 시도(정적 분석 대상에서 제외)
+    # ✅ whitelist guard 로더
+    # - 정적 import는 src.modes.types로만 (정적 분석 중복 방지)
+    # - 폴백은 런타임 동적 import('modes.types')로 시도
     def _resolve_sanitizer():
         try:
-            from src.modes.types import sanitize_source_label as _san  # 정적·단일 경로
+            from src.modes.types import sanitize_source_label as _san  # SSOT
             return _san
         except Exception:
             try:
-                _mod = _imp.import_module("modes.types")  # 런타임 폴백
+                _mod = _imp.import_module("modes.types")
                 return getattr(_mod, "sanitize_source_label")
             except Exception:
-                return lambda _label=None: "[AI지식]"
+                def _default_sanitize(_label=None):
+                    return "[AI지식]"
+                return _default_sanitize
+
     sanitize_source_label = _resolve_sanitizer()
 
     def _esc(t: str) -> str:
@@ -1295,7 +1298,8 @@ def _render_chat_panel() -> None:
     def _src_html(label: Optional[str]) -> str:
         if not label:
             return ""
-        return f'<span class="chip-src'>{html.escape(label)}</span>'
+        # ⛏️ FIX: f-string이 중간에서 끊기지 않도록 전체를 하나의 f-string으로 유지
+        return f'<span class="chip-src">{html.escape(label)}</span>'
 
     def _emit_bubble(
         placeholder,
@@ -1337,8 +1341,8 @@ def _render_chat_panel() -> None:
         except Exception:
             src_label = "[AI지식]"
 
-    # ✅ whitelist 강제: 허용 외 라벨은 [AI지식]으로 클램프
-    src_label = sanitize_source_label(src_label)  # SSOT: src/modes/types.py 사용. :contentReference[oaicite:2]{index=2}
+    # ✅ whitelist 강제 (허용 외 라벨은 [AI지식]으로 클램프)
+    src_label = sanitize_source_label(src_label)  # SSOT: src/modes/types.py 기준.  # noqa: E265
 
     chip_text = src_label
     if callable(_make_chip):
