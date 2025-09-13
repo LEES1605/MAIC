@@ -1251,7 +1251,7 @@ def _inject_chat_styles_once() -> None:
         unsafe_allow_html=True,
     )
 
-# [15B] START: _render_mode_controls_pills (FULL REPLACEMENT)====================
+# [15B] START: _render_mode_controls_pills (FULL REPLACEMENT)
 def _render_mode_controls_pills() -> str:
     """
     질문 모드 선택(문법·문장·지문[·이야기]).
@@ -1263,13 +1263,12 @@ def _render_mode_controls_pills() -> str:
         return "grammar"
 
     try:
-        # SSOT에서 모드 목록/라벨/키를 가져온다.
-        from src.core.modes import enabled_modes  # 타입 안정
+        from src.core.modes import enabled_modes, find_mode_by_label  # SSOT
         modes = enabled_modes()
         labels = [m.label for m in modes]
         keys = [m.key for m in modes]
     except Exception:
-        # 문제가 생겨도 최소 3모드는 유지(폴백)
+        # 문제가 생겨도 최소 3모드는 유지(폴백 함수 정의는 금지)
         labels = ["문법", "문장", "지문"]
         keys = ["grammar", "sentence", "passage"]
 
@@ -1289,18 +1288,14 @@ def _render_mode_controls_pills() -> str:
         label_visibility="collapsed",
     )
 
-    # 라벨→key 매핑: 동적 import로 안전하게 처리(타입 충돌 회피)
-    from typing import Callable, Optional, Any
-    _find_fn: Optional[Callable[[str], Any]] = None
+    # 라벨→key 매핑(임포트 가능하면 사용, 아니면 키 매핑)
+    _find = None  # 동적 임포트 실패 대비: Optional[Callable]로 동작
     try:
-        import importlib as _imp
-        _modes = _imp.import_module("src.core.modes")
-        _find_fn = getattr(_modes, "find_mode_by_label", None)
+        from src.core.modes import find_mode_by_label as _find  # 재임포트 안전
     except Exception:
-        _find_fn = None
-
+        _find = None
     try:
-        spec = _find_fn(sel_label) if callable(_find_fn) else None
+        spec = _find(sel_label) if callable(_find) else None
         cur_key = spec.key if spec else keys[labels.index(sel_label)]
     except Exception:
         cur_key = keys[labels.index(sel_label)]
@@ -1308,7 +1303,9 @@ def _render_mode_controls_pills() -> str:
     ss["qa_mode_radio"] = sel_label
     ss["__mode"] = cur_key
     return cur_key
-# [15B] END=======================================
+# [15B] END
+
+
 # [16] START: 채팅 패널 (FULL REPLACEMENT)
 def _render_chat_panel() -> None:
     """질문(오른쪽) → 피티쌤(스트리밍) → 미나쌤(스트리밍) → 품질 배지."""
