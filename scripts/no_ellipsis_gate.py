@@ -1,4 +1,4 @@
-# [27C] START: scripts/no_ellipsis_gate.py (FULL REPLACEMENT)
+# [27D] START: scripts/no_ellipsis_gate.py (FULL REPLACEMENT)
 from __future__ import annotations
 
 import argparse
@@ -50,12 +50,14 @@ ALLOWED_MARKERS = [
 ]
 
 # 스니핏/줄임표 패턴(화이트리스트 외에는 모두 ‘스니핏’으로 간주)
+# ⚠️ 이중 꺾쇠(<< >>)는 문장분석 ‘강조’ 표기로 정상이므로 제외하고,
+#    ‘스니핏’은 트리플 꺾쇠(<<< >>>)만 감지한다.
 SNIPPET_PATTERNS = [
-    r"<<<?",               # << 또는 <<< (LLM 표식류)
-    r">>>?",               # >> 또는 >>>
-    r"\[\s*\.\.\.\s*\]",   # [ ... ] 류
-    r"\.\.\.",             # ...
-    r"…",                  # 단일 문자 줄임표
+    r"<<<",               # <<<  (LLM 스니핏 표식만)
+    r">>>",               # >>>
+    r"\[\s*\.\.\.\s*\]",  # [ ... ]
+    r"\.\.\.",            # ...
+    r"…",                 # 단일 문자 줄임표
 ]
 
 # 메시지 상수(긴 문자열은 상수화해서 E501 회피)
@@ -64,6 +66,9 @@ MSG_SNIP_KO = "‘중략/생략’ + 스니핏/…/... 패턴"
 
 # (code, relpath, lineno, message)
 Violation: TypeAlias = Tuple[str, str, int, str]
+
+# ‘중략/생략’을 단어 끝(뒤에 한글 없음)일 때만 인식(예: ‘생략된’ 제외)
+RE_KO_DIRECTIVE = re.compile(r"(중략|생략)(?![가-힣])")
 
 
 def _expand_braces(pattern: str) -> List[str]:
@@ -141,7 +146,7 @@ def _scan_file(path: Path, root: Path) -> List[Violation]:
     # 2) SNIP_KO: 같은 파일에서 '중략|생략'과 스니핏이 근접(±2줄)한 경우
     #    - 문서 내 실제 생략본/스니핏 혼용을 금지
     for i, line in enumerate(txt, start=1):
-        if re.search(r"(중략|생략)", line):
+        if RE_KO_DIRECTIVE.search(line):
             for _k, near in _window(txt, i - 1, radius=2):
                 if _line_has_snippet(near) or _line_is_ellipsis_only(near):
                     vios.append(
@@ -223,12 +228,13 @@ def main() -> int:
     print("\n가이드:")
     print("  1) 실제 '중략본'이면 원본 텍스트로 교체하세요.")
     print("  2) 정상 문서의 줄임표는 허용되지만,")
-    print("     '중략/생략'과 스니핏 마커의 근접 사용(±2줄)은 금지입니다.")
-    print("  3) 프롬프트 표식은 --allowed-markers 에 등록하면 제외됩니다.")
+    print("     '중략/생략'(단어)과 스니핏 마커의 근접 사용(±2줄)은 금지입니다.")
+    print("  3) 스니핏 마커는 기본 ‘<<< >>>’만 검출합니다.")
+    print("     (필요 시 --allowed-markers 로 허용 목록을 확장하세요.)")
     print("  4) 코드(.py)는 기본 제외이며, 필요 시 --check-code 로 포함하세요.")
     return 1
 
 
 if __name__ == "__main__":
     sys.exit(main())
-# [27C] END: scripts/no_ellipsis_gate.py
+# [27D] END: scripts/no_ellipsis_gate.py
