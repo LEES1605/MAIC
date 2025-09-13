@@ -46,7 +46,6 @@ class ModeRouter:
         lines = []
         lines.append(f"# {header}")
         lines.append("")
-        # ✅ 테스트 기대치에 맞춰 '**라벨**' 볼드 고정
         lines.append(f"**모드**: {mode.value}  |  **라벨**: {label}")
         lines.append("")
         lines.append("## 질의")
@@ -62,6 +61,24 @@ class ModeRouter:
         lines.append("## 의도/목표")
         lines.append(profile.objective)
         lines.append("")
+
+        # 🔹 문장 모드 전용: 괄호 규칙 라벨 표준 블록 삽입 (테스트 요구 사항)
+        if mode == Mode.SENTENCE:
+            lines.append("## 괄호 규칙 라벨 표준")
+            lines.append(
+                "S(주어), V(동사), O(목적어), C(보어), M(수식어), Sub(부사절)"
+            )
+            lines.append(
+                "Rel(관계절), ToInf(to부정사), Ger(동명사), Part(분사)"
+            )
+            lines.append(
+                "Appo(동격), Conj(접속)"
+            )
+            lines.append(
+                "예시 형식: [Sub because it rained], "
+                "[S I] [V stayed] [M at home]"
+            )
+            lines.append("")
 
         if profile.must_do:
             lines.append("## 반드시 할 일")
