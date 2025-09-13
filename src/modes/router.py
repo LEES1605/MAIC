@@ -1,22 +1,20 @@
-# [R1] START: src/modes/router.py (FULL REPLACEMENT)
+# [P4-02] START: src/modes/router.py (FULL REPLACEMENT)
 from __future__ import annotations
 
 from dataclasses import asdict
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Optional, Sequence
 
 from .profiles import get_profile
 from .types import Mode, PromptBundle, clamp_fragments, sanitize_source_label
 
 
 class ModeRouter:
-    """mode(enum) -> profile(SSOT or builtin) -> rendered prompt(bundle)."""
+    """mode(enum) -> profile(SSOT or builtin) -> rendered prompt(bundle)"""
 
-    def __init__(self, *, ssot_root: Optional[Path] = None) -> None:
-        self._ssot_root = ssot_root
+    def __init__(self, *, ssot_root: Optional[str] = None) -> None:
+        self._ssot_root = None if ssot_root is None else ssot_root  # path-like tolerated
 
     def select_profile(self, mode: Mode) -> PromptBundle:
-        """SSOT 또는 내장 프로필을 선택만 한 빈 번들을 반환."""
         profile = get_profile(mode, ssot_root=self._ssot_root)
         return PromptBundle(
             mode=mode,
@@ -35,7 +33,6 @@ class ModeRouter:
         context_fragments: Optional[Sequence[str]] = None,
         source_label: Optional[str] = None,
     ) -> PromptBundle:
-        """질문/컨텍스트/프로필을 조합해 LLM 프롬프트 번들을 생성."""
         profile = get_profile(mode, ssot_root=self._ssot_root)
         label = sanitize_source_label(source_label)
         frags = clamp_fragments(context_fragments, max_items=5, max_chars_each=500)
@@ -45,7 +42,7 @@ class ModeRouter:
             mode_kr=profile.extras.get("mode_kr", mode.value),
         )
 
-        lines: List[str] = []
+        lines: list[str] = []
         lines.append(f"# {header}")
         lines.append("")
         lines.append(f"**모드**: {mode.value}  |  **라벨**: {label}")
@@ -75,16 +72,22 @@ class ModeRouter:
                 lines.append(f"- {item}")
             lines.append("")
 
+        # ✅ Sentence 모드면 괄호 라벨 표준을 명시적으로 제공
+        if mode is Mode.SENTENCE:
+            labels = tuple(profile.extras.get("allowed_bracket_labels", ()))
+            if labels:
+                lines.append("## 괄호 규칙 라벨 표준")
+                lines.append("라벨: " + ", ".join(labels))
+                lines.append("예시: [S I] [V stayed] [M at home]")
+                lines.append("")
+
         if profile.sections:
             lines.append("## 출력 스키마(섹션 순서 고정)")
             for i, sec in enumerate(profile.sections, 1):
                 lines.append(f"{i}. {sec}")
             lines.append("")
 
-        lines.append(
-            "> 위 스키마를 **순서대로** 준수하고, "
-            "각 섹션은 간결한 소제목으로 시작하세요."
-        )
+        lines.append("> 위 스키마를 **순서대로** 준수하고, 각 섹션은 간결한 소제목으로 시작하세요.")
         prompt = "\n".join(lines).strip()
 
         return PromptBundle(
@@ -96,8 +99,7 @@ class ModeRouter:
             context_fragments=tuple(frags),
         )
 
-    def debug_dict(self, bundle: PromptBundle) -> Dict[str, Any]:
-        """프롬프트 번들을 디버그/테스트 친화 JSON으로 직렬화."""
+    def debug_dict(self, bundle: PromptBundle) -> dict:
         return {
             "mode": bundle.mode.value,
             "source_label": bundle.source_label,
@@ -105,4 +107,4 @@ class ModeRouter:
             "context_count": len(bundle.context_fragments),
             "profile": asdict(bundle.profile),
         }
-# [R1] END: src/modes/router.py
+# [P4-02] END: src/modes/router.py
