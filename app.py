@@ -1271,7 +1271,7 @@ def _render_chat_panel() -> None:
 
     # ✅ whitelist guard
     # - 정적 import는 src.modes.types로만 (mypy 중복 모듈 방지)
-    # - 런타임 폴백은 importlib로 'modes.types'를 시도(정적 탐색 대상에서 제외)
+    # - 폴백은 importlib로 'modes.types'를 런타임 시도(정적 분석 대상에서 제외)
     def _resolve_sanitizer():
         try:
             from src.modes.types import sanitize_source_label as _san  # 정적·단일 경로
@@ -1295,7 +1295,7 @@ def _render_chat_panel() -> None:
     def _src_html(label: Optional[str]) -> str:
         if not label:
             return ""
-        return f'<span class="chip-src">{html.escape(label)}</span>'
+        return f'<span class="chip-src'>{html.escape(label)}</span>'
 
     def _emit_bubble(
         placeholder,
@@ -1338,7 +1338,7 @@ def _render_chat_panel() -> None:
             src_label = "[AI지식]"
 
     # ✅ whitelist 강제: 허용 외 라벨은 [AI지식]으로 클램프
-    src_label = sanitize_source_label(src_label)
+    src_label = sanitize_source_label(src_label)  # SSOT: src/modes/types.py 사용. :contentReference[oaicite:2]{index=2}
 
     chip_text = src_label
     if callable(_make_chip):
