@@ -311,10 +311,9 @@ def _mount_background(
 def _boot_auto_restore_index() -> None:
     """부팅 시 인덱스 자동 복원(한 세션 1회).
     - 조건: chunks.jsonl==0B 또는 미존재, 또는 .ready 미존재
-    - 동작: GH Releases에서 최신 index_*.zip 받아서 복원(Private 인증 지원)
+    - 동작: GH Releases에서 최신 index_*.zip 받아서 복원
     - SSOT: persist는 core.persist.effective_persist_dir()만 사용
     """
-    # 세션 1회 가드
     try:
         if "st" in globals() and st is not None:
             if st.session_state.get("_BOOT_RESTORE_DONE"):
@@ -322,7 +321,6 @@ def _boot_auto_restore_index() -> None:
     except Exception:
         pass
 
-    # 현 상태 점검
     p = effective_persist_dir()
     cj = p / "chunks.jsonl"
     ready = (p / ".ready").exists()
@@ -334,150 +332,92 @@ def _boot_auto_restore_index() -> None:
             pass
         return
 
-    # 시크릿 로드(SSOT)
+    # ---- SSOT 시크릿 로더 사용 ----
     try:
-        from src.core.secret import (
-            token as _gh_token,
-            resolve_owner_repo as _resolve_owner_repo,
-        )
+        from src.core.secret import token as _gh_token, resolve_owner_repo as _resolve_owner_repo
         token = _gh_token() or ""
         owner, repo = _resolve_owner_repo()
     except Exception:
         token, owner, repo = "", "", ""
 
     if not (token and owner and repo):
-        # 시크릿 미설정 시 조용히 종료
-        return
+        return  # 복원 불가(시크릿 미설정)
 
-    # GitHub API 헬퍼
+    # ---- 최신 릴리스의 index_*.zip 다운로드 ----
     from urllib import request as _rq
     import zipfile
     import json as _json
 
-    API = f"https://api.github.com/repos/{owner}/{repo}"
-
-    def _get_json(url: str) -> dict:
+    api_latest = f"https://api.github.com/repos/{owner}/{repo}/releases/latest"
+    try:
         req = _rq.Request(
-            url,
+            api_latest,
             headers={
                 "Authorization": f"token {token}",
                 "Accept": "application/vnd.github+json",
             },
         )
-        with _rq.urlopen(req, timeout=25) as resp:
-            return _json.loads(resp.read().decode("utf-8", "ignore"))
+        with _rq.urlopen(req, timeout=20) as resp:
+            data = _json.loads(resp.read().decode("utf-8", "ignore"))
+    except Exception:
+        return
 
-    def _download_asset_to(asset: dict, dst: Path) -> bool:
-        """Assets API로 인증 다운로드(Private 저장소 지원)."""
-        asset_api = str(asset.get("url") or "")
-        if asset_api:
-            req = _rq.Request(
-                asset_api,
-                headers={
-                    "Authorization": f"token {token}",
-                    "Accept": "application/octet-stream",
-                },
-            )
-            with _rq.urlopen(req, timeout=180) as resp:
-                dst.write_bytes(resp.read())
-                return True
-        # public 폴백
-        bdl = str(asset.get("browser_download_url") or "")
-        if bdl:
-            req = _rq.Request(
-                bdl,
-                headers={
-                    "Authorization": f"token {token}",
-                    "Accept": "application/octet-stream",
-                },
-            )
-            with _rq.urlopen(req, timeout=180) as resp:
-                dst.write_bytes(resp.read())
-                return True
-        return False
+    asset = None
+    for a in data.get("assets") or []:
+        n = str(a.get("name") or "")
+        if n.startswith("index_") and n.endswith(".zip"):
+            asset = a
+            break
+    if not asset:
+        return
 
-    # 1) latest 시도 → 실패 시 목록 폴백
-    zip_asset = None
-    try:
-        data = _get_json(f"{API}/releases/latest")
-        for a in data.get("assets") or []:
-            n = str(a.get("name") or "")
-            if n.startswith("index_") and n.endswith(".zip"):
-                zip_asset = a
-                break
-    except Exception as e:
-        _errlog(f"releases/latest 조회 실패: {e}", where="[boot.restore]")
+    dl = asset.get("browser_download_url")
+    if not dl:
+        return
 
-    if zip_asset is None:
-        try:
-            rels = _get_json(f"{API}/releases")  # 최신 → 과거
-            for rel in rels or []:
-                for a in rel.get("assets") or []:
-                    n = str(a.get("name") or "")
-                    if n.startswith("index_") and n.endswith(".zip"):
-                        zip_asset = a
-                        break
-                if zip_asset:
-                    break
-        except Exception as e:
-            _errlog(f"releases 목록 조회 실패: {e}", where="[boot.restore]")
-            return
-        if zip_asset is None:
-            # 적합한 자산 없음
-            return
-
-    # 2) 다운로드 및 복원
+    # ---- 저장 후 압축 해제 + 하위폴더 보정 ----
     try:
         p.mkdir(parents=True, exist_ok=True)
         tmp = p / f"__restore_{int(time.time())}.zip"
-        ok = _download_asset_to(zip_asset, tmp)
-        if not ok or not tmp.exists() or tmp.stat().st_size == 0:
-            _errlog("asset 다운로드 실패 또는 0B", where="[boot.restore]")
-            try:
-                tmp.unlink()
-            except Exception:
-                pass
-            return
+        _rq.urlretrieve(dl, tmp)
 
         with zipfile.ZipFile(tmp, "r") as zf:
             zf.extractall(p)
+
         try:
             tmp.unlink()
         except Exception:
             pass
 
-        # 3) ZIP 내부 하위 폴더에 있을 수 있는 chunks.jsonl 탐색
-        found = None
-        try:
-            for cand in p.rglob("chunks.jsonl"):
-                if cand.stat().st_size > 0:
-                    found = cand
-                    break
-        except Exception:
-            found = None
+        # NEW: 루트에 chunks.jsonl 없으면 하위폴더 검색
+        cj = p / "chunks.jsonl"
+        if not (cj.exists() and cj.stat().st_size > 0):
+            try:
+                cand = next(p.glob("**/chunks.jsonl"))
+                p = cand.parent  # 복원 기준 경로를 하위 매치 폴더로 스위칭
+                cj = cand
+            except StopIteration:
+                pass
 
-        target_dir = found.parent if found else p
-
-        # ready 마킹(SSOT 우선)
+        # SSOT: 코어로 ready 마킹
         try:
-            core_mark_ready(target_dir)
+            core_mark_ready(p)
         except Exception:
             try:
-                (target_dir / ".ready").write_text("ok", encoding="utf-8")
+                (p / ".ready").write_text("ok", encoding="utf-8")
             except Exception:
                 pass
 
         # 세션 플래그/경로 공유
         try:
             if "st" in globals() and st is not None:
-                st.session_state["_PERSIST_DIR"] = target_dir.resolve()
+                st.session_state["_PERSIST_DIR"] = p.resolve()
                 st.session_state["_BOOT_RESTORE_DONE"] = True
         except Exception:
             pass
-    except Exception as e:
-        _errlog(f"복원 실패: {e}", where="[boot.restore]", exc=e)
+    except Exception:
         return
-# =================== [10] 부팅 훅: 인덱스 자동 복원 — END =======================
+# =================== [10] 부팅 훅: 인덱스 자동 복원 — END =====================
 
 # =================== [11] 부팅 오토플로우 & 자동 복원 모드 ==================
 def _boot_autoflow_hook() -> None:
@@ -1000,8 +940,7 @@ def _render_admin_panels() -> None:
     """과거 집계 렌더러 호환용(현재는 사용 안함)."""
     return None
 
-
-# =================== [13B] ADMIN: Prepared Scan — START ====================
+# [13B] ADMIN: Prepared Scan — START
 def _render_admin_prepared_scan_panel() -> None:
     """prepared 폴더의 '새 파일 유무'만 확인하는 경량 스캐너.
     - 인덱싱은 수행하지 않고, check_prepared_updates()만 호출
@@ -1019,7 +958,7 @@ def _render_admin_prepared_scan_panel() -> None:
 
     if act_clear:
         st.session_state.pop("_PR_SCAN_RESULT", None)
-        _safe_rerun("scan_clear", ttl=1)
+        _safe_rerun("pr_scan_clear", ttl=1)
 
     # 이전 결과 있으면 보여주기
     prev = st.session_state.get("_PR_SCAN_RESULT")
@@ -1075,7 +1014,6 @@ def _render_admin_prepared_scan_panel() -> None:
         with st.expander("새 파일 미리보기(최대 50개)"):
             rows = []
             for rec in (new_files[:50] if isinstance(new_files, list) else []):
-                # 항목이 문자열(경로/이름)일 수도 있고 dict일 수도 있으므로 방어적 처리
                 if isinstance(rec, str):
                     rows.append({"name": rec})
                 elif isinstance(rec, dict):
@@ -1098,6 +1036,7 @@ def _render_admin_prepared_scan_panel() -> None:
         "sample_new": new_files[:10] if isinstance(new_files, list) else [],
     }
 # =================== [13B] ADMIN: Prepared Scan — END ====================
+
 
 # ============= [14] 인덱싱된 소스 목록(읽기 전용 대시보드) ==============
 def _render_admin_indexed_sources_panel() -> None:
@@ -1262,14 +1201,13 @@ def _render_mode_controls_pills() -> str:
     if st is None:
         return "grammar"
 
-    # SSOT에서 모드 목록(라벨/키)만 가져온다.
+    # SSOT에서 모드 목록(라벨/키)만 가져옴
     try:
         from src.core.modes import enabled_modes  # SSOT
         modes = enabled_modes()
         labels = [m.label for m in modes]
         keys = [m.key for m in modes]
     except Exception:
-        # 문제가 생겨도 최소 3모드는 유지(폴백 함수 정의는 금지)
         labels = ["문법", "문장", "지문"]
         keys = ["grammar", "sentence", "passage"]
 
@@ -1289,11 +1227,10 @@ def _render_mode_controls_pills() -> str:
         label_visibility="collapsed",
     )
 
-    # 라벨→key 매핑(임포트 가능하면 사용, 아니면 키 매핑)
+    # 라벨→key 매핑: 모듈에서 함수 참조(이름 재정의 금지)
     spec = None
     try:
-        import src.core.modes as _mcore  # 모듈 임포트로 이름 충돌 방지
-        # find_mode_by_label(label: str) -> ModeSpec | None
+        import src.core.modes as _mcore
         spec = _mcore.find_mode_by_label(sel_label)
     except Exception:
         spec = None
@@ -1301,7 +1238,6 @@ def _render_mode_controls_pills() -> str:
     try:
         cur_key = spec.key if spec else keys[labels.index(sel_label)]
     except Exception:
-        # 비상 폴백
         cur_key = "grammar"
 
     ss["qa_mode_radio"] = sel_label
@@ -1551,7 +1487,7 @@ def _render_body() -> None:
     with st.container(border=True, key="chatpane_container"):
         st.markdown('<div class="chatpane">', unsafe_allow_html=True)
         st.session_state["__mode"] = _render_mode_controls_pills() or st.session_state.get("__mode", "")
-        submitted: bool = False  # ✅ mypy 엄격설정 대비 선제 초기화
+        submitted: bool = False  # 엄격 설정 대비 선제 초기화
         with st.form("chat_form", clear_on_submit=False):
             q: str = st.text_input("질문", placeholder="질문을 입력하세요…", key="q_text")
             submitted = st.form_submit_button("➤")
@@ -1559,7 +1495,7 @@ def _render_body() -> None:
 
     if submitted and isinstance(q, str) and q.strip():
         st.session_state["inpane_q"] = q.strip()
-        st.rerun()
+        _safe_rerun("chat_submit", ttl=1)
     else:
         st.session_state.setdefault("inpane_q", "")
 

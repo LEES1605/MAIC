@@ -5,15 +5,6 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, List, Optional, Sequence
 
-__all__ = [
-    "Mode",
-    "ModeProfile",
-    "PromptBundle",
-    "ALLOWED_SOURCE_LABELS",
-    "sanitize_source_label",
-    "clamp_fragments",
-]
-
 
 class Mode(str, Enum):
     """App-wide canonical modes. Keep names stable across UI/Services/LLM."""
@@ -38,7 +29,6 @@ class Mode(str, Enum):
             raise ValueError(f"Unsupported mode: {value!r}") from e
 
 
-# 필요시 확장 가능한 라벨 화이트리스트(칩 표시/검증 용도)
 ALLOWED_SOURCE_LABELS: Dict[str, str] = {
     "[이유문법]": "Reason-based grammar materials",
     "[문법서적]": "Printed/official grammar books",
