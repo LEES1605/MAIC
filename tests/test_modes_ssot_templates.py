@@ -3,8 +3,8 @@ import pytest
 
 pytest.importorskip("yaml")  # SSOT 템플릿 로딩 검증에 PyYAML 필요
 
-from modes.types import Mode
-from modes.profiles import get_profile
+from src.modes.types import Mode
+from src.modes.profiles import get_profile
 
 
 def test_grammar_template_sections():
