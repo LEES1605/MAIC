@@ -1251,7 +1251,7 @@ def _render_chat_panel() -> None:
     import importlib as _imp
     import html
     import re
-    from typing import Optional
+    from typing import Optional, Callable
     from src.agents.responder import answer_stream
     from src.agents.evaluator import evaluate_stream
     from src.llm.streaming import BufferOptions, make_stream_handler
@@ -1270,18 +1270,24 @@ def _render_chat_panel() -> None:
         _make_chip = None
 
     # ✅ whitelist guard 로더
-    # - 정적 import는 src.modes.types로만 (mypy의 이중 모듈명 방지)
-    # - 폴백은 'modes.types'를 importlib로 런타임 로드(정적 분석 제외)
-    def _resolve_sanitizer():
+    # - 정적 import는 src.modes.types만 사용(SSOT).   ←★ 핵심
+    # - 폴백은 런타임 동적 import('modes.types')로 시도(정적 분석 제외)
+    def _resolve_sanitizer() -> Callable[[Optional[str]], str]:
         try:
             from src.modes.types import sanitize_source_label as _san  # SSOT
             return _san
         except Exception:
             try:
-                _mod = _imp.import_module("modes.types")  # runtime-only fallback
-                return getattr(_mod, "sanitize_source_label")
+                mod = _imp.import_module("modes.types")  # runtime-only
+                fn = getattr(mod, "sanitize_source_label", None)
+                if callable(fn):
+                    return fn
             except Exception:
-                return lambda _label=None: "[AI지식]"
+                pass
+
+        def _fallback(label: Optional[str] = None) -> str:
+            return "[AI지식]"
+        return _fallback
 
     sanitize_source_label = _resolve_sanitizer()
 
@@ -1339,7 +1345,7 @@ def _render_chat_panel() -> None:
             src_label = "[AI지식]"
 
     # ✅ whitelist 강제 (허용 외 라벨은 [AI지식]으로 클램프)
-    src_label = sanitize_source_label(src_label)  # SSOT: src/modes/types.py.  
+    src_label = sanitize_source_label(src_label)  # SSOT: src/modes/types.py.  :contentReference[oaicite:3]{index=3}
 
     chip_text = src_label
     if callable(_make_chip):
