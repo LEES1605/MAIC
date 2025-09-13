@@ -1,115 +1,175 @@
-# [26B] START: src/agents/responder.py (FULL REPLACEMENT)
+# [28A] START: src/agents/responder.py (FULL REPLACEMENT)
 from __future__ import annotations
 
-from typing import Iterator, Optional, Dict
+from typing import Iterator, Optional, Dict, Any, Tuple
+from pathlib import Path
+import importlib
+import os
+import time
+
 from src.agents._common import stream_llm
-from src.core.prompt_loader import (
-    get_bracket_rules,
-    get_custom_mode_prompts,
-)
 
 
-def _default_system_by_mode(mode_key: str) -> str:
-    m = (mode_key or "").strip().lower()
-    if m == "sentence":
+# --------------------------- prompts.yaml loader ----------------------------
+_PROMPTS_CACHE: Tuple[float, Dict[str, Any]] | None = None  # (mtime, data)
+
+
+def _prompts_path() -> Path:
+    """
+    Resolve prompts.yaml path with precedence:
+      1) env MAIC_PROMPTS_PATH
+      2) st.secrets["PROMPTS_PATH"]
+      3) ./prompts.yaml
+    """
+    # 1) env
+    p = (os.getenv("MAIC_PROMPTS_PATH") or "").strip()
+    if p:
+        return Path(p).expanduser()
+
+    # 2) streamlit secrets (optional)
+    try:
+        st = importlib.import_module("streamlit")
+        secrets_obj = getattr(st, "secrets", {})
+        sp = (secrets_obj.get("PROMPTS_PATH") or "").strip()
+        if sp:
+            return Path(sp).expanduser()
+    except Exception:
+        pass
+
+    # 3) default
+    return Path("prompts.yaml").expanduser()
+
+
+def _load_yaml_text(fp: Path) -> Optional[str]:
+    try:
+        if not fp.exists() or not fp.is_file():
+            return None
+        return fp.read_text(encoding="utf-8")
+    except Exception:
+        return None
+
+
+def _parse_yaml(txt: str) -> Dict[str, Any]:
+    """
+    Parse YAML if PyYAML is available; else return {} to trigger fallback.
+    """
+    try:
+        yaml = importlib.import_module("yaml")
+    except Exception:
+        return {}
+    try:
+        data = yaml.safe_load(txt)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _load_prompts_yaml() -> Dict[str, Any]:
+    """
+    Load prompts.yaml with simple mtime-based cache.
+    Returns {} on any failure (so caller will fallback).
+    """
+    global _PROMPTS_CACHE
+    fp = _prompts_path()
+    txt = _load_yaml_text(fp)
+    if txt is None:
+        _PROMPTS_CACHE = None
+        return {}
+
+    try:
+        mtime = fp.stat().st_mtime
+    except Exception:
+        mtime = 0.0
+
+    if _PROMPTS_CACHE and _PROMPTS_CACHE[0] == mtime:
+        return _PROMPTS_CACHE[1]
+
+    data = _parse_yaml(txt)
+    _PROMPTS_CACHE = (mtime, data)
+    return data
+
+
+# ----------------------------- system prompt -------------------------------
+_HINTS_BY_MODE: Dict[str, str] = {
+    "문법설명": "핵심 규칙 → 간단 예시 → 흔한 오해 순서로 쉽게 설명하세요.",
+    "문장구조분석": "품사/구문 역할을 표처럼 정리하고 핵심 포인트 3개를 요약하세요.",
+    "지문분석": "주제/요지/세부정보를 구분하고 근거 문장을 제시하세요.",
+}
+
+# 내부키 → YAML 한글 라벨 매핑
+_MODEKEY_TO_LABEL: Dict[str, str] = {
+    "grammar": "문법설명",
+    "sentence": "문장구조분석",
+    "passage": "지문분석",
+}
+
+
+def _normalize_mode_label(mode_in: str) -> str:
+    """
+    Accepts internal key or Korean label; returns Korean label.
+    Unknown input → '문법설명'.
+    """
+    v = (mode_in or "").strip()
+    if not v:
+        return "문법설명"
+    # 내부키 매핑
+    if v in _MODEKEY_TO_LABEL:
+        return _MODEKEY_TO_LABEL[v]
+    # 한글 라벨로 들어온 경우(정확 일치만)
+    if v in _HINTS_BY_MODE:
+        return v
+    # 기타 → 기본
+    return "문법설명"
+
+
+def _system_prompt(mode: str) -> str:
+    """
+    Build system prompt from prompts.yaml if available; else fallback hints.
+    """
+    label = _normalize_mode_label(mode)
+    data = _load_prompts_yaml()
+
+    # YAML 경로: modes.<라벨>.system
+    sys_txt = None
+    try:
+        modes = data.get("modes") if isinstance(data, dict) else None
+        if isinstance(modes, dict):
+            node = modes.get(label)
+            if isinstance(node, dict):
+                val = node.get("system")
+                if isinstance(val, str) and val.strip():
+                    sys_txt = val.strip()
+    except Exception:
+        sys_txt = None
+
+    if not sys_txt:
+        # 안전 폴백: 기존 하드코딩 힌트 기반
+        hint = _HINTS_BY_MODE.get(label, "학생 눈높이에 맞춰 핵심→예시→한 줄 정리로 설명하세요.")
         return (
             "당신은 학생을 돕는 영어 선생님입니다. 불필요한 말은 줄이고, "
-            "짧고 명확한 단계적 설명을 사용하세요.\n"
-            "출력: 괄호분석 → 해석 → 핵심 포인트 3개."
+            "짧은 문장과 단계적 설명을 사용하세요. " + hint
         )
-    if m == "passage":
-        return (
-            "당신은 학생을 돕는 영어 선생님입니다. 요지→쉬운 예시→주제→제목을 "
-            "간결하게 정리하세요."
-        )
-    # grammar
-    return (
-        "당신은 학생을 돕는 영어 선생님입니다. 핵심 규칙→간단 예시→흔한 오해를 "
-        "짧게 설명하세요."
-    )
+
+    return sys_txt
 
 
-def _maybe_append_bracket_rules(system_txt: str) -> str:
-    """
-    문장 모드인데 사용자 system에 괄호 규칙 안내가 없으면
-    사용자 제공 괄호규칙 블록을 덧붙인다.
-    """
-    s = system_txt or ""
-    has_hint = bool(
-        ("괄호" in s)
-        or ("표기 규칙" in s)
-        or ("bracket" in s.lower())
-    )
-    if has_hint:
-        return s
-    rules = get_bracket_rules()
-    return (
-        s
-        + "\n\n[괄호/기호 표기 규칙 — 엄수]\n"
-        + "--BRACKET_RULES--\n"
-        + rules
-        + "\n--END_BRACKET_RULES--"
-    )
-
-
-def _safe_format(template: str, mapping: Dict[str, str]) -> str:
-    """
-    {PLACEHOLDER}를 안전하게 치환(미지 키는 빈 문자열).
-    """
-    import re
-
-    def repl(m):
-        key = (m.group(1) or "").strip()
-        return str(mapping.get(key, ""))
-
-    return re.sub(r"{\s*([A-Za-z0-9_]+)\s*}", repl, template)
-
-
-def _compose_prompts(
-    mode_key: str, question: str, ctx: Optional[Dict[str, str]]
-) -> tuple[str, str]:
-    """
-    반환: (system_prompt, user_prompt)
-    - prompts.yaml(modes.*)의 사용자 정의 system/user가 있으면 우선 사용
-    - 문장 모드는 괄호규칙 블록을 필요 시 부착
-    """
-    custom = get_custom_mode_prompts(mode_key)
-    sys_txt = custom.get("system") or _default_system_by_mode(mode_key)
-    usr_txt = custom.get("user") or ""
-
-    if mode_key == "sentence":
-        sys_txt = _maybe_append_bracket_rules(sys_txt)
-
-    # user 템플릿이 있으면 안전 치환, 없으면 질문만 전달
-    if usr_txt:
-        mapping: Dict[str, str] = {
-            "QUESTION": question,
-            "question": question,
-            "EVIDENCE_CLASS_NOTES": (ctx or {}).get("EVIDENCE_CLASS_NOTES", ""),
-            "EVIDENCE_GRAMMAR_BOOKS": (ctx or {}).get("EVIDENCE_GRAMMAR_BOOKS", ""),
-        }
-        user_prompt = _safe_format(usr_txt, mapping)
-        if ("{QUESTION}" not in usr_txt) and ("{question}" not in usr_txt):
-            user_prompt = user_prompt.rstrip() + "\n\n[질문]\n" + question
-    else:
-        user_prompt = question
-
-    return sys_txt, user_prompt
-
-
+# ------------------------------ answer stream ------------------------------
 def answer_stream(
-    *, question: str, mode: str, ctx: Optional[Dict[str, str]] = None
+    *,
+    question: str,
+    mode: str,
+    ctx: Optional[Dict[str, str]] = None,
 ) -> Iterator[str]:
     """
     주답변(피티쌤) 스트리밍 제너레이터.
-    - 내부 모드 키(mode)는 'grammar|sentence|passage'
-    - 사용자 정의 prompts.yaml(modes.*)가 있으면 system/user를 우선 사용
-    - split_fallback=True: 콜백 미지원 provider에서 문장 단위 의사 스트리밍
+    - prompts.yaml → system 프롬프트 선택(핫리로드)
+    - 공통 SSOT(stream_llm)만 호출하여 중복 제거
+    - split_fallback=True: 콜백 미지원 provider에서 문장단위 의사 스트리밍
     """
-    sys_p, user_p = _compose_prompts(mode, question, ctx)
+    sys_p = _system_prompt(mode)
     yield from stream_llm(
         system_prompt=sys_p,
-        user_prompt=user_p,
+        user_prompt=question,
         split_fallback=True,
     )
-# [26B] END: src/agents/responder.py
+# [28A] END: src/agents/responder.py
