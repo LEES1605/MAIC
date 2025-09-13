@@ -46,7 +46,7 @@ class ModeRouter:
         lines = []
         lines.append(f"# {header}")
         lines.append("")
-        lines.append(f"**모드**: {mode.value}  |  **라벨**: {label}")
+        lines.append(f"**모드**: {mode.value}  |  라벨: {label}")
         lines.append("")
         lines.append("## 질의")
         lines.append(question.strip())
