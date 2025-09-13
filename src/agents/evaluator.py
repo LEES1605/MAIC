@@ -15,7 +15,7 @@ def _load_mode_spec(mode_key: str) -> Dict[str, List[str] | str]:
     key = (mode_key or "").strip().lower()
     try:
         # SSOT: MODES (mode spec with output_shape/eval_focus)
-        from src.core.modes import MODES  # noqa: WPS433 (local import by design)
+        from src.core.modes import MODES
 
         if key in MODES and getattr(MODES[key], "enabled", True):
             m = MODES[key]
@@ -62,7 +62,6 @@ def _system_prompt(mode_key: str) -> str:
     sections = "·".join(spec["sections"]) if spec["sections"] else "형식 미정"
     focus = "·".join(spec["eval_focus"]) if spec["eval_focus"] else "정확도"
 
-    # 괄호규칙 라벨: S/V/O/C/M/Sub/Rel/ToInf/Ger/Part/Appo/Conj
     bracket_rules = (
         "문장 모드에서는 다음 라벨만 사용했는지 확인: "
         "S,V,O,C,M,Sub,Rel,ToInf,Ger,Part,Appo,Conj. "
