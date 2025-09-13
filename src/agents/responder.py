@@ -1,47 +1,83 @@
-# src/agents/responder.py
-# ================================ Answer Stream ================================
+# [01] START: src/agents/responder.py (FULL REPLACEMENT)
 from __future__ import annotations
 
-from typing import Iterator, Optional, Dict
+from pathlib import Path
+from typing import Dict, Iterator, Optional, Sequence, Union
+
 from src.agents._common import stream_llm
+from src.modes.router import ModeRouter
+from src.modes.types import Mode, sanitize_source_label
 
 
-def _system_prompt(mode: str) -> str:
+def _system_prompt(profile_title: str) -> str:
     """
-    피티쌤(주답변) 시스템 프롬프트.
-    - 모드 키('grammar'|'sentence'|'passage')와 한글 라벨을 모두 인식.
-    - 간결·단계·예시 우선. 과장/불필요한 수식 금지.
+    '피티쌤' 톤의 시스템 프롬프트.
+    - 불필요한 수사를 줄이고, 단계적·간결 설명을 유도
+    - 모드 제목(프로필 타이틀)을 주입해 역할 고정을 강화
     """
-    m = (mode or "").strip().lower()
-    if m in ("grammar", "문법", "문법설명"):
-        hint = "핵심 규칙 → 간단 예시 → 흔한 오해 순서로, 문장 짧게."
-    elif m in ("sentence", "문장", "문장구조분석", "문장분석"):
-        hint = (
-            "괄호규칙으로 구문을 먼저 제시하고, 품사/역할 표를 간단히. "
-            "핵심 포인트 3개를 한 줄씩."
-        )
-    elif m in ("passage", "지문", "지문분석", "지문설명"):
-        hint = "주제·요지·세부 근거를 구분하고, 쉬운 예시로 평이화."
-    else:
-        hint = "학생 눈높이에 맞춰 핵심→예시→한 줄 정리로 설명."
-
     return (
-        "당신은 학생을 돕는 영어 선생님입니다. 불필요한 말은 줄이고, "
-        "짧은 문장과 단계적 설명을 사용하세요. " + hint
+        "당신은 학생을 돕는 영어 선생님 '피티쌤'입니다. "
+        "친절하고 단계적으로 설명하고, 불필요한 말은 줄이세요. "
+        "간결한 문장과 목록을 활용해 핵심→예시→요약 순으로 답변합니다. "
+        f"(모드: {profile_title})"
     )
+
+
+def _pick_fragments(ctx: Optional[Dict[str, object]]) -> Sequence[str]:
+    """
+    ctx에서 컨텍스트 조각을 추출(있다면).
+    - 허용 키: 'fragments'|'context'|'hits'
+    - 문자열/비문자 혼입 시 문자열로 강제 변환
+    - 나머지 길이 제한/개수 제한은 Router.render_prompt()에서 클램프
+    """
+    if not isinstance(ctx, dict):
+        return ()
+    cand: Optional[Union[Sequence[object], object]] = (
+        ctx.get("fragments") or ctx.get("context") or ctx.get("hits")
+    )
+    if isinstance(cand, (list, tuple)):
+        return tuple(str(x) for x in cand)
+    return ()
 
 
 def answer_stream(
-    *, question: str, mode: str, ctx: Optional[Dict[str, str]] = None
+    *,
+    question: str,
+    mode: str,
+    ctx: Optional[Dict[str, object]] = None,
 ) -> Iterator[str]:
     """
     주답변(피티쌤) 스트리밍 제너레이터.
-    - 공통 SSOT(stream_llm)만 호출하여 중복 제거
-    - split_fallback=True: 콜백 미지원 provider에서 문장단위 의사 스트리밍
+    - SSOT 라우터로 모드별 프롬프트 번들을 만들고 stream_llm으로 스트리밍
+    - split_fallback=True: 콜백 미지원 provider에서 문장 단위 의사 스트리밍
     """
-    sys_p = _system_prompt(mode)
+    # 1) 모드 정규화
+    try:
+        m = Mode.from_str(mode)
+    except Exception:
+        m = Mode.GRAMMAR
+
+    # 2) 컨텍스트 & 라벨
+    frags = _pick_fragments(ctx)
+    raw_label = ""
+    if isinstance(ctx, dict):
+        raw_label = str(ctx.get("source_label") or "")
+    label = sanitize_source_label(raw_label)
+
+    # 3) Router로 프롬프트 번들 구성
+    router = ModeRouter(ssot_root=Path("docs/_gpt"))
+    bundle = router.render_prompt(
+        mode=m,
+        question=question,
+        context_fragments=frags,
+        source_label=label,
+    )
+
+    # 4) LLM 스트리밍
+    sys_p = _system_prompt(bundle.profile.title)
     yield from stream_llm(
         system_prompt=sys_p,
-        user_prompt=question,
+        user_prompt=bundle.prompt,
         split_fallback=True,
     )
+# [01] END: src/agents/responder.py (FULL REPLACEMENT)
