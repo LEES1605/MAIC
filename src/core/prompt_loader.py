@@ -1,4 +1,4 @@
-# [30A] START: src/core/prompt_loader.py (FULL REPLACEMENT)
+# [31A] START: src/core/prompt_loader.py (FULL REPLACEMENT)
 from __future__ import annotations
 
 from pathlib import Path
@@ -173,8 +173,6 @@ def get_bracket_rules() -> str:
                 # 2) system 안에서 섹션 자동 추출
                 sys_txt = node.get("system")
                 if isinstance(sys_txt, str) and sys_txt.strip():
-                    # 헤더 줄부터 끝까지를 보수적으로 취함
-                    # 예: "[괄호/기호 표기 규칙 — 엄수]" 같은 패턴
                     pat = r"(?ms)^\s*\[(?:괄호|괄호/기호)[^\]]*\]\s*(.*?)\Z"
                     m = re.search(pat, sys_txt)
                     if m:
@@ -183,4 +181,44 @@ def get_bracket_rules() -> str:
         pass
 
     return _DEFAULT_BRACKET_RULE
-# [30A] END: src/core/prompt_loader.py
+
+
+# ----------------- user 템플릿 로더 -----------------
+def _fill_placeholders(tpl: str, values: Dict[str, str]) -> str:
+    """
+    단순 치환: values의 키에 대해 '{KEY}'만 치환.
+    알 수 없는 플레이스홀더나 다른 중괄호는 그대로 둔다.
+    """
+    out = str(tpl)
+    for k, v in values.items():
+        out = out.replace("{" + str(k) + "}", str(v))
+    return out
+
+
+def user_prompt_for(mode: str, question: str, ctx: Optional[Dict[str, str]] = None) -> str:
+    """
+    모드별 user 템플릿을 로드해 질문을 감쌈.
+    - 성공: prompts.yaml의 modes.<라벨>.user 에 플레이스홀더 삽입
+    - 실패: 질문 원문(question) 반환
+    기본 플레이스홀더:
+      * {QUESTION}: 필수
+      * 그 외 ctx의 키들: 예) EVIDENCE_CLASS_NOTES, EVIDENCE_GRAMMAR_BOOKS
+    """
+    label = _label_for(mode)
+    data = load_prompts()
+    try:
+        modes = data.get("modes") if isinstance(data, dict) else None
+        if isinstance(modes, dict):
+            node = modes.get(label)
+            if isinstance(node, dict):
+                uv = node.get("user")
+                if isinstance(uv, str) and uv.strip():
+                    values: Dict[str, str] = {"QUESTION": question}
+                    if isinstance(ctx, dict):
+                        for k, v in ctx.items():
+                            values[str(k)] = str(v)
+                    return _fill_placeholders(uv, values).strip()
+    except Exception:
+        pass
+    return question
+# [31A] END: src/core/prompt_loader.py
