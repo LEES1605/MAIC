@@ -4,8 +4,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, Optional, Sequence
 
-from modes.router import ModeRouter
-from modes.types import Mode
+from src.modes.router import ModeRouter
+from src.modes.types import Mode
 
 
 @dataclass(frozen=True)
