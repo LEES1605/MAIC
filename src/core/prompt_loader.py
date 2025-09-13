@@ -1,12 +1,11 @@
-# [29A] START: src/core/prompt_loader.py (NEW FILE)
+# [30A] START: src/core/prompt_loader.py (FULL REPLACEMENT)
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
-
 import importlib
 import os
-import time
+import re
 
 # mtime 캐시: (mtime, data)
 _PROMPTS_CACHE: Tuple[float, Dict[str, Any]] | None = None
@@ -86,7 +85,7 @@ _MODEKEY_TO_LABEL = {
     "sentence": "문장구조분석",
     "passage": "지문분석",
 }
-# resonder 폴백 힌트
+# responder 폴백 힌트
 _FALLBACK_HINT = {
     "문법설명": "핵심 규칙 → 간단 예시 → 흔한 오해 순서로 쉽게 설명하세요.",
     "문장구조분석": "품사/구문 역할을 표처럼 정리하고 핵심 포인트 3개를 요약하세요.",
@@ -134,4 +133,54 @@ def system_prompt_for(mode: str) -> str:
         "당신은 학생을 돕는 영어 선생님입니다. 불필요한 말은 줄이고, "
         "짧은 문장과 단계적 설명을 사용하세요. " + hint
     )
-# [29A] END: src/core/prompt_loader.py
+
+
+# ----------------- 괄호 규칙 로더(문장구조분석용) -----------------
+_DEFAULT_BRACKET_RULE = (
+    "괄호/기호 표기 규칙(요약)\n"
+    "* [ ]: 명사적 용법(명사절/To부정사/Gerund 등)\n"
+    "* { }: 형용사적 용법(관계절/분사/형용사 수식)\n"
+    "* < >: 부사적 용법(부사절/부사구)\n"
+    "* ( ): 전치사구\n"
+    "* It-cleft: [[중심]] {that/관계절}, 부사 강조는 << >>\n"
+    "* 생략 복원: (*생략항목) 표기로 그 자리 표시\n"
+    "* the 비교급…, the 비교급…: 앞절은 < >, 뒷절은 일반 표기\n"
+)
+
+
+def get_bracket_rules() -> str:
+    """
+    문장구조분석용 괄호 규칙 문자열을 반환.
+    우선순위:
+      1) prompts.yaml: modes.문장구조분석.bracket_rules
+      2) prompts.yaml: modes.문장구조분석.system 안의
+         '[괄호/기호 표기 규칙' 섹션 자동 추출
+      3) _DEFAULT_BRACKET_RULE 폴백
+    """
+    label = _label_for("sentence")
+    data = load_prompts()
+
+    try:
+        modes = data.get("modes") if isinstance(data, dict) else None
+        if isinstance(modes, dict):
+            node = modes.get(label)
+            if isinstance(node, dict):
+                # 1) 명시 키가 있으면 최우선
+                br = node.get("bracket_rules")
+                if isinstance(br, str) and br.strip():
+                    return br.strip()
+
+                # 2) system 안에서 섹션 자동 추출
+                sys_txt = node.get("system")
+                if isinstance(sys_txt, str) and sys_txt.strip():
+                    # 헤더 줄부터 끝까지를 보수적으로 취함
+                    # 예: "[괄호/기호 표기 규칙 — 엄수]" 같은 패턴
+                    pat = r"(?ms)^\s*\[(?:괄호|괄호/기호)[^\]]*\]\s*(.*?)\Z"
+                    m = re.search(pat, sys_txt)
+                    if m:
+                        return m.group(1).strip()
+    except Exception:
+        pass
+
+    return _DEFAULT_BRACKET_RULE
+# [30A] END: src/core/prompt_loader.py
