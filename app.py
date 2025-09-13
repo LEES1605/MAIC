@@ -1245,7 +1245,6 @@ def _render_mode_controls_pills() -> str:
     return cur_key
 # [15B] END
 
-
 # [16] START: 채팅 패널 (FULL REPLACEMENT)
 def _render_chat_panel() -> None:
     """질문(오른쪽) → 피티쌤(스트리밍) → 미나쌤(스트리밍) → 품질 배지."""
@@ -1255,10 +1254,8 @@ def _render_chat_panel() -> None:
     from typing import Optional
     from src.agents.responder import answer_stream
     from src.agents.evaluator import evaluate_stream
-    from src.agents.eval_parser import parse_eval_block
     from src.llm.streaming import BufferOptions, make_stream_handler
 
-    # ---------- 소스 라벨/검색 도우미 ----------
     try:
         try:
             _label_mod = _imp.import_module("src.rag.label")
@@ -1272,12 +1269,15 @@ def _render_chat_panel() -> None:
         _search_hits = None
         _make_chip = None
 
-    # ✅ whitelist guard
+    # ✅ whitelist guard (src.modes.types → modes.types → fallback)
     try:
-        from modes.types import sanitize_source_label
+        from src.modes.types import sanitize_source_label as _sanitize
     except Exception:
-        def sanitize_source_label(label: Optional[str]) -> str:
-            return "[AI지식]"
+        try:
+            from modes.types import sanitize_source_label as _sanitize  # type: ignore
+        except Exception:
+            def _sanitize(label: Optional[str]) -> str:
+                return "[AI지식]"
 
     def _esc(t: str) -> str:
         s = html.escape(t or "").replace("\n", "<br/>")
@@ -1310,6 +1310,64 @@ def _render_chat_panel() -> None:
         )
         placeholder.markdown(html_block, unsafe_allow_html=True)
 
+    def _parse_eval_block(text: str) -> dict:
+        """[형식 체크]·[한 줄 총평] 블록을 파싱해 상태/사유/요약을 반환."""
+        res = {
+            "sections": {"state": "", "reason": ""},
+            "bracket": {"state": "", "reason": ""},
+            "factual": {"state": "", "reason": ""},
+            "summary": "",
+        }
+        try:
+            m = re.search(
+                r"^-\\s*섹션:\\s*(OK|FAIL)\\s*(?:\\((.*?)\\))?",
+                text,
+                flags=re.MULTILINE,
+            )
+            if m:
+                res["sections"]["state"] = m.group(1)
+                res["sections"]["reason"] = (m.group(2) or "").strip()
+
+            m = re.search(
+                r"^-\\s*괄호규칙:\\s*(OK|FAIL)\\s*(?:\\((.*?)\\))?",
+                text,
+                flags=re.MULTILINE,
+            )
+            if m:
+                res["bracket"]["state"] = m.group(1)
+                res["bracket"]["reason"] = (m.group(2) or "").strip()
+
+            m = re.search(
+                r"^-\\s*사실성:\\s*(OK|WARN)\\s*(?:\\((.*?)\\))?",
+                text,
+                flags=re.MULTILINE,
+            )
+            if m:
+                res["factual"]["state"] = m.group(1)
+                res["factual"]["reason"] = (m.group(2) or "").strip()
+
+            m = re.search(
+                r"\\[한 줄 총평\\]\\s*\\n-?\\s*(.+)",
+                text,
+                flags=re.MULTILINE,
+            )
+            if m:
+                res["summary"] = (m.group(1) or "").strip()
+        except Exception:
+            # 파싱 실패 시 빈 결과 유지
+            pass
+        return res
+
+    def _badge(state: str, ok: str = "OK", bad: str = "FAIL", warn: str = "WARN") -> str:
+        s = (state or "").upper()
+        if s == ok:
+            return "🟢 OK"
+        if s == bad:
+            return "🔴 FAIL"
+        if s == warn:
+            return "🟨 WARN"
+        return "⬜︎ —"
+
     if st is None:
         return
     ss = st.session_state
@@ -1333,7 +1391,7 @@ def _render_chat_panel() -> None:
             src_label = "[AI지식]"
 
     # ✅ whitelist 강제
-    src_label = sanitize_source_label(src_label)
+    src_label = _sanitize(src_label)
 
     chip_text = src_label
     if callable(_make_chip):
@@ -1390,51 +1448,35 @@ def _render_chat_panel() -> None:
         ),
     )
     for piece in evaluate_stream(
-        question=question,
-        mode=ss.get("__mode", ""),
-        answer=full_answer,
-        ctx={"answer": full_answer},
+        question=question, mode=ss.get("__mode", ""), answer=full_answer, ctx={"answer": full_answer}
     ):
         emit_chunk_eval(str(piece or ""))
     close_stream_eval()
 
     # --- 평가 결과 배지/총평
-    parsed = parse_eval_block(acc_eval)
-
-    def _badge(state: str, ok: str = "OK", bad: str = "FAIL", warn: str = "WARN") -> str:
-        s = (state or "").upper()
-        if s == ok:
-            return "🟢 OK"
-        if s == bad:
-            return "🔴 FAIL"
-        if s == warn:
-            return "🟨 WARN"
-        return "⬜︎ —"
-
+    parsed = _parse_eval_block(acc_eval)
     with st.container():
         st.markdown("**품질 체크 요약**")
         lines = []
-
         sec = parsed.get("sections", {})
         br = parsed.get("bracket", {})
         fa = parsed.get("factual", {})
-        if sec:
-            reason = f" — {sec.get('reason','')}" if sec.get("reason") else ""
-            lines.append(f"- 섹션: {_badge(sec.get('state',''))}{reason}")
-        if br:
-            reason = f" — {br.get('reason','')}" if br.get("reason") else ""
-            lines.append(f"- 괄호규칙: {_badge(br.get('state',''))}{reason}")
-        if fa:
-            reason = f" — {fa.get('reason','')}" if fa.get("reason") else ""
-            lines.append(f"- 사실성: {_badge(fa.get('state',''), warn='WARN')}{reason}")
+        lines.append(f"- 섹션: {_badge(sec.get('state'))}"
+                     + (f" — {sec.get('reason')}" if sec.get("reason") else ""))
+        if br.get("state"):
+            lines.append(f"- 괄호규칙: {_badge(br.get('state'))}"
+                         + (f" — {br.get('reason')}" if br.get("reason") else ""))
+        if fa.get("state"):
+            lines.append(f"- 사실성: {_badge(fa.get('state'), warn='WARN')}"
+                         + (f" — {fa.get('reason')}" if fa.get("reason") else ""))
         if parsed.get("summary"):
             lines.append(f"- **한 줄 총평:** {parsed['summary']}")
-
         st.markdown("\n".join(lines))
 
     ss["last_q"] = question
     ss["inpane_q"] = ""
 # [16] END
+
 
 # ========================== [17] 본문 렌더 ===============================
 def _render_body() -> None:
