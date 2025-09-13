@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from pathlib import Path
-from typing import Optional, Sequence, Union
+from typing import Optional, Sequence
 
 from .profiles import get_profile
 from .types import Mode, PromptBundle, clamp_fragments, sanitize_source_label
@@ -12,11 +12,9 @@ from .types import Mode, PromptBundle, clamp_fragments, sanitize_source_label
 class ModeRouter:
     """mode(enum) -> profile(SSOT or builtin) -> rendered prompt(bundle)"""
 
-    def __init__(self, *, ssot_root: Optional[Union[Path, str]] = None) -> None:
-        # 내부 표준 타입은 Optional[Path]
-        if isinstance(ssot_root, str):
-            ssot_root = Path(ssot_root).expanduser()
-        self._ssot_root: Optional[Path] = ssot_root
+    def __init__(self, *, ssot_root: Optional[Path] = None) -> None:
+        self._ssot_root = ssot_root
+
     def select_profile(self, mode: Mode) -> PromptBundle:
         profile = get_profile(mode, ssot_root=self._ssot_root)
         return PromptBundle(
@@ -73,6 +71,17 @@ class ModeRouter:
             lines.append("## 피할 것")
             for item in profile.must_avoid:
                 lines.append(f"- {item}")
+            lines.append("")
+
+        # ⬇️ NEW: Sentence 모드에 '괄호 규칙 라벨 표준' 섹션 삽입 (테스트 기대 반영)
+        if mode == Mode.SENTENCE:
+            lines.append("## 괄호 규칙 라벨 표준")
+            lines.append("- 라벨 표준:")
+            lines.append("  S(주어), V(동사), O(목적어), C(보어), M(수식어)")
+            lines.append("  Sub(부사절), Rel(관계절), ToInf(to부정사)")
+            lines.append("  Ger(동명사), Part(분사), Appo(동격), Conj(접속)")
+            lines.append("- 예시 형식:")
+            lines.append("  [Sub because it rained] , [S I] [V stayed] [M at home]")
             lines.append("")
 
         if profile.sections:
