@@ -1270,8 +1270,8 @@ def _render_chat_panel() -> None:
         _make_chip = None
 
     # ✅ sanitize_source_label 로더
-    # - 정적 import는 src.modes.types만 사용(SSOT: 단일 진실).
-    # - 폴백은 런타임 동적 import('modes.types')로 시도(정적 분석 제외).
+    # - 정적 import는 src.modes.types만 사용(SSOT)
+    # - 폴백은 런타임 동적 import('modes.types')로 시도(정적 분석 제외)
     def _resolve_sanitizer() -> Callable[[Optional[str]], str]:
         try:
             from src.modes.types import sanitize_source_label as _san  # SSOT
@@ -1344,7 +1344,7 @@ def _render_chat_panel() -> None:
             src_label = "[AI지식]"
 
     # ✅ whitelist 강제(허용 외 라벨은 [AI지식]으로 클램프)
-    src_label = sanitize_source_label(src_label)  # SSOT: src/modes/types.py. :contentReference[oaicite:3]{index=3}
+    src_label = sanitize_source_label(src_label)  # SSOT: src/modes/types.py.  
 
     chip_text = src_label
     if callable(_make_chip):
@@ -1379,7 +1379,7 @@ def _render_chat_panel() -> None:
     for piece in answer_stream(question=question, mode=ss.get("__mode", "")):
         emit_chunk_ans(str(piece or ""))
     close_stream_ans()
-    full_answer = acc_ans.strip() or "(응답이 비어있어요)"
+    full_answer = acc_ans.strip()  # 빈 문자열은 아래 평가 단계에서 그대로 처리
 
     # --- 평가 스트리밍
     ph_eval = st.empty()
