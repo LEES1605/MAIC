@@ -46,7 +46,8 @@ class ModeRouter:
         lines = []
         lines.append(f"# {header}")
         lines.append("")
-        lines.append(f"**모드**: {mode.value}  |  라벨: {label}")
+        # ✅ 테스트 기대치에 맞춰 '**라벨**' 볼드 고정
+        lines.append(f"**모드**: {mode.value}  |  **라벨**: {label}")
         lines.append("")
         lines.append("## 질의")
         lines.append(question.strip())
@@ -71,17 +72,6 @@ class ModeRouter:
             lines.append("## 피할 것")
             for item in profile.must_avoid:
                 lines.append(f"- {item}")
-            lines.append("")
-
-        # ⬇️ NEW: Sentence 모드에 '괄호 규칙 라벨 표준' 섹션 삽입 (테스트 기대 반영)
-        if mode == Mode.SENTENCE:
-            lines.append("## 괄호 규칙 라벨 표준")
-            lines.append("- 라벨 표준:")
-            lines.append("  S(주어), V(동사), O(목적어), C(보어), M(수식어)")
-            lines.append("  Sub(부사절), Rel(관계절), ToInf(to부정사)")
-            lines.append("  Ger(동명사), Part(분사), Appo(동격), Conj(접속)")
-            lines.append("- 예시 형식:")
-            lines.append("  [Sub because it rained] , [S I] [V stayed] [M at home]")
             lines.append("")
 
         if profile.sections:
