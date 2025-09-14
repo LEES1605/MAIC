@@ -32,5 +32,5 @@ jobs:
         env:
           MAIC_RAG_ENGINE: ${{ matrix.engine }}
         run: |
-          pytest -q -k rag_engine_toggle or -k rag_engine_bm25
+          pytest -q -k "rag_engine_toggle or rag_engine_bm25"
 # [06] END: .github/workflows/rag-fixture.yml
