@@ -26,23 +26,26 @@ def _read_baseline() -> float | None:
         return None
 
 
-def _read_threshold() -> float:
+def _threshold_with_source() -> tuple[float, str]:
     """
-    1) 래칫 파일이 있으면 그 값을 사용
-    2) 없으면 환경변수 COVERAGE_MIN 사용
-    3) 둘 다 없으면 0.70(70%) 사용
+    우선순위:
+    1) baseline 파일
+    2) env: COVERAGE_MIN (0.0~1.0 또는 0~100)
+    3) 기본값 0.70
     """
-    f = _read_baseline()
-    if f is not None:
-        return f
+    b = _read_baseline()
+    if b is not None:
+        return b, "baseline-file"
     v = os.getenv("COVERAGE_MIN", "").strip()
     if v:
         try:
             fv = float(v)
-            return max(0.0, min(1.0, fv))
+            fv = fv if fv <= 1.0 else fv / 100.0
+            fv = max(0.0, min(1.0, fv))
+            return fv, "env:COVERAGE_MIN"
         except Exception:
             pass
-    return 0.70
+    return 0.70, "default"
 
 
 def _parse_rate(xml_path: Path) -> float:
@@ -68,7 +71,7 @@ def _parse_rate(xml_path: Path) -> float:
 
 
 def main() -> int:
-    thresh = _read_threshold()
+    thresh, src = _threshold_with_source()
     xml_path = Path("coverage.xml")
     try:
         rate = _parse_rate(xml_path)
@@ -80,11 +83,13 @@ def main() -> int:
     need = round(thresh * 100.0, 2)
 
     if rate + 1e-9 < thresh:
-        print(f"[coverage-gate] FAIL: {pct}% < required {need}% (ratchet)", file=sys.stderr)
+        print(
+            f"[coverage-gate] FAIL: {pct}% < required {need}% ({src})",
+            file=sys.stderr,
+        )
         return 1
 
-    # 커버리지가 기준선을 넘으면 통과(자동 상향은 CI에서 아티팩트/로그로 통지)
-    print(f"[coverage-gate] OK: {pct}% >= required {need}% (ratchet)")
+    print(f"[coverage-gate] OK: {pct}% >= required {need}% ({src})")
     return 0
 
 
