@@ -26,3 +26,50 @@ body:
     attributes:
       label: 추가 메모
 # [03] END: .github/ISSUE_TEMPLATE/bug_report.yml
+# [04] START: .github/ISSUE_TEMPLATE/feature_request.yml
+name: "Feature request"
+description: "기능 제안"
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 문제/배경
+      description: 사용 사례와 목표를 간단히 설명해 주세요.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 제안 내용
+      description: API/워크플로/문서 변경 등 구체적인 제안을 적어 주세요.
+      placeholder: 입력/출력, 경계 조건, 성능/보안 고려사항 등
+  - type: textarea
+    id: alt
+    attributes:
+      label: 대안 검토
+      description: 고려했던 다른 방법이 있다면 적어 주세요.
+# [04] END: .github/ISSUE_TEMPLATE/feature_request.yml
+# [05] START: .github/ISSUE_TEMPLATE/docs.yml
+name: "Docs"
+description: "문서 개선"
+labels: ["docs"]
+body:
+  - type: dropdown
+    id: doc_area
+    attributes:
+      label: 문서 영역
+      options:
+        - README
+        - CONVENTIONS
+        - CHANGELOG
+        - GPT Docs Index
+        - 기타
+    validations:
+      required: true
+  - type: textarea
+    id: change
+    attributes:
+      label: 수정 제안
+      description: 변경 전/후를 비교해서 간단히 적어 주세요.
+# [05] END: .github/ISSUE_TEMPLATE/docs.yml
