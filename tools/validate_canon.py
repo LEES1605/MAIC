@@ -1,6 +1,7 @@
 # [02] START: tools/validate_canon.py
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 from typing import Iterable, List, Tuple
@@ -15,7 +16,7 @@ except Exception as e:  # pragma: no cover
 try:
     import jsonschema  # type: ignore
 except Exception:
-    jsonschema = None  # CI가 아닌 환경에서도 동작하도록 관용 처리
+    jsonschema = None  # CI 외 환경에서도 관용 처리
 
 MODES = ("grammar", "sentence", "passage")
 
@@ -42,18 +43,35 @@ def _ensure_list_str(xs: Iterable) -> List[str]:
     return out
 
 
+def _load_schema(root: Path) -> dict:
+    """
+    스키마 파일 탐색(우선순위): .yaml → .yml → .json
+    - YAML: 주석 허용(숫자구획 정책과 호환)
+    - JSON: 주석 불가(파일에 START/END 주석이 있으면 파싱 실패)
+    """
+    candidates = [
+        root / "modes" / "_canon.schema.yaml",
+        root / "modes" / "_canon.schema.yml",
+        root / "modes" / "_canon.schema.json",
+    ]
+    for sp in candidates:
+        if sp.exists():
+            if sp.suffix in {".yaml", ".yml"}:
+                return _load_yaml(sp)
+            # JSON의 경우 주석이 있으면 실패하므로 레포에서는 비권장
+            return json.loads(sp.read_text(encoding="utf-8"))
+    raise FileNotFoundError(
+        "schema file not found: _canon.schema.yaml|yml|json under docs/_gpt/modes"
+    )
+
+
 def _validate_with_schema(root: Path, data: dict) -> List[str]:
     """jsonschema가 있으면 스키마로 1차 검증을 수행하고 문제를 리스트로 반환."""
     problems: List[str] = []
     if jsonschema is None:
         return problems  # 스키마 검증 생략(후속 수동 검증 수행)
-    schema_path = root / "modes" / "_canon.schema.json"
     try:
-        schema = _load_yaml(schema_path) if schema_path.suffix in {".yaml", ".yml"} else None
-        if schema is None:
-            import json
-
-            schema = json.loads(schema_path.read_text(encoding="utf-8"))
+        schema = _load_schema(root)
         jsonschema.validate(instance=data, schema=schema)  # type: ignore
     except Exception as e:
         problems.append(f"schema validation failed: {e}")
@@ -63,10 +81,10 @@ def _validate_with_schema(root: Path, data: dict) -> List[str]:
 def validate_canon(root: Path) -> Tuple[bool, List[str]]:
     """
     Validate docs/_gpt/modes/_canon.yaml:
-      1) (있다면) JSON Schema로 구조 검증
+      1) (가능하면) JSON Schema로 구조 검증
       2) 수동 규칙 검증:
          - modes.{mode}.order/required: 문자열 리스트
-         - required는 기사단(필수) 섹션 포함 여부(미포함 시 '보강됨' 경고)
+         - required 미포함 섹션은 코드에서 보강되지만, 경고 표기
          - synonyms: 키/값 문자열, 공백/자기참조 금지
     """
     p = root / "modes" / "_canon.yaml"
@@ -109,9 +127,11 @@ def validate_canon(root: Path) -> Tuple[bool, List[str]]:
         if len(set(order_l)) != len(order_l):
             problems.append(f"modes.{m}.order: duplicated entries")
 
-        # 권장: '근거/출처'는 필수 섹션(정책상의 표준)
+        # 정책 권장: '근거/출처' 존재(필수 혹은 order 내)
         if "근거/출처" not in set(order_l + req_l):
-            problems.append(f"modes.{m}: missing recommended required section '근거/출처'")
+            problems.append(
+                f"modes.{m}: missing recommended section '근거/출처'"
+            )
 
     for k, v in (synonyms or {}).items():
         if not isinstance(k, str) or not isinstance(v, str):
