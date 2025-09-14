@@ -1,17 +1,18 @@
-# [13] START: .github/workflows/security.yml
-name: Security Scans
+# [06] START: .github/workflows/security.yml
+name: CI • Security Scans
 
 on:
+  pull_request:
   push:
     branches: ["**"]
-  pull_request:
   workflow_dispatch:
 
 jobs:
-  pip-audit:
+  security:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      security-events: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -21,36 +22,22 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install pip-audit
+      - name: Install tooling
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pip-audit
+          pip install pip-audit bandit
 
-      - name: Run pip-audit (requirements)
-        if: ${{ hashFiles('**/requirements*.txt') != '' }}
+      - name: pip-audit (dependencies)
         run: |
-          pip-audit -r requirements.txt
-
-      - name: Run pip-audit (environment)
-        if: ${{ hashFiles('**/requirements*.txt') == '' }}
-        run: |
+          pip install .[dev]
           pip-audit
 
-  gitleaks:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: read
-    steps:
-      - name: Checkout (full history recommended)
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+      - name: bandit (SAST)
+        run: |
+          bandit -r -q -x tests .
 
-      - name: Gitleaks secret scan
+      - name: gitleaks (secrets)
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # 조직 계정이 아닌 개인 계정(repo owner가 개인)인 경우 라이선스 불필요
-          # GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
-# [13] END: .github/workflows/security.yml
+# [06] END: .github/workflows/security.yml
