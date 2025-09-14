@@ -60,6 +60,10 @@ def _parse_unified_diff(base: str, head: str, path: str) -> DiffInfo:
     Parse 'git diff --unified=0 base..head -- path'.
     If diff fails (e.g., brand-new file), fall back to "all lines added".
     """
+    # Single typed declarations (mypy no-redef safe)
+    plus: Set[int]
+    minus: Set[int]
+
     try:
         text = _run(
             "git", "diff", "--unified=0", "--no-color", f"{base}..{head}", "--", path
@@ -70,13 +74,12 @@ def _parse_unified_diff(base: str, head: str, path: str) -> DiffInfo:
             after_lines = Path(path).read_text(encoding="utf-8").splitlines()
         except Exception:
             after_lines = []
-        plus: Set[int] = set(range(1, len(after_lines) + 1))
-        minus: Set[int] = set()
+        plus = set(range(1, len(after_lines) + 1))
+        minus = set()
         return DiffInfo(plus=plus, minus=minus)
 
-    # One typed declaration per name (mypy no-redef safe)
-    plus: Set[int] = set()
-    minus: Set[int] = set()
+    plus = set[int]()   # empty typed sets (no var-annotated warnings)
+    minus = set[int]()
     cur_plus = 0
     cur_minus = 0
 
