@@ -1,12 +1,47 @@
-<!--
-PATCH-GUARD
-files:
-  - path: .github/workflows/guard-patch.yml
-    anchors:
-      - "name: CI • Patch Guard"
-      - "[03] Guard Script — START"
-  - path: .github/workflows/gen-tree.yml
-    anchors:
-      - "name: CI • Generate TREE/INVENTORY"
-      - "python scripts/gen_tree.py --out-dir docs/_gpt"
--->
+# MAIC
+
+MAIC는 SSOT(단일 진실 원천) 기반의 모드 템플릿과 정규화 계층을 통해
+코드/문서/프롬프트의 **일관성**을 보장하는 프로젝트입니다.
+엄격한 CI 게이트(스타일/타입/테스트/스키마/보안/커버리지)를 통해
+**회귀를 사전에 차단**하는 것을 목표로 합니다.
+
+## Status
+![Canon Validate](https://github.com/LEES1605/MAIC/actions/workflows/canon-validate.yml/badge.svg)
+![Coverage Gate](https://github.com/LEES1605/MAIC/actions/workflows/coverage.yml/badge.svg)
+![RAG Fixture](https://github.com/LEES1605/MAIC/actions/workflows/rag-fixture.yml/badge.svg)
+![Security Scans](https://github.com/LEES1605/MAIC/actions/workflows/security.yml/badge.svg)
+![Release Cut](https://github.com/LEES1605/MAIC/actions/workflows/release-cut.yml/badge.svg)
+
+## Project Layout
+src/ # 코드(모듈 임포트 기준은 "레포 루트")
+tests/ # 단일 테스트 디렉터리
+docs/_gpt/ # SSOT 및 문서(정규화/스키마/가이드/생성 산출물)
+├─ CONVENTIONS.md # 협의규약(정본)
+├─ modes/_canon.yaml # 모드 정규화 SSOT
+├─ modes/_canon.schema.yaml
+├─ modes/*.yaml
+└─ _generated/MODES.md
+tools/ # CI 유틸(검증/커버리지/문서생성 등)
+.github/workflows/ # CI 워크플로
+
+## SSOT & Canonicalization
+- `_canon.yaml`의 **order/required/synonyms**를 기준으로,
+  `get_profile()`가 **동의어 표준화 → 필수 보강 → 표준 순서** 정렬을 수행합니다.
+- 스키마는 `_canon.schema.yaml`로 **잠금**되어 CI에서 자동 검증됩니다.
+- 문장 모드의 “괄호 규칙 라벨 표준” 등 **규칙 섹션**은 자동 포함됩니다.
+- 자세한 규약은 `docs/_gpt/CONVENTIONS.md`를 참조하세요.
+
+## CI Quality Gates
+- **Canon Validate**: `_canon.yaml` 스키마/규칙 검사 (jsonschema + 수동 규칙).
+- **Coverage Gate (Ratchet)**: `tools/check_coverage.py`가 기준선 이하를 차단.
+- **RAG Fixture Regression**: 결정적 엔진(`hash|bm25|disabled`)과 소형 픽스처로 회귀 테스트.
+- **Security Scans**: `pip-audit`(취약점), `gitleaks`(시크릿).
+
+## Release
+- `Release Cut` 워크플로는 `CHANGELOG.md`의 `[Unreleased]`를
+  새 버전 블록으로 내리고 **태그/릴리스**를 생성합니다.
+
+## Conventions
+- 모든 패치는 **숫자구획 전체 교체([NN] START/END)** 원칙을 따릅니다.
+- 로컬 방식 안내는 제공하지 않습니다(레포/CI 중심 운영).
+- 자세한 규약: `docs/_gpt/CONVENTIONS.md`.
