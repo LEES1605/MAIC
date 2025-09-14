@@ -1,4 +1,4 @@
-# [05] START: .github/ISSUE_TEMPLATE/docs.yml
+# [01] START: .github/ISSUE_TEMPLATE/docs.yml
 name: "Docs"
 description: "문서 개선"
 labels: ["docs"]
@@ -20,4 +20,4 @@ body:
     attributes:
       label: 수정 제안
       description: 변경 전/후를 비교해서 간단히 적어 주세요.
-# [05] END: .github/ISSUE_TEMPLATE/docs.yml
+# [01] END: .github/ISSUE_TEMPLATE/docs.yml
