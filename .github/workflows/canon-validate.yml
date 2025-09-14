@@ -1,4 +1,4 @@
-# [04] START: .github/workflows/canon-validate.yml
+# [03] START: .github/workflows/canon-validate.yml
 name: Canon Validate
 
 on:
@@ -20,12 +20,19 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install deps (pyyaml)
+      - name: Install deps (pyyaml + jsonschema)
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pyyaml
+          python -m pip install pyyaml jsonschema
 
-      - name: Validate _canon.yaml
+      - name: Validate _canon.yaml (schema + rules)
         run: |
           python tools/validate_canon.py
-# [04] END: .github/workflows/canon-validate.yml
+
+      - name: Upload _canon.yaml for review
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: canon-config
+          path: docs/_gpt/modes/_canon.yaml
+# [03] END: .github/workflows/canon-validate.yml
