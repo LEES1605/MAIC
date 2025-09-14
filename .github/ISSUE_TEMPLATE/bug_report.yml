@@ -1,0 +1,28 @@
+# [03] START: .github/ISSUE_TEMPLATE/bug_report.yml
+name: "Bug report"
+description: "버그 신고"
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: 무엇이 문제인가요?
+      description: 기대한 동작과 실제 동작을 구체적으로 작성해 주세요.
+      placeholder: 재현 절차, 스크린샷, 에러 로그(시크릿 제거) 등
+    validations:
+      required: true
+  - type: input
+    id: scope
+    attributes:
+      label: 영향 영역(scope)
+      placeholder: modes / rag / router / docs / ci / security / tests
+  - type: textarea
+    id: repro
+    attributes:
+      label: 재현 절차
+      placeholder: 1) ... 2) ... 3) ...
+  - type: textarea
+    id: notes
+    attributes:
+      label: 추가 메모
+# [03] END: .github/ISSUE_TEMPLATE/bug_report.yml
