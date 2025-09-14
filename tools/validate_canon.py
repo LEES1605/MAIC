@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
 
 try:
-    import yaml  # type: ignore
+    import yaml
 except Exception as e:  # pragma: no cover
     print(f"[validate_canon] ERROR: pyyaml not installed: {e}", file=sys.stderr)
     sys.exit(2)
