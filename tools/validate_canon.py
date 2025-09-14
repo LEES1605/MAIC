@@ -1,10 +1,11 @@
 # [02] START: tools/validate_canon.py
 from __future__ import annotations
 
+import importlib
 import json
 import sys
 from pathlib import Path
-from typing import Iterable, List, Tuple
+from typing import Any, Iterable, List, Tuple
 
 try:
     import yaml
@@ -12,11 +13,12 @@ except Exception as e:  # pragma: no cover
     print(f"[validate_canon] ERROR: pyyaml not installed: {e}", file=sys.stderr)
     raise
 
-# jsonschema는 선택 사항이지만, CI에서는 설치해 사용합니다.
+# jsonschema는 선택 사항. 정적 임포트로 mypy 오류가 나지 않도록 동적 임포트 사용.
+_jsonschema: Any
 try:
-    import jsonschema
-except Exception:
-    jsonschema = None  # CI가 아닌 환경에서도 동작하도록 관용 처리
+    _jsonschema = importlib.import_module("jsonschema")
+except Exception:  # pragma: no cover
+    _jsonschema = None  # CI 외 환경에서도 관용 처리
 
 MODES = ("grammar", "sentence", "passage")
 
@@ -47,7 +49,7 @@ def _load_schema(root: Path) -> dict:
     """
     스키마 파일 탐색(우선순위): .yaml → .yml → .json
     - YAML: 주석 허용(숫자구획 정책과 호환)
-    - JSON: 주석 불가(파일에 START/END 주석이 있으면 파싱 실패)
+    - JSON: 주석 불가(START/END 주석이 있으면 파싱 실패)
     """
     candidates = [
         root / "modes" / "_canon.schema.yaml",
@@ -67,11 +69,11 @@ def _load_schema(root: Path) -> dict:
 def _validate_with_schema(root: Path, data: dict) -> List[str]:
     """jsonschema가 있으면 스키마로 1차 검증을 수행하고 문제를 리스트로 반환."""
     problems: List[str] = []
-    if jsonschema is None:
+    if _jsonschema is None:
         return problems  # 스키마 검증 생략(후속 수동 검증 수행)
     try:
         schema = _load_schema(root)
-        jsonschema.validate(instance=data, schema=schema)
+        _jsonschema.validate(instance=data, schema=schema)
     except Exception as e:
         problems.append(f"schema validation failed: {e}")
     return problems
@@ -128,7 +130,7 @@ def validate_canon(root: Path) -> Tuple[bool, List[str]]:
 
         # 정책 권장: '근거/출처' 존재(필수 혹은 order 내)
         if "근거/출처" not in set(order_l + req_l):
-            problems.append("modes.{m}: missing recommended section '근거/출처'")
+            problems.append(f"modes.{m}: missing recommended section '근거/출처'")
 
     for k, v in (synonyms or {}).items():
         if not isinstance(k, str) or not isinstance(v, str):
@@ -144,6 +146,7 @@ def validate_canon(root: Path) -> Tuple[bool, List[str]]:
 
 
 def main() -> int:
+    # SSOT 루트는 docs/_gpt/ (문서 표준 위치)
     root = Path("docs/_gpt")
     ok, problems = validate_canon(root)
     if not ok:
