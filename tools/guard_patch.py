@@ -62,13 +62,7 @@ def _parse_unified_diff(base: str, head: str, path: str) -> DiffInfo:
     """
     try:
         text = _run(
-            "git",
-            "diff",
-            "--unified=0",
-            "--no-color",
-            f"{base}..{head}",
-            "--",
-            path,
+            "git", "diff", "--unified=0", "--no-color", f"{base}..{head}", "--", path
         )
     except subprocess.CalledProcessError:
         # New file fallback: treat every line in AFTER as added
@@ -76,8 +70,8 @@ def _parse_unified_diff(base: str, head: str, path: str) -> DiffInfo:
             after_lines = Path(path).read_text(encoding="utf-8").splitlines()
         except Exception:
             after_lines = []
-        plus = set(range(1, len(after_lines) + 1))
-        minus = set()
+        plus: Set[int] = set(range(1, len(after_lines) + 1))
+        minus: Set[int] = set()
         return DiffInfo(plus=plus, minus=minus)
 
     # One typed declaration per name (mypy no-redef safe)
@@ -89,10 +83,7 @@ def _parse_unified_diff(base: str, head: str, path: str) -> DiffInfo:
     for ln in text.splitlines():
         if ln.startswith("@@"):
             # @@ -<a>,<b> +<c>,<d> @@
-            m = re.search(
-                r"-([0-9]+)(?:,([0-9]+))?\s+\+([0-9]+)(?:,([0-9]+))?",
-                ln,
-            )
+            m = re.search(r"-([0-9]+)(?:,([0-9]+))?\s+\+([0-9]+)(?:,([0-9]+))?", ln)
             if not m:
                 continue
             a = int(m.group(1))
