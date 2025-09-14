@@ -26,28 +26,6 @@ def _read_baseline() -> float | None:
         return None
 
 
-def _threshold_with_source() -> tuple[float, str]:
-    """
-    우선순위:
-    1) baseline 파일
-    2) env: COVERAGE_MIN (0.0~1.0 또는 0~100)
-    3) 기본값 0.70
-    """
-    b = _read_baseline()
-    if b is not None:
-        return b, "baseline-file"
-    v = os.getenv("COVERAGE_MIN", "").strip()
-    if v:
-        try:
-            fv = float(v)
-            fv = fv if fv <= 1.0 else fv / 100.0
-            fv = max(0.0, min(1.0, fv))
-            return fv, "env:COVERAGE_MIN"
-        except Exception:
-            pass
-    return 0.70, "default"
-
-
 def _parse_rate(xml_path: Path) -> float:
     if not xml_path.exists():
         raise FileNotFoundError(f"coverage xml not found: {xml_path}")
@@ -70,14 +48,47 @@ def _parse_rate(xml_path: Path) -> float:
     raise ValueError("line coverage rate not found in coverage XML")
 
 
+def _threshold_with_bootstrap(current_rate: float) -> tuple[float, str]:
+    """
+    우선순위:
+    1) baseline 파일이 있으면 → 그 값을 사용 (source='baseline-file')
+    2) env COVERAGE_MIN이 있으면 → 그 값을 사용 (source='env:COVERAGE_MIN')
+    3) 둘 다 없으면 → 현재 커버리지를 baseline으로 "자동 생성"하고 사용 (source='bootstrap')
+       - 파일 기록 실패 시에만 마지막 수단으로 기본 0.70을 사용 (source='default')
+    """
+    b = _read_baseline()
+    if b is not None:
+        return b, "baseline-file"
+
+    v = os.getenv("COVERAGE_MIN", "").strip()
+    if v:
+        try:
+            fv = float(v)
+            fv = fv if fv <= 1.0 else fv / 100.0
+            fv = max(0.0, min(1.0, fv))
+            return fv, "env:COVERAGE_MIN"
+        except Exception:
+            pass
+
+    # 자동 부트스트랩: 현재 커버리지를 기준선으로 파일에 기록
+    try:
+        BASELINE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        BASELINE_FILE.write_text(f"{current_rate:.4f}\n", encoding="utf-8")
+        return current_rate, "bootstrap"
+    except Exception:
+        # 기록 실패 시에만 기본값으로 폴백
+        return 0.70, "default"
+
+
 def main() -> int:
-    thresh, src = _threshold_with_source()
     xml_path = Path("coverage.xml")
     try:
         rate = _parse_rate(xml_path)
     except Exception as e:
         print(f"[coverage-gate] ERROR: {e}", file=sys.stderr)
         return 2
+
+    thresh, src = _threshold_with_bootstrap(rate)
 
     pct = round(rate * 100.0, 2)
     need = round(thresh * 100.0, 2)
@@ -88,6 +99,10 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
+
+    # 부트스트랩 시, 기준선 파일 생성 사실을 출력(참고용)
+    if src == "bootstrap":
+        print(f"[coverage-gate] BOOTSTRAP: baseline created at {need}% -> {BASELINE_FILE}")
 
     print(f"[coverage-gate] OK: {pct}% >= required {need}% ({src})")
     return 0
