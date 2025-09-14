@@ -7,16 +7,16 @@ from pathlib import Path
 from typing import Iterable, List, Tuple
 
 try:
-    import yaml  # type: ignore
+    import yaml
 except Exception as e:  # pragma: no cover
     print(f"[validate_canon] ERROR: pyyaml not installed: {e}", file=sys.stderr)
     raise
 
 # jsonschema는 선택 사항이지만, CI에서는 설치해 사용합니다.
 try:
-    import jsonschema  # type: ignore
+    import jsonschema
 except Exception:
-    jsonschema = None  # CI 외 환경에서도 관용 처리
+    jsonschema = None  # CI가 아닌 환경에서도 동작하도록 관용 처리
 
 MODES = ("grammar", "sentence", "passage")
 
@@ -58,7 +58,6 @@ def _load_schema(root: Path) -> dict:
         if sp.exists():
             if sp.suffix in {".yaml", ".yml"}:
                 return _load_yaml(sp)
-            # JSON의 경우 주석이 있으면 실패하므로 레포에서는 비권장
             return json.loads(sp.read_text(encoding="utf-8"))
     raise FileNotFoundError(
         "schema file not found: _canon.schema.yaml|yml|json under docs/_gpt/modes"
@@ -72,7 +71,7 @@ def _validate_with_schema(root: Path, data: dict) -> List[str]:
         return problems  # 스키마 검증 생략(후속 수동 검증 수행)
     try:
         schema = _load_schema(root)
-        jsonschema.validate(instance=data, schema=schema)  # type: ignore
+        jsonschema.validate(instance=data, schema=schema)
     except Exception as e:
         problems.append(f"schema validation failed: {e}")
     return problems
@@ -129,9 +128,7 @@ def validate_canon(root: Path) -> Tuple[bool, List[str]]:
 
         # 정책 권장: '근거/출처' 존재(필수 혹은 order 내)
         if "근거/출처" not in set(order_l + req_l):
-            problems.append(
-                f"modes.{m}: missing recommended section '근거/출처'"
-            )
+            problems.append("modes.{m}: missing recommended section '근거/출처'")
 
     for k, v in (synonyms or {}).items():
         if not isinstance(k, str) or not isinstance(v, str):
