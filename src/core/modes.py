@@ -1,4 +1,4 @@
-[01] START src/core/modes.py
+#[01] START src/core/modes.py
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, List, Optional
@@ -76,4 +76,4 @@ def find_mode_by_label(label: str) -> Optional[ModeSpec]:
         if m.label == label:
             return m
     return None
-[01] END src/core/modes.py
+#[01] END src/core/modes.py
