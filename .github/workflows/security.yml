@@ -26,7 +26,6 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install pip-audit
 
-      # requirements*.txt가 있으면 그 기준으로, 없으면 현재 환경 검사
       - name: Run pip-audit (requirements)
         if: ${{ hashFiles('**/requirements*.txt') != '' }}
         run: |
@@ -41,12 +40,17 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      pull-requests: read
     steps:
-      - name: Checkout
+      - name: Checkout (full history recommended)
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Gitleaks secret scan
         uses: gitleaks/gitleaks-action@v2
-        with:
-          args: detect --no-banner --redact
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # 조직 계정이 아닌 개인 계정(repo owner가 개인)인 경우 라이선스 불필요
+          # GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
 # [13] END: .github/workflows/security.yml
