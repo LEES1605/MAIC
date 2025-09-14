@@ -1,4 +1,4 @@
-# [06] START: .github/workflows/security.yml
+# [01] START: .github/workflows/security.yml
 name: CI • Security Scans
 
 on:
@@ -40,4 +40,4 @@ jobs:
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-# [06] END: .github/workflows/security.yml
+# [01] END: .github/workflows/security.yml
