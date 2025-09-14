@@ -16,7 +16,8 @@ try:
     from src.modes.profiles import get_profile
     from src.modes.types import Mode
 except Exception as e:  # pragma: no cover
-    raise RuntimeError(f"Failed to import project modules from {SRC}: {e}")
+    # B904: re-raise with explicit chaining to preserve original context
+    raise RuntimeError(f"Failed to import project modules from {SRC}: {e}") from e
 
 OUT = Path("docs/_gpt/_generated/MODES.md")
 
