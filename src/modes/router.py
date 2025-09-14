@@ -1,4 +1,4 @@
-# [02] START: src/modes/router.py
+# [01] START: src/modes/router.py
 from __future__ import annotations
 
 from dataclasses import asdict
@@ -82,6 +82,13 @@ class ModeRouter:
             lines.append(self._sentence_rules_text(profile.extras))
             lines.append("")
 
+        # ⚠️ 테스트 재발 방지: 출력 스키마를 must_do/avoid보다 먼저 출력
+        if profile.sections:
+            lines.append("## 출력 스키마(섹션 순서 고정)")
+            for i, sec in enumerate(profile.sections, 1):
+                lines.append(f"{i}. {sec}")
+            lines.append("")
+
         if profile.must_do:
             lines.append("## 반드시 할 일")
             for item in profile.must_do:
@@ -91,12 +98,6 @@ class ModeRouter:
             lines.append("## 피할 것")
             for item in profile.must_avoid:
                 lines.append(f"- {item}")
-            lines.append("")
-
-        if profile.sections:
-            lines.append("## 출력 스키마(섹션 순서 고정)")
-            for i, sec in enumerate(profile.sections, 1):
-                lines.append(f"{i}. {sec}")
             lines.append("")
 
         lines.append(
@@ -121,4 +122,4 @@ class ModeRouter:
             "context_count": len(bundle.context_fragments),
             "profile": asdict(bundle.profile),
         }
-# [02] END: src/modes/router.py
+# [01] END: src/modes/router.py
