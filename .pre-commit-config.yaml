@@ -1,7 +1,9 @@
+# [03] START: pre-commit-config.yaml
 # ============================ [01] PRE-COMMIT CONFIG — START ============================
 # MAIC: pre-commit hooks (최소 변경 버전)
 # - 기존 훅(ruff/mypy/bandit)은 유지
 # - 로컬에서도 '오탈자 임포트 가드'와 '스모크 테스트(수동)' 추가
+# - 본 패치: SSOT 캐논 검증(canon-validate) 훅 추가
 
 minimum_pre_commit_version: "3.5.0"
 default_stages: [commit]
@@ -48,4 +50,14 @@ repos:
         entry: bash -lc 'set -euo pipefail; PATTERN="src\.intergration|src\.intergratoins|src\.integration\.|src\.integration$"; HITS="$(git grep -nE \"$PATTERN\" -- \":!*.md\" || true)"; if [ -n \"$HITS\" ]; then echo \"Forbidden imports found:\"; echo \"$HITS\"; exit 1; fi'
         language: system
         pass_filenames: false
+
+      # ✅ 추가: SSOT 캐논 설정(_canon.yaml) 검증 훅
+      # - docs/_gpt/modes/_canon.yaml의 스키마/동의어/필수 섹션을 검증
+      # - 실패 시 커밋 차단 → 템플릿/코드 표기 불일치 회귀 방지
+      - id: canon-validate
+        name: Validate _canon.yaml (SSOT)
+        entry: python tools/validate_canon.py
+        language: system
+        pass_filenames: false
 # ============================= [01] PRE-COMMIT CONFIG — END =============================
+# [03] END: pre-commit-config.yaml
