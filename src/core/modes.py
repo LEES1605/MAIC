@@ -1,4 +1,3 @@
-#[01] START src/core/modes.py
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, List, Optional
@@ -32,8 +31,11 @@ MODES: Dict[str, ModeSpec] = {
     "sentence": ModeSpec(
         key="sentence",
         label="문장",
-        # ↓↓↓ 테스트 스펙 충족: "괄호 규칙 라벨 표준"을 goal에 명시적으로 포함
-        goal="사용자 괄호규칙/기타 규칙과 괄호 규칙 라벨 표준에 따른 문장 구조·어감 분석",
+        # 테스트 스펙 충족: "괄호 규칙 라벨 표준"을 goal에 명시적으로 포함
+        goal=(
+            "사용자 괄호규칙/기타 규칙과 괄호 규칙 라벨 표준에 따른 "
+            "문장 구조·어감 분석"
+        ),
         output_shape=["토큰화", "구문(괄호규칙)", "의미해석", "개선 제안(선택)"],
         eval_focus=["규칙 준수", "분석 일관성", "재현성"],
         prompt_rules=[
@@ -76,4 +78,3 @@ def find_mode_by_label(label: str) -> Optional[ModeSpec]:
         if m.label == label:
             return m
     return None
-#[01] END src/core/modes.py
