@@ -1,3 +1,4 @@
+# [P4] START: src/core/modes.py
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, List, Optional
@@ -14,7 +15,7 @@ class ModeSpec:
     enabled: bool = True     # UI 노출 여부
 
 
-# 사용자 규칙/교재명을 환경/시크릿에서 주입할 수도 있음(필요 시 확장).
+# 평가 루브릭용(라우팅은 SSOT 우선)
 MODES: Dict[str, ModeSpec] = {
     "grammar": ModeSpec(
         key="grammar",
@@ -31,7 +32,8 @@ MODES: Dict[str, ModeSpec] = {
     "sentence": ModeSpec(
         key="sentence",
         label="문장",
-        goal="사용자 괄호규칙/기타 규칙에 따른 문장 구조·어감 분석",
+        # ✅ 테스트 스펙과 SSOT에 맞춰 정확 문구 포함
+        goal='사용자 괄호규칙/기타 규칙과 "괄호 규칙 라벨 표준"에 따른 문장 구조·어감 분석',
         output_shape=["토큰화", "구문(괄호규칙)", "의미해석", "개선 제안(선택)"],
         eval_focus=["규칙 준수", "분석 일관성", "재현성"],
         prompt_rules=[
@@ -50,7 +52,6 @@ MODES: Dict[str, ModeSpec] = {
             "문단이 길면 문단별 한 줄 요지 후 전체 요지",
         ],
     ),
-    # 선택 모드(비활성 기본)
     "story": ModeSpec(
         key="story",
         label="이야기",
@@ -74,3 +75,4 @@ def find_mode_by_label(label: str) -> Optional[ModeSpec]:
         if m.label == label:
             return m
     return None
+# [P4] END: src/core/modes.py

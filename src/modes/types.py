@@ -1,10 +1,9 @@
-# src/modes/types.py
 # [01] START: src/modes/types.py (FULL REPLACEMENT)
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 
 class Mode(str, Enum):
@@ -50,7 +49,8 @@ class ModeProfile:
     tone: str = "친절하고 명확하며 단계적인 설명"
     sections: Sequence[str] = field(default_factory=tuple)
     header_template: str = "{title} — {mode_kr}"
-    extras: Dict[str, str] = field(default_factory=dict)
+    # ✅ extras 값을 Any로 확대: str, bool, int, list[str] 등 허용
+    extras: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
