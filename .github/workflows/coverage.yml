@@ -33,9 +33,7 @@ jobs:
         run: |
           pytest -q --cov=src --cov-report=xml
 
-      - name: Enforce minimum coverage (>= 70%)
-        env:
-          COVERAGE_MIN: "0.70"
+      - name: Enforce non-regression coverage (ratchet)
         run: |
           python tools/check_coverage.py
 
