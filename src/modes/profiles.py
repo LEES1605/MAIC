@@ -1,5 +1,4 @@
 # [02] START: src/modes/profiles.py
-
 from __future__ import annotations
 
 from functools import lru_cache
@@ -81,6 +80,7 @@ _BUILTIN: Dict[Mode, ModeProfile] = {
         extras={"mode_kr": "지문설명"},
     ),
 }
+
 
 # ----------------------------- SSOT loaders -----------------------------
 def _safe_load_yaml(path: Path) -> Optional[dict]:
@@ -203,6 +203,7 @@ def get_profile(mode: Mode, *, ssot_root: Optional[Path] = None) -> ModeProfile:
         data = _safe_load_yaml(p)
         if not data:
             continue
+
         d = data.get("modes", {}).get(mode.value) if "modes" in data else data.get(mode.value)
         if not isinstance(d, dict):
             continue
@@ -217,6 +218,7 @@ def get_profile(mode: Mode, *, ssot_root: Optional[Path] = None) -> ModeProfile:
         # 섹션 정규화
         raw_sections = tuple(d.get("sections", _BUILTIN[mode].sections) or ())
         norm_sections = _canon_sections(mode, raw_sections, root=root)
+
         try:
             return ModeProfile(
                 id=str(d.get("id", _BUILTIN[mode].id)),
