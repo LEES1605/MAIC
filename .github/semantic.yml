@@ -1,4 +1,4 @@
-# [02] START: .github/semantic.yml
+# [01] START: .github/semantic.yml
 titleOnly: true
 types:
   - feat
@@ -23,4 +23,4 @@ scopes:
 requireScope: false
 subjectPattern: "^[^ ].{2,98}[^ .]$"
 subjectPatternError: "Subject must be 4..100 chars, no leading space, no trailing dot."
-# [02] END: .github/semantic.yml
+# [01] END: .github/semantic.yml
