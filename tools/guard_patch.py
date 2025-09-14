@@ -67,14 +67,19 @@ def _parse_unified_diff(base: str, head: str, path: str) -> DiffInfo:
     except subprocess.CalledProcessError:
         # Fallback: treat as brand-new file (all lines are added)
         try:
-            after = Path(path).read_text(encoding="utf-8").splitlines()
-            plus = set(range(1, len(after) + 1))
+            after_lines = Path(path).read_text(encoding="utf-8").splitlines()
         except Exception:
-            plus = set()
-        return DiffInfo(plus=plus, minus=set())
+            after_lines = []
+        plus: Set[int]
+        minus: Set[int]
+        plus = set(range(1, len(after_lines) + 1))
+        minus = set()
+        return DiffInfo(plus=plus, minus=minus)
 
-    plus: Set[int] = set()
-    minus: Set[int] = set()
+    plus: Set[int]
+    minus: Set[int]
+    plus = set()
+    minus = set()
     cur_plus = 0
     cur_minus = 0
     for ln in text.splitlines():
