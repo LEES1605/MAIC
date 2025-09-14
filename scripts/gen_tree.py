@@ -1,3 +1,4 @@
+# [01] START: scripts/gen_tree.py
 # ======================= [01] imports & constants ============================
 from __future__ import annotations
 
@@ -394,3 +395,4 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())
+# [01] END: scripts/gen_tree.py

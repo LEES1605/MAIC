@@ -57,3 +57,20 @@ include = ["*"]
 # ===== [06] POETRY SETUP (disable package install of the app) ===============
 [tool.poetry]
 package-mode = false
+
+# [07] START: pyproject.toml (tool.gen_tree)
+[tool.gen_tree]
+# gen_tree 구성은 pyproject.toml에서 중앙화합니다.
+# scripts/gen_tree.py 가 이 섹션을 자동으로 읽습니다.
+
+max_depth = 4
+exclude = [
+  ".git", ".venv", "node_modules", "__pycache__", ".mypy_cache",
+  ".ruff_cache", ".pytest_cache", "dist", "build", ".DS_Store",
+  "*.zip", "*.bin"
+]
+# 보고서는 콤마 또는 리스트 입력 둘 다 인식됩니다.
+reports = "stale,sizes,orphans"
+stale_days = 120
+topn_sizes = 20
+# [05] END: pyproject.toml (tool.gen_tree)
