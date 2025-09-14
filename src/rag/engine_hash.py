@@ -4,7 +4,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from hashlib import blake2b
-from typing import Dict, Iterable, List, Tuple
+from typing import Iterable, List, Tuple
 
 from .engine import RagDoc, RagEngine, RagHit
 
@@ -42,6 +42,13 @@ def _cos(a: List[float], b: List[float]) -> float:
     return float(sum(x * y for x, y in zip(a, b)))
 
 
+def _snippet(text: str) -> str:
+    """긴 본문을 고정 길이로 잘라 스니펫 생성(E501 대응)."""
+    if len(text) > _SNIPPET_LEN:
+        return text[:_SNIPPET_LEN] + "..."
+    return text
+
+
 @dataclass
 class _DocVec:
     doc: RagDoc
@@ -66,9 +73,16 @@ class HashRagEngine(RagEngine):
             s = _cos(qv, dv.vec)
             scored.append((s, dv))
         scored.sort(key=lambda x: x[0], reverse=True)
+
         hits: List[RagHit] = []
         for s, dv in scored[: max(1, k)]:
-            snip = (dv.doc.text[:_SNIPPET_LEN] + "...") if len(dv.doc.text) > _SNIPPET_LEN else dv.doc.text
-            hits.append(RagHit(doc_id=dv.doc.doc_id, score=float(s), title=dv.doc.title, snippet=snip))
+            hits.append(
+                RagHit(
+                    doc_id=dv.doc.doc_id,
+                    score=float(s),
+                    title=dv.doc.title,
+                    snippet=_snippet(dv.doc.text),
+                )
+            )
         return hits
 # [02] END: src/rag/engine_hash.py
