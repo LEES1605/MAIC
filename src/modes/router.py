@@ -1,4 +1,4 @@
-# [P3] START: src/modes/router.py
+# [02] START: src/modes/router.py
 from __future__ import annotations
 
 from dataclasses import asdict
@@ -10,7 +10,7 @@ from .types import Mode, PromptBundle, clamp_fragments, sanitize_source_label
 
 
 class ModeRouter:
-    """mode(enum) -> profile(SSOT or builtin) -> rendered prompt(bundle)"""
+    """mode -> profile(SSOT or builtin) -> rendered prompt(bundle)"""
 
     def __init__(self, *, ssot_root: Optional[Path] = None) -> None:
         self._ssot_root = ssot_root
@@ -32,9 +32,12 @@ class ModeRouter:
         if txt:
             # 보장: 예시가 빠졌다면 추가(테스트 안전)
             if "[S I] [V stayed] [M at home]" not in txt:
-                txt = txt.rstrip() + "\n예시: [S I] [V stayed] [M at home]"
+                txt = txt.rstrip() + "\n" + "예시: [S I] [V stayed] [M at home]"
             return txt
-        return "라벨: [S 주어] [V 동사] [O 목적어] [C 보어] [M 부가]\n예시: [S I] [V stayed] [M at home]"
+        return (
+            "라벨: [S 주어] [V 동사] [O 목적어] [C 보어] [M 부가]\n"
+            "예시: [S I] [V stayed] [M at home]"
+        )
 
     def render_prompt(
         self,
@@ -73,7 +76,7 @@ class ModeRouter:
         lines.append(profile.objective)
         lines.append("")
 
-        # ✅ 근본 해결: Sentence 모드는 규칙 섹션을 항상 포함(SSOT→폴백 순)
+        # Sentence 모드는 규칙 섹션을 항상 포함(SSOT → 폴백 순)
         if mode is Mode.SENTENCE:
             lines.append("## 괄호 규칙 라벨 표준")
             lines.append(self._sentence_rules_text(profile.extras))
@@ -96,7 +99,9 @@ class ModeRouter:
                 lines.append(f"{i}. {sec}")
             lines.append("")
 
-        lines.append("> 위 스키마를 **순서대로** 준수하고, 각 섹션은 간결한 소제목으로 시작하세요.")
+        lines.append(
+            "> 위 스키마를 **순서대로** 준수하고, 각 섹션은 간결한 소제목으로 시작하세요."
+        )
         prompt = "\n".join(lines).strip()
 
         return PromptBundle(
@@ -116,4 +121,4 @@ class ModeRouter:
             "context_count": len(bundle.context_fragments),
             "profile": asdict(bundle.profile),
         }
-# [P3] END: src/modes/router.py
+# [02] END: src/modes/router.py
