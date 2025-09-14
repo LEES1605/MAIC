@@ -1,0 +1,62 @@
+# [RC2] START: .github/workflows/release-cut.yml
+name: Release Cut
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Tag/Version (e.g., v0.2.0)"
+        required: true
+        type: string
+      date:
+        description: "Release date (YYYY-MM-DD; default: today)"
+        required: false
+        type: string
+      prerelease:
+        description: "Mark as pre-release"
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  cut:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write    # tag/release/commit
+      pull-requests: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Update CHANGELOG ([Unreleased] -> ${{ inputs.version }})
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_DATE: ${{ inputs.date }}
+          REPO: ${{ github.repository }}
+        run: |
+          python tools/changelog_release.py
+
+      - name: Commit CHANGELOG
+        uses: EndBug/add-and-commit@v9
+        with:
+          add: "CHANGELOG.md"
+          message: "chore(release): cut ${{ inputs.version }} in CHANGELOG"
+
+      - name: Create Tag & Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.version }}
+          name: ${{ inputs.version }}
+          body_path: CHANGELOG.md
+          prerelease: ${{ inputs.prerelease }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+# [RC2] END: .github/workflows/release-cut.yml
