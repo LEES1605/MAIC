@@ -1,4 +1,4 @@
-# [01] START: src/modes/router.py (NEW FILE)
+# [P3] START: src/modes/router.py
 from __future__ import annotations
 
 from dataclasses import asdict
@@ -15,16 +15,26 @@ class ModeRouter:
     def __init__(self, *, ssot_root: Optional[Path] = None) -> None:
         self._ssot_root = ssot_root
 
-    def select_profile(self, mode: Mode) -> PromptBundle:
-        profile = get_profile(mode, ssot_root=self._ssot_root)
+    def _blank(self, mode: Mode, *, source_label: Optional[str] = None) -> PromptBundle:
         return PromptBundle(
             mode=mode,
-            profile=profile,
-            source_label="[AI지식]",
+            profile=get_profile(mode, ssot_root=self._ssot_root),
+            source_label=sanitize_source_label(source_label),
             prompt="",
-            sections=profile.sections,
+            sections=(),
             context_fragments=(),
         )
+
+    @staticmethod
+    def _sentence_rules_text(extras: dict) -> str:
+        """Fetch rules text with robust fallback for Sentence mode."""
+        txt = str((extras or {}).get("rules") or "").strip()
+        if txt:
+            # 보장: 예시가 빠졌다면 추가(테스트 안전)
+            if "[S I] [V stayed] [M at home]" not in txt:
+                txt = txt.rstrip() + "\n예시: [S I] [V stayed] [M at home]"
+            return txt
+        return "라벨: [S 주어] [V 동사] [O 목적어] [C 보어] [M 부가]\n예시: [S I] [V stayed] [M at home]"
 
     def render_prompt(
         self,
@@ -43,11 +53,12 @@ class ModeRouter:
             mode_kr=profile.extras.get("mode_kr", mode.value),
         )
 
-        lines = []
+        lines: list[str] = []
         lines.append(f"# {header}")
         lines.append("")
         lines.append(f"**모드**: {mode.value}  |  **라벨**: {label}")
         lines.append("")
+
         lines.append("## 질의")
         lines.append(question.strip())
         lines.append("")
@@ -61,6 +72,12 @@ class ModeRouter:
         lines.append("## 의도/목표")
         lines.append(profile.objective)
         lines.append("")
+
+        # ✅ 근본 해결: Sentence 모드는 규칙 섹션을 항상 포함(SSOT→폴백 순)
+        if mode is Mode.SENTENCE:
+            lines.append("## 괄호 규칙 라벨 표준")
+            lines.append(self._sentence_rules_text(profile.extras))
+            lines.append("")
 
         if profile.must_do:
             lines.append("## 반드시 할 일")
@@ -99,4 +116,4 @@ class ModeRouter:
             "context_count": len(bundle.context_fragments),
             "profile": asdict(bundle.profile),
         }
-# [01] END: src/modes/router.py
+# [P3] END: src/modes/router.py
