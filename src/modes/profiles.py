@@ -1,4 +1,4 @@
-# [01] START: src/modes/profiles.py
+# [02] START: src/modes/profiles.py
 from __future__ import annotations
 
 from pathlib import Path
@@ -16,7 +16,8 @@ _BUILTIN: Dict[Mode, ModeProfile] = {
         must_do=("용어는 풀어서 설명", "규칙→예시→반례→요약 순서"),
         must_avoid=("근거 없는 단정",),
         tone="친절하고 명확하며 단계적인 설명",
-        sections=("핵심규칙", "근거(국어↔영어)", "예문", "역예문(선택)", "한 줄 요약"),
+        # ✅ '핵심 규칙'으로 띄어쓰기 수정 (테스트 기대 일치)
+        sections=("핵심 규칙", "근거(국어↔영어)", "예문", "역예문(선택)", "한 줄 요약"),
         header_template="{title} — {mode_kr}",
         extras={"mode_kr": "문법설명"},
     ),
@@ -49,7 +50,8 @@ _BUILTIN: Dict[Mode, ModeProfile] = {
         must_do=("요지→예시→주제→제목 순서",),
         must_avoid=("핵심 누락",),
         tone="친절하고 명확하며 단계적인 설명",
-        sections=("핵심 요지", "쉬운 예시/비유", "주제", "제목", "오답 포인트(선택)"),
+        # ✅ '요지/주제' 항목 포함 (테스트 기대 일치)
+        sections=("요지/주제", "쉬운 예시/비유", "제목", "오답 포인트(선택)"),
         header_template="{title} — {mode_kr}",
         extras={"mode_kr": "지문설명"},
     ),
@@ -114,4 +116,4 @@ def get_profile(mode: Mode, *, ssot_root: Optional[Path] = None) -> ModeProfile:
         except Exception:
             break
     return _BUILTIN[mode]
-# [01] END: src/modes/profiles.py
+# [02] END: src/modes/profiles.py
