@@ -1,10 +1,11 @@
-# [P2] START: src/modes/profiles.py
+# [01] START: src/modes/profiles.py
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Dict, Optional
 
 from .types import Mode, ModeProfile
+
 
 # ----------------------------- Built-in safe defaults -----------------------------
 _BUILTIN: Dict[Mode, ModeProfile] = {
@@ -22,8 +23,11 @@ _BUILTIN: Dict[Mode, ModeProfile] = {
     Mode.SENTENCE: ModeProfile(
         id="sentence.v1",
         title="문장 분석 모드",
-        # ✅ 테스트 스펙 충족을 위해 기본 objective에도 정확 문구 포함
-        objective='문장 구조(S/V/O, 수식어, 절·구문)를 "괄호 규칙"과 "괄호 규칙 라벨 표준"에 따라 설명',
+        # 테스트 스펙 충족: 정확 문구를 기본 objective에도 포함
+        objective=(
+            '문장 구조(S/V/O, 수식어, 절·구문)를 "괄호 규칙"과 '
+            '"괄호 규칙 라벨 표준"에 따라 설명'
+        ),
         must_do=("S/V/O/C/M 라벨링", "근거·출처 요약"),
         must_avoid=("근거 없는 라벨링",),
         tone="친절하고 명확하며 단계적인 설명",
@@ -31,8 +35,11 @@ _BUILTIN: Dict[Mode, ModeProfile] = {
         header_template="{title} — {mode_kr}",
         extras={
             "mode_kr": "문장분석",
-            # ✅ YAML에 rules가 없을 때 사용할 폴백
-            "rules": "라벨: [S 주어] [V 동사] [O 목적어] [C 보어] [M 부가]\n예시: [S I] [V stayed] [M at home]",
+            # YAML에 rules가 없을 때 사용할 폴백
+            "rules": (
+                "라벨: [S 주어] [V 동사] [O 목적어] [C 보어] [M 부가]\n"
+                "예시: [S I] [V stayed] [M at home]"
+            ),
         },
     ),
     Mode.PASSAGE: ModeProfile(
@@ -66,6 +73,7 @@ def _try_load_yaml(path: Path) -> Optional[dict]:
 def get_profile(mode: Mode, *, ssot_root: Optional[Path] = None) -> ModeProfile:
     """
     Returns a ModeProfile from SSOT(docs/_gpt) if present; otherwise built-in.
+
     SSOT candidates:
       - docs/_gpt/modes/{mode}.yaml
       - docs/_gpt/prompts.modes.yaml (or .yml)
@@ -84,7 +92,7 @@ def get_profile(mode: Mode, *, ssot_root: Optional[Path] = None) -> ModeProfile:
         if not isinstance(d, dict):
             continue
 
-        # ----- merge extras + bring top-level 'rules' into extras -----
+        # merge extras + bring top-level 'rules' into extras
         base_extras = dict(_BUILTIN[mode].extras or {})
         yaml_extras = dict(d.get("extras") or {})
         if "rules" in d and d["rules"] is not None:
@@ -106,4 +114,4 @@ def get_profile(mode: Mode, *, ssot_root: Optional[Path] = None) -> ModeProfile:
         except Exception:
             break
     return _BUILTIN[mode]
-# [P2] END: src/modes/profiles.py
+# [01] END: src/modes/profiles.py
