@@ -1,0 +1,23 @@
+# [01] START: .github/workflows/pr-title.yml
+name: CI • PR Title (Conventional)
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  pr-title:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+      statuses: write
+    steps:
+      - name: Validate PR title (Conventional Commits)
+        uses: amannn/action-semantic-pull-request@v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # types/scopes는 .github/semantic.yml에서 로드
+          # subjectPattern도 그 파일에서 규정
+          validateSingleCommit: true
+# [01] END: .github/workflows/pr-title.yml
