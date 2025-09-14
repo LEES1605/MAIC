@@ -1,0 +1,3 @@
+# [11B] START: tools/coverage_baseline.txt
+0.3671
+# [11B] END: tools/coverage_baseline.txt
