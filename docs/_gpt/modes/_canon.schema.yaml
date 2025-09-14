@@ -1,0 +1,49 @@
+# [01] START: docs/_gpt/modes/_canon.schema.yaml
+# JSON Schema (in YAML) for _canon.yaml
+# - YAML은 주석 허용 → 숫자구획 주석 사용 가능
+# - 검증기는 YAML을 dict로 로드해 jsonschema.validate()에 전달
+
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "https://maic.local/schemas/modes_canon.schema.json"
+title: "MAIC Modes Canon Schema"
+type: object
+additionalProperties: false
+
+properties:
+  modes:
+    type: object
+    additionalProperties: false
+    properties:
+      grammar: { $ref: "#/$defs/mode" }
+      sentence: { $ref: "#/$defs/mode" }
+      passage: { $ref: "#/$defs/mode" }
+    required: [grammar, sentence, passage]
+
+  synonyms:
+    type: object
+    additionalProperties:
+      type: string
+      minLength: 1
+    propertyNames:
+      type: string
+      minLength: 1
+
+required: [modes]
+
+$defs:
+  mode:
+    type: object
+    additionalProperties: false
+    properties:
+      order:
+        type: array
+        items: { type: string, minLength: 1 }
+        minItems: 1
+        uniqueItems: false
+      required:
+        type: array
+        items: { type: string, minLength: 1 }
+        minItems: 0
+        uniqueItems: false
+    required: [order]
+# [01] END: docs/_gpt/modes/_canon.schema.yaml
