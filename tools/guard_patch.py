@@ -8,15 +8,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
-# Monitored extensions (keep narrow)
+# Monitored extensions
 MONITORED_EXTS = {".py", ".md", ".yaml", ".yml"}
 
 # Numeric block markers: "# [NN] ... START/END" or "<!-- [NN] ... START/END -->"
 START_RE = re.compile(r"^\s*(#|<!--)\s*\[(\d{2,3})\].*START", re.IGNORECASE)
 END_RE = re.compile(r"^\s*(#|<!--)\s*\[(\d{2,3})\].*END", re.IGNORECASE)
 
-# No-Ellipsis Gate: detect Unicode ellipsis (U+2026) in added lines
-# IMPORTANT: do not put the literal ellipsis in source; build from code point.
+# No-Ellipsis Gate: build regex from code point (do not place literal ellipsis)
 NO_ELLIPSIS_RE = re.compile(chr(0x2026))
 
 
@@ -59,33 +58,41 @@ class DiffInfo:
 def _parse_unified_diff(base: str, head: str, path: str) -> DiffInfo:
     """
     Parse 'git diff --unified=0 base..head -- path'.
-    If 'git diff' fails (e.g., brand-new file), fall back to treating the
-    whole AFTER file content as added lines.
+    If diff fails (e.g., brand-new file), fall back to "all lines added".
     """
     try:
-        text = _run("git", "diff", "--unified=0", "--no-color", f"{base}..{head}", "--", path)
+        text = _run(
+            "git",
+            "diff",
+            "--unified=0",
+            "--no-color",
+            f"{base}..{head}",
+            "--",
+            path,
+        )
     except subprocess.CalledProcessError:
-        # Fallback: treat as brand-new file (all lines are added)
+        # New file fallback: treat every line in AFTER as added
         try:
             after_lines = Path(path).read_text(encoding="utf-8").splitlines()
         except Exception:
             after_lines = []
-        plus: Set[int]
-        minus: Set[int]
         plus = set(range(1, len(after_lines) + 1))
         minus = set()
         return DiffInfo(plus=plus, minus=minus)
 
-    plus: Set[int]
-    minus: Set[int]
-    plus = set()
-    minus = set()
+    # One typed declaration per name (mypy no-redef safe)
+    plus: Set[int] = set()
+    minus: Set[int] = set()
     cur_plus = 0
     cur_minus = 0
+
     for ln in text.splitlines():
         if ln.startswith("@@"):
             # @@ -<a>,<b> +<c>,<d> @@
-            m = re.search(r"-([0-9]+)(?:,([0-9]+))?\s+\+([0-9]+)(?:,([0-9]+))?", ln)
+            m = re.search(
+                r"-([0-9]+)(?:,([0-9]+))?\s+\+([0-9]+)(?:,([0-9]+))?",
+                ln,
+            )
             if not m:
                 continue
             a = int(m.group(1))
@@ -93,19 +100,24 @@ def _parse_unified_diff(base: str, head: str, path: str) -> DiffInfo:
             cur_minus = a
             cur_plus = c
             continue
+
         if ln.startswith("---") or ln.startswith("+++") or ln == "":
             continue
+
         if ln.startswith("+"):
             plus.add(cur_plus)
             cur_plus += 1
             continue
+
         if ln.startswith("-"):
             minus.add(cur_minus)
             cur_minus += 1
             continue
-        # context line: increments both
+
+        # context line
         cur_plus += 1
         cur_minus += 1
+
     return DiffInfo(plus=plus, minus=minus)
 
 
@@ -125,7 +137,9 @@ def _parse_blocks(text: str) -> List[Block]:
                 raise ValueError(f"END without START at line {i}")
             start_num, start_ln = stack.pop()
             if start_num != num:
-                raise ValueError(f"Mismatched block numbers: {start_num}..{num} at line {i}")
+                raise ValueError(
+                    f"Mismatched block numbers: {start_num}..{num} at line {i}"
+                )
             blocks.append(Block(num=num, start=start_ln, end=i))
     if stack:
         raise ValueError("Unclosed START block(s) at EOF")
@@ -165,7 +179,7 @@ def _guard_file(path: str, base: str, head: str) -> List[str]:
     before = _read_at_commit(base, path)
     after = Path(path).read_text(encoding="utf-8") if Path(path).exists() else ""
 
-    # Parse blocks (ignore if file had no blocks before/after)
+    # Parse blocks
     try:
         blocks_before = _parse_blocks(before) if before else []
         blocks_after = _parse_blocks(after) if after else []
@@ -178,25 +192,25 @@ def _guard_file(path: str, base: str, head: str) -> List[str]:
 
     # (2) whole-block replace rule (additions)
     after_lines = _line_map(after)
-    touched_after_blocks: Set[int] = set()
+    touched_after: Set[int] = set()
     for ln_no in sorted(diff.plus):
         b = _block_of(ln_no, blocks_after)
         if b:
-            touched_after_blocks.add(b.num)
-    for num in sorted(touched_after_blocks):
+            touched_after.add(b.num)
+    for num in sorted(touched_after):
         b = next(x for x in blocks_after if x.num == num)
         if b.start not in diff.plus or b.end not in diff.plus:
             probs.append(
-                f"{path}: block [{b.num}] changed without touching START/END (need whole-block)"
+                f"{path}: block [{b.num}] changed without START/END (need whole-block)"
             )
 
     # (3) whole-block delete rule (deletions)
-    touched_before_blocks: Set[int] = set()
+    touched_before: Set[int] = set()
     for ln_no in sorted(diff.minus):
         b = _block_of(ln_no, blocks_before)
         if b:
-            touched_before_blocks.add(b.num)
-    for num in sorted(touched_before_blocks):
+            touched_before.add(b.num)
+    for num in sorted(touched_before):
         b = next(x for x in blocks_before if x.num == num)
         if b.start not in diff.minus or b.end not in diff.minus:
             probs.append(
@@ -207,7 +221,9 @@ def _guard_file(path: str, base: str, head: str) -> List[str]:
     for ln_no in diff.plus:
         txt = after_lines.get(ln_no, "")
         if NO_ELLIPSIS_RE.search(txt):
-            probs.append(f"{path}:{ln_no}: contains Unicode ellipsis (U+2026) - forbidden")
+            probs.append(
+                f"{path}:{ln_no}: contains Unicode ellipsis (U+2026) - forbidden"
+            )
 
     return probs
 
@@ -228,6 +244,7 @@ def main() -> int:
         for p in problems:
             print(" -", p)
         return 1
+
     print("[patch-guard] OK")
     return 0
 
