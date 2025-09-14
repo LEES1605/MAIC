@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        engine: [hash, disabled]
+        engine: [hash, bm25, disabled]
 
     steps:
       - name: Checkout
@@ -32,5 +32,5 @@ jobs:
         env:
           MAIC_RAG_ENGINE: ${{ matrix.engine }}
         run: |
-          pytest -q -k rag_engine_toggle
+          pytest -q -k rag_engine_toggle or -k rag_engine_bm25
 # [06] END: .github/workflows/rag-fixture.yml
