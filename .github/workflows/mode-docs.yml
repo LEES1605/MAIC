@@ -26,6 +26,8 @@ jobs:
           python -m pip install pyyaml
 
       - name: Generate docs
+        env:
+          PYTHONPATH: ${{ github.workspace }}/src
         run: |
           python tools/generate_mode_docs.py
 
