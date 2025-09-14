@@ -1,22 +1,26 @@
-# [01] START: src/modes/profiles.py
+# [02] START: src/modes/profiles.py
 from __future__ import annotations
 
+from functools import lru_cache
 from pathlib import Path
 from typing import Dict, Iterable, Optional, Tuple
 
 from .types import Mode, ModeProfile
 
 
-# ----------------------------- Canonical schema -----------------------------
-# 모드별 표준 섹션 순서(=최종 출력 순서)
-_CANON_ORDER: Dict[Mode, Tuple[str, ...]] = {
+# ----------------------------- Fallback canonical schema -----------------------------
+# SSOT(_canon.yaml)이 없거나 파싱 실패 시 사용할 "내장 표준"
+_FALLBACK_ORDER: Dict[Mode, Tuple[str, ...]] = {
     Mode.GRAMMAR: ("핵심 규칙", "근거/출처", "예문", "역예문(선택)", "한 줄 요약"),
     Mode.SENTENCE: ("원문", "구조 분석(괄호 규칙)", "어휘·표현", "해석", "요약", "근거/출처"),
     Mode.PASSAGE: ("요지/주제", "쉬운 예시/비유", "제목", "오답 포인트(선택)", "근거/출처"),
 }
-
-# 섹션 동의어 → 표준명 매핑
-_SYNONYM_MAP: Dict[str, str] = {
+_FALLBACK_REQUIRED: Dict[Mode, Tuple[str, ...]] = {
+    Mode.GRAMMAR: ("근거/출처",),
+    Mode.SENTENCE: ("근거/출처",),
+    Mode.PASSAGE: ("근거/출처",),
+}
+_FALLBACK_SYNONYMS: Dict[str, str] = {
     # Grammar
     "핵심규칙": "핵심 규칙",
     "근거(국어↔영어)": "근거/출처",
@@ -26,45 +30,10 @@ _SYNONYM_MAP: Dict[str, str] = {
     # Passage
     "핵심 요지": "요지/주제",
     "요지": "요지/주제",
-    # 공통: 불규칙 공백 대응 등은 호출부에서 strip 처리됨
 }
 
 
-def _canon_sections(mode: Mode, sections: Iterable[str]) -> Tuple[str, ...]:
-    """동의어를 표준명으로 치환하고, 필수 섹션 보강 + 표준 순서로 정렬."""
-    # 1) 동의어 치환
-    mapped: list[str] = []
-    for s in sections or ():
-        s = (s or "").strip()
-        mapped.append(_SYNONYM_MAP.get(s, s))
-
-    # 2) 필수 섹션 보강: '근거/출처'는 항상 포함
-    if "근거/출처" not in mapped:
-        mapped.append("근거/출처")
-
-    # 3) 표준 순서로 정렬(중복 제거)
-    order = _CANON_ORDER.get(mode, ())
-    seen: set[str] = set()
-    result: list[str] = []
-    if order:
-        for name in order:
-            if name in mapped and name not in seen:
-                result.append(name)
-                seen.add(name)
-        # 표준 목록에 없지만 사용자가 추가한 섹션이 있다면, 순서 뒤에 보존
-        for name in mapped:
-            if name not in seen:
-                result.append(name)
-                seen.add(name)
-    else:
-        for name in mapped:
-            if name not in seen:
-                result.append(name)
-                seen.add(name)
-    return tuple(result)
-
-
-# ----------------------------- Built-in safe defaults -----------------------------
+# ----------------------------- Built-in safe defaults (profiles) -----------------------------
 _BUILTIN: Dict[Mode, ModeProfile] = {
     Mode.GRAMMAR: ModeProfile(
         id="grammar.v1",
@@ -73,7 +42,6 @@ _BUILTIN: Dict[Mode, ModeProfile] = {
         must_do=("용어는 풀어서 설명", "규칙→예시→반례→요약 순서"),
         must_avoid=("근거 없는 단정",),
         tone="친절하고 명확하며 단계적인 설명",
-        # ✅ 표준화: 테스트 기대와 동일한 섹션명 사용
         sections=("핵심 규칙", "근거/출처", "예문", "역예문(선택)", "한 줄 요약"),
         header_template="{title} — {mode_kr}",
         extras={"mode_kr": "문법설명"},
@@ -107,7 +75,6 @@ _BUILTIN: Dict[Mode, ModeProfile] = {
         must_do=("요지→예시→주제→제목 순서",),
         must_avoid=("핵심 누락",),
         tone="친절하고 명확하며 단계적인 설명",
-        # ✅ 표준화: '요지/주제' 및 '근거/출처' 포함
         sections=("요지/주제", "쉬운 예시/비유", "제목", "오답 포인트(선택)", "근거/출처"),
         header_template="{title} — {mode_kr}",
         extras={"mode_kr": "지문설명"},
@@ -115,7 +82,8 @@ _BUILTIN: Dict[Mode, ModeProfile] = {
 }
 
 
-def _try_load_yaml(path: Path) -> Optional[dict]:
+# ----------------------------- SSOT loaders -----------------------------
+def _safe_load_yaml(path: Path) -> Optional[dict]:
     if not path.exists():
         return None
     try:
@@ -129,6 +97,91 @@ def _try_load_yaml(path: Path) -> Optional[dict]:
         return None
 
 
+@lru_cache(maxsize=1)
+def _load_canon(root_str: str) -> dict:
+    """
+    SSOT _canon.yaml 로딩(1회 캐시).
+    반환 스키마:
+    {
+      "order": {mode_str: [..]},
+      "required": {mode_str: [..]},
+      "synonyms": {from: to}
+    }
+    """
+    root = Path(root_str)
+    data = _safe_load_yaml(root / "modes" / "_canon.yaml") or {}
+    modes = data.get("modes") or {}
+    syns = data.get("synonyms") or {}
+
+    def _mode_key(m: Mode) -> str:
+        return m.value if hasattr(m, "value") else str(m)
+
+    order = {}
+    required = {}
+    for m in (Mode.GRAMMAR, Mode.SENTENCE, Mode.PASSAGE):
+        key = _mode_key(m)
+        mconf = modes.get(key) or {}
+        order[key] = tuple(map(str, (mconf.get("order") or ())))
+        required[key] = tuple(map(str, (mconf.get("required") or ())))
+
+    return {
+        "order": order,
+        "required": {k: tuple(v) for k, v in required.items()},
+        "synonyms": {str(k): str(v) for k, v in (syns.items() if isinstance(syns, dict) else {})},
+    }
+
+
+def _canon_sections(
+    mode: Mode,
+    sections: Iterable[str],
+    *,
+    root: Path,
+) -> Tuple[str, ...]:
+    """
+    동의어를 표준명으로 치환하고, 필수 섹션 보강 + 표준 순서로 정렬.
+    설정파일(_canon.yaml)을 우선 사용하고, 부재 시 내장 표준으로 폴백합니다.
+    """
+    conf = _load_canon(str(root))
+    syn = conf.get("synonyms") or _FALLBACK_SYNONYMS
+    order_map = conf.get("order") or {}
+    req_map = conf.get("required") or {}
+
+    mode_key = mode.value if hasattr(mode, "value") else str(mode)
+    want_order = tuple(order_map.get(mode_key) or _FALLBACK_ORDER.get(mode, ()))
+    must_have = set(req_map.get(mode_key) or _FALLBACK_REQUIRED.get(mode, ()))
+
+    # 1) 동의어 치환 + strip
+    mapped: list[str] = []
+    for s in sections or ():
+        s2 = (s or "").strip()
+        mapped.append(syn.get(s2, s2))
+
+    # 2) 필수 섹션 보강
+    for req in must_have:
+        if req not in mapped:
+            mapped.append(req)
+
+    # 3) 표준 순서 정렬 + 중복 제거
+    seen: set[str] = set()
+    result: list[str] = []
+    if want_order:
+        for name in want_order:
+            if name in mapped and name not in seen:
+                result.append(name)
+                seen.add(name)
+        for name in mapped:
+            if name not in seen:
+                result.append(name)
+                seen.add(name)
+    else:
+        for name in mapped:
+            if name not in seen:
+                result.append(name)
+                seen.add(name)
+    return tuple(result)
+
+
+# ----------------------------- Public API -----------------------------
 def get_profile(mode: Mode, *, ssot_root: Optional[Path] = None) -> ModeProfile:
     """
     Returns a ModeProfile from SSOT(docs/_gpt) if present; otherwise built-in.
@@ -136,31 +189,35 @@ def get_profile(mode: Mode, *, ssot_root: Optional[Path] = None) -> ModeProfile:
     SSOT candidates:
       - docs/_gpt/modes/{mode}.yaml
       - docs/_gpt/prompts.modes.yaml (or .yml)
+      - docs/_gpt/modes/_canon.yaml (정규화 규칙)
     """
     root = ssot_root or Path("docs/_gpt")
+
+    # 1) SSOT 템플릿 로딩(선택)
     candidates = [
         root / "modes" / f"{mode.value}.yaml",
         root / "prompts.modes.yaml",
         root / "prompts.modes.yml",
     ]
     for p in candidates:
-        data = _try_load_yaml(p)
+        data = _safe_load_yaml(p)
         if not data:
             continue
+
         d = data.get("modes", {}).get(mode.value) if "modes" in data else data.get(mode.value)
         if not isinstance(d, dict):
             continue
 
-        # merge extras + bring top-level 'rules' into extras
+        # extras 병합 (+ rules 상향)
         base_extras = dict(_BUILTIN[mode].extras or {})
         yaml_extras = dict(d.get("extras") or {})
         if "rules" in d and d["rules"] is not None:
             yaml_extras["rules"] = str(d["rules"])
         extras = {**base_extras, **yaml_extras}
 
-        # sections 정규화
+        # 섹션 정규화
         raw_sections = tuple(d.get("sections", _BUILTIN[mode].sections) or ())
-        norm_sections = _canon_sections(mode, raw_sections)
+        norm_sections = _canon_sections(mode, raw_sections, root=root)
 
         try:
             return ModeProfile(
@@ -177,7 +234,7 @@ def get_profile(mode: Mode, *, ssot_root: Optional[Path] = None) -> ModeProfile:
         except Exception:
             break
 
-    # 폴백: 내장 프로필도 정규화 후 반환
+    # 2) 폴백: 내장 프로필 + 정규화 적용
     b = _BUILTIN[mode]
     return ModeProfile(
         id=b.id,
@@ -186,8 +243,8 @@ def get_profile(mode: Mode, *, ssot_root: Optional[Path] = None) -> ModeProfile:
         must_do=b.must_do,
         must_avoid=b.must_avoid,
         tone=b.tone,
-        sections=_canon_sections(mode, b.sections),
+        sections=_canon_sections(mode, b.sections, root=root),
         header_template=b.header_template,
         extras=b.extras,
     )
-# [01] END: src/modes/profiles.py
+# [02] END: src/modes/profiles.py
