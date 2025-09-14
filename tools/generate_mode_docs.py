@@ -5,19 +5,20 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-# --- Make 'src' importable in CI and script contexts -------------------------
+# --- Make project modules importable in CI/script contexts -------------------
 # Repository layout uses a top-level `src/` directory for project modules.
+# IMPORTANT: To import `src.*`, Python must see the **repository root** on sys.path,
+# not the `src/` directory itself. (Otherwise it would look for `src/src/...`)
 ROOT = Path(__file__).resolve().parent.parent  # <repo-root>
-SRC = ROOT / "src"
-if SRC.exists():
-    sys.path.insert(0, str(SRC))
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 try:
     from src.modes.profiles import get_profile
     from src.modes.types import Mode
 except Exception as e:  # pragma: no cover
     # B904: re-raise with explicit chaining to preserve original context
-    raise RuntimeError(f"Failed to import project modules from {SRC}: {e}") from e
+    raise RuntimeError(f"Failed to import project modules from ROOT={ROOT}: {e}") from e
 
 OUT = Path("docs/_gpt/_generated/MODES.md")
 
