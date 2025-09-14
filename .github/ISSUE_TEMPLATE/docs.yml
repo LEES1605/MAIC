@@ -4,7 +4,7 @@ description: "문서 개선"
 labels: ["docs"]
 body:
   - type: dropdown
-    id: doc_area
+    id: docs_area
     attributes:
       label: 문서 영역
       options:
@@ -15,8 +15,9 @@ body:
         - 기타
     validations:
       required: true
+
   - type: textarea
-    id: change
+    id: docs_change
     attributes:
       label: 수정 제안
       description: 변경 전/후를 비교해서 간단히 적어 주세요.
