@@ -1,5 +1,4 @@
-[01] START: docs/_gpt/modes/sentence.yaml
-# [01] START: docs/_gpt/modes/sentence.yaml (NEW FILE)
+# [P1] START: docs/_gpt/modes/sentence.yaml
 id: sentence.ssot.v1
 title: 문장 분석 모드
 objective: >
@@ -43,28 +42,11 @@ teacher_notes:
   - "括弧 규칙 설명은 예시와 함께 짧고 명확하게"
   - "문장 길이가 길면 절·구문 단위로 분해"
   - "의도/목표를 재확인하며 불필요한 우회 설명 제거"
-review_checklist:
-  - "라벨링 일관성(S/V/O/C/M)"
-  - "수식어/전치사구 처리 정확성"
-  - "괄호 규칙 준수 여부"
-  - "해석의 자연스러움"
-  - "근거/출처 명시 여부"
-llm_prompts:
-  system: |
-    너는 영어 문장을 구조적으로 분석하고 학습자 친화적으로 설명하는 튜터다.
-    아래 템플릿의 섹션 순서와 라벨링 규칙을 반드시 지키고, 근거를 간결히 제시하라.
-  user_template: |
-    # 문장 분석 요청
-    문장: "{question}"
-
-    ## 지시
-    - 아래 섹션 순서를 정확히 따르라.
-    - 라벨 표준: S(주어)/V(동사)/O(목적어)/C(보어)/M(부가)
-    - 괄호 표기: [명사적] {형용사적} <부사적> (전치사구)
-developer_notes:
-  - "지침이 모호하거나 다의적이면 질문 권장(수업 흐름상 기본은 자동 진행)"
-  - "정확성 기준을 엄격히 유지하고, 불확실성은 솔직히 고지"
+# 라우터가 프롬프트에 포함할 규칙(필수 문구/예시 포함)
 rules: |
+  라벨: [S 주어] [V 동사] [O 목적어] [C 보어] [M 부가]
+  예시: [S I] [V stayed] [M at home]
+
   [명사적], {형용사적}, <부사적>, (전치사구) 표기 지침:
     - 명사적 용법(준동사/절): 대괄호 []
     - 형용사적 용법(구/절 & 단독 분사 수식): 중괄호 {}
@@ -83,5 +65,4 @@ rules: |
 sources_and_evidence: |
   - 필요한 경우 최근 10년 TOEFL/IELTS 지문 문장 예시를 참고하되, 인용은 간결히.
   - 모든 주장에는 근거를 제시하고, 불확실하면 범위를 명시.
-# [01] END: docs/_gpt/modes/sentence.yaml
-[01] END: docs/_gpt/modes/sentence.yaml
+# [P1] END: docs/_gpt/modes/sentence.yaml
