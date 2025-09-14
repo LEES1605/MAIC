@@ -6,14 +6,18 @@ import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
-
+# Monitored extensions (keep narrow)
 MONITORED_EXTS = {".py", ".md", ".yaml", ".yml"}
+
+# Numeric block markers: "# [NN] ... START/END" or "<!-- [NN] ... START/END -->"
 START_RE = re.compile(r"^\s*(#|<!--)\s*\[(\d{2,3})\].*START", re.IGNORECASE)
 END_RE = re.compile(r"^\s*(#|<!--)\s*\[(\d{2,3})\].*END", re.IGNORECASE)
-# CHANGELOG 기조에 맞춘 No‑Ellipsis Gate
-NO_ELLIPSIS_RE = re.compile(r"…")  # Unicode ellipsis
+
+# No-Ellipsis Gate: detect Unicode ellipsis (U+2026) in added lines
+# IMPORTANT: do not put the literal ellipsis in source; build from code point.
+NO_ELLIPSIS_RE = re.compile(chr(0x2026))
 
 
 @dataclass(frozen=True)
@@ -46,53 +50,29 @@ def _read_at_commit(commit: str, path: str) -> str:
     return _run("git", "show", f"{commit}:{path}")
 
 
-def _parse_blocks(text: str) -> List[Block]:
-    blocks: List[Block] = []
-    stack: List[Tuple[int, int]] = []  # (num, start_line)
-    for i, ln in enumerate(text.splitlines(), 1):
-        s = START_RE.match(ln)
-        if s:
-            num = int(s.group(2))
-            stack.append((num, i))
-            continue
-        e = END_RE.match(ln)
-        if e:
-            num = int(e.group(2))
-            if not stack:
-                raise ValueError(f"END without START at line {i}")
-            start_num, start_ln = stack.pop()
-            if start_num != num:
-                raise ValueError(
-                    f"Mismatched block numbers: {start_num}..{num} at line {i}"
-                )
-            blocks.append(Block(num=num, start=start_ln, end=i))
-    if stack:
-        raise ValueError("Unclosed START block(s) at EOF")
-    return sorted(blocks, key=lambda b: b.start)
-
-
-def _check_numbering(blocks: List[Block]) -> List[str]:
-    probs: List[str] = []
-    expect = 1
-    for b in blocks:
-        if b.num != expect:
-            probs.append(f"non-sequential block number: got {b.num}, expect {expect}")
-            expect = b.num + 1
-        else:
-            expect += 1
-    return probs
-
-
 @dataclass
 class DiffInfo:
-    plus: Set[int]   # changed line numbers in AFTER file
-    minus: Set[int]  # changed line numbers in BEFORE file
+    plus: Set[int]   # added/changed line numbers in AFTER file
+    minus: Set[int]  # removed/changed line numbers in BEFORE file
 
 
 def _parse_unified_diff(base: str, head: str, path: str) -> DiffInfo:
-    text = _run(
-        "git", "diff", "--unified=0", "--no-color", f"{base}..{head}", "--", path
-    )
+    """
+    Parse 'git diff --unified=0 base..head -- path'.
+    If 'git diff' fails (e.g., brand-new file), fall back to treating the
+    whole AFTER file content as added lines.
+    """
+    try:
+        text = _run("git", "diff", "--unified=0", "--no-color", f"{base}..{head}", "--", path)
+    except subprocess.CalledProcessError:
+        # Fallback: treat as brand-new file (all lines are added)
+        try:
+            after = Path(path).read_text(encoding="utf-8").splitlines()
+            plus = set(range(1, len(after) + 1))
+        except Exception:
+            plus = set()
+        return DiffInfo(plus=plus, minus=set())
+
     plus: Set[int] = set()
     minus: Set[int] = set()
     cur_plus = 0
@@ -124,6 +104,41 @@ def _parse_unified_diff(base: str, head: str, path: str) -> DiffInfo:
     return DiffInfo(plus=plus, minus=minus)
 
 
+def _parse_blocks(text: str) -> List[Block]:
+    blocks: List[Block] = []
+    stack: List[Tuple[int, int]] = []  # (num, start_line)
+    for i, ln in enumerate(text.splitlines(), 1):
+        s = START_RE.match(ln)
+        if s:
+            num = int(s.group(2))
+            stack.append((num, i))
+            continue
+        e = END_RE.match(ln)
+        if e:
+            num = int(e.group(2))
+            if not stack:
+                raise ValueError(f"END without START at line {i}")
+            start_num, start_ln = stack.pop()
+            if start_num != num:
+                raise ValueError(f"Mismatched block numbers: {start_num}..{num} at line {i}")
+            blocks.append(Block(num=num, start=start_ln, end=i))
+    if stack:
+        raise ValueError("Unclosed START block(s) at EOF")
+    return sorted(blocks, key=lambda b: b.start)
+
+
+def _check_numbering(blocks: List[Block]) -> List[str]:
+    probs: List[str] = []
+    expect = 1
+    for b in blocks:
+        if b.num != expect:
+            probs.append(f"non-sequential block number: got {b.num}, expect {expect}")
+            expect = b.num + 1
+        else:
+            expect += 1
+    return probs
+
+
 def _line_map(text: str) -> Dict[int, str]:
     return {i: ln for i, ln in enumerate(text.splitlines(), 1)}
 
@@ -145,7 +160,7 @@ def _guard_file(path: str, base: str, head: str) -> List[str]:
     before = _read_at_commit(base, path)
     after = Path(path).read_text(encoding="utf-8") if Path(path).exists() else ""
 
-    # Parse blocks
+    # Parse blocks (ignore if file had no blocks before/after)
     try:
         blocks_before = _parse_blocks(before) if before else []
         blocks_after = _parse_blocks(after) if after else []
@@ -153,10 +168,10 @@ def _guard_file(path: str, base: str, head: str) -> List[str]:
         probs.append(f"{path}: block parse error: {e}")
         return probs
 
-    # 1) numbering check (after)
+    # (1) numbering check (after)
     probs.extend(f"{path}: {p}" for p in _check_numbering(blocks_after))
 
-    # 2) “whole-block replace” rule (additions)
+    # (2) whole-block replace rule (additions)
     after_lines = _line_map(after)
     touched_after_blocks: Set[int] = set()
     for ln_no in sorted(diff.plus):
@@ -167,13 +182,10 @@ def _guard_file(path: str, base: str, head: str) -> List[str]:
         b = next(x for x in blocks_after if x.num == num)
         if b.start not in diff.plus or b.end not in diff.plus:
             probs.append(
-                (
-                    f"{path}: block [{b.num}] changed without touching START/END "
-                    f"(require whole-block replace)"
-                )
+                f"{path}: block [{b.num}] changed without touching START/END (need whole-block)"
             )
 
-    # 3) “whole-block delete” rule (deletions)
+    # (3) whole-block delete rule (deletions)
     touched_before_blocks: Set[int] = set()
     for ln_no in sorted(diff.minus):
         b = _block_of(ln_no, blocks_before)
@@ -186,11 +198,11 @@ def _guard_file(path: str, base: str, head: str) -> List[str]:
                 f"{path}: block [{b.num}] deletion touches inside lines without START/END"
             )
 
-    # 4) No‑Ellipsis Gate (added lines)
+    # (4) No-Ellipsis Gate (added lines)
     for ln_no in diff.plus:
         txt = after_lines.get(ln_no, "")
         if NO_ELLIPSIS_RE.search(txt):
-            probs.append(f"{path}:{ln_no}: contains Unicode ellipsis (…) — forbidden")
+            probs.append(f"{path}:{ln_no}: contains Unicode ellipsis (U+2026) - forbidden")
 
     return probs
 
