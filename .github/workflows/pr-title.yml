@@ -2,33 +2,35 @@
 name: CI • PR Title (Conventional, auto-fix)
 
 on:
-  pull_request:
+  # PR 이벤트에서 무조건 트리거되도록 target 사용(포크/권한 이슈 회피)
+  pull_request_target:
     types: [opened, edited, synchronize, reopened]
+  # 수동 실행 시 특정 PR 번호로 강제 교정 지원
   workflow_dispatch:
+    inputs:
+      pr:
+        description: 'PR number to autofix (optional)'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: write
+  statuses: write
 
 jobs:
   pr-title:
     runs-on: ubuntu-latest
-    permissions:
-      pull-requests: write
-      statuses: write
-
     steps:
-      - name: Autofix PR title (Patch N / patch-N / Patch-N -> chore(patch-N): ...)
-        if: ${{ github.event_name == 'pull_request' }}
+      - name: Autofix PR title (PR events)
+        if: ${{ github.event_name == 'pull_request_target' }}
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const pr = context.payload.pull_request;
-            if (!pr) {
-              core.info("No PR context. Skipping autofix.");
-              return;
-            }
-            const title = pr.title || "";
-
-            // Patterns to normalize "Patch ..." titles into Conventional form.
-            // e.g. "Patch 12", "Patch-12", "Patch 12: subject", "Patch-12 - subject"
+            if (!pr) { core.info("No PR context."); return; }
+            const original = pr.title || "";
             const patterns = [
               [/^patch\s*[-\s]?(\d+)\s*[:\-]?\s*(.*)$/i, (m) => {
                 const num = m[1];
@@ -36,34 +38,70 @@ jobs:
                 return `chore(patch-${num}): ${subj}`;
               }],
             ];
-
-            let newTitle = null;
+            let fixed = null;
             for (const [rx, fmt] of patterns) {
-              const m = title.match(rx);
-              if (m) { newTitle = fmt(m); break; }
+              const m = original.match(rx);
+              if (m) { fixed = fmt(m); break; }
             }
-
-            if (newTitle && newTitle !== title) {
+            core.info(`title(before)="${original}"`);
+            if (fixed && fixed !== original) {
               await github.rest.pulls.update({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 pull_number: pr.number,
-                title: newTitle
+                title: fixed
               });
-              core.info(`Updated PR title -> ${newTitle}`);
+              core.info(`title(after)="${fixed}"`);
             } else {
-              core.info("Title is not in a known 'Patch' pattern or already conventional. No change.");
+              core.info("no change");
+            }
+
+      - name: Autofix by PR number (manual run)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.pr != '' }}
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const n = Number(core.getInput('pr'));
+            if (!n) { core.setFailed('invalid PR number'); return; }
+            const pr = (await github.rest.pulls.get({
+              owner: context.repo.owner, repo: context.repo.repo, pull_number: n
+            })).data;
+            const original = pr.title || "";
+            const patterns = [
+              [/^patch\s*[-\s]?(\d+)\s*[:\-]?\s*(.*)$/i, (m) => {
+                const num = m[1];
+                const subj = (m[2] || "").trim() || "maintenance";
+                return `chore(patch-${num}): ${subj}`;
+              }],
+            ];
+            let fixed = null;
+            for (const [rx, fmt] of patterns) {
+              const m = original.match(rx);
+              if (m) { fixed = fmt(m); break; }
+            }
+            core.info(`title(before)="${original}"`);
+            if (fixed && fixed !== original) {
+              await github.rest.pulls.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: n,
+                title: fixed
+              });
+              core.info(`title(after)="${fixed}"`);
+            } else {
+              core.info("no change");
             }
 
       - name: Validate PR title (Conventional Commits)
-        if: ${{ github.event_name == 'pull_request' }}
+        if: ${{ github.event_name == 'pull_request_target' }}
         uses: amannn/action-semantic-pull-request@v5
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           validateSingleCommit: true
 
-      - name: No-op for workflow_dispatch
-        if: ${{ github.event_name != 'pull_request' }}
-        run: echo "This workflow validates PR titles. Manual run is a no-op."
+      - name: No-op for manual run without PR
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.pr == '' }}
+        run: echo "Set 'pr' input to run autofix for a specific pull request."
 # [01] END: .github/workflows/pr-title.yml
