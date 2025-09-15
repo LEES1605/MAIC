@@ -106,6 +106,7 @@ def rebuild_index(output_dir: str | Path | None = None) -> Dict[str, Any]:
     else:
         target_chars, overlap_chars, max_chunks = 1200, 200, 800
 
+    # ---- persist dir 결정: 인자 → SSOT → 전역/CFG → 폴백 ----------------------
     def _persist_dir() -> Path:
         if output_dir:
             return Path(output_dir).expanduser()
@@ -128,6 +129,7 @@ def rebuild_index(output_dir: str | Path | None = None) -> Dict[str, Any]:
             pass
         return Path.home() / ".maic" / "persist"
 
+    # ---- 허용 확장자 ---------------------------------------------------------
     def _allowed_exts() -> set[str]:
         try:
             exts = globals().get("ALLOWED_EXTS")
@@ -139,7 +141,7 @@ def rebuild_index(output_dir: str | Path | None = None) -> Dict[str, Any]:
 
     exts_allowed = _allowed_exts()
 
-    # ---------- 정규화/클린업 ----------
+    # ---- 정규화/클린업 -------------------------------------------------------
     re_codeblock = re.compile(r"```.*?```", re.S)
     re_html = re.compile(r"<[^>]+>")
     re_ws = re.compile(r"[ \t]+")
@@ -159,7 +161,7 @@ def rebuild_index(output_dir: str | Path | None = None) -> Dict[str, Any]:
         hangul = sum(0xAC00 <= ord(ch) <= 0xD7A3 for ch in s)
         return "ko" if hangul >= max(10, len(s) * 0.1) else "en"
 
-    # ---------- PDF 텍스트 추출 ----------
+    # ---- PDF 텍스트 추출 ----------------------------------------------------
     def _read_text_pdf_bytes(blob: bytes) -> str:
         try:
             PdfReader = None
@@ -190,9 +192,9 @@ def rebuild_index(output_dir: str | Path | None = None) -> Dict[str, Any]:
         except Exception:
             return ""
 
-    # ---------- 청킹 ----------
+    # ---- 청킹 ---------------------------------------------------------------
     re_paras = re.compile(r"\n{2,}")
-    # HQ: U+2026(…)도 문장 경계로 인식 (소스에는 실제 '…' 문자가 아니라 \u2026 사용)
+    # HQ: U+2026(ellipsis)도 문장 경계로 인식 (소스에는 실제 문자를 쓰지 않고 \u2026 이스케이프 사용)
     re_sents = re.compile(r"(?<=[.!?\u3002\uFF01\uFF1F\u2026])\s+")
 
     def _split_paragraphs(s: str) -> list[str]:
@@ -239,7 +241,7 @@ def rebuild_index(output_dir: str | Path | None = None) -> Dict[str, Any]:
             chunks.append((acc, acc_start, acc_start + len(acc)))
         return chunks
 
-    # ---------- JSONL 쓰기 ----------
+    # ---- JSONL 쓰기 ---------------------------------------------------------
     def _write_jsonl_atomic(lines: list[dict[str, _Any]], out_file: Path) -> int:
         tmp = out_file.with_suffix(".jsonl.tmp")
         try:
@@ -272,11 +274,11 @@ def rebuild_index(output_dir: str | Path | None = None) -> Dict[str, Any]:
         return count
 
     def _hash_norm(s: str) -> str:
-        # HQ: … → ... 정규화 후 해시(중복제거 정밀도 ↑)
+        # HQ: U+2026을 ASCII ...로 정규화 후 해시(중복제거 정밀도 향상)
         s2 = s.replace("\u2026", "...").lower().strip()
         return hashlib.sha1(s2.encode("utf-8", errors="ignore")).hexdigest()
 
-    # ---- 빌드: Drive prepared에서만 수집 ----
+    # ---- 빌드 ---------------------------------------------------------------
     dest = _persist_dir()
     dest.mkdir(parents=True, exist_ok=True)
     out_jsonl = dest / "chunks.jsonl"
@@ -307,6 +309,7 @@ def rebuild_index(output_dir: str | Path | None = None) -> Dict[str, Any]:
         size = int(f.get("size") or 0)
         mime = str(f.get("mime") or "")
 
+        # 확장자 판정
         ext = ""
         parts = name.rsplit(".", 1)
         if len(parts) == 2:
@@ -325,11 +328,13 @@ def rebuild_index(output_dir: str | Path | None = None) -> Dict[str, Any]:
         if ext and ext not in exts_allowed:
             continue
 
+        # 바이트 다운로드
         try:
             blob, eff_mime = download_bytes(fid, mime_hint=mime)
         except Exception:
             blob, eff_mime = (b"", mime)
 
+        # 텍스트 추출
         raw = ""
         if (ext == ".pdf") or (not ext and "pdf" in (eff_mime or "")):
             raw = _read_text_pdf_bytes(blob) or ""
@@ -340,7 +345,7 @@ def rebuild_index(output_dir: str | Path | None = None) -> Dict[str, Any]:
                 raw = ""
 
         if not raw:
-            raw = name
+            raw = name  # 최소 인덱싱
 
         text = _strip_noise(raw)
         title = _title_from_markdown(raw) or name
@@ -407,5 +412,3 @@ def rebuild_index(output_dir: str | Path | None = None) -> Dict[str, Any]:
 
     return {"chunks": count, "dest": str(dest), "roots": ["gdrive:prepared"], "files_count": len(manifest_files)}
 # ======================== [04] PUBLIC API: rebuild_index — END ========================
-
-
