@@ -206,7 +206,7 @@ def rebuild_index(output_dir: str | Path | None = None) -> Dict[str, Any]:
 
     # ---------- 청킹 ---------------------------------------------------------
     re_paras = re.compile(r"\n{2,}")
-    # HQ: U+2026(…)도 문장 경계로 인식
+    # HQ: U+2026(...)도 문장 경계로 인식
     re_sents = re.compile(r"(?<=[.!?\u3002\uFF01\uFF1F\u2026])\s+")
 
     def _split_paragraphs(s: str) -> list[str]:
