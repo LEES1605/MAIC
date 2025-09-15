@@ -80,8 +80,6 @@ def _unpack_snapshot(blob: bytes) -> Dict[str, Any]:
             out["chunks"] = []
         return out
 # [03] END
-
-
 # ======================= [04] PUBLIC API: rebuild_index — START =======================
 def rebuild_index(output_dir: str | Path | None = None) -> Dict[str, Any]:
     """
@@ -203,7 +201,8 @@ def rebuild_index(output_dir: str | Path | None = None) -> Dict[str, Any]:
 
     # ---------- 청킹 ---------------------------------------------------------
     re_paras = re.compile(r"\n{2,}")
-    re_sents = re.compile(r"(?<=[.!?。！？])\s+")
+    # HQ 품질: U+2026(ellipsis)도 문장 경계로 인식 (리터럴 대신 유니코드 이스케이프 사용)
+    re_sents = re.compile(r"(?<=[.!?\u3002\uFF01\uFF1F\u2026])\s+")
 
     def _split_paragraphs(s: str) -> list[str]:
         parts = [p.strip() for p in re_paras.split(s) if p.strip()]
@@ -282,7 +281,8 @@ def rebuild_index(output_dir: str | Path | None = None) -> Dict[str, Any]:
         return count
 
     def _hash_norm(s: str) -> str:
-        s2 = s.lower().strip()
+        # HQ 품질: …(U+2026)을 ...로 정규화 후 해시 → 중복제거 정밀도 향상
+        s2 = s.replace("\u2026", "...").lower().strip()
         return hashlib.sha1(s2.encode("utf-8", errors="ignore")).hexdigest()
 
     # ---- 빌드: Drive prepared에서만 수집 -----------------------------------
@@ -457,4 +457,3 @@ def rebuild_index(output_dir: str | Path | None = None) -> Dict[str, Any]:
         "files_count": len(manifest_files),
     }
 # ======================== [04] PUBLIC API: rebuild_index — END ========================
-
