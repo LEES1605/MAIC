@@ -210,6 +210,7 @@ def _download_asset(asset: Dict[str, Any]) -> Optional[Tuple[str, bytes]]:
     _log(f"asset download failed: {rr.status_code}")
     return None
 # ========================== [04] release discovery — END ============================
+
 # ========================= [05] extraction helpers — START ==========================
 def _is_safe_member(base: Path, target: Path) -> bool:
     """Prevent path traversal and absolute extraction."""

@@ -96,27 +96,17 @@ def rebuild_index(output_dir: str | Path | None = None) -> Dict[str, Any]:
     - 산출물: chunks.jsonl, manifest.json, index.meta.json, .ready
     """
 
-    # ---- 내부 헬퍼 및 설정 ------------------------------------------------------
-    import datetime
-    import hashlib
-    import importlib
-    import json as _json
-    import os
-    import re
+    import datetime, hashlib, importlib, json as _json, os, re
     from typing import Any as _Any
     from pathlib import Path
 
     mode = (os.getenv("MAIC_INDEX_MODE") or "").upper()
     if mode == "HQ":
-        target_chars = 900
-        overlap_chars = 250
-        max_chunks = 8000
+        target_chars, overlap_chars, max_chunks = 900, 250, 8000
     else:
-        target_chars = 1200
-        overlap_chars = 200
-        max_chunks = 800
+        target_chars, overlap_chars, max_chunks = 1200, 200, 800
 
-    # --- persist dir 결정: 인자 → SSOT → 전역/CFG → 폴백 ----------------------
+    # ---- persist dir 결정: 인자 → SSOT → 전역/CFG → 폴백 ----------------------
     def _persist_dir() -> Path:
         if output_dir:
             return Path(output_dir).expanduser()
@@ -139,7 +129,7 @@ def rebuild_index(output_dir: str | Path | None = None) -> Dict[str, Any]:
             pass
         return Path.home() / ".maic" / "persist"
 
-    # --- 허용 확장자 ---------------------------------------------------------
+    # ---- 허용 확장자 ---------------------------------------------------------
     def _allowed_exts() -> set[str]:
         try:
             exts = globals().get("ALLOWED_EXTS")
@@ -151,7 +141,7 @@ def rebuild_index(output_dir: str | Path | None = None) -> Dict[str, Any]:
 
     exts_allowed = _allowed_exts()
 
-    # ---------- 정규화/클린업 ------------------------------------------------
+    # ---- 정규화/클린업 -------------------------------------------------------
     re_codeblock = re.compile(r"```.*?```", re.S)
     re_html = re.compile(r"<[^>]+>")
     re_ws = re.compile(r"[ \t]+")
@@ -171,9 +161,8 @@ def rebuild_index(output_dir: str | Path | None = None) -> Dict[str, Any]:
         hangul = sum(0xAC00 <= ord(ch) <= 0xD7A3 for ch in s)
         return "ko" if hangul >= max(10, len(s) * 0.1) else "en"
 
-    # ---------- PDF 텍스트 추출(가능하면) ------------------------------------
+    # ---- PDF 텍스트 추출 ----------------------------------------------------
     def _read_text_pdf_bytes(blob: bytes) -> str:
-        """pypdf 우선, 실패 시 PyPDF2 폴백."""
         try:
             PdfReader = None
             try:
@@ -189,7 +178,6 @@ def rebuild_index(output_dir: str | Path | None = None) -> Dict[str, Any]:
                     PdfReader = None
             if PdfReader is None:
                 return ""
-
             import io as _io
             reader = PdfReader(_io.BytesIO(blob))
             parts: list[str] = []
@@ -204,9 +192,9 @@ def rebuild_index(output_dir: str | Path | None = None) -> Dict[str, Any]:
         except Exception:
             return ""
 
-    # ---------- 청킹 ---------------------------------------------------------
+    # ---- 청킹 ---------------------------------------------------------------
     re_paras = re.compile(r"\n{2,}")
-    # HQ: U+2026(...)도 문장 경계로 인식
+    # HQ: U+2026(ellipsis)도 문장 경계로 인식 (소스에는 실제 문자를 쓰지 않고 \u2026 이스케이프 사용)
     re_sents = re.compile(r"(?<=[.!?\u3002\uFF01\uFF1F\u2026])\s+")
 
     def _split_paragraphs(s: str) -> list[str]:
@@ -253,7 +241,7 @@ def rebuild_index(output_dir: str | Path | None = None) -> Dict[str, Any]:
             chunks.append((acc, acc_start, acc_start + len(acc)))
         return chunks
 
-    # ---------- JSONL 쓰기 ---------------------------------------------------
+    # ---- JSONL 쓰기 ---------------------------------------------------------
     def _write_jsonl_atomic(lines: list[dict[str, _Any]], out_file: Path) -> int:
         tmp = out_file.with_suffix(".jsonl.tmp")
         try:
@@ -286,11 +274,11 @@ def rebuild_index(output_dir: str | Path | None = None) -> Dict[str, Any]:
         return count
 
     def _hash_norm(s: str) -> str:
-        # HQ: ... → ... 정규화 후 해시(중복제거 정밀도 ↑)
+        # HQ: U+2026을 ASCII ...로 정규화 후 해시(중복제거 정밀도 향상)
         s2 = s.replace("\u2026", "...").lower().strip()
         return hashlib.sha1(s2.encode("utf-8", errors="ignore")).hexdigest()
 
-    # ---- 빌드: Drive prepared에서만 수집 -----------------------------------
+    # ---- 빌드 ---------------------------------------------------------------
     dest = _persist_dir()
     dest.mkdir(parents=True, exist_ok=True)
     out_jsonl = dest / "chunks.jsonl"
@@ -298,31 +286,18 @@ def rebuild_index(output_dir: str | Path | None = None) -> Dict[str, Any]:
     if os.getenv("MAIC_USE_PREPARED_ONLY", "1") != "1":
         os.environ["MAIC_USE_PREPARED_ONLY"] = "1"
 
-    # 1) 드라이브 모듈 준비
     try:
         gd = importlib.import_module("src.integrations.gdrive")
         list_files = getattr(gd, "list_prepared_files")
         download_bytes = getattr(gd, "download_bytes")
-    except Exception as e:  # 모듈 로드 실패
-        return {
-            "chunks": 0,
-            "dest": str(dest),
-            "roots": ["gdrive:prepared"],
-            "error": f"load_gdrive_failed: {e}",
-        }
+    except Exception as e:
+        return {"chunks": 0, "dest": str(dest), "roots": ["gdrive:prepared"], "error": f"load_gdrive_failed: {e}"}
 
-    files: list[dict[str, _Any]] = []
     try:
         files = list_files() if callable(list_files) else []
     except Exception as e:
-        return {
-            "chunks": 0,
-            "dest": str(dest),
-            "roots": ["gdrive:prepared"],
-            "error": f"list_failed: {e}",
-        }
+        return {"chunks": 0, "dest": str(dest), "roots": ["gdrive:prepared"], "error": f"list_failed: {e}"}
 
-    # 2) 반복 처리
     lines: list[dict[str, _Any]] = []
     seen_hash: set[str] = set()
     manifest_files: list[dict[str, _Any]] = []
@@ -377,11 +352,7 @@ def rebuild_index(output_dir: str | Path | None = None) -> Dict[str, Any]:
         lang = _detect_lang(text)
         doc_id = f"gdrive::{fid}"
         try:
-            meta_time = (
-                datetime.datetime.utcfromtimestamp(mts).isoformat() + "Z"
-                if mts
-                else ""
-            )
+            meta_time = (datetime.datetime.utcfromtimestamp(mts).isoformat() + "Z") if mts else ""
         except Exception:
             meta_time = ""
 
@@ -389,10 +360,7 @@ def rebuild_index(output_dir: str | Path | None = None) -> Dict[str, Any]:
         if not chunks:
             continue
 
-        # manifest용 파일 엔트리
-        manifest_files.append(
-            {"id": fid, "name": name, "bytes": size, "mtime": meta_time}
-        )
+        manifest_files.append({"id": fid, "name": name, "bytes": size, "mtime": meta_time})
 
         for i, (ck, s0, s1) in enumerate(chunks):
             if len(lines) >= max_chunks:
@@ -401,25 +369,22 @@ def rebuild_index(output_dir: str | Path | None = None) -> Dict[str, Any]:
             if h in seen_hash:
                 continue
             seen_hash.add(h)
-            lines.append(
-                {
-                    "id": len(lines),
-                    "doc_id": doc_id,
-                    "chunk_id": f"{doc_id}::{i}",
-                    "title": title,
-                    "source": f"gdrive://{fid}/{name}",
-                    "ext": ext or "",
-                    "offsets": [s0, s1],
-                    "lang": lang,
-                    "text": ck,
-                    "mtime": meta_time,
-                    "bytes": size,
-                }
-            )
+            lines.append({
+                "id": len(lines),
+                "doc_id": doc_id,
+                "chunk_id": f"{doc_id}::{i}",
+                "title": title,
+                "source": f"gdrive://{fid}/{name}",
+                "ext": ext or "",
+                "offsets": [s0, s1],
+                "lang": lang,
+                "text": ck,
+                "mtime": meta_time,
+                "bytes": size,
+            })
         if len(lines) >= max_chunks:
             break
 
-    # 3) 결과 쓰기
     count = _write_jsonl_atomic(lines, out_jsonl)
     if count > 0:
         try:
@@ -427,39 +392,23 @@ def rebuild_index(output_dir: str | Path | None = None) -> Dict[str, Any]:
         except Exception:
             pass
 
-        # manifest.json
         headers: dict[str, dict[str, str]] = {}
         for obj in lines:
             d = obj.get("doc_id")
             if d and d not in headers:
-                headers[d] = {
-                    "title": str(obj.get("title") or ""),
-                    "source": str(obj.get("source") or ""),
-                }
+                headers[d] = {"title": str(obj.get("title") or ""), "source": str(obj.get("source") or "")}
         manifest_obj = {"files": manifest_files, "docs": headers}
         try:
-            (dest / "manifest.json").write_text(
-                _json.dumps(manifest_obj, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
+            (dest / "manifest.json").write_text(_json.dumps(manifest_obj, ensure_ascii=False, indent=2), encoding="utf-8")
         except Exception:
             pass
 
-        # index.meta.json
         try:
             built_ts = int(datetime.datetime.utcnow().timestamp())
             meta = {"built_at": built_ts, "mode": mode or "STD", "chunks": count}
-            (dest / "index.meta.json").write_text(
-                _json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
-            )
+            (dest / "index.meta.json").write_text(_json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
         except Exception:
             pass
 
-    return {
-        "chunks": count,
-        "dest": str(dest),
-        "roots": ["gdrive:prepared"],
-        "files_count": len(manifest_files),
-    }
+    return {"chunks": count, "dest": str(dest), "roots": ["gdrive:prepared"], "files_count": len(manifest_files)}
 # ======================== [04] PUBLIC API: rebuild_index — END ========================
-
