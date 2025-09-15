@@ -85,7 +85,7 @@ def clamp_fragments(
     for s in list(frags)[:max_items]:
         s = (s or "").strip()
         if max_chars_each > 0 and len(s) > max_chars_each:
-            s = s[: max_chars_each] + "…"
+            s = s[: max_chars_each] + "..."
         safe.append(s)
     return safe
 # [01] END: src/modes/types.py

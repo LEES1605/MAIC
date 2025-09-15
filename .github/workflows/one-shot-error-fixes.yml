@@ -1,0 +1,40 @@
+# [01] START
+name: one-shot-error-fixes
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run ellipsis gate (fix mode)
+        run: |
+          python -V
+          python scripts/no_ellipsis_gate.py --root . --fix
+
+      - name: Patch-guard hotfix (END lines & EOF auto-close)
+        run: |
+          python scripts/hotfix_patch_guard.py --root . --apply
+
+      - name: Commit changes if any
+        run: |
+          if [[ -n "$(git status --porcelain)" ]]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add -A
+            git commit -m "ci: fix Unicode ellipsis and normalize patch-guard END lines"
+            git push
+          else
+            echo "No changes to commit."
+# [01] END

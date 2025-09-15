@@ -1,0 +1,26 @@
+# [01] START: .github/semantic.yml
+titleOnly: true
+types:
+  - feat
+  - fix
+  - docs
+  - refactor
+  - test
+  - perf
+  - build
+  - ci
+  - chore
+  - revert
+scopes:
+  - modes
+  - rag
+  - router
+  - docs
+  - ci
+  - security
+  - tests
+  - infra
+requireScope: false
+subjectPattern: "^[^ ].{2,98}[^ .]$"
+subjectPatternError: "Subject must be 4..100 chars, no leading space, no trailing dot."
+# [01] END: .github/semantic.yml

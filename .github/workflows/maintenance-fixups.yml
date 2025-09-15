@@ -1,0 +1,41 @@
+# [01] START
+name: maintenance-fixups
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install minimal deps
+        run: |
+          python -V
+      - name: Dry-run report
+        run: |
+          python scripts/fix_markers_and_ellipsis.py --root . || true
+          python scripts/no_ellipsis_gate.py --root . || true
+      - name: Apply fixes
+        run: |
+          python scripts/fix_markers_and_ellipsis.py --root . --apply
+          python scripts/no_ellipsis_gate.py --root . --fix
+      - name: Commit changes if any
+        run: |
+          if [[ -n "$(git status --porcelain)" ]]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add -A
+            git commit -m "ci: normalize patch-guard markers and replace Unicode ellipsis"
+            git push
+          else
+            echo "No changes to commit."
+          fi
+# [01] END

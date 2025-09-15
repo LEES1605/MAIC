@@ -1,0 +1,53 @@
+# [01] START
+name: one-shot-ellipsis-clean
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  clean:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Replace U+2026 with ASCII in code files
+        run: |
+          python - << 'PY'
+          from pathlib import Path
+          EXTS = {".py",".pyi",".ts",".tsx",".js",".jsx",".sh",".bat",".ps1"}
+          SKIP_DIRS = {".git",".venv","venv","node_modules","dist","build","__pycache__","docs"}
+          TARGET = "\u2026"
+          changed = 0
+          for p in Path(".").rglob("*"):
+            if not p.is_file():
+              continue
+            if p.suffix.lower() not in EXTS:
+              continue
+            if set(x.name for x in p.parents) & SKIP_DIRS:
+              continue
+            txt = p.read_text(encoding="utf-8")
+            if TARGET in txt:
+              p.write_text(txt.replace(TARGET, "..."), encoding="utf-8")
+              changed += 1
+          print(f"changed={changed}")
+          PY
+
+      - name: Commit changes if any
+        run: |
+          if [[ -n "$(git status --porcelain)" ]]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add -A
+            git commit -m "ci: replace Unicode ellipsis in code files"
+            git push
+          else
+            echo "No changes to commit."
+# [01] END

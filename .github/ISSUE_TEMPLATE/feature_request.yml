@@ -1,0 +1,26 @@
+# [01] START: .github/ISSUE_TEMPLATE/feature_request.yml
+name: "Feature request"
+description: "기능 제안"
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem_statement
+    attributes:
+      label: 문제/배경
+      description: 사용 사례와 목표를 간단히 설명해 주세요.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal_detail
+    attributes:
+      label: 제안 내용
+      description: API/워크플로/문서 변경 등 구체적인 제안을 적어 주세요.
+      placeholder: 입력/출력, 경계 조건, 성능/보안 고려사항 등
+
+  - type: textarea
+    id: considered_alternatives
+    attributes:
+      label: 대안 검토
+      description: 고려했던 다른 방법이 있다면 적어 주세요.
+# [01] END: .github/ISSUE_TEMPLATE/feature_request.yml

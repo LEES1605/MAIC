@@ -1,3 +1,4 @@
+# File: pyproject.toml
 # ===== [00] BUILD SYSTEM =====================================================
 [build-system]
 requires = ["setuptools>=68", "wheel"]
@@ -20,7 +21,8 @@ dependencies = [
   "llama-index-core>=0.10",
   "google-api-python-client>=2.136.0",
   "google-auth>=2.30.0",
-  "pypdf>=4.2,<5",            # ← PDF 텍스트 추출용 (신규 추가)
+  # ✅ 보안: pypdf 6.x 이상으로 상향 (GHSA-7hfw-26vp-jp8m 회피)
+  "pypdf>=6,<7",
 ]
 
 # ===== [03] DEV DEPS (optional) =============================================
@@ -34,17 +36,16 @@ dev = [
   "types-PyYAML",
 ]
 
-# ===== [04] TOOL CONFIG POINTERS ============================================  # [04] START
+# ===== [04] TOOL CONFIG POINTERS ============================================
 [tool.ruff]
 extend = "ruff.toml"
-src = ["src"]  # isort/ruff가 프로젝트 first-party 탐지 시 사용할 소스 루트
+src = ["src"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["src"]  # 'src'를 first-party로 분류하여 import 그룹 충돌 해소
+known-first-party = ["src"]
 
 [tool.mypy]
 config_file = "mypy.ini"
-# [04] END
 
 # ===== [05] SETUPTOOLS (package discovery) ==================================
 [tool.setuptools]
@@ -57,20 +58,3 @@ include = ["*"]
 # ===== [06] POETRY SETUP (disable package install of the app) ===============
 [tool.poetry]
 package-mode = false
-
-# [07] START: pyproject.toml (tool.gen_tree)
-[tool.gen_tree]
-# gen_tree 구성은 pyproject.toml에서 중앙화합니다.
-# scripts/gen_tree.py 가 이 섹션을 자동으로 읽습니다.
-
-max_depth = 4
-exclude = [
-  ".git", ".venv", "node_modules", "__pycache__", ".mypy_cache",
-  ".ruff_cache", ".pytest_cache", "dist", "build", ".DS_Store",
-  "*.zip", "*.bin"
-]
-# 보고서는 콤마 또는 리스트 입력 둘 다 인식됩니다.
-reports = "stale,sizes,orphans"
-stale_days = 120
-topn_sizes = 20
-# [05] END: pyproject.toml (tool.gen_tree)

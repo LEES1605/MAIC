@@ -1,0 +1,9 @@
+# [01] START: .github/CODEOWNERS
+# Default owner
+*                 @LEES1605
+
+# Area owners (필요하면 세분화)
+src/              @LEES1605
+docs/_gpt/        @LEES1605
+.github/          @LEES1605
+# [01] END: .github/CODEOWNERS

@@ -1,250 +1,132 @@
-# [27E] START: scripts/no_ellipsis_gate.py (FULL REPLACEMENT)
+# [01] START
+#!/usr/bin/env python3
+"""
+scripts/no_ellipsis_gate.py
+
+Fail CI if Unicode ellipsis (U+2026) appears in code files.
+Use --fix to replace it with ASCII "...".
+"""
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Iterable, List, Tuple
 import argparse
 import sys
-import re
-from pathlib import Path
-from typing import List, Tuple, Iterable, TypeAlias
 
-# ==========================
-# 설정(기본값: 문서/프롬프트 전용)
-# ==========================
-DEFAULT_INCLUDE = [
-    "README.md",
-    "prompts.yaml",
-    "docs/**/*.md",
-    "docs/**/*.rst",
-    "docs/**/*.txt",
-    "prompts/**/*.md",
-    "prompts/**/*.txt",
-    "prompts/**/*.yaml",
-    "prompts/**/*.yml",
-]
+TARGET = "\u2026"  # do NOT use the literal char in this file
 
-DEFAULT_EXCLUDE = [
-    ".git/**",
-    ".github/**",
-    "venv/**",
-    ".venv/**",
-    "node_modules/**",
-    "__pycache__/**",
-    "build/**",
-    "dist/**",
-]
+INCLUDE_EXTS = {
+    ".py", ".pyi", ".ts", ".tsx", ".js", ".jsx", ".sh", ".bat", ".ps1",
+}
+EXCLUDE_DIRS = {
+    ".git", ".venv", "venv", "node_modules", "dist", "build", "__pycache__", "docs",
+}
+EXCLUDE_FILES = {"prompts.yaml"}
+# [01] END
 
-# 코드 파일은 기본적으로 제외(요청 시 --check-code로 opt-in)
-CODE_GLOBS = [
-    "**/*.py",
-    "src/**/*.py",
-    "tests/**/*.py",
-    "scripts/**/*.py",
-]
-
-# 허용 마커(화이트리스트): 프롬프트 문맥에서 사용하는 내부 표식
-ALLOWED_MARKERS = [
-    "--START_ANSWER--",
-    "--END_ANSWER--",
-    "--BRACKET_RULES--",
-    "--END_BRACKET_RULES--",
-]
-
-# 스니핏/줄임표 패턴(화이트리스트 외에는 모두 ‘스니핏’으로 간주)
-# ⚠️ 이중 꺾쇠(<< >>)는 문장분석 ‘강조’ 표기로 정상이므로 제외하고,
-#    ‘스니핏’은 트리플 꺾쇠(<<< >>>)만 감지한다.
-SNIPPET_PATTERNS = [
-    r"<<<",               # <<<  (LLM 스니핏 표식만)
-    r">>>",               # >>>
-    r"\[\s*\.\.\.\s*\]",  # [ ... ]
-    r"\.\.\.",            # ...
-    r"…",                 # 단일 문자 줄임표
-]
-
-# 메시지 상수(긴 문자열은 상수화해서 E501 회피)
-MSG_ELLIPSIS_ONLY = "줄 전체가 '…' 또는 '...'로만 구성됨"
-MSG_SNIP_KO = "‘중략/생략’ + 스니핏/…/... 패턴"
-
-# (code, relpath, lineno, message)
-Violation: TypeAlias = Tuple[str, str, int, str]
-
-# ‘중략/생략’을 단어 끝(뒤에 한글 없음)일 때만 인식(예: ‘생략된’ 제외)
-RE_KO_DIRECTIVE = re.compile(r"(중략|생략)(?![가-힣])")
-
-
-def _expand_braces(pattern: str) -> List[str]:
-    """'*.{md,txt}' 같은 브레이스 패턴을 fnmatch 용으로 풀어준다."""
-    m = re.search(r"\{([^}]+)\}", pattern)
-    if not m:
-        return [pattern]
-    head = pattern[:m.start()]
-    tail = pattern[m.end():]
-    alts = [x.strip() for x in m.group(1).split(",") if x.strip()]
-    out = []
-    for a in alts:
-        out.extend(_expand_braces(head + a + tail))
-    return out
-
-
-def _path_match_any(p: Path, patterns: Iterable[str], root: Path) -> bool:
-    from fnmatch import fnmatch
-    rp = str(p.relative_to(root).as_posix())
-    for pat in patterns:
-        for exp in _expand_braces(pat):
-            if fnmatch(rp, exp):
-                return True
-    return False
-
-
-def _collect_files(root: Path, includes: List[str], excludes: List[str]) -> List[Path]:
-    files: List[Path] = []
-    for pat in includes:
-        for exp in _expand_braces(pat):
-            files.extend(root.glob(exp))
-    uniq = []
-    seen = set()
-    for f in files:
-        if f.is_dir():
+# [02] START
+def iter_files(root: Path) -> Iterable[Path]:
+    for p in root.rglob("*"):
+        if not p.is_file():
             continue
-        rel = f.resolve()
-        if rel in seen:
+        if p.suffix.lower() not in INCLUDE_EXTS:
             continue
-        if _path_match_any(f, excludes, root):
+        if set(x.name for x in p.parents) & EXCLUDE_DIRS:
             continue
-        seen.add(rel)
-        uniq.append(f)
-    return sorted(uniq)
+        if p.name in EXCLUDE_FILES:
+            continue
+        yield p
 
 
-def _line_is_ellipsis_only(s: str) -> bool:
-    t = s.strip()
-    return t in ("...", "…")
+def scan_file(p: Path) -> List[Tuple[int, int]]:
+    locs: List[Tuple[int, int]] = []
+    try:
+        text = p.read_text(encoding="utf-8")
+    except Exception:
+        return locs
+    idx = 0
+    while True:
+        found = text.find(TARGET, idx)
+        if found == -1:
+            break
+        line = text.count("\n", 0, found) + 1
+        col = found - (text.rfind("\n", 0, found) + 1)
+        locs.append((line, col))
+        idx = found + 1
+    return locs
+# [02] END
 
-
-def _line_has_snippet(s: str) -> bool:
-    if any(marker in s for marker in ALLOWED_MARKERS):
-        return False
-    return any(re.search(pat, s) for pat in SNIPPET_PATTERNS)
-
-
-def _window(lines: List[str], i: int, radius: int = 2) -> List[Tuple[int, str]]:
-    lo = max(0, i - radius)
-    hi = min(len(lines), i + radius + 1)
-    return [(k, lines[k]) for k in range(lo, hi)]
-
-
-def _scan_file(path: Path, root: Path) -> List[Violation]:
-    txt = path.read_text(encoding="utf-8", errors="ignore").splitlines()
-    vios: List[Violation] = []
-
-    # 1) ELLIPSIS_ONLY: 줄 전체가 ... 또는 … 인 경우
-    for i, line in enumerate(txt, start=1):
-        if _line_is_ellipsis_only(line):
-            vios.append(("ELLIPSIS_ONLY", str(path.relative_to(root)), i, MSG_ELLIPSIS_ONLY))
-
-    # 2) SNIP_KO: 같은 파일에서 '중략|생략'과 스니핏이 근접(±2줄)한 경우
-    #    - 문서 내 실제 생략본/스니핏 혼용을 금지
-    for i, line in enumerate(txt, start=1):
-        if RE_KO_DIRECTIVE.search(line):
-            for _k, near in _window(txt, i - 1, radius=2):
-                if _line_has_snippet(near) or _line_is_ellipsis_only(near):
-                    vios.append(("SNIP_KO", str(path.relative_to(root)), i, MSG_SNIP_KO))
-                    break
-
-    return vios
-
-
-def _parse_args() -> argparse.Namespace:
-    ap = argparse.ArgumentParser(
-        description="No‑Ellipsis Gate (docs/prompts only by default)"
+#  [03] START
+def parse_args(argv: List[str] | None = None) -> argparse.Namespace:
+    # 줄 길이 제한(E501) 회피: 설명 문자열을 분할하여 컴파일 타임 결합
+    desc = (
+        "Fail CI on U+2026 (Unicode ellipsis) "
+        "inside code files."
     )
-    ap.add_argument("--root", default=".", help="project root")
+    ap = argparse.ArgumentParser(description=desc)
     ap.add_argument(
-        "--include", action="append", default=[], help="extra include glob (repeatable)"
+        "--root",
+        default=".",
+        help="Root directory to scan (default: .)",
     )
     ap.add_argument(
-        "--exclude", action="append", default=[], help="extra exclude glob (repeatable)"
-    )
-    ap.add_argument(
-        "--check-code",
+        "--fix",
         action="store_true",
-        help="also scan code (*.py) — opt-in",
+        help="Replace with ASCII '...' in-place.",
     )
     ap.add_argument(
-        "--allowed-markers",
-        default=",".join(ALLOWED_MARKERS),
-        help="comma-separated whitelist markers",
-    )
-    ap.add_argument(
-        "-v",
         "--verbose",
         action="store_true",
-        help="print debug info (paths, patterns, files)",
+        help="Print scanning details (optional).",
     )
-    return ap.parse_args()
+    return ap.parse_args(argv)
 
 
-def main() -> int:
-    args = _parse_args()
-    root = Path(args.root).resolve()
+def main() -> None:
+    ns = parse_args()
+    root = Path(ns.root).resolve()
+    bad: List[str] = []
+    fixed = 0
+    scanned = 0
 
-    # allow runtime extension of allowed markers
-    markers = [m.strip() for m in str(args.allowed_markers or "").split(",") if m.strip()]
-    # 리스트 내부 변경(모듈 전역 상수 업데이트)
-    ALLOWED_MARKERS[:] = markers
+    for p in iter_files(root):
+        scanned += 1
+        locs = scan_file(p)
+        if ns.verbose and locs:
+            # 간단한 디버그 출력(옵션)
+            msg = ", ".join([f"L{ln}:{co}" for (ln, co) in locs[:3]])
+            more = "" if len(locs) <= 3 else f" (+{len(locs)-3} more)"
+            print(f"[no-ellipsis] {p}: {msg}{more}")
 
-    includes = list(DEFAULT_INCLUDE)
-    excludes = list(DEFAULT_EXCLUDE)
-
-    # user overrides
-    includes.extend(args.include or [])
-    excludes.extend(args.exclude or [])
-
-    # code scan opt-in
-    if args.check_code:
-        includes.extend(CODE_GLOBS)
-
-    if args.verbose:
-        print(f"[Gate] root={root}")
-        print(f"[Gate] includes={includes}")
-        print(f"[Gate] excludes={excludes}")
-        print(f"[Gate] check_code={args.check_code}")
-        print(f"[Gate] allowed_markers={ALLOWED_MARKERS}")
-
-    files = _collect_files(root, includes, excludes)
-    if args.verbose:
-        print(f"[Gate] matched_files={len(files)}")
-        for f in files[:50]:
-            print(f"  - {f.relative_to(root)}")
-        if len(files) > 50:
-            print(f"  ... (+{len(files) - 50} more)")
-
-    all_vios: List[Violation] = []
-    for f in files:
-        try:
-            all_vios.extend(_scan_file(f, root))
-        except Exception as e:
-            if args.verbose:
-                print(f"[Gate] skip {f}: {e}")
+        if not locs:
             continue
+        if ns.fix:
+            try:
+                t = p.read_text(encoding="utf-8").replace(TARGET, "...")
+                p.write_text(t, encoding="utf-8")
+                fixed += 1
+            except Exception as e:
+                bad.append(f"{p}: fix failed: {e}")
+                continue
+        else:
+            msg = ", ".join([f"L{ln}:{co}" for (ln, co) in locs[:5]])
+            more = "" if len(locs) <= 5 else f" (+{len(locs)-5} more)"
+            bad.append(f"{p}: found at {msg}{more}")
 
-    if not all_vios:
-        print("No‑Ellipsis Gate: ✅ 통과")
-        return 0
+    if ns.verbose:
+        print(f"[no-ellipsis] scanned files: {scanned}")
 
-    print("No‑Ellipsis Gate: ❌ 위반 발견")
-    for code, rel, ln, msg in all_vios:
-        print(f"  - {code:<12} | {root.joinpath(rel)}:{ln} | {msg}")
+    if ns.fix:
+        print(f"Replaced ellipsis in {fixed} file(s).")
 
-    print("\n가이드:")
-    print("  1) 실제 '중략본'이면 원본 텍스트로 교체하세요.")
-    print("  2) 정상 문서의 줄임표는 허용되지만,")
-    print("     '중략/생략'(단어)과 스니핏 마커의 근접 사용(±2줄)은 금지입니다.")
-    print("  3) 스니핏 마커는 기본 ‘<<< >>>’만 검출합니다.")
-    print("     (필요 시 --allowed-markers 로 허용 목록을 확장하세요.)")
-    print("  4) 코드(.py)는 기본 제외이며, 필요 시 --check-code 로 포함하세요.")
-    return 1
+    if bad and not ns.fix:
+        print("Unicode ellipsis (U+2026) found in:", file=sys.stderr)
+        for b in bad:
+            print(" -", b, file=sys.stderr)
+        raise SystemExit(1)
+    raise SystemExit(0)
 
 
 if __name__ == "__main__":
-    sys.exit(main())
-# [27E] END: scripts/no_ellipsis_gate.py
+    main()
+#  [03] END

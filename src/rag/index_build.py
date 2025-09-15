@@ -79,7 +79,7 @@ def _unpack_snapshot(blob: bytes) -> Dict[str, Any]:
         except Exception:
             out["chunks"] = []
         return out
-# [03] END==================================================================
+# [03] END
 # ======================= [04] PUBLIC API: rebuild_index — START =======================
 def rebuild_index(output_dir: str | Path | None = None) -> Dict[str, Any]:
     """
@@ -87,12 +87,8 @@ def rebuild_index(output_dir: str | Path | None = None) -> Dict[str, Any]:
     - 의미 단위 청킹(문단/문장) + 오버랩
     - 중복 청크 제거(정규화 텍스트 해시)
     - 원자적 쓰기 후 검증 통과 시 .ready 생성
-    - PDF는 PyPDF2 사용 가능 시 본문 추출, 아니면 파일명으로 최소 인덱싱
+    - PDF는 pypdf/PyPDF2 사용 가능 시 본문 추출, 아니면 파일명으로 최소 인덱싱
     - 산출물: chunks.jsonl, manifest.json, index.meta.json, .ready
-
-    환경 힌트:
-      - MAIC_INDEX_MODE=HQ  → 작은 청크/높은 오버랩/상한↑
-      - MAIC_USE_PREPARED_ONLY=1  → prepared만 사용(기본도 prepared 전용)
     """
 
     # ---- 내부 헬퍼 및 설정 ------------------------------------------------------
@@ -103,6 +99,7 @@ def rebuild_index(output_dir: str | Path | None = None) -> Dict[str, Any]:
     import os
     import re
     from typing import Any as _Any
+    from pathlib import Path
 
     mode = (os.getenv("MAIC_INDEX_MODE") or "").upper()
     if mode == "HQ":
@@ -118,14 +115,12 @@ def rebuild_index(output_dir: str | Path | None = None) -> Dict[str, Any]:
     def _persist_dir() -> Path:
         if output_dir:
             return Path(output_dir).expanduser()
-        # SSOT 최우선 사용
         try:
             from src.core.persist import effective_persist_dir as _ssot  # noqa: E402
             p = _ssot()
             return p if isinstance(p, Path) else Path(str(p)).expanduser()
         except Exception:
             pass
-        # 하위호환: 전역 상수/CFG → 기본
         try:
             cfg = globals().get("PERSIST_DIR")
             if cfg:
@@ -173,11 +168,23 @@ def rebuild_index(output_dir: str | Path | None = None) -> Dict[str, Any]:
 
     # ---------- PDF 텍스트 추출(가능하면) ------------------------------------
     def _read_text_pdf_bytes(blob: bytes) -> str:
+        """pypdf 우선, 실패 시 PyPDF2 폴백."""
         try:
-            mod = importlib.import_module("PyPDF2")
-            PdfReader = getattr(mod, "PdfReader", None)
+            PdfReader = None
+            try:
+                mod = importlib.import_module("pypdf")
+                PdfReader = getattr(mod, "PdfReader", None)
+            except Exception:
+                PdfReader = None
+            if PdfReader is None:
+                try:
+                    mod2 = importlib.import_module("PyPDF2")
+                    PdfReader = getattr(mod2, "PdfReader", None)
+                except Exception:
+                    PdfReader = None
             if PdfReader is None:
                 return ""
+
             import io as _io
             reader = PdfReader(_io.BytesIO(blob))
             parts: list[str] = []
@@ -194,7 +201,8 @@ def rebuild_index(output_dir: str | Path | None = None) -> Dict[str, Any]:
 
     # ---------- 청킹 ---------------------------------------------------------
     re_paras = re.compile(r"\n{2,}")
-    re_sents = re.compile(r"(?<=[.!?。！？])\s+")
+    # HQ 품질: U+2026(ellipsis)도 문장 경계로 인식 (리터럴 대신 유니코드 이스케이프 사용)
+    re_sents = re.compile(r"(?<=[.!?\u3002\uFF01\uFF1F\u2026])\s+")
 
     def _split_paragraphs(s: str) -> list[str]:
         parts = [p.strip() for p in re_paras.split(s) if p.strip()]
@@ -273,7 +281,8 @@ def rebuild_index(output_dir: str | Path | None = None) -> Dict[str, Any]:
         return count
 
     def _hash_norm(s: str) -> str:
-        s2 = s.lower().strip()
+        # HQ 품질: ...(U+2026)을 ...로 정규화 후 해시 → 중복제거 정밀도 향상
+        s2 = s.replace("\u2026", "...").lower().strip()
         return hashlib.sha1(s2.encode("utf-8", errors="ignore")).hexdigest()
 
     # ---- 빌드: Drive prepared에서만 수집 -----------------------------------
@@ -281,7 +290,6 @@ def rebuild_index(output_dir: str | Path | None = None) -> Dict[str, Any]:
     dest.mkdir(parents=True, exist_ok=True)
     out_jsonl = dest / "chunks.jsonl"
 
-    # prepared only 힌트(엔진이 다른 입력원을 보지 않도록)
     if os.getenv("MAIC_USE_PREPARED_ONLY", "1") != "1":
         os.environ["MAIC_USE_PREPARED_ONLY"] = "1"
 
@@ -414,7 +422,7 @@ def rebuild_index(output_dir: str | Path | None = None) -> Dict[str, Any]:
         except Exception:
             pass
 
-        # manifest.json: files 리스트 + 간단 docs 헤더 맵
+        # manifest.json
         headers: dict[str, dict[str, str]] = {}
         for obj in lines:
             d = obj.get("doc_id")
@@ -432,7 +440,7 @@ def rebuild_index(output_dir: str | Path | None = None) -> Dict[str, Any]:
         except Exception:
             pass
 
-        # index.meta.json: 빌드 메타
+        # index.meta.json
         try:
             built_ts = int(datetime.datetime.utcnow().timestamp())
             meta = {"built_at": built_ts, "mode": mode or "STD", "chunks": count}

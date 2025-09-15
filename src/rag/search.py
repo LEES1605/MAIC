@@ -1,3 +1,4 @@
+# File: src/rag/search.py
 # ============================ [01] SIMPLE RAG SEARCH — START ============================
 """
 경량 RAG 검색기.
@@ -9,7 +10,7 @@
 - 한국어 토큰 정규화: 대표 조사(예: 은/는/이/가/을/를/과/와/로/의/도/만/
   에게/한테/에서/부터/까지 등)를 제거
 - PDF 처리:
-  * PyPDF2가 있으면 본문 추출
+  * pypdf(우선), PyPDF2(폴백) 사용 가능 시 본문 추출
   * 미설치/추출 실패 시 파일명(제목)만으로 최소 인덱싱
 """
 
@@ -23,41 +24,17 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+import importlib
 
 SUPPORTED_EXTS = {".md", ".txt", ".pdf"}
 TOKEN_RE = re.compile(r"[A-Za-z0-9가-힣]+")
 
 # 말단 조사(길이 긴 것 → 짧은 것 순서) — 과도 절단 방지(토큰 길이 체크)
 _KR_SUFFIXES = [
-    "으로써",
-    "으로서",
-    "에게서",
-    "한테서",
-    "로부터",
-    "부터",
-    "까지",
-    "이라고",
-    "라고",
-    "이며",
-    "이고",
-    "에게",
-    "한테",
-    "에서",
-    "으로",
-    "처럼",
-    "보다",
-    "과",
-    "와",
-    "로",
-    "의",
-    "도",
-    "만",
-    "은",
-    "는",
-    "이",
-    "가",
-    "을",
-    "를",
+    "으로써", "으로서", "에게서", "한테서", "로부터", "부터", "까지",
+    "이라고", "라고", "이며", "이고", "에게", "한테", "에서", "으로",
+    "처럼", "보다", "과", "와", "로", "의", "도", "만", "은", "는",
+    "이", "가", "을", "를",
 ]
 
 
@@ -72,17 +49,21 @@ class Doc:
 def _read_text_pdf(path: Path) -> str:
     """
     PDF 텍스트 추출(가능하면). 실패 시 빈 문자열.
-    정적 import 대신 importlib 런타임 로딩으로 mypy 의존 제거.
+    pypdf 우선 시도, 실패 시 PyPDF2 폴백.
     """
     try:
-        import importlib
-
+        PdfReader = None
         try:
-            mod = importlib.import_module("PyPDF2")
+            mod = importlib.import_module("pypdf")
             PdfReader = getattr(mod, "PdfReader", None)
         except Exception:
             PdfReader = None
-
+        if PdfReader is None:
+            try:
+                mod2 = importlib.import_module("PyPDF2")
+                PdfReader = getattr(mod2, "PdfReader", None)
+            except Exception:
+                PdfReader = None
         if PdfReader is None:
             return ""
 
@@ -128,7 +109,6 @@ def build_index(dataset_dir: str) -> Dict:
     docs: List[Doc] = []
     for p in base.rglob("*"):
         if p.is_file() and p.suffix.lower() in SUPPORTED_EXTS:
-            # _read_text는 [04] READ HELPERS 구획에서 제공
             raw = _read_text(p)
             title = _title_from_path(p)
             if not raw and p.suffix.lower() == ".pdf":
@@ -172,17 +152,18 @@ def _idf(N: int, df: int) -> float:
 
 
 def _make_snippet(text: str, needle: str, width: int = 120) -> str:
+    """needle 주변으로 고정 폭 스니펫 생성(ASCII only, no Unicode ellipsis)."""
     if not text:
         return ""
     text_l = text.replace("\n", " ")
     pos = text_l.lower().find(needle.lower())
     if pos < 0:
         base = text_l[:width]
-        return base + ("…" if len(text_l) > width else "")
+        return base + ("..." if len(text_l) > width else "")
     start = max(0, pos - width // 2)
     end = min(len(text_l), pos + width // 2)
-    prefix = "…" if start > 0 else ""
-    suffix = "…" if end < len(text_l) else ""
+    prefix = "..." if start > 0 else ""
+    suffix = "..." if end < len(text_l) else ""
     return f"{prefix}{text_l[start:end]}{suffix}"
 
 
@@ -229,7 +210,6 @@ def search(
         path = docs[doc_id]["path"]
         title = docs[doc_id]["title"]
         try:
-            # _read_text는 [04] READ HELPERS 구획에서 제공
             text = _read_text(Path(path))
         except Exception:
             text = ""

@@ -1,0 +1,43 @@
+# [01] START: .github/workflows/pr-title.yml
+name: CI • PR Title (Conventional, auto-fix)
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  pr-title:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      statuses: write
+    steps:
+      - name: Autofix PR title (Patch N / patch-N -> chore(patch-N): ...)
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = context.payload.pull_request.title || "";
+            let m = title.match(/^Patch\s+(\d+)(?::\s*(.+))?$/i);
+            if (!m) m = title.match(/^patch-(\d+)(?::\s*(.+))?$/i);
+            if (m) {
+              const num = m[1];
+              const subj = (m[2] && m[2].trim()) ? m[2].trim() : "maintenance";
+              const newTitle = `chore(patch-${num}): ${subj}`;
+              await github.rest.pulls.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.payload.pull_request.number,
+                title: newTitle
+              });
+              core.info(`Updated PR title -> ${newTitle}`);
+            } else {
+              core.info("Title is not 'Patch N' or 'patch-N', no change.");
+            }
+
+      - name: Validate PR title (Conventional Commits)
+        uses: amannn/action-semantic-pull-request@v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          validateSingleCommit: true
+# [01] END: .github/workflows/pr-title.yml
