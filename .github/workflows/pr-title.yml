@@ -2,10 +2,10 @@
 name: CI • PR Title (Conventional, auto-fix)
 
 on:
-  # PR 이벤트에서 무조건 트리거되도록 target 사용(포크/권한 이슈 회피)
+  # 포크 PR도 제목 보정 권한이 확보되도록 target 이벤트 사용
   pull_request_target:
     types: [opened, edited, synchronize, reopened]
-  # 수동 실행 시 특정 PR 번호로 강제 교정 지원
+  # 수동 실행 시 특정 PR 번호로 강제 보정 지원
   workflow_dispatch:
     inputs:
       pr:
@@ -21,6 +21,7 @@ permissions:
 jobs:
   pr-title:
     runs-on: ubuntu-latest
+
     steps:
       - name: Autofix PR title (PR events)
         if: ${{ github.event_name == 'pull_request_target' }}
@@ -32,9 +33,16 @@ jobs:
             if (!pr) { core.info("No PR context."); return; }
             const original = pr.title || "";
             const patterns = [
+              // 영어: Patch 18: foo / Patch-18 foo / patch 18 - foo ...
               [/^patch\s*[-\s]?(\d+)\s*[:\-]?\s*(.*)$/i, (m) => {
                 const num = m[1];
                 const subj = (m[2] || "").trim() || "maintenance";
+                return `chore(patch-${num}): ${subj}`;
+              }],
+              // 한국어: 패치 18: 제목 / 패치-18 제목 ...
+              [/^패치\s*[-\s]?(\d+)\s*[:\-]?\s*(.*)$/i, (m) => {
+                const num = m[1];
+                const subj = (m[2] || "").trim() || "유지보수";
                 return `chore(patch-${num}): ${subj}`;
               }],
             ];
@@ -74,6 +82,11 @@ jobs:
                 const subj = (m[2] || "").trim() || "maintenance";
                 return `chore(patch-${num}): ${subj}`;
               }],
+              [/^패치\s*[-\s]?(\d+)\s*[:\-]?\s*(.*)$/i, (m) => {
+                const num = m[1];
+                const subj = (m[2] || "").trim() || "유지보수";
+                return `chore(patch-${num}): ${subj}`;
+              }],
             ];
             let fixed = null;
             for (const [rx, fmt] of patterns) {
@@ -99,7 +112,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          validateSingleCommit: true
+          # 👉 단일 커밋 PR이라도 'PR 제목'만 규약형이면 통과
+          validateSingleCommit: false
+          # (선택) 허용 타입을 명시적으로 고정
+          types: |
+            build, chore, ci, docs, feat, fix, perf, refactor, revert, style, test
 
       - name: No-op for manual run without PR
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.pr == '' }}
