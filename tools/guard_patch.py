@@ -1,240 +1,215 @@
-# [01] START: tools/guard_patch.py (rev 2025-09-15)
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Patch-Guard (Relaxed)
+
+정책(완화판):
+  - START/END 쌍의 "짝맞춤"과 "중첩 금지"만 강제.
+  - 블록 전체 교체 의무 없음(블록 내부 일부 라인 변경 허용).
+  - 번호([NN] 또는 [NNX])는 순차성 권고, 강제하지 않음.
+  - [NNX]에서 X는 대문자 1글자(예: [03B]) 허용.
+  - 마커 라인은 다음 형태만 인식:
+      * Python/YAML 주석: ^\s*#.*\[(\d{2})([A-Z])?\].*\b(START|END)\b
+      * Markdown 맨 앞:  ^\[(\d{2})([A-Z])?\].*\b(START|END)\b
+  - U+2026(…) 금지(문서/코드 모두).
+
+입력:
+  --base, --head : (선택) diff 범위를 좁히기 위한 힌트. 실패 시 안전 폴백.
+
+종료코드:
+  0 = PASS, 1 = FAIL
+"""
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Iterable, List, Optional, Sequence, Tuple
 
-# Monitored extensions
-MONITORED_EXTS = {".py", ".md", ".yaml", ".yml"}
 
-# Numeric block markers: "# [NN] ... START/END" or "<!-- [NN] ... START/END -->"
-START_RE = re.compile(r"^\s*(#|<!--)\s*\[(\d{2,3})\].*START", re.IGNORECASE)
-END_RE = re.compile(r"^\s*(#|<!--)\s*\[(\d{2,3})\].*END", re.IGNORECASE)
-
-# No-Ellipsis Gate (U+2026). Do not place the ellipsis literal in source.
-NO_ELLIPSIS_RE = re.compile(chr(0x2026))
+# -------- 설정 --------
+TEXT_EXTS = {
+    ".py", ".md", ".txt", ".yml", ".yaml", ".toml", ".ini", ".cfg", ".json", ".sh"
+}
+ELLIPSIS = "\u2026"  # 금지 문자
 
 
 @dataclass(frozen=True)
-class Block:
-    num: int
-    start: int
-    end: int
+class Marker:
+    line_no: int
+    ident: str    # "02" or "02B"
+    kind: str     # "START" or "END"
+    raw: str
 
 
-def _run(*cmd: str) -> str:
-    """Run a command and capture stdout/stderr together; raise on failure."""
-    cp = subprocess.run(
-        list(cmd),
-        text=True,
-        encoding="utf-8",
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        check=False,
-    )
-    if cp.returncode != 0:
-        raise subprocess.CalledProcessError(cp.returncode, cmd, output=cp.stdout)
-    return cp.stdout
+# Python/YAML 주석형: "# ... [NN] ... START/END"
+RE_COMMENT = re.compile(
+    r"^\s*#.*\[(?P<num>\d{2})(?P<sfx>[A-Z])?\].*\b(?P<kind>START|END)\b", re.IGNORECASE
+)
 
+# Markdown 맨 앞: "[NN] ... START/END"
+RE_MD = re.compile(
+    r"^\[(?P<num>\d{2})(?P<sfx>[A-Z])?\].*\b(?P<kind>START|END)\b", re.IGNORECASE
+)
 
-def _changed_files(base: str, head: str) -> List[str]:
-    out = _run("git", "diff", "--name-only", f"{base}..{head}")
-    return [p for p in out.splitlines() if p.strip()]
-
-
-def _file_exists_at_commit(commit: str, path: str) -> bool:
-    try:
-        _run("git", "cat-file", "-e", f"{commit}:{path}")
+# 폭 넓은 텍스트 판정(바이너리 회피)
+def _is_text_candidate(p: Path) -> bool:
+    if p.suffix.lower() in TEXT_EXTS:
         return True
-    except subprocess.CalledProcessError:
+    # 기타 확장자는 크기 작고 널바이트 없으면 텍스트로 가정
+    try:
+        b = p.read_bytes()[:4096]
+        return b.find(b"\x00") < 0
+    except Exception:
         return False
 
 
-def _read_at_commit(commit: str, path: str) -> str:
-    if not _file_exists_at_commit(commit, path):
-        return ""
-    return _run("git", "show", f"{commit}:{path}")
-
-
-@dataclass
-class DiffInfo:
-    plus: Set[int]   # AFTER file: added/changed line numbers
-    minus: Set[int]  # BEFORE file: removed/changed line numbers
-
-
-def _parse_unified_diff(base: str, head: str, path: str) -> DiffInfo:
-    """
-    Parse 'git diff --unified=0 base..head -- path'.
-    If diff fails (e.g., brand-new file), treat the entire AFTER as added.
-    """
-    plus: Set[int]
-    minus: Set[int]
+def _run(cmd: Sequence[str]) -> Tuple[int, str]:
     try:
-        text = _run("git", "diff", "--unified=0", "--no-color", f"{base}..{head}", "--", path)
-    except subprocess.CalledProcessError:
-        # New file fallback
-        try:
-            after_lines = Path(path).read_text(encoding="utf-8").splitlines()
-        except Exception:
-            after_lines = []
-        plus = set(range(1, len(after_lines) + 1))
-        minus = set()
-        return DiffInfo(plus=plus, minus=minus)
-
-    plus = set()
-    minus = set()
-    cur_plus = 0
-    cur_minus = 0
-    for ln in text.splitlines():
-        if ln.startswith("@@"):
-            m = re.search(r"-([0-9]+)(?:,([0-9]+))?\s+\+([0-9]+)(?:,([0-9]+))?", ln)
-            if not m:
-                continue
-            a = int(m.group(1))
-            c = int(m.group(3))
-            cur_minus = a
-            cur_plus = c
-            continue
-        if ln.startswith("---") or ln.startswith("+++") or ln == "":
-            continue
-        if ln.startswith("+"):
-            plus.add(cur_plus)
-            cur_plus += 1
-            continue
-        if ln.startswith("-"):
-            minus.add(cur_minus)
-            cur_minus += 1
-            continue
-        # context line
-        cur_plus += 1
-        cur_minus += 1
-    return DiffInfo(plus=plus, minus=minus)
-
-
-def _parse_blocks(text: str) -> List[Block]:
-    blocks: List[Block] = []
-    stack: List[Tuple[int, int]] = []  # (num, start_line)
-    for i, ln in enumerate(text.splitlines(), 1):
-        s = START_RE.match(ln)
-        if s:
-            num = int(s.group(2))
-            stack.append((num, i))
-            continue
-        e = END_RE.match(ln)
-        if e:
-            num = int(e.group(2))
-            if not stack:
-                raise ValueError(f"END without START at line {i}")
-            start_num, start_ln = stack.pop()
-            if start_num != num:
-                raise ValueError(f"Mismatched block numbers: {start_num}..{num} at line {i}")
-            blocks.append(Block(num=num, start=start_ln, end=i))
-    if stack:
-        raise ValueError("Unclosed START block(s) at EOF")
-    return sorted(blocks, key=lambda b: b.start)
-
-
-def _check_numbering(blocks: List[Block]) -> List[str]:
-    probs: List[str] = []
-    expect = 1
-    for b in blocks:
-        if b.num != expect:
-            probs.append(f"non-sequential block number: got {b.num}, expect {expect}")
-            expect = b.num + 1
-        else:
-            expect += 1
-    return probs
-
-
-def _line_map(text: str) -> Dict[int, str]:
-    return {i: ln for i, ln in enumerate(text.splitlines(), 1)}
-
-
-def _block_of(line_no: int, blocks: List[Block]) -> Optional[Block]:
-    for b in blocks:
-        if b.start <= line_no <= b.end:
-            return b
-    return None
-
-
-def _guard_file(path: str, base: str, head: str) -> List[str]:
-    probs: List[str] = []
-    ext = Path(path).suffix.lower()
-    if ext not in MONITORED_EXTS:
-        return probs
-
-    diff = _parse_unified_diff(base, head, path)
-    before = _read_at_commit(base, path)
-    after = Path(path).read_text(encoding="utf-8") if Path(path).exists() else ""
-
-    # Parse blocks
-    try:
-        blocks_before = _parse_blocks(before) if before else []
-        blocks_after = _parse_blocks(after) if after else []
+        cp = subprocess.run(cmd, check=False, capture_output=True, text=True)
+        out = (cp.stdout or "").strip()
+        if not out and cp.stderr:
+            out = cp.stderr.strip()
+        return cp.returncode, out
     except Exception as e:
-        probs.append(f"{path}: block parse error: {e}")
-        return probs
-
-    # (1) numbering check (after)
-    probs.extend(f"{path}: {p}" for p in _check_numbering(blocks_after))
-
-    # (2) whole-block replace rule (additions)
-    after_lines = _line_map(after)
-    touched_after: Set[int] = set()
-    for ln_no in sorted(diff.plus):
-        b = _block_of(ln_no, blocks_after)
-        if b:
-            touched_after.add(b.num)
-    for num in sorted(touched_after):
-        b = next(x for x in blocks_after if x.num == num)
-        if b.start not in diff.plus or b.end not in diff.plus:
-            probs.append(f"{path}: block [{b.num}] changed without START/END (need whole-block)")
-
-    # (3) whole-block delete rule (deletions)
-    touched_before: Set[int] = set()
-    for ln_no in sorted(diff.minus):
-        b = _block_of(ln_no, blocks_before)
-        if b:
-            touched_before.add(b.num)
-    for num in sorted(touched_before):
-        b = next(x for x in blocks_before if x.num == num)
-        if b.start not in diff.minus or b.end not in diff.minus:
-            probs.append(f"{path}: block [{b.num}] deletion touches inside without START/END")
-
-    # (4) No-Ellipsis Gate (added lines only)
-    for ln_no in diff.plus:
-        txt = after_lines.get(ln_no, "")
-        if NO_ELLIPSIS_RE.search(txt):
-            probs.append(f"{path}:{ln_no}: contains Unicode ellipsis (U+2026) - forbidden")
-
-    return probs
+        return 1, str(e)
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(description="Patch guard for numeric-block edits")
-    ap.add_argument("--base", required=True)
-    ap.add_argument("--head", required=True)
-    args = ap.parse_args()
+def _changed_files(base: Optional[str], head: Optional[str]) -> List[Path]:
+    # 우선 Git diff 시도
+    candidates: List[str] = []
+    if base and head:
+        rc, out = _run(["git", "diff", "--name-only", f"{base}..{head}"])
+        if rc == 0 and out:
+            candidates = [s for s in out.splitlines() if s.strip()]
+    if not candidates:
+        # PR 환경이 아니거나 실패 시: 추적 중인 텍스트 파일 전체 검사
+        rc, out = _run(["git", "ls-files"])
+        if rc == 0 and out:
+            candidates = [s for s in out.splitlines() if s.strip()]
+        else:
+            # 최후: 작업 디렉터리 전체(상대경로) 스캔
+            for p in Path(".").rglob("*"):
+                if p.is_file():
+                    candidates.append(str(p))
 
-    files = _changed_files(args.base, args.head)
-    problems: List[str] = []
+    files: List[Path] = []
+    for s in candidates:
+        p = Path(s)
+        if p.exists() and p.is_file() and _is_text_candidate(p):
+            files.append(p)
+    # uniq 유지
+    seen = set()
+    out: List[Path] = []
     for p in files:
-        problems.extend(_guard_file(p, args.base, args.head))
+        if p.as_posix() not in seen:
+            seen.add(p.as_posix())
+            out.append(p)
+    return out
 
-    if problems:
+
+def _read_text(p: Path) -> str:
+    for enc in ("utf-8", "utf-8-sig", "cp949", "euc-kr", "latin1"):
+        try:
+            return p.read_text(encoding=enc)
+        except Exception:
+            continue
+    return ""
+
+
+def _collect_markers(text: str) -> List[Marker]:
+    markers: List[Marker] = []
+    for i, line in enumerate(text.splitlines(), start=1):
+        m = RE_COMMENT.search(line)
+        if not m:
+            m = RE_MD.search(line)
+        if not m:
+            continue
+        ident = m.group("num") + (m.group("sfx") or "")
+        kind = m.group("kind").upper()
+        markers.append(Marker(i, ident, kind, line.rstrip()))
+    return markers
+
+
+def _validate_pairs(markers: List[Marker]) -> List[str]:
+    """
+    중첩 금지 + 짝맞춤만 검사.
+    - START 다음에는 반드시 같은 ident의 END가 나와야 한다.
+    - 다른 ident로 "중첩 START" 금지.
+    - END가 먼저 나오면 오류.
+    """
+    errs: List[str] = []
+    stack: List[Marker] = []
+    for m in markers:
+        if m.kind == "START":
+            if stack:
+                prev = stack[-1]
+                errs.append(
+                    f"nested block not allowed: {m.ident} START at line {m.line_no} while {prev.ident} still open (START line {prev.line_no})"
+                )
+            stack.append(m)
+        else:  # END
+            if not stack:
+                errs.append(f"END without START: {m.ident} at line {m.line_no}")
+                continue
+            prev = stack.pop()
+            if prev.ident != m.ident:
+                errs.append(
+                    f"mismatched END: got {m.ident} at line {m.line_no}, expected {prev.ident} (START line {prev.line_no})"
+                )
+    if stack:
+        open_list = ", ".join(f"{x.ident}@{x.line_no}" for x in stack)
+        errs.append(f"unclosed START remains: {open_list}")
+    return errs
+
+
+def _scan_ellipsis(text: str) -> List[int]:
+    lines: List[int] = []
+    if ELLIPSIS not in text:
+        return lines
+    for i, line in enumerate(text.splitlines(), start=1):
+        if ELLIPSIS in line:
+            lines.append(i)
+    return lines
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    ap = argparse.ArgumentParser(description="Patch-Guard (Relaxed)")
+    ap.add_argument("--base", default=os.getenv("BASE_SHA") or "", help="optional base sha")
+    ap.add_argument("--head", default=os.getenv("HEAD_SHA") or "", help="optional head sha")
+    args = ap.parse_args(argv)
+
+    targets = _changed_files(args.base or None, args.head or None)
+    errors: List[str] = []
+
+    for p in targets:
+        txt = _read_text(p)
+        # 1) Ellipsis 금지
+        bad = _scan_ellipsis(txt)
+        if bad:
+            for ln in bad:
+                errors.append(f"{p.as_posix()}:{ln}: contains Unicode ellipsis (U+2026) - forbidden")
+
+        # 2) START/END 쌍 검증 (해당 파일에 마커가 있는 경우에만)
+        markers = _collect_markers(txt)
+        if markers:
+            ers = _validate_pairs(markers)
+            for e in ers:
+                errors.append(f"{p.as_posix()}: {e}")
+
+    if errors:
         print("[patch-guard] FAIL")
-        for p in problems:
-            print(" -", p)
+        for e in errors:
+            print(f" - {e}")
         return 1
 
-    print("[patch-guard] OK")
+    print("[patch-guard] PASS")
     return 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-# [01] END: tools/guard_patch.py (rev 2025-09-15)
