@@ -281,7 +281,7 @@ def rebuild_index(output_dir: str | Path | None = None) -> Dict[str, Any]:
         return count
 
     def _hash_norm(s: str) -> str:
-        # HQ 품질: …(U+2026)을 ...로 정규화 후 해시 → 중복제거 정밀도 향상
+        # HQ 품질: ...(U+2026)을 ...로 정규화 후 해시 → 중복제거 정밀도 향상
         s2 = s.replace("\u2026", "...").lower().strip()
         return hashlib.sha1(s2.encode("utf-8", errors="ignore")).hexdigest()
 
