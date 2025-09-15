@@ -3,14 +3,13 @@ name: CI • PR Title (Conventional, auto-fix)
 
 on:
   pull_request:
-  pull_request_target:
   workflow_dispatch:
 
 jobs:
   pr-title:
     runs-on: ubuntu-latest
     permissions:
-      pull-requests: write   # 제목 자동 수정에 필요
+      pull-requests: write
       statuses: write
     steps:
       - name: Autofix PR title (Patch N / patch-N -> chore(patch-N): ...)
@@ -18,9 +17,7 @@ jobs:
         with:
           script: |
             const title = context.payload.pull_request.title || "";
-            // 1) "Patch 31[: subject]" 형태
             let m = title.match(/^Patch\s+(\d+)(?::\s*(.+))?$/i);
-            // 2) "patch-31[: subject]" 형태
             if (!m) m = title.match(/^patch-(\d+)(?::\s*(.+))?$/i);
             if (m) {
               const num = m[1];
