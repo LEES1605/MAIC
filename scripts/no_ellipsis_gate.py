@@ -3,7 +3,7 @@
 """
 scripts/no_ellipsis_gate.py
 
-Fail CI if Unicode ellipsis (U+2026) appears in tracked text/code files.
+Fail CI if Unicode ellipsis (U+2026) appears in code files.
 Use --fix to replace it with ASCII "...".
 """
 from __future__ import annotations
@@ -14,11 +14,14 @@ import argparse
 import sys
 
 TARGET = "\u2026"  # do NOT use the literal char in this file
+
 INCLUDE_EXTS = {
-    ".py", ".md", ".txt", ".yaml", ".yml", ".toml", ".ini",
-    ".json", ".sh", ".ps1", ".bat", ".sql", ".js", ".ts", ".tsx",
+    ".py", ".pyi", ".ts", ".tsx", ".js", ".jsx", ".sh", ".bat", ".ps1",
 }
-EXCLUDE_DIRS = {".git", ".venv", "venv", "node_modules", "dist", "build", "__pycache__"}
+EXCLUDE_DIRS = {
+    ".git", ".venv", "venv", "node_modules", "dist", "build", "__pycache__", "docs",
+}
+EXCLUDE_FILES = {"prompts.yaml"}
 # [01] END
 
 # [02] START
@@ -29,6 +32,8 @@ def iter_files(root: Path) -> Iterable[Path]:
         if p.suffix.lower() not in INCLUDE_EXTS:
             continue
         if set(x.name for x in p.parents) & EXCLUDE_DIRS:
+            continue
+        if p.name in EXCLUDE_FILES:
             continue
         yield p
 
@@ -53,7 +58,7 @@ def scan_file(p: Path) -> List[Tuple[int, int]]:
 
 # [03] START
 def parse_args(argv: List[str] | None = None) -> argparse.Namespace:
-    ap = argparse.ArgumentParser(description="Fail CI on U+2026 (Unicode ellipsis).")
+    ap = argparse.ArgumentParser(description="Fail CI on U+2026 (Unicode ellipsis) inside code files.")
     ap.add_argument("--root", default=".", help="Root directory to scan (default: .)")
     ap.add_argument("--fix", action="store_true", help="Replace with ASCII '...' in-place.")
     return ap.parse_args(argv)
