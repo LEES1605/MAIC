@@ -1108,6 +1108,7 @@ def _render_admin_indexed_sources_panel() -> None:
         st.dataframe(rows2, hide_index=True, use_container_width=True)
 # ============= [14] 인덱싱된 소스 목록(읽기 전용 대시보드) ==============
 
+# File: app.py
 # ===================== [15] 채팅 UI(스타일/모드) ==========================
 def _inject_chat_styles_once() -> None:
     """전역 CSS: 카톡형 입력, 말풍선/칩, 모드 pill."""
@@ -1117,6 +1118,7 @@ def _inject_chat_styles_once() -> None:
         return
     st.session_state["_chat_styles_injected_v2"] = True
 
+    # ✅ "질문을 입력하세요..." (ASCII) 로 교체
     st.markdown(
         """
     <style>
@@ -1136,23 +1138,23 @@ def _inject_chat_styles_once() -> None:
       }
       .chatpane div[data-testid="stRadio"] svg{ display:none!important }
 
-      form[data-testid="stForm"]:has(input[placeholder='질문을 입력하세요…']) {
+      form[data-testid="stForm"]:has(input[placeholder='질문을 입력하세요...']) {
         position:relative; background:#EDF4FF; padding:8px 10px 10px 10px; margin:0;
       }
-      form[data-testid="stForm"]:has(input[placeholder='질문을 입력하세요…'])
+      form[data-testid="stForm"]:has(input[placeholder='질문을 입력하세요...'])
       [data-testid="stTextInput"] input{
         background:#FFF8CC !important; border:1px solid #F2E4A2 !important;
         border-radius:999px !important; color:#333 !important; height:46px; padding-right:56px;
       }
-      form[data-testid="stForm"]:has(input[placeholder='질문을 입력하세요…']) ::placeholder{ color:#8A7F4A !important; }
+      form[data-testid="stForm"]:has(input[placeholder='질문을 입력하세요...']) ::placeholder{ color:#8A7F4A !important; }
 
-      form[data-testid="stForm"]:has(input[placeholder='질문을 입력하세요…']) .stButton,
-      form[data-testid="stForm"]:has(input[placeholder='질문을 입력하세요…']) .row-widget.stButton{
+      form[data-testid="stForm"]:has(input[placeholder='질문을 입력하세요...']) .stButton,
+      form[data-testid="stForm"]:has(input[placeholder='질문을 입력하세요...']) .row-widget.stButton{
         position:absolute; right:14px; top:50%; transform:translateY(-50%);
         z-index:2; margin:0!important; padding:0!important;
       }
-      form[data-testid="stForm"]:has(input[placeholder='질문을 입력하세요…']) .stButton > button,
-      form[data-testid="stForm"]:has(input[placeholder='질문을 입력하세요…']) .row-widget.stButton > button{
+      form[data-testid="stForm"]:has(input[placeholder='질문을 입력하세요...']) .stButton > button,
+      form[data-testid="stForm"]:has(input[placeholder='질문을 입력하세요...']) .row-widget.stButton > button{
         width:38px; height:38px; border-radius:50%; border:0; background:#0a2540; color:#fff;
         font-size:18px; line-height:1; cursor:pointer; box-shadow:0 2px 6px rgba(0,0,0,.15);
         padding:0; min-height:0;
@@ -1172,9 +1174,9 @@ def _inject_chat_styles_once() -> None:
         display:inline-block; margin:-2px 0 6px 0; padding:2px 10px; border-radius:999px;
         font-size:12px; font-weight:700; color:#fff; line-height:1;
       }
-      .chip.me{ background:#059669; }   /* 나 */
-      .chip.pt{ background:#2563eb; }   /* 피티쌤 */
-      .chip.mn{ background:#7c3aed; }   /* 미나쌤 */
+      .chip.me{ background:#059669; }
+      .chip.pt{ background:#2563eb; }
+      .chip.mn{ background:#7c3aed; }
       .chip-src{
         display:inline-block; margin-left:6px; padding:2px 8px; border-radius:10px;
         background:#eef2ff; color:#3730a3; font-size:12px; font-weight:600; line-height:1;
@@ -1190,6 +1192,7 @@ def _inject_chat_styles_once() -> None:
     """,
         unsafe_allow_html=True,
     )
+
 # [15B] START: _render_mode_controls_pills (FULL REPLACEMENT)
 def _render_mode_controls_pills() -> str:
     """
@@ -1411,6 +1414,7 @@ def _render_chat_panel() -> None:
 # [16] END
 
 
+# File: app.py
 # ========================== [17] 본문 렌더 ===============================
 def _render_body() -> None:
     if st is None:
@@ -1432,7 +1436,6 @@ def _render_body() -> None:
 
     _header()
 
-    # 관리자만: 오케스트레이터/스캔/인덱싱/읽기전용 상세
     if _is_admin_view():
         _render_index_orchestrator_header()
         try:
@@ -1462,9 +1465,10 @@ def _render_body() -> None:
     with st.container(border=True, key="chatpane_container"):
         st.markdown('<div class="chatpane">', unsafe_allow_html=True)
         st.session_state["__mode"] = _render_mode_controls_pills() or st.session_state.get("__mode", "")
-        submitted: bool = False  # 엄격 설정 대비 선제 초기화
+        submitted: bool = False
         with st.form("chat_form", clear_on_submit=False):
-            q: str = st.text_input("질문", placeholder="질문을 입력하세요…", key="q_text")
+            # ✅ ASCII 줄임표 사용
+            q: str = st.text_input("질문", placeholder="질문을 입력하세요...", key="q_text")
             submitted = st.form_submit_button("➤")
         st.markdown("</div>", unsafe_allow_html=True)
 
@@ -1473,6 +1477,7 @@ def _render_body() -> None:
         _safe_rerun("chat_submit", ttl=1)
     else:
         st.session_state.setdefault("inpane_q", "")
+# (이하 [18] 최신본 유지)
 
 # =============================== [18] main =================================
 def main() -> None:
