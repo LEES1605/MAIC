@@ -1,520 +1,470 @@
-# ============================ [01] imports & constants — START ============================
+# ========================= [01] imports & constants — START =========================
 from __future__ import annotations
 
-import gzip
 import io
 import json
 import os
-import shutil
 import tarfile
 import time
 import zipfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
+from urllib import error as _urlerr
+from urllib import parse as _urlp
+from urllib import request as _urlq
 
-API = "https://api.github.com"
-# ============================= [01] imports & constants — END =============================
+API_BASE = "https://api.github.com"
+UPLOAD_BASE = "https://uploads.github.com"
+# ========================== [01] imports & constants — END ==========================
 
 
-# ============================ [02] env & header helpers — START ===========================
+# ========================= [02] logging & env helpers — START =======================
 def _log(msg: str) -> None:
-    """모듈 내부 표준 로거(민감정보 금지)."""
+    """Non-sensitive console log. ASCII only."""
     try:
-        print(f"[backup] {msg}")
+        print(f"[github_release] {msg}")
     except Exception:
         pass
 
 
 def _get_env(name: str, default: str = "") -> str:
-    v = os.getenv(name, default)
-    return (v or "").strip()
+    """Read env first; try Streamlit secrets if available."""
+    v = os.getenv(name, "")
+    if v:
+        return v
+    # optional: streamlit secrets (safe and best-effort)
+    try:
+        import streamlit as st  # type: ignore[import-not-found]
+        s = st.secrets.get(name)
+        if isinstance(s, str) and s:
+            return s
+    except Exception:
+        pass
+    return default
 
 
-def _token() -> str:
-    return _get_env("GH_TOKEN") or _get_env("GITHUB_TOKEN")
+def _resolve_owner_repo() -> Tuple[str, str]:
+    """
+    Resolve (owner, repo) from common env/secrets.
+    Priority:
+      1) GITHUB_REPO = "owner/repo"
+      2) GH_OWNER + GH_REPO
+      3) GITHUB_OWNER + GITHUB_REPO_NAME
+    """
+    combo = _get_env("GITHUB_REPO", "")
+    if combo and "/" in combo:
+        o, r = combo.split("/", 1)
+        return o.strip(), r.strip()
+
+    ow = _get_env("GH_OWNER", "") or _get_env("GITHUB_OWNER", "")
+    rp = _get_env("GH_REPO", "") or _get_env("GITHUB_REPO_NAME", "")
+    return ow.strip(), rp.strip()
 
 
 def _repo() -> str:
-    """
-    owner/repo 문자열 계산.
-    우선순위: GITHUB_REPO → (GH_OWNER|GITHUB_OWNER) + (GH_REPO|GITHUB_REPO_NAME)
-    """
-    combo = _get_env("GITHUB_REPO")
-    if combo and "/" in combo:
-        return combo
-
-    owner = _get_env("GH_OWNER") or _get_env("GITHUB_OWNER")
-    repo = _get_env("GH_REPO") or _get_env("GITHUB_REPO_NAME")
-    if owner and repo:
-        return f"{owner}/{repo}"
+    """Return 'owner/repo' or empty string."""
+    ow, rp = _resolve_owner_repo()
+    if ow and rp:
+        return f"{ow}/{rp}"
     return ""
 
 
 def _branch() -> str:
-    return _get_env("GITHUB_REF_NAME") or "main"
+    """Best-effort current branch for tag target."""
+    # CI: GITHUB_REF_NAME exists on GitHub Actions
+    ref = os.getenv("GITHUB_REF_NAME", "")
+    if ref:
+        return ref
+    # default
+    return "main"
 
 
 def _headers() -> Dict[str, str]:
-    h = {
-        "Accept": "application/vnd.github+json",
-        "User-Agent": "MAIC-backup/0.1",
-    }
-    t = _token()
-    if t:
-        h["Authorization"] = f"token {t}"
+    """Default GitHub API headers with token if present."""
+    tok = _get_env("GH_TOKEN") or _get_env("GITHUB_TOKEN")
+    h = {"Accept": "application/vnd.github+json"}
+    if tok:
+        h["Authorization"] = f"token {tok}"
     return h
 
 
 def _upload_headers(content_type: str) -> Dict[str, str]:
-    h = dict(_headers())
-    if content_type:
-        h["Content-Type"] = content_type
+    h = _headers()
+    h["Content-Type"] = content_type
     return h
-# ============================= [02] env & header helpers — END ============================
+# ========================== [02] logging & env helpers — END ========================
 
 
-# ================================ [03] http helpers — START ===============================
-def _use_requests():
-    try:
-        import requests  # type: ignore
-        return requests
-    except Exception:
-        return None
+# ========================= [03] http helpers (urllib) — START =======================
+@dataclass
+class HttpResp:
+    status_code: int
+    text: str
+    data: Optional[Dict[str, Any]] = None
+    content: Optional[bytes] = None
 
 
-def _http_json(
-    method: str,
-    url: str,
-    headers: Optional[Dict[str, str]] = None,
-    payload: Optional[Dict[str, Any]] = None,
-    timeout: int = 30,
-) -> Tuple[int, Any]:
-    """requests 우선, 실패 시 urllib 폴백."""
-    rq = _use_requests()
-    if rq is not None:
-        try:
-            r = rq.request(method, url, headers=headers, json=payload, timeout=timeout)
-            ct = r.headers.get("content-type", "")
-            if "json" in ct.lower():
-                return r.status_code, r.json()
-            return r.status_code, {"_raw": r.text}
-        except Exception as e:
-            return 0, {"_error": str(e)}
-
-    from urllib import error, request
-
-    data_b = None
+def _http_json(method: str, url: str, payload: Optional[Dict[str, Any]] = None,
+               headers: Optional[Dict[str, str]] = None, timeout: int = 30) -> HttpResp:
+    data_bytes: Optional[bytes] = None
     if payload is not None:
-        data_b = json.dumps(payload).encode("utf-8")
+        data_bytes = json.dumps(payload).encode("utf-8")
         headers = dict(headers or {})
-        headers.setdefault("Content-Type", "application/json")
+        headers["Content-Type"] = "application/json"
 
-    req = request.Request(url, data=data_b, method=method)
+    req = _urlq.Request(url, data=data_bytes, method=method.upper())
     for k, v in (headers or {}).items():
         req.add_header(k, v)
 
     try:
-        with request.urlopen(req, timeout=timeout) as resp:
-            txt = resp.read().decode("utf-8", "ignore")
+        with _urlq.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read()
+            txt = raw.decode("utf-8", "ignore")
             try:
-                return 200, json.loads(txt)
+                obj = json.loads(txt)
             except Exception:
-                return 200, {"_raw": txt}
-    except error.HTTPError as e:
-        try:
-            detail = e.read().decode("utf-8", "ignore")
-        except Exception:
-            detail = ""
-        return e.code, {"_error": f"HTTP {e.code}", "detail": detail}
+                obj = None
+            return HttpResp(status_code=getattr(resp, "status", 200), text=txt, data=obj)
+    except _urlerr.HTTPError as e:
+        body = e.read().decode("utf-8", "ignore")
+        return HttpResp(status_code=e.code, text=body, data=None)
     except Exception as e:
-        return 0, {"_error": "network_error", "detail": str(e)}
+        return HttpResp(status_code=599, text=str(e), data=None)
 
 
-def _http_bytes(url: str, headers: Optional[Dict[str, str]] = None, timeout: int = 60) -> bytes:
-    rq = _use_requests()
-    if rq is not None:
-        try:
-            r = rq.get(url, headers=headers, timeout=timeout)
-            r.raise_for_status()
-            return r.content
-        except Exception:
-            return b""
-
-    from urllib import request
-    req = request.Request(url)
+def _http_bin(method: str, url: str, data: Optional[bytes] = None,
+              headers: Optional[Dict[str, str]] = None, timeout: int = 60) -> HttpResp:
+    req = _urlq.Request(url, data=data, method=method.upper())
     for k, v in (headers or {}).items():
         req.add_header(k, v)
+
     try:
-        with request.urlopen(req, timeout=timeout) as resp:
-            return resp.read()
-    except Exception:
-        return b""
-# ================================= [03] http helpers — END ================================
-
-
-# ============================== [04] archive helpers — START ==============================
-def _safe_extractall_tar(
-    tf: tarfile.TarFile,
-    dest_dir: Path,
-    members: Iterable[tarfile.TarInfo] | None = None,
-) -> None:
-    """
-    tar 안전 추출: 절대경로/상위탈출/심링크 차단.
-    """
-    dest_dir = Path(dest_dir).resolve()
-    items = list(members) if members is not None else list(tf.getmembers())
-
-    for m in items:
-        name = m.name
-        if not name:
-            continue
-        if name.startswith("/") or ".." in Path(name).parts:
-            continue
-        if getattr(m, "issym", lambda: False)() or getattr(m, "islnk", lambda: False)():
-            continue
-        target = dest_dir / name
-        target.parent.mkdir(parents=True, exist_ok=True)
-        tf.extract(m, path=dest_dir)
-
-
-def _extract_zip_bytes(data: bytes, dest: Path) -> bool:
-    try:
-        with io.BytesIO(data) as bio, zipfile.ZipFile(bio) as zf:
-            # 경로 탈출 방지
-            for n in zf.namelist():
-                if n.startswith("/") or ".." in Path(n).parts:
-                    continue
-            zf.extractall(dest)
-        return True
+        with _urlq.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read()
+            return HttpResp(status_code=getattr(resp, "status", 200), text="", content=raw)
+    except _urlerr.HTTPError as e:
+        body = e.read().decode("utf-8", "ignore")
+        return HttpResp(status_code=e.code, text=body, content=None)
     except Exception as e:
-        _log(f"unzip failed: {e}")
-        return False
+        return HttpResp(status_code=599, text=str(e), content=None)
+# ========================== [03] http helpers (urllib) — END ========================
 
 
-def _decompress_gz(src: Path, target: Path) -> bool:
-    try:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        with gzip.open(src, "rb") as rf, open(target, "wb") as wf:
-            shutil.copyfileobj(rf, wf)
-        return True
-    except Exception as e:
-        _log(f"gz decompress failed: {e}")
-        return False
-
-
-def _merge_dir_jsonl(dir_path: Path, target_file: Path) -> bool:
-    """디렉터리 내부의 *.jsonl(.gz)들을 합쳐 단일 jsonl 생성."""
-    cands = list(dir_path.glob("*.jsonl")) + list(dir_path.glob("*.jsonl.gz"))
-    cands.sort(key=lambda p: p.name)
-
-    if not cands:
-        return False
-
-    try:
-        target_file.parent.mkdir(parents=True, exist_ok=True)
-        with target_file.open("wb") as wf:
-            for p in cands:
-                if p.suffix == ".gz":
-                    with gzip.open(p, "rb") as rf:
-                        shutil.copyfileobj(rf, wf)
-                else:
-                    with p.open("rb") as rf:
-                        shutil.copyfileobj(rf, wf)
-        return True
-    except Exception as e:
-        _log(f"merge dir jsonl failed: {e}")
-        return False
-# =============================== [04] archive helpers — END ===============================
-
-
-# =============================== [05] release helpers — START =============================
+# ========================= [04] release discovery — START ===========================
 def _latest_release(repo: str) -> Optional[Dict[str, Any]]:
-    """가장 최신 릴리스 정보를 조회. 실패 시 None."""
+    """Return latest release JSON or None."""
     if not repo:
-        _log("GITHUB_REPO가 설정되지 않았습니다.")
+        _log("GITHUB_REPO is empty.")
         return None
-    code, body = _http_json("GET", f"{API}/repos/{repo}/releases/latest", _headers())
-    if code == 200 and isinstance(body, dict):
-        return body
-    _log(f"latest release query failed: code={code}")
+    url = f"{API_BASE}/repos/{repo}/releases/latest"
+    r = _http_json("GET", url, headers=_headers(), timeout=20)
+    if r.status_code == 200 and isinstance(r.data, dict):
+        return r.data
+    _log(f"latest release query failed: {r.status_code}")
     return None
 
 
-def _pick_best_asset(rel: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """다운로드 우선순위: index_*.zip > chunks.jsonl.gz > chunks.jsonl > 기타 zip."""
-    assets = list(rel.get("assets") or [])
-
-    def _name(a: Dict[str, Any]) -> str:
-        return str(a.get("name") or "").lower()
-
+def _pick_asset(rel: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Pick best asset: prefer index_*.zip, then .tar.gz, then chunks.jsonl(.gz)."""
+    assets = rel.get("assets") or []
+    best = None
     for a in assets:
-        n = _name(a)
+        n = str(a.get("name") or "")
         if n.startswith("index_") and n.endswith(".zip"):
             return a
     for a in assets:
-        n = _name(a)
-        if n.endswith("chunks.jsonl.gz"):
+        n = str(a.get("name") or "")
+        if n.startswith("index_") and (n.endswith(".tar.gz") or n.endswith(".tgz")):
             return a
     for a in assets:
-        n = _name(a)
-        if n.endswith("chunks.jsonl"):
-            return a
-    for a in assets:
-        n = _name(a)
-        if n.endswith(".zip"):
-            return a
-    return assets[0] if assets else None
+        n = str(a.get("name") or "")
+        if n.endswith("chunks.jsonl.gz") or n.endswith("chunks.jsonl"):
+            best = a
+            break
+    return best
 
 
-def _download_asset(asset: Dict[str, Any], repo: str) -> Optional[bytes]:
-    """자산 바이트 다운로드. browser_download_url 선호."""
-    url = str(asset.get("browser_download_url") or "")
-    hdrs = dict(_headers())
-    if not url:
-        aid = asset.get("id")
-        if aid:
-            url = f"{API}/repos/{repo}/releases/assets/{aid}"
-            hdrs["Accept"] = "application/octet-stream"
+def _download_asset(asset: Dict[str, Any]) -> Optional[Tuple[str, bytes]]:
+    """
+    Download asset bytes.
+    For assets API, use 'Accept: application/octet-stream' when needed.
+    Return (name, bytes) or None.
+    """
+    name = str(asset.get("name") or "")
+    url = str(asset.get("browser_download_url") or asset.get("url") or "")
     if not url:
         return None
-    data = _http_bytes(url, hdrs)
-    return data if data else None
-# ================================ [05] release helpers — END ==============================
+
+    hdrs = _headers()
+    # If it's the assets API URL, switch Accept
+    if "releases/assets/" in url and "browser_download_url" not in asset:
+        hdrs = dict(hdrs)
+        hdrs["Accept"] = "application/octet-stream"
+
+    rr = _http_bin("GET", url, headers=hdrs, timeout=60)
+    if rr.status_code in (200, 302) and rr.content is not None:
+        return name, rr.content
+    _log(f"asset download failed: {rr.status_code}")
+    return None
+# ========================== [04] release discovery — END ============================
 
 
-# ======================= [06] PUBLIC API: restore_latest — START ==========================
-def restore_latest(dest_dir: str | Path) -> bool:
+# ========================= [05] extraction helpers — START ==========================
+def _is_safe_member(base: Path, target: Path) -> bool:
+    """Prevent path traversal and absolute extraction."""
+    try:
+        return str(target.resolve()).startswith(str(base.resolve()))
+    except Exception:
+        return False
+
+
+def _safe_extract_zip(zdata: bytes, dest_dir: Path) -> bool:
+    """Extract zip bytes into dest_dir safely."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(zdata)) as zf:
+            members = zf.infolist()
+            # Dry-run safety check
+            for m in members:
+                if m.is_dir():
+                    continue
+                target = (dest_dir / m.filename).resolve()
+                if not _is_safe_member(dest_dir, target):
+                    _log(f"zip path blocked: {m.filename}")
+                    return False
+            # Extract
+            zf.extractall(dest_dir)
+        return True
+    except Exception as e:
+        _log(f"zip extract failed: {e}")
+        return False
+
+
+def _safe_extract_tar(tdata: bytes, dest_dir: Path) -> bool:
+    """Extract tar.gz/tgz safely."""
+    try:
+        with tarfile.open(fileobj=io.BytesIO(tdata), mode="r:*") as tf:
+            for m in tf.getmembers():
+                if not m.name:
+                    continue
+                target = (dest_dir / m.name).resolve()
+                if not _is_safe_member(dest_dir, target):
+                    _log(f"tar path blocked: {m.name}")
+                    return False
+            tf.extractall(dest_dir)
+        return True
+    except Exception as e:
+        _log(f"tar extract failed: {e}")
+        return False
+
+
+def _write_bytes(path: Path, data: bytes) -> bool:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        return True
+    except Exception as e:
+        _log(f"write failed: {e}")
+        return False
+
+
+def _find_chunks(root: Path) -> Optional[Path]:
+    """Find chunks.jsonl possibly nested."""
+    try:
+        # prefer root first
+        p = root / "chunks.jsonl"
+        if p.exists() and p.stat().st_size > 0:
+            return p
+        # nested
+        for cand in root.rglob("chunks.jsonl"):
+            if cand.stat().st_size > 0:
+                return cand
+    except Exception:
+        pass
+    return None
+# ========================== [05] extraction helpers — END ===========================
+
+
+# ========================= [06] PUBLIC API: restore_latest — START ===================
+def restore_latest(dest_dir: str | Path, repo: Optional[str] = None) -> bool:
     """
-    최신 릴리스에서 인덱스 산출물을 내려받아 복원합니다.
-    - 우선 zip(index_*.zip) 추출 → 루트에 chunks.jsonl 없으면 하위 탐색
-    - 다음 후보: chunks.jsonl.gz → 해제, chunks.jsonl → 복사
-    - 성공 시 .ready 생성
+    Restore latest index artifact into dest_dir.
+    - Supports index_*.zip / *.tar.gz / chunks.jsonl(.gz)
+    - Marks '.ready' when chunks.jsonl exists
     """
     dest = Path(dest_dir).expanduser().resolve()
     dest.mkdir(parents=True, exist_ok=True)
 
-    repo = _repo()
-    if not repo:
-        _log("restore_latest: GITHUB_REPO 미설정")
+    target_repo = (repo or _repo()).strip()
+    if not target_repo:
+        _log("restore_latest: repo is empty.")
         return False
 
-    rel = _latest_release(repo)
-    if rel is None:
+    rel = _latest_release(target_repo)
+    if not rel:
         return False
 
-    asset = _pick_best_asset(rel)
+    asset = _pick_asset(rel)
     if not asset:
-        _log("restore_latest: 릴리스에 다운로드 가능한 자산이 없습니다.")
+        _log("restore_latest: no suitable asset.")
         return False
 
-    name = str(asset.get("name") or "")
-    _log(f"restore_latest: 선택 자산 = {name}")
-
-    blob = _download_asset(asset, repo)
-    if not blob:
-        _log("restore_latest: 자산 다운로드 실패")
+    got = _download_asset(asset)
+    if not got:
         return False
+    name, data = got
 
-    # 1) zip 계열
-    if name.endswith(".zip"):
-        if not _extract_zip_bytes(blob, dest):
-            return False
-    # 2) tar.gz 계열
-    elif name.endswith(".tar.gz") or name.endswith(".tgz"):
+    ok = False
+    lname = name.lower()
+    if lname.endswith(".zip"):
+        ok = _safe_extract_zip(data, dest)
+    elif lname.endswith(".tar.gz") or lname.endswith(".tgz"):
+        ok = _safe_extract_tar(data, dest)
+    elif lname.endswith(".jsonl.gz"):
+        # naive gunzip
         try:
-            with io.BytesIO(blob) as bio, tarfile.open(fileobj=bio, mode="r:gz") as tf:
-                _safe_extractall_tar(tf, dest)
+            import gzip  # stdlib
+            chunks = dest / "chunks.jsonl"
+            with gzip.GzipFile(fileobj=io.BytesIO(data), mode="rb") as gz:
+                raw = gz.read()
+            ok = _write_bytes(chunks, raw)
         except Exception as e:
-            _log(f"restore_latest: tar.gz 해제 실패: {e}")
-            return False
-    # 3) chunks.jsonl(.gz) 단일 파일
-    elif name.endswith(".jsonl.gz"):
-        tmp = dest / "__chunks.jsonl.gz"
-        tmp.write_bytes(blob)
-        if not _decompress_gz(tmp, dest / "chunks.jsonl"):
-            return False
-        try:
-            tmp.unlink()
-        except Exception:
-            pass
-    elif name.endswith(".jsonl"):
-        (dest / "chunks.jsonl").write_bytes(blob)
+            _log(f"gunzip failed: {e}")
+            ok = False
+    elif lname.endswith(".jsonl"):
+        ok = _write_bytes(dest / "chunks.jsonl", data)
     else:
-        # 기타 확장자는 지원하지 않음
-        _log("restore_latest: 지원하지 않는 자산 형식")
+        _log(f"restore_latest: unsupported asset {name}")
+        ok = False
+
+    if not ok:
         return False
 
-    # 산출물 보정: 루트에 없으면 하위 검색 후 승격 복사
-    cj = dest / "chunks.jsonl"
-    if not (cj.exists() and cj.stat().st_size > 0):
+    # flatten when artifact created a top folder
+    chunks = _find_chunks(dest)
+    if chunks and chunks.parent != dest:
+        # move file into dest
         try:
-            cand = next(dest.glob("**/chunks.jsonl"))
-            if cand != cj:
-                target = cj
-                target.write_bytes(cand.read_bytes())
-        except StopIteration:
-            _log("restore_latest: chunks.jsonl을 찾을 수 없습니다.")
+            target = dest / "chunks.jsonl"
+            target.write_bytes(chunks.read_bytes())
+            _log(f"flatten: adopted chunks from {chunks.parent.name}")
+        except Exception as e:
+            _log(f"flatten failed: {e}")
             return False
 
-    # ready 마킹
+    # mark ready
     try:
         (dest / ".ready").write_text("ok", encoding="utf-8")
     except Exception:
         pass
 
-    _log("restore_latest: 완료")
+    _log("restore_latest: done.")
     return True
-# ======================== [06] PUBLIC API: restore_latest — END ===========================
+# ========================== [06] PUBLIC API: restore_latest — END ====================
 
 
-# ======================= [07] PUBLIC API: publish_backup — START ==========================
-def publish_backup(
-    persist_dir: str | Path,
-    *,
-    keep_last_n: int = 5,
-    tag_prefix: str = "index",
-) -> bool:
-    """
-    persist_dir의 chunks.jsonl을 릴리스 자산으로 업로드합니다.
-    - tag: {tag_prefix}-{YYYYmmdd-HHMMSS}
-    - assets: chunks.jsonl.gz, manifest.json
-    - keep_last_n 이후 릴리스는 보존 정책에 따라 정리(베스트에 가까운 구현)
-    """
-    p = Path(persist_dir).expanduser().resolve()
-    chunks = p / "chunks.jsonl"
-    if not chunks.exists() or chunks.stat().st_size == 0:
-        _log("publish_backup: chunks.jsonl 이 없거나 비어 있습니다.")
-        return False
-
-    repo = _repo()
-    if not repo:
-        _log("publish_backup: GITHUB_REPO 미설정")
-        return False
-
-    mode = (_get_env("MAIC_INDEX_MODE", "STD") or "STD").upper()
-    build_id = time.strftime("%Y%m%d-%H%M%S")
-    tag = f"{tag_prefix}-{build_id}"
-    manifest = {
-        "mode": mode,
-        "build_id": build_id,
-        "branch": _branch(),
-        "size_bytes": int(chunks.stat().st_size),
-    }
-
-    # release 생성 또는 조회
-    status, body = _http_json(
-        "POST",
-        f"{API}/repos/{repo}/releases",
-        _headers(),
-        {
-            "tag_name": tag,
-            "name": tag,
-            "target_commitish": _branch(),
-            "body": "Automated index backup",
-            "draft": False,
-            "prerelease": False,
-        },
-        timeout=30,
-    )
-    if status not in (201, 422):
-        _log(f"publish_backup: 릴리스 생성 실패: code={status}")
-        return False
-
-    if status == 422:
-        # 이미 존재 → 조회
-        st2, body2 = _http_json(
-            "GET", f"{API}/repos/{repo}/releases/tags/{tag}", _headers(), None, 15
-        )
-        if st2 != 200 or not isinstance(body2, dict):
-            _log(f"publish_backup: 기존 릴리스 조회 실패: code={st2}")
-            return False
-        rel_id = body2.get("id")
-    else:
-        rel_id = body.get("id")
-
-    if not rel_id:
-        _log("publish_backup: release id 없음")
-        return False
-
-    # 업로드 준비: gzip, manifest
-    gz_buf = io.BytesIO()
-    with open(chunks, "rb") as rf, gzip.GzipFile(fileobj=gz_buf, mode="wb") as gz:
-        shutil.copyfileobj(rf, gz)
-    data_gz = gz_buf.getvalue()
-    man_bytes = json.dumps(manifest, ensure_ascii=False).encode("utf-8")
-
-    # 업로드
-    from urllib import parse, request
-
-    def _upload(name: str, data: bytes, content_type: str) -> Tuple[int, Any]:
-        url = (
-            f"https://uploads.github.com/repos/{repo}/releases/{rel_id}/assets"
-            f"?name={parse.quote(name)}"
-        )
-        req = request.Request(url, data=data, method="POST")
-        hdrs = _upload_headers(content_type)
-        for k, v in hdrs.items():
-            req.add_header(k, v)
-        try:
-            with request.urlopen(req, timeout=120) as resp:
-                txt = resp.read().decode("utf-8", "ignore")
-                try:
-                    return 201, json.loads(txt)
-                except Exception:
-                    return 201, {"_raw": txt}
-        except Exception as e:
-            return 0, {"_error": str(e)}
-
-    s1, _ = _upload("chunks.jsonl.gz", data_gz, "application/gzip")
-    if s1 != 201:
-        _log(f"publish_backup: chunks 업로드 실패: code={s1}")
-        return False
-
-    s2, _ = _upload("manifest.json", man_bytes, "application/json")
-    if s2 != 201:
-        _log(f"publish_backup: manifest 업로드 실패: code={s2}")
-        return False
-
-    # 보존 정책: 오래된 릴리스 정리(최대 keep_last_n 유지)
+# ========================= [07] PUBLIC API: publish_backup — START ===================
+def _zip_dir(src: Path, out_zip: Path) -> bool:
     try:
-        st3, rels = _http_json(
-            "GET",
-            f"{API}/repos/{repo}/releases",
-            _headers(),
-            None,
-            timeout=20,
-        )
-        if st3 == 200 and isinstance(rels, list):
-            # index- 접두 태그만 대상으로 정렬
-            idx_rels = [
-                r for r in rels if str(r.get("tag_name") or "").startswith(f"{tag_prefix}-")
-            ]
-            idx_rels.sort(
-                key=lambda r: str(r.get("created_at") or ""),
-                reverse=True,
-            )
-            for r in idx_rels[keep_last_n:]:
-                rid = r.get("id")
-                tname = r.get("tag_name")
-                if rid:
-                    _http_json(
-                        "DELETE",
-                        f"{API}/repos/{repo}/releases/{rid}",
-                        _headers(),
-                        None,
-                        timeout=15,
-                    )
-                if tname:
-                    _http_json(
-                        "DELETE",
-                        f"{API}/repos/{repo}/git/refs/tags/{tname}",
-                        _headers(),
-                        None,
-                        timeout=15,
-                    )
+        out_zip.parent.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(out_zip, "w", zipfile.ZIP_DEFLATED) as zf:
+            for root, _dirs, files in os.walk(str(src)):
+                for fn in files:
+                    p = Path(root) / fn
+                    arc = p.relative_to(src)
+                    zf.write(str(p), arcname=str(arc))
+        return True
     except Exception as e:
-        _log(f"publish_backup: 보존 정책 예외(무시): {e}")
+        _log(f"zip build failed: {e}")
+        return False
 
-    _log(f"publish_backup: 완료 — tag={tag}, repo={repo}")
+
+def publish_backup(persist_dir: str | Path, repo: Optional[str] = None,
+                   tag: Optional[str] = None, name: Optional[str] = None,
+                   body: str = "Automated MAIC index") -> bool:
+    """
+    Zip persist_dir and upload as release asset.
+    - Creates release when missing.
+    - Uses token from GH_TOKEN/GITHUB_TOKEN.
+    """
+    base = Path(persist_dir).expanduser().resolve()
+    if not base.exists():
+        _log("publish_backup: persist_dir missing.")
+        return False
+
+    target_repo = (repo or _repo()).strip()
+    if not target_repo:
+        _log("publish_backup: repo is empty.")
+        return False
+
+    # Build zip
+    backups = base / "backups"
+    zpath = backups / f"index_{int(time.time())}.zip"
+    if not _zip_dir(base, zpath):
+        return False
+
+    # Create or get release
+    tag = tag or f"index-{int(time.time())}"
+    rel_name = name or tag
+
+    # Try to fetch by tag
+    ow, rp = _resolve_owner_repo()
+    get_url = f"{API_BASE}/repos/{ow}/{rp}/releases/tags/{_urlp.quote(tag)}"
+    r = _http_json("GET", get_url, headers=_headers(), timeout=20)
+    if r.status_code != 200:
+        # create release
+        payload = {
+            "tag_name": tag,
+            "name": rel_name,
+            "target_commitish": _branch(),
+            "body": body,
+        }
+        r = _http_json("POST", f"{API_BASE}/repos/{ow}/{rp}/releases",
+                       payload=payload, headers=_headers(), timeout=30)
+        if r.status_code not in (201, 200):
+            _log(f"publish_backup: create release failed {r.status_code}")
+            return False
+
+    rel = r.data or {}
+    rid = rel.get("id")
+    if not rid:
+        _log("publish_backup: missing release id.")
+        return False
+
+    # Upload asset
+    up_url = (
+        f"{UPLOAD_BASE}/repos/{ow}/{rp}/releases/{rid}/assets"
+        f"?name={_urlp.quote(zpath.name)}"
+    )
+    up = _http_bin("POST", up_url, data=zpath.read_bytes(),
+                   headers=_upload_headers("application/zip"), timeout=180)
+    if up.status_code not in (201, 200):
+        # If asset exists (422), attempt to delete then re-upload
+        if up.status_code == 422:
+            # list assets
+            la = _http_json("GET",
+                            f"{API_BASE}/repos/{ow}/{rp}/releases/{rid}/assets",
+                            headers=_headers(), timeout=20)
+            if la.status_code == 200 and isinstance(la.data, list):
+                same = next((a for a in la.data if a.get("name") == zpath.name), None)
+                if same and same.get("id"):
+                    aid = same["id"]
+                    _http_json("DELETE",
+                               f"{API_BASE}/repos/{ow}/{rp}/releases/assets/{aid}",
+                               headers=_headers(), timeout=20)
+                    # retry upload
+                    up = _http_bin("POST", up_url, data=zpath.read_bytes(),
+                                   headers=_upload_headers("application/zip"),
+                                   timeout=180)
+        if up.status_code not in (201, 200):
+            _log(f"publish_backup: upload failed {up.status_code}")
+            return False
+
+    _log(f"publish_backup: done tag={tag}")
     return True
-# ======================== [07] PUBLIC API: publish_backup — END ===========================
+# ========================== [07] PUBLIC API: publish_backup — END ====================
+
+
+# ========================= [08] module exports — START ==============================
+__all__ = ["restore_latest", "publish_backup"]
+# ========================== [08] module exports — END ===============================
