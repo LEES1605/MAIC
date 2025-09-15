@@ -9,7 +9,7 @@ import time
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 from urllib import error as _urlerr
 from urllib import parse as _urlp
 from urllib import request as _urlq
