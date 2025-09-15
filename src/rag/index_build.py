@@ -81,7 +81,6 @@ def _unpack_snapshot(blob: bytes) -> Dict[str, Any]:
         return out
 # [03] END
 
-# File: src/rag/index_build.py
 # ======================= [04] PUBLIC API: rebuild_index — START =======================
 def rebuild_index(output_dir: str | Path | None = None) -> Dict[str, Any]:
     """
