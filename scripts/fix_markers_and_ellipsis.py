@@ -8,9 +8,13 @@ Purpose:
       "# [NN] START" / "# [NN] END" (line-end anchored, no trailing text)
   - Re-number blocks per file from [01]..[NN], contiguous, non-nested.
   - Replace Unicode ellipsis (U+2026) with ASCII "..." across text/code files.
+  - Remove unknown WPS-based noqa codes (e.g., `# noqa: WPS433`) by collapsing
+    them to a plain `# noqa`, preserving any non-WPS codes.
 Safety:
-  - If a file has structural issues (END without START, START without END, or nested blocks),
-    the file is left untouched and reported.
+  - If a file has structural issues (END without START, START without END, or nested
+    blocks), the file is left untouched and reported.
+  - A single trailing unmatched START as the last event in a file is auto-closed by
+    inserting an END at EOF (safe heuristic).
 Usage:
   python scripts/fix_markers_and_ellipsis.py --root . --apply
   python scripts/fix_markers_and_ellipsis.py --root . --only markers --dry-run
@@ -44,12 +48,15 @@ STRICT_START = "# [%(nn)s] START"
 STRICT_END = "# [%(nn)s] END"
 UNICODE_ELLIPSIS = "\u2026"
 
+NOQA_WPS_RE = re.compile(r"# noqa:\s*([^\n#]*)")
+
 DEFAULT_INCLUDE_EXTS = {
     ".py", ".md", ".txt", ".yaml", ".yml", ".toml", ".ini",
     ".json", ".sh", ".ps1", ".bat", ".sql", ".js", ".ts", ".tsx",
 }
 DEFAULT_EXCLUDE_DIRS = {
-    ".git", ".github", ".venv", "venv", "node_modules", "dist", "build", "__pycache__",
+    ".git", ".github", ".venv", "venv", "node_modules", "dist", "build",
+    "__pycache__",
 }
 DEFAULT_EXCLUDE_FILES = {
     "scripts/fix_markers_and_ellipsis.py",  # avoid self-edit
@@ -74,7 +81,7 @@ def _iter_candidate_files(root: Path, include_exts: Iterable[str]) -> Iterable[P
             continue
         if p.suffix.lower() not in include_exts:
             continue
-        parts = set(x.name for x in p.parents)
+        parts = {x.name for x in p.parents}
         if parts & DEFAULT_EXCLUDE_DIRS:
             continue
         rel = p.as_posix()
@@ -115,6 +122,23 @@ def _validate_structure(events: List[Event]) -> Tuple[bool, Optional[str]]:
     return True, None
 
 
+def _try_auto_close_eof(lines: List[str], events: List[Event]) -> Optional[List[str]]:
+    """If the last event is a START, insert an END at EOF and return new lines.
+    Otherwise, return None.
+    """
+    if not events:
+        return None
+    if events[-1].kind != "START":
+        return None
+    # Insert a placeholder END (will be renumbered later).
+    new_lines = lines[:]
+    end_line = STRICT_END % {"nn": "99"}
+    if new_lines and not new_lines[-1].endswith("\n"):
+        new_lines[-1] = new_lines[-1] + "\n"
+    new_lines.append(end_line + "\n")
+    return new_lines
+
+
 def _renumber_and_rewrite(lines: List[str], events: List[Event]) -> List[str]:
     """
     Given structurally valid events, rewrite marker lines to strict format and
@@ -135,16 +159,47 @@ def _renumber_and_rewrite(lines: List[str], events: List[Event]) -> List[str]:
 
 def _replace_ellipsis(text: str) -> str:
     return text.replace(UNICODE_ELLIPSIS, "...")
+
+
+def _fix_invalid_noqa(text: str) -> str:
+    """Replace invalid WPS-based noqa codes with a plain '# noqa'.
+
+    Preserves any non-WPS codes on the same line, e.g.
+      '# noqa: WPS433, E402'  ->  '# noqa: E402'
+      '# noqa: WPS433'        ->  '# noqa'
+    """
+    out_lines: List[str] = []
+    for line in text.splitlines(keepends=True):
+        m = NOQA_WPS_RE.search(line)
+        if not m:
+            out_lines.append(line)
+            continue
+        codes = [c.strip() for c in m.group(1).split(",") if c.strip()]
+        kept = [c for c in codes if not c.startswith("WPS")]
+        if "noqa:" in line:
+            if kept:
+                repl = "# noqa: " + ", ".join(kept)
+            else:
+                repl = "# noqa"
+            # Replace only the matched segment, not the entire line trailing text.
+            start, end = m.span(0)
+            line = line[:start] + repl + line[end:]
+        out_lines.append(line)
+    return "".join(out_lines)
 # [03] END
 
 # [04] START
-def normalize_file(path: Path, replace_ellipsis: bool = True) -> Tuple[bool, str, Optional[str], Optional[str]]:
+def normalize_file(
+    path: Path,
+    replace_ellipsis: bool = True,
+) -> Tuple[bool, str, Optional[str], Optional[str]]:
     """
     Returns:
       (changed, action_summary, error_kind, error_detail)
       - changed: whether file content changed
       - action_summary: human summary
-      - error_kind/error_detail: populated if structural error detected (file left untouched)
+      - error_kind/error_detail: populated if structural error detected
+        (file left untouched)
     """
     try:
         content = path.read_text(encoding="utf-8")
@@ -154,16 +209,26 @@ def normalize_file(path: Path, replace_ellipsis: bool = True) -> Tuple[bool, str
     lines = content.splitlines(keepends=True)
     events = _find_marker_events(lines)
 
-    # Only apply marker normalization if any events present
+    # Attempt light auto-repair for the safe case:
+    # a single unmatched START at EOF.
     if events:
-        ok, msg = _validate_structure(events)
+        ok, _ = _validate_structure(events)
         if not ok:
-            return False, "skip(structural_error)", "structure", msg
+            trial = _try_auto_close_eof(lines, events)
+            if trial is not None:
+                lines = trial
+                events = _find_marker_events(lines)
+                ok, _ = _validate_structure(events)
+        if not ok:
+            return False, "skip(structural_error)", "structure", "unbalanced or nested markers"
         lines = _renumber_and_rewrite(lines, events)
 
     new_text = "".join(lines)
+
+    # Text-level normalizations
     if replace_ellipsis:
         new_text = _replace_ellipsis(new_text)
+    new_text = _fix_invalid_noqa(new_text)
 
     if new_text != content:
         try:
@@ -181,12 +246,12 @@ def run(root: Path, apply: bool, only: Optional[str]) -> int:
     reports: List[str] = []
 
     for p in _iter_candidate_files(root, include_exts):
-        replace_ellipsis = True
+        # Decide which normalizations to apply in this pass
+        do_replace_ellipsis = True
         if only == "markers":
-            replace_ellipsis = False
+            do_replace_ellipsis = False
         elif only == "ellipsis":
-            # still need to skip marker normalization but we do not need to parse markers
-            pass
+            pass  # keep default
 
         if not apply:
             # Dry run: inspect and report only
@@ -195,18 +260,22 @@ def run(root: Path, apply: bool, only: Optional[str]) -> int:
             except Exception:
                 continue
             needs = []
-            if UNICODE_ELLIPSIS in content and (only in (None, "ellipsis")):
+            if (UNICODE_ELLIPSIS in content) and (only in (None, "ellipsis")):
                 needs.append("ellipsis")
-            if (only in (None, "markers")) and _find_marker_events(content.splitlines(keepends=True)):
+            if (only in (None, "markers")) and _find_marker_events(
+                content.splitlines(keepends=True)
+            ):
                 # We do not know if strictly formatted; just flag presence.
                 needs.append("markers")
+            if NOQA_WPS_RE.search(content):
+                needs.append("noqa")
             if needs:
                 reports.append(f"[DRY] {p}: needs {','.join(needs)}")
             continue
 
         # apply mode
         changed, summary, err_kind, err_detail = normalize_file(
-            p, replace_ellipsis=(only != "markers")
+            p, replace_ellipsis=do_replace_ellipsis
         )
         if err_kind:
             errors.append(f"{p}: {err_kind} - {err_detail}")
@@ -221,16 +290,30 @@ def run(root: Path, apply: bool, only: Optional[str]) -> int:
         print("Errors (files left untouched):", file=sys.stderr)
         for e in errors:
             print(" -", e, file=sys.stderr)
-        # non-zero to surface issues but not to break maintenance workflow
+        # non-zero return to surface issues but not to break maintenance workflow:
+        # this script is used in a maintenance job; callers can inspect logs.
     return 0
 # [04] END
 
 # [05] START
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
-    ap = argparse.ArgumentParser(description="Normalize patch-guard markers and replace Unicode ellipsis.")
-    ap.add_argument("--root", default=".", help="Root directory to scan (default: .)")
-    ap.add_argument("--apply", action="store_true", help="Apply changes to files. Without this, dry-run reports.")
-    ap.add_argument("--only", choices=["markers", "ellipsis"], help="Restrict to one type of fix.")
+    desc = "Normalize patch-guard markers and replace Unicode ellipsis."
+    ap = argparse.ArgumentParser(description=desc)
+    ap.add_argument(
+        "--root",
+        default=".",
+        help="Root directory to scan (default: .)",
+    )
+    ap.add_argument(
+        "--apply",
+        action="store_true",
+        help="Apply changes (default: dry-run)",
+    )
+    ap.add_argument(
+        "--only",
+        choices=["markers", "ellipsis"],
+        help="Restrict to one type of fix.",
+    )
     return ap.parse_args(argv)
 
 
