@@ -56,11 +56,24 @@ def scan_file(p: Path) -> List[Tuple[int, int]]:
     return locs
 # [02] END
 
-# [03] START
+#  [03] START
 def parse_args(argv: List[str] | None = None) -> argparse.Namespace:
-    ap = argparse.ArgumentParser(description="Fail CI on U+2026 (Unicode ellipsis) inside code files.")
-    ap.add_argument("--root", default=".", help="Root directory to scan (default: .)")
-    ap.add_argument("--fix", action="store_true", help="Replace with ASCII '...' in-place.")
+    # 줄 길이 제한(E501) 대응: 설명 문자열을 두 줄로 나눠 컴파일 타임 결합
+    desc = (
+        "Fail CI on U+2026 (Unicode ellipsis) "
+        "inside code files."
+    )
+    ap = argparse.ArgumentParser(description=desc)
+    ap.add_argument(
+        "--root",
+        default=".",
+        help="Root directory to scan (default: .)",
+    )
+    ap.add_argument(
+        "--fix",
+        action="store_true",
+        help="Replace with ASCII '...' in-place.",
+    )
     return ap.parse_args(argv)
 
 
@@ -100,4 +113,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-# [03] END
+#  [03] END
