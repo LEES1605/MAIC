@@ -1,226 +1,298 @@
-# ========================= [01] imports & constants — START =========================
+# ============================ [01] imports & constants — START ============================
 from __future__ import annotations
 
 import argparse
 import re
 import subprocess
-import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import Iterable, List, Optional, Sequence, Set, Tuple
 
-ELLIPSIS_CHAR = "\u2026"  # forbidden
-MARKER_RE = re.compile(r"\[\s*(\d{2})\s*\].*\b(START|END)\b", re.IGNORECASE)
+# 금지 문자(ASCII만 허용): Unicode ellipsis
+ELLIPSIS = "\u2026"
 
-# git diff hunk header example:
-# @@ -old_start,old_len +new_start,new_len @@
-HUNK_RE = re.compile(r"^@@\s*-\d+(?:,\d+)?\s+\+(\d+)(?:,(\d+))?\s+@@")
+# 블록 마커: 라인 주석 안에서 [NN][A-Z?] 식별자와 START/END 키워드를 탐지
+# 예: "# ===== [07] RERUN GUARD utils — START ====="
+#     "# ...  # [07] END"
+MARK_RE = re.compile(
+    r"^\s*#.*\[\s*(?P<num>\d{2})(?P<suf>[A-Z]?)\s*\].*(?P<edge>START|END)\s*$",
+    re.IGNORECASE,
+)
 
-# ========================== [01] imports & constants — END ==========================
+# git diff hunk 헤더: "@@ -a,b +c,d @@"
+HUNK_RE = re.compile(
+    r"^@@\s+- (?P<amin>\d+),(?P<alen>\d+)\s+\+(?P<pmin>\d+),(?P<plen>\d+)\s+@@"
+)
 
-
-# ============================ [02] cli arguments — START ===========================
-@dataclass(frozen=True)
-class Args:
-    base: str
-    head: str
-    paths: Tuple[str, ...]
-
-
-def _parse_args(argv: Optional[Sequence[str]] = None) -> Args:
-    p = argparse.ArgumentParser(prog="guard_patch")
-    p.add_argument("--base", required=True, help="base commit sha")
-    p.add_argument("--head", required=True, help="head commit sha")
-    p.add_argument(
-        "paths",
-        nargs="*",
-        help="optional path filters. if empty, all changed files are checked",
-    )
-    a = p.parse_args(argv)
-    return Args(base=a.base, head=a.head, paths=tuple(a.paths or ()))
-# ============================= [02] cli arguments — END ============================
+# 출력 포맷(게이트 메시지와 동일한 톤)
+FAIL_HEADER = "[patch-guard] FAIL"
+ELLIPSIS_MSG = "contains Unicode ellipsis (U+2026) - forbidden"
+PARTIAL_MSG = "block [{ident}] changed without START/END (need whole-block)"
+DELETE_INNER_MSG = "block [{ident}] deletion touches inside without START/END"
+MISMATCH_END_MSG = (
+    "mismatched END: got {got} at line {line}, expected {exp} "
+    "(START line {start_line})"
+)
+END_NO_START_MSG = "END without START at line {line}"
+# ============================ [01] imports & constants — END ==============================
 
 
-# ============================== [03] git helpers — START ===========================
-def _git(*args: str) -> str:
-    out = subprocess.run(
-        ["git", *args],
-        check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    return out.stdout
-
-
-def _changed_files(base: str, head: str, paths: Sequence[str]) -> List[str]:
-    cmd = ["diff", "--name-only", "--diff-filter=ACMRTUXB", f"{base}..{head}"]
-    if paths:
-        cmd.extend(list(paths))
-    out = _git(*cmd)
-    files = [ln.strip() for ln in out.splitlines() if ln.strip()]
-    return files
-
-
-def _file_text_at(commit: str, path: str) -> str:
-    # head에는 항상 존재. base에는 없을 수 있으므로 실패는 빈 문자열 처리.
-    try:
-        out = subprocess.run(
-            ["git", "show", f"{commit}:{path}"],
-            check=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        if out.returncode != 0:
-            return ""
-        return out.stdout
-    except Exception:
-        return ""
-
-
-def _changed_line_numbers(base: str, head: str, path: str) -> Set[int]:
-    # 신버전 파일 전체 추가도 안전히 처리됨.
-    cmd = ["diff", "-U0", f"{base}..{head}", "--", path]
-    out = _git(*cmd)
-    lines: Set[int] = set()
-    for ln in out.splitlines():
-        m = HUNK_RE.match(ln)
-        if not m:
-            continue
-        start = int(m.group(1))
-        length = int(m.group(2) or "1")
-        for off in range(length or 1):
-            lines.add(start + off)
-    return lines
-# =============================== [03] git helpers — END ============================
-
-
-# ============================ [04] marker validators — START =======================
+# =============================== [02] data models — START =================================
 @dataclass(frozen=True)
 class Marker:
-    ident: int
-    kind: str  # "START" or "END"
+    ident: str
     line_no: int
+    is_start: bool
 
 
-def _scan_markers(text: str) -> List[Marker]:
-    out: List[Marker] = []
-    for i, raw in enumerate(text.splitlines(), start=1):
-        m = MARKER_RE.search(raw)
+@dataclass(frozen=True)
+class Block:
+    ident: str
+    start: int
+    end: int  # 포함 범위(START 라인~END 라인)
+
+    @property
+    def inner_range(self) -> Tuple[int, int]:
+        # 블록 내부(START/END 제외)
+        return (self.start + 1, self.end - 1) if self.end - self.start >= 2 else (0, -1)
+# =============================== [02] data models — END ===================================
+
+
+# ============================== [03] small helpers — START =================================
+def _run(cmd: Sequence[str]) -> str:
+    out = subprocess.run(
+        list(cmd), check=False, capture_output=True, text=True
+    )
+    return out.stdout or ""
+
+
+def _lines_with_ellipsis(text: str) -> List[int]:
+    lines: List[int] = []
+    for i, s in enumerate(text.splitlines(), start=1):
+        if ELLIPSIS in s:
+            lines.append(i)
+    return lines
+
+
+def _parse_markers(text: str) -> Tuple[List[Marker], List[str]]:
+    """파일 텍스트에서 START/END 마커를 추출하고 기초 오류를 리턴."""
+    markers: List[Marker] = []
+    errs: List[str] = []
+    for i, s in enumerate(text.splitlines(), start=1):
+        m = MARK_RE.match(s)
         if not m:
             continue
-        ident = int(m.group(1))
-        kind = m.group(2).upper()
-        out.append(Marker(ident=ident, kind=kind, line_no=i))
-    return out
+        ident = f"{m.group('num')}{m.group('suf')}".upper()
+        edge = m.group("edge").upper()
+        markers.append(Marker(ident=ident, line_no=i, is_start=edge == "START"))
 
-
-def _validate_blocks(markers: Sequence[Marker]) -> List[str]:
-    """완화된 v2: 숫자 구획만 검증(균형·순차)."""
-    errs: List[str] = []
-    if not markers:
-        return errs
-
-    # 1) START/END 균형(스택)
+    # 쌍 매칭 검증(파일 내부)
     stack: List[Marker] = []
     for m in markers:
-        if m.kind == "START":
+        if m.is_start:
             stack.append(m)
             continue
         # END
         if not stack:
-            errs.append(
-                f"END without START at line {m.line_no} (block {m.ident:02d})"
-            )
+            errs.append(END_NO_START_MSG.format(line=m.line_no))
             continue
         prev = stack.pop()
         if prev.ident != m.ident:
-            msg = (
-                f"mismatched END: got {m.ident:02d} at {m.line_no}, "
-                f"expected {prev.ident:02d} (START {prev.line_no})"
+            errs.append(
+                MISMATCH_END_MSG.format(
+                    got=m.ident,
+                    line=m.line_no,
+                    exp=prev.ident,
+                    start_line=prev.line_no,
+                )
             )
-            errs.append(msg)
-    if stack:
-        top = stack[-1]
+    # 남은 START는 허용(후속 블록 교체 시 diff가 분리될 수 있음)
+    # 완벽한 짝맞춤은 아래 build_blocks에서 다시 확인
+    return markers, errs
+
+
+def _build_blocks(markers: Sequence[Marker]) -> Tuple[List[Block], List[str]]:
+    """마커로 블록(START~END) 목록을 구성."""
+    blocks: List[Block] = []
+    errs: List[str] = []
+    stack: List[Marker] = []
+    for m in markers:
+        if m.is_start:
+            stack.append(m)
+        else:
+            if not stack:
+                errs.append(END_NO_START_MSG.format(line=m.line_no))
+                continue
+            prev = stack.pop()
+            if prev.ident != m.ident:
+                errs.append(
+                    MISMATCH_END_MSG.format(
+                        got=m.ident,
+                        line=m.line_no,
+                        exp=prev.ident,
+                        start_line=prev.line_no,
+                    )
+                )
+                continue
+            blocks.append(Block(ident=m.ident, start=prev.line_no, end=m.line_no))
+    # START 남아서 짝이 없으면 내부 규약상 허용하지 않음
+    for s in stack:
+        # START에 대응하는 END가 없음
         errs.append(
-            f"unterminated START at line {top.line_no} (block {top.ident:02d})"
+            f"START without END: [{s.ident}] opened at line {s.line_no}"
+        )
+    return blocks, errs
+
+
+def _range_to_set(r: Tuple[int, int]) -> Set[int]:
+    a, b = r
+    if a <= 0 or b <= 0 or b < a:
+        return set()
+    return set(range(a, b + 1))
+# ============================== [03] small helpers — END ===================================
+
+
+# =============================== [04] diff utils — START ===================================
+def _changed_lines_plus(base: str, head: str, path: str) -> Set[int]:
+    """HEAD 기준 추가/변경된 라인(plus)을 집합으로 반환."""
+    out = _run(["git", "diff", "-U0", base, head, "--", path])
+    plus: Set[int] = set()
+    for line in out.splitlines():
+        m = HUNK_RE.match(line.strip())
+        if not m:
+            continue
+        pmin = int(m.group("pmin"))
+        plen = int(m.group("plen"))
+        if plen == 0:
+            continue
+        plus.update(range(pmin, pmin + plen))
+    return plus
+
+
+def _changed_lines_minus(base: str, head: str, path: str) -> Set[int]:
+    """BASE 기준 삭제된 라인(minus)을 집합으로 반환."""
+    out = _run(["git", "diff", "-U0", base, head, "--", path])
+    minus: Set[int] = set()
+    for line in out.splitlines():
+        m = HUNK_RE.match(line.strip())
+        if not m:
+            continue
+        amin = int(m.group("amin"))
+        alen = int(m.group("alen"))
+        if alen == 0:
+            continue
+        minus.update(range(amin, amin + alen))
+    return minus
+# =============================== [04] diff utils — END =====================================
+
+
+# ============================== [05] validators — START ====================================
+def _check_ellipsis(path: Path, head_text: str, errors: List[str]) -> None:
+    bad = _lines_with_ellipsis(head_text)
+    for ln in bad:
+        errors.append(f"{path.as_posix()}:{ln}: {ELLIPSIS_MSG}")
+
+
+def _check_blocks_whole_replace(
+    path: Path,
+    head_text: str,
+    base_text: str,
+    base_sha: str,
+    head_sha: str,
+    errors: List[str],
+) -> None:
+    """
+    규칙:
+      - 파일에 블록 마커가 있다면, 블록 내부를 수정할 때 START/END 라인도 함께 변경되어야 한다.
+      - 삭제가 블록 내부를 건드리면 마찬가지로 START/END 동반 변경이 있어야 한다.
+    """
+    markers, perr = _parse_markers(head_text)
+    errors.extend(f"{path.as_posix()}: {e}" for e in perr)
+    if not markers:
+        # 마커가 없다면 이 검사는 생략(번호 규약 강제하지 않음)
+        return
+
+    blocks, berr = _build_blocks(markers)
+    errors.extend(f"{path.as_posix()}: {e}" for e in berr)
+    if not blocks:
+        return
+
+    plus = _changed_lines_plus(base_sha, head_sha, path.as_posix())
+    minus = _changed_lines_minus(base_sha, head_sha, path.as_posix())
+
+    # HEAD 파일에서 마커 라인 집합
+    head_lines = head_text.splitlines()
+    start_lines = {b.start for b in blocks if 1 <= b.start <= len(head_lines)}
+    end_lines = {b.end for b in blocks if 1 <= b.end <= len(head_lines)}
+    marker_lines = start_lines | end_lines
+
+    # 1) 내부 수정이 있으면 START/END 동반 변경 필요
+    for b in blocks:
+        inner = _range_to_set(b.inner_range)
+        if not inner:
+            continue
+        touched = inner & plus
+        if touched and not ({b.start, b.end} <= plus):
+            errors.append(f"{path.as_posix()}: {PARTIAL_MSG.format(ident=b.ident)}")
+
+    # 2) 삭제가 base의 블록 내부를 건드렸는데, HEAD에서 어떤 마커도 바뀌지 않았다면 실패
+    if minus:
+        if not (plus & marker_lines):
+            for b in blocks:
+                # 보수적으로: 삭제가 있었다면 각 블록에 대해 경고를 내리되,
+                # 한 번이라도 마커 변경이 있으면 통과.
+                errors.append(
+                    f"{path.as_posix()}: "
+                    f"{DELETE_INNER_MSG.format(ident=b.ident)}"
+                )
+            # 중복 과다 보고 방지: 한 번만 내리고 종료
+            return
+# ============================== [05] validators — END ======================================
+
+
+# ================================ [06] main — START ========================================
+def _changed_files(base_sha: str, head_sha: str) -> List[Path]:
+    out = _run(["git", "diff", "--name-only", base_sha, head_sha])
+    files = [Path(p.strip()) for p in out.splitlines() if p.strip()]
+    return files
+
+
+def _git_show(sha: str, path: Path) -> str:
+    out = _run(["git", "show", f"{sha}:{path.as_posix()}"])
+    return out
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    p = argparse.ArgumentParser(prog="guard_patch")
+    p.add_argument("--base", required=True, help="base commit sha")
+    p.add_argument("--head", required=True, help="head commit sha")
+    args = p.parse_args(argv)
+
+    base_sha = str(args.base)
+    head_sha = str(args.head)
+
+    files = _changed_files(base_sha, head_sha)
+    all_errors: List[str] = []
+
+    for path in files:
+        # 워크트리(HEAD)의 최신 내용
+        head_text = Path(path).read_text(encoding="utf-8", errors="ignore") \
+            if Path(path).exists() else ""
+        base_text = _git_show(base_sha, path)
+
+        _check_ellipsis(path, head_text, all_errors)
+        _check_blocks_whole_replace(
+            path, head_text, base_text, base_sha, head_sha, all_errors
         )
 
-    # 2) 숫자 구획 순차(01부터 1씩 증가, 중복 금지)
-    starts = [m.ident for m in markers if m.kind == "START"]
-    if starts:
-        uniq = sorted(set(starts))
-        expect = list(range(1, len(uniq) + 1))
-        if uniq[0] != 1:
-            errs.append(
-                f"non-sequential block number: got {uniq[0]}, expect 1"
-            )
-        if uniq != expect:
-            errs.append(
-                f"block numbers must be 01..{expect[-1]:02d} without gaps"
-            )
-    return errs
-# ============================= [04] marker validators — END ========================
-
-
-# =============================== [05] file checks — START ==========================
-def _check_no_ellipsis(head_text: str, changed_lines: Set[int]) -> List[str]:
-    """U+2026(…) 금지. 변경 라인에서만 검사."""
-    errs: List[str] = []
-    if not changed_lines:
-        return errs
-    rows = head_text.splitlines()
-    for i in changed_lines:
-        if 1 <= i <= len(rows):
-            if ELLIPSIS_CHAR in rows[i - 1]:
-                errs.append(
-                    f"Unicode ellipsis (U+2026) forbidden at line {i}"
-                )
-    return errs
-
-
-def _check_file(base: str, head: str, path: str) -> List[str]:
-    head_text = _file_text_at(head, path)
-    if not head_text:
-        return []
-
-    changed = _changed_line_numbers(base, head, path)
-    errors: List[str] = []
-
-    # a) 금지 문자
-    for e in _check_no_ellipsis(head_text, changed):
-        errors.append(f"{path}: {e}")
-
-    # b) 숫자 구획(있을 때만 적용)
-    markers = _scan_markers(head_text)
-    if markers:
-        for e in _validate_blocks(markers):
-            errors.append(f"{path}: {e}")
-
-    return errors
-# ================================ [05] file checks — END ===========================
-
-
-# ================================= [06] main — START ===============================
-def main(argv: Optional[Sequence[str]] = None) -> int:
-    a = _parse_args(argv)
-    files = _changed_files(a.base, a.head, a.paths)
-
-    all_errs: List[str] = []
-    for p in files:
-        all_errs.extend(_check_file(a.base, a.head, p))
-
-    if all_errs:
-        print("[patch-guard] FAIL")
-        for e in all_errs:
+    if all_errors:
+        print(FAIL_HEADER)
+        for e in all_errors:
             print(f" - {e}")
         return 1
-
-    print("[patch-guard] PASS")
     return 0
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())
-# ================================== [06] main — END ================================
+# ================================ [06] main — END ==========================================
