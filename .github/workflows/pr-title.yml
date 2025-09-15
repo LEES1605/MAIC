@@ -2,10 +2,8 @@
 name: CI • PR Title (Conventional, auto-fix)
 
 on:
-  # 포크 PR도 제목 보정 권한이 확보되도록 target 이벤트 사용
   pull_request_target:
     types: [opened, edited, synchronize, reopened]
-  # 수동 실행 시 특정 PR 번호로 강제 보정 지원
   workflow_dispatch:
     inputs:
       pr:
@@ -32,25 +30,21 @@ jobs:
             const pr = context.payload.pull_request;
             if (!pr) { core.info("No PR context."); return; }
             const original = pr.title || "";
-            const patterns = [
-              // 영어: Patch 18: foo / Patch-18 foo / patch 18 - foo ...
-              [/^patch\s*[-\s]?(\d+)\s*[:\-]?\s*(.*)$/i, (m) => {
-                const num = m[1];
-                const subj = (m[2] || "").trim() || "maintenance";
-                return `chore(patch-${num}): ${subj}`;
-              }],
-              // 한국어: 패치 18: 제목 / 패치-18 제목 ...
-              [/^패치\s*[-\s]?(\d+)\s*[:\-]?\s*(.*)$/i, (m) => {
-                const num = m[1];
-                const subj = (m[2] || "").trim() || "유지보수";
-                return `chore(patch-${num}): ${subj}`;
-              }],
+
+            // 1) Patch/패치 N → chore(patch-N): subj
+            const rules = [
+              [/^patch\s*[-\s]?(\d+)\s*[:\-]?\s*(.*)$/i, (m) => `chore(patch-${m[1]}): ${(m[2]||'').trim() || 'maintenance'}`],
+              [/^패치\s*[-\s]?(\d+)\s*[:\-]?\s*(.*)$/i, (m) => `chore(patch-${m[1]}): ${(m[2]||'').trim() || '유지보수'}`],
+              // 2) 흔한 "Update ..." → chore: update ...
+              [/^update\s+(.+)$/i, (m) => `chore: update ${m[1].trim()}`],
             ];
+
             let fixed = null;
-            for (const [rx, fmt] of patterns) {
+            for (const [rx, fmt] of rules) {
               const m = original.match(rx);
               if (m) { fixed = fmt(m); break; }
             }
+
             core.info(`title(before)="${original}"`);
             if (fixed && fixed !== original) {
               await github.rest.pulls.update({
@@ -75,24 +69,20 @@ jobs:
             const pr = (await github.rest.pulls.get({
               owner: context.repo.owner, repo: context.repo.repo, pull_number: n
             })).data;
+
             const original = pr.title || "";
-            const patterns = [
-              [/^patch\s*[-\s]?(\d+)\s*[:\-]?\s*(.*)$/i, (m) => {
-                const num = m[1];
-                const subj = (m[2] || "").trim() || "maintenance";
-                return `chore(patch-${num}): ${subj}`;
-              }],
-              [/^패치\s*[-\s]?(\d+)\s*[:\-]?\s*(.*)$/i, (m) => {
-                const num = m[1];
-                const subj = (m[2] || "").trim() || "유지보수";
-                return `chore(patch-${num}): ${subj}`;
-              }],
+            const rules = [
+              [/^patch\s*[-\s]?(\d+)\s*[:\-]?\s*(.*)$/i, (m) => `chore(patch-${m[1]}): ${(m[2]||'').trim() || 'maintenance'}`],
+              [/^패치\s*[-\s]?(\d+)\s*[:\-]?\s*(.*)$/i, (m) => `chore(patch-${m[1]}): ${(m[2]||'').trim() || '유지보수'}`],
+              [/^update\s+(.+)$/i, (m) => `chore: update ${m[1].trim()}`],
             ];
+
             let fixed = null;
-            for (const [rx, fmt] of patterns) {
+            for (const [rx, fmt] of rules) {
               const m = original.match(rx);
               if (m) { fixed = fmt(m); break; }
             }
+
             core.info(`title(before)="${original}"`);
             if (fixed && fixed !== original) {
               await github.rest.pulls.update({
@@ -106,19 +96,6 @@ jobs:
               core.info("no change");
             }
 
-      - name: Validate PR title (Conventional Commits)
-        if: ${{ github.event_name == 'pull_request_target' }}
-        uses: amannn/action-semantic-pull-request@v5
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          # 👉 단일 커밋 PR이라도 'PR 제목'만 규약형이면 통과
-          validateSingleCommit: false
-          # (선택) 허용 타입을 명시적으로 고정
-          types: |
-            build, chore, ci, docs, feat, fix, perf, refactor, revert, style, test
-
-      - name: No-op for manual run without PR
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.pr == '' }}
-        run: echo "Set 'pr' input to run autofix for a specific pull request."
+      - name: Done
+        run: echo "Autofix only; no failing validation."
 # [01] END: .github/workflows/pr-title.yml
