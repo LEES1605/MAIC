@@ -216,8 +216,8 @@ def _is_safe_member(base: Path, target: Path) -> bool:
     try:
         b = base.resolve()
         t = target.resolve()
-        # dest 자체거나 하위여야 함
-        return (t == b) or (str(t).startswith(str(b) + os.sep))
+        # target가 base 자신이거나 그 하위여야 함
+        return (t == b) or str(t).startswith(str(b) + os.sep)
     except Exception:
         return False
 
@@ -225,11 +225,11 @@ def _is_safe_member(base: Path, target: Path) -> bool:
 def _safe_extract_zip(zdata: bytes, dest_dir: Path) -> bool:
     """
     Safely extract ZIP bytes into dest_dir.
-    - 경로 탈출 방지, 파일 수/총 바이트 상한, 디렉터리/일반파일만 허용
+    - 경로 탈출 방지, 링크 차단, 파일 수/총 바이트 상한, 디렉터리/일반파일만 허용
     """
     try:
         dest_dir.mkdir(parents=True, exist_ok=True)
-        max_files = 10000
+        max_files = 10_000
         max_bytes = 512 * 1024 * 1024  # 512MB
         total = 0
 
@@ -244,19 +244,20 @@ def _safe_extract_zip(zdata: bytes, dest_dir: Path) -> bool:
                 if not name:
                     continue
 
-                # 디렉터리?
-                if name.endswith("/"):
-                    target_dir = (dest_dir / name).resolve()
-                    if not _is_safe_member(dest_dir, target_dir):
-                        _log(f"zip path blocked: {name}")
-                        return False
-                    target_dir.mkdir(parents=True, exist_ok=True)
-                    continue
+                # symlink 추정: ZipInfo.external_attr의 상위 16비트에 파일 모드가 들어감
+                mode = (m.external_attr >> 16) & 0xFFFF
+                if stat.S_ISLNK(mode):
+                    _log(f"zip blocked: symlink {name}")
+                    return False
 
                 target = (dest_dir / name).resolve()
                 if not _is_safe_member(dest_dir, target):
                     _log(f"zip path blocked: {name}")
                     return False
+
+                if name.endswith("/"):
+                    target.mkdir(parents=True, exist_ok=True)
+                    continue
 
                 data = zf.read(m)
                 total += len(data)
@@ -283,7 +284,7 @@ def _safe_extract_tar(tdata: bytes, dest_dir: Path) -> bool:
     """
     try:
         dest_dir.mkdir(parents=True, exist_ok=True)
-        max_files = 10000
+        max_files = 10_000
         max_bytes = 512 * 1024 * 1024  # 512MB
         total = 0
 
@@ -297,8 +298,6 @@ def _safe_extract_tar(tdata: bytes, dest_dir: Path) -> bool:
                 name = m.name or ""
                 if not name:
                     continue
-
-                # 링크/디바이스 차단
                 if m.issym() or m.islnk() or m.isdev():
                     _log(f"tar blocked: link/dev entry {name}")
                     return False
@@ -311,7 +310,6 @@ def _safe_extract_tar(tdata: bytes, dest_dir: Path) -> bool:
                 if m.isdir():
                     target.mkdir(parents=True, exist_ok=True)
                     continue
-
                 if not m.isfile():
                     _log(f"tar blocked: unsupported type {name}")
                     return False
@@ -348,11 +346,9 @@ def _write_bytes(path: Path, data: bytes) -> bool:
 def _find_chunks(root: Path) -> Optional[Path]:
     """Find chunks.jsonl possibly nested."""
     try:
-        # prefer root first
         p = root / "chunks.jsonl"
         if p.exists() and p.stat().st_size > 0:
             return p
-        # nested
         for cand in root.rglob("chunks.jsonl"):
             if cand.stat().st_size > 0:
                 return cand
