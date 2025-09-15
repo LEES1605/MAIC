@@ -58,7 +58,7 @@ def scan_file(p: Path) -> List[Tuple[int, int]]:
 
 #  [03] START
 def parse_args(argv: List[str] | None = None) -> argparse.Namespace:
-    # 줄 길이 제한(E501) 대응: 설명 문자열을 두 줄로 나눠 컴파일 타임 결합
+    # 줄 길이 제한(E501) 회피: 설명 문자열을 분할하여 컴파일 타임 결합
     desc = (
         "Fail CI on U+2026 (Unicode ellipsis) "
         "inside code files."
@@ -74,6 +74,11 @@ def parse_args(argv: List[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Replace with ASCII '...' in-place.",
     )
+    ap.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Print scanning details (optional).",
+    )
     return ap.parse_args(argv)
 
 
@@ -82,9 +87,17 @@ def main() -> None:
     root = Path(ns.root).resolve()
     bad: List[str] = []
     fixed = 0
+    scanned = 0
 
     for p in iter_files(root):
+        scanned += 1
         locs = scan_file(p)
+        if ns.verbose and locs:
+            # 간단한 디버그 출력(옵션)
+            msg = ", ".join([f"L{ln}:{co}" for (ln, co) in locs[:3]])
+            more = "" if len(locs) <= 3 else f" (+{len(locs)-3} more)"
+            print(f"[no-ellipsis] {p}: {msg}{more}")
+
         if not locs:
             continue
         if ns.fix:
@@ -99,6 +112,9 @@ def main() -> None:
             msg = ", ".join([f"L{ln}:{co}" for (ln, co) in locs[:5]])
             more = "" if len(locs) <= 5 else f" (+{len(locs)-5} more)"
             bad.append(f"{p}: found at {msg}{more}")
+
+    if ns.verbose:
+        print(f"[no-ellipsis] scanned files: {scanned}")
 
     if ns.fix:
         print(f"Replaced ellipsis in {fixed} file(s).")
