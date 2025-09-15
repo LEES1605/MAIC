@@ -56,8 +56,6 @@ class Block:
         # 블록 내부(START/END 제외)
         return (self.start + 1, self.end - 1) if self.end - self.start >= 2 else (0, -1)
 # =============================== [02] data models — END ===================================
-
-
 # ============================== [03] small helpers — START =================================
 def _run(cmd: Sequence[str]) -> str:
     out = subprocess.run(
@@ -79,31 +77,31 @@ def _parse_markers(text: str) -> Tuple[List[Marker], List[str]]:
     markers: List[Marker] = []
     errs: List[str] = []
     for i, s in enumerate(text.splitlines(), start=1):
-        m = MARK_RE.match(s)
-        if not m:
+        match = MARK_RE.match(s)  # re.Match | None (로컬 변수명 충돌 방지)
+        if not match:
             continue
-        ident = f"{m.group('num')}{m.group('suf')}".upper()
-        edge = m.group("edge").upper()
+        ident = f"{match.group('num')}{match.group('suf')}".upper()
+        edge = match.group("edge").upper()
         markers.append(Marker(ident=ident, line_no=i, is_start=edge == "START"))
 
     # 쌍 매칭 검증(파일 내부)
     stack: List[Marker] = []
-    for m in markers:
-        if m.is_start:
-            stack.append(m)
+    for mk in markers:
+        if mk.is_start:
+            stack.append(mk)
             continue
         # END
         if not stack:
-            errs.append(END_NO_START_MSG.format(line=m.line_no))
+            errs.append(END_NO_START_MSG.format(line=mk.line_no))
             continue
-        prev = stack.pop()
-        if prev.ident != m.ident:
+        prev_mk: Marker = stack.pop()
+        if prev_mk.ident != mk.ident:
             errs.append(
                 MISMATCH_END_MSG.format(
-                    got=m.ident,
-                    line=m.line_no,
-                    exp=prev.ident,
-                    start_line=prev.line_no,
+                    got=mk.ident,
+                    line=mk.line_no,
+                    exp=prev_mk.ident,
+                    start_line=prev_mk.line_no,
                 )
             )
     # 남은 START는 허용(후속 블록 교체 시 diff가 분리될 수 있음)
@@ -116,30 +114,30 @@ def _build_blocks(markers: Sequence[Marker]) -> Tuple[List[Block], List[str]]:
     blocks: List[Block] = []
     errs: List[str] = []
     stack: List[Marker] = []
-    for m in markers:
-        if m.is_start:
-            stack.append(m)
+    for mk in markers:
+        if mk.is_start:
+            stack.append(mk)
         else:
             if not stack:
-                errs.append(END_NO_START_MSG.format(line=m.line_no))
+                errs.append(END_NO_START_MSG.format(line=mk.line_no))
                 continue
-            prev = stack.pop()
-            if prev.ident != m.ident:
+            prev_mk: Marker = stack.pop()
+            if prev_mk.ident != mk.ident:
                 errs.append(
                     MISMATCH_END_MSG.format(
-                        got=m.ident,
-                        line=m.line_no,
-                        exp=prev.ident,
-                        start_line=prev.line_no,
+                        got=mk.ident,
+                        line=mk.line_no,
+                        exp=prev_mk.ident,
+                        start_line=prev_mk.line_no,
                     )
                 )
                 continue
-            blocks.append(Block(ident=m.ident, start=prev.line_no, end=m.line_no))
+            blocks.append(Block(ident=mk.ident, start=prev_mk.line_no, end=mk.line_no))
     # START 남아서 짝이 없으면 내부 규약상 허용하지 않음
-    for s in stack:
+    for start_mk in stack:
         # START에 대응하는 END가 없음
         errs.append(
-            f"START without END: [{s.ident}] opened at line {s.line_no}"
+            f"START without END: [{start_mk.ident}] opened at line {start_mk.line_no}"
         )
     return blocks, errs
 
@@ -150,7 +148,6 @@ def _range_to_set(r: Tuple[int, int]) -> Set[int]:
         return set()
     return set(range(a, b + 1))
 # ============================== [03] small helpers — END ===================================
-
 
 # =============================== [04] diff utils — START ===================================
 def _changed_lines_plus(base: str, head: str, path: str) -> Set[int]:
