@@ -393,7 +393,6 @@ def restore_latest(dest_dir: str | Path, repo: Optional[str] = None) -> bool:
     elif lname.endswith(".tar.gz") or lname.endswith(".tgz"):
         ok = _safe_extract_tar(data, dest)
     elif lname.endswith(".jsonl.gz"):
-        # naive gunzip
         try:
             import gzip  # stdlib
             chunks = dest / "chunks.jsonl"
@@ -415,7 +414,6 @@ def restore_latest(dest_dir: str | Path, repo: Optional[str] = None) -> bool:
     # flatten when artifact created a top folder
     chunks = _find_chunks(dest)
     if chunks and chunks.parent != dest:
-        # move file into dest
         try:
             target = dest / "chunks.jsonl"
             target.write_bytes(chunks.read_bytes())
@@ -424,7 +422,6 @@ def restore_latest(dest_dir: str | Path, repo: Optional[str] = None) -> bool:
             _log(f"flatten failed: {e}")
             return False
 
-    # mark ready
     try:
         (dest / ".ready").write_text("ok", encoding="utf-8")
     except Exception as e:
@@ -433,7 +430,6 @@ def restore_latest(dest_dir: str | Path, repo: Optional[str] = None) -> bool:
     _log("restore_latest: done.")
     return True
 # ========================== [06] PUBLIC API: restore_latest — END ====================
-
 
 # ========================= [07] PUBLIC API: publish_backup — START ===================
 def _zip_dir(src: Path, out_zip: Path) -> bool:
