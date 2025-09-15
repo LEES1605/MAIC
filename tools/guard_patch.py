@@ -1,4 +1,4 @@
-# [01] START: tools/guard_patch.py (rev 2025-09-14)
+# [01] START: tools/guard_patch.py (rev 2025-09-15)
 from __future__ import annotations
 
 import argparse
@@ -15,7 +15,7 @@ MONITORED_EXTS = {".py", ".md", ".yaml", ".yml"}
 START_RE = re.compile(r"^\s*(#|<!--)\s*\[(\d{2,3})\].*START", re.IGNORECASE)
 END_RE = re.compile(r"^\s*(#|<!--)\s*\[(\d{2,3})\].*END", re.IGNORECASE)
 
-# No-Ellipsis Gate (U+2026). Do not put the ellipsis literal in source.
+# No-Ellipsis Gate (U+2026). Do not place the ellipsis literal in source.
 NO_ELLIPSIS_RE = re.compile(chr(0x2026))
 
 
@@ -27,11 +27,7 @@ class Block:
 
 
 def _run(*cmd: str) -> str:
-    """
-    Run a command, capturing stdout and stderr together.
-    If the process fails, raise CalledProcessError with captured output.
-    This keeps git 'fatal' messages out of raw job logs and in our control.
-    """
+    """Run a command and capture stdout/stderr together; raise on failure."""
     cp = subprocess.run(
         list(cmd),
         text=True,
@@ -241,4 +237,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-# [01] END: tools/guard_patch.py (rev 2025-09-14)
+# [01] END: tools/guard_patch.py (rev 2025-09-15)
