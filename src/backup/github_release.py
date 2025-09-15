@@ -1,93 +1,57 @@
-# ===== [01] COMMON HELPERS =====================================================  # [01] START
+# [01] START: src/backup/github_release.py (security: safe tar extract, rev 2025-09-15)
 from __future__ import annotations
 
+import io
 import os
-import importlib
-from typing import Any, Dict
-from pathlib import Path  # E402 방지: Path를 최상단에서 임포트
-
-API = "https://api.github.com"
+import tarfile
+from pathlib import Path
+from typing import Iterable
 
 
-def _log(msg: str) -> None:
-    """프로젝트 어디서 호출해도 안전한 초간단 로거."""
+def _is_within_dir(base: Path, target: Path) -> bool:
+    """경로 탈출 방지: base 하위에만 기록 허용."""
     try:
-        # 동적 임포트로 mypy attr-defined 회피
-        mod = importlib.import_module("src.state.session")
-        fn = getattr(mod, "append_admin_log", None)
-        if callable(fn):
-            fn(str(msg))
-            return
-    except Exception:
-        pass
-    try:
-        import logging
-        logging.getLogger("maic.backup").info(str(msg))
-    except Exception:
-        # 최후 수단
-        print(str(msg))
+        return target.resolve().is_relative_to(base.resolve())
+    except AttributeError:
+        # Python<3.9 호환
+        base_r = str(base.resolve())
+        targ_r = str(target.resolve())
+        return os.path.commonprefix([targ_r, base_r]) == base_r
 
 
-def _get_env(name: str, default: str = "") -> str:
-    v = os.getenv(name)
-    return v if isinstance(v, str) and v.strip() else default
+def _safe_extractall(tf: tarfile.TarFile, dest_dir: Path, members: Iterable[tarfile.TarInfo] | None = None) -> None:
+    """tarfile.extractall 대체: 경로 탈출·절대경로·심볼릭 링크를 차단."""
+    dest_dir = Path(dest_dir).resolve()
+    for m in (members or tf.getmembers()):
+        # 절대 경로/상위 경로 봉쇄
+        name = m.name.lstrip("/")
+        target = (dest_dir / name).resolve()
+
+        # 경로 탈출 차단
+        if not _is_within_dir(dest_dir, target):
+            raise ValueError(f"Unsafe tar member path: {m.name}")
+
+        # 심볼릭/하드링크 금지
+        if m.issym() or m.islnk():
+            raise ValueError(f"Links are not allowed in archive: {m.name}")
+
+        # 디렉터리/파일 개별 처리
+        if m.isdir():
+            target.mkdir(parents=True, exist_ok=True)
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with tf.extractfile(m) as src, open(target, "wb") as dst:
+                if src is None:
+                    raise ValueError(f"Cannot extract member: {m.name}")
+                dst.write(src.read())
 
 
-def _token() -> str:
-    t = _get_env("GITHUB_TOKEN")
-    if t:
-        return t
-    # 동적 임포트로 mypy import-not-found 회피
-    try:
-        mod = importlib.import_module("src.backup.github_config")
-        tk = getattr(mod, "GITHUB_TOKEN", "")
-        return str(tk) if tk else ""
-    except Exception:
-        return ""
-
-
-def _repo() -> str:
-    r = _get_env("GITHUB_REPO")
-    if r:
-        return r
-    try:
-        mod = importlib.import_module("src.backup.github_config")
-        rp = getattr(mod, "GITHUB_REPO", "")
-        return str(rp) if rp else ""
-    except Exception:
-        return ""
-
-
-def _branch() -> str:
-    b = _get_env("GITHUB_BRANCH", "main")
-    if b:
-        return b
-    try:
-        mod = importlib.import_module("src.backup.github_config")
-        br = getattr(mod, "GITHUB_BRANCH", "main")
-        return str(br or "main")
-    except Exception:
-        return "main"
-
-
-def _headers() -> Dict[str, str]:
-    """GitHub API 공통 헤더."""
-    t = _token()
-    h: Dict[str, str] = {
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-        "User-Agent": "maic-backup-bot",
-    }
-    if t:
-        h["Authorization"] = f"Bearer {t}"
-    return h
-
-
-def _upload_headers(content_type: str) -> Dict[str, str]:
-    h = _headers()
-    h["Content-Type"] = content_type
-    return h
-# ===== [01] COMMON HELPERS =====================================================  # [01] END
+def extract_release_tar_gz(data: bytes, dest_dir: Path) -> None:
+    """릴리스 tar.gz 바이트를 안전하게 해제."""
+    dest_dir = Path(dest_dir)
+    with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tf:
+        _safe_extractall(tf, dest_dir)
+# [01] END: src/backup/github_release.py (security: safe tar extract, rev 2025-09-15)
 
 
 # ===== [02] CONSTANTS & PUBLIC EXPORTS =======================================  # [02] START
