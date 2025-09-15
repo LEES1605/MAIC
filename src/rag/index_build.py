@@ -80,6 +80,7 @@ def _unpack_snapshot(blob: bytes) -> Dict[str, Any]:
             out["chunks"] = []
         return out
 # [03] END==================================================================
+# File: src/rag/index_build.py
 # ======================= [04] PUBLIC API: rebuild_index — START =======================
 def rebuild_index(output_dir: str | Path | None = None) -> Dict[str, Any]:
     """
@@ -87,12 +88,8 @@ def rebuild_index(output_dir: str | Path | None = None) -> Dict[str, Any]:
     - 의미 단위 청킹(문단/문장) + 오버랩
     - 중복 청크 제거(정규화 텍스트 해시)
     - 원자적 쓰기 후 검증 통과 시 .ready 생성
-    - PDF는 PyPDF2 사용 가능 시 본문 추출, 아니면 파일명으로 최소 인덱싱
+    - PDF는 pypdf/PyPDF2 사용 가능 시 본문 추출, 아니면 파일명으로 최소 인덱싱
     - 산출물: chunks.jsonl, manifest.json, index.meta.json, .ready
-
-    환경 힌트:
-      - MAIC_INDEX_MODE=HQ  → 작은 청크/높은 오버랩/상한↑
-      - MAIC_USE_PREPARED_ONLY=1  → prepared만 사용(기본도 prepared 전용)
     """
 
     # ---- 내부 헬퍼 및 설정 ------------------------------------------------------
@@ -103,6 +100,7 @@ def rebuild_index(output_dir: str | Path | None = None) -> Dict[str, Any]:
     import os
     import re
     from typing import Any as _Any
+    from pathlib import Path
 
     mode = (os.getenv("MAIC_INDEX_MODE") or "").upper()
     if mode == "HQ":
@@ -118,14 +116,12 @@ def rebuild_index(output_dir: str | Path | None = None) -> Dict[str, Any]:
     def _persist_dir() -> Path:
         if output_dir:
             return Path(output_dir).expanduser()
-        # SSOT 최우선 사용
         try:
             from src.core.persist import effective_persist_dir as _ssot  # noqa: E402
             p = _ssot()
             return p if isinstance(p, Path) else Path(str(p)).expanduser()
         except Exception:
             pass
-        # 하위호환: 전역 상수/CFG → 기본
         try:
             cfg = globals().get("PERSIST_DIR")
             if cfg:
@@ -173,11 +169,23 @@ def rebuild_index(output_dir: str | Path | None = None) -> Dict[str, Any]:
 
     # ---------- PDF 텍스트 추출(가능하면) ------------------------------------
     def _read_text_pdf_bytes(blob: bytes) -> str:
+        """pypdf 우선, 실패 시 PyPDF2 폴백."""
         try:
-            mod = importlib.import_module("PyPDF2")
-            PdfReader = getattr(mod, "PdfReader", None)
+            PdfReader = None
+            try:
+                mod = importlib.import_module("pypdf")
+                PdfReader = getattr(mod, "PdfReader", None)
+            except Exception:
+                PdfReader = None
+            if PdfReader is None:
+                try:
+                    mod2 = importlib.import_module("PyPDF2")
+                    PdfReader = getattr(mod2, "PdfReader", None)
+                except Exception:
+                    PdfReader = None
             if PdfReader is None:
                 return ""
+
             import io as _io
             reader = PdfReader(_io.BytesIO(blob))
             parts: list[str] = []
@@ -281,7 +289,6 @@ def rebuild_index(output_dir: str | Path | None = None) -> Dict[str, Any]:
     dest.mkdir(parents=True, exist_ok=True)
     out_jsonl = dest / "chunks.jsonl"
 
-    # prepared only 힌트(엔진이 다른 입력원을 보지 않도록)
     if os.getenv("MAIC_USE_PREPARED_ONLY", "1") != "1":
         os.environ["MAIC_USE_PREPARED_ONLY"] = "1"
 
@@ -414,7 +421,7 @@ def rebuild_index(output_dir: str | Path | None = None) -> Dict[str, Any]:
         except Exception:
             pass
 
-        # manifest.json: files 리스트 + 간단 docs 헤더 맵
+        # manifest.json
         headers: dict[str, dict[str, str]] = {}
         for obj in lines:
             d = obj.get("doc_id")
@@ -432,7 +439,7 @@ def rebuild_index(output_dir: str | Path | None = None) -> Dict[str, Any]:
         except Exception:
             pass
 
-        # index.meta.json: 빌드 메타
+        # index.meta.json
         try:
             built_ts = int(datetime.datetime.utcnow().timestamp())
             meta = {"built_at": built_ts, "mode": mode or "STD", "chunks": count}
@@ -449,3 +456,4 @@ def rebuild_index(output_dir: str | Path | None = None) -> Dict[str, Any]:
         "files_count": len(manifest_files),
     }
 # ======================== [04] PUBLIC API: rebuild_index — END ========================
+
