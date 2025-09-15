@@ -124,6 +124,7 @@ def _pick_best_asset(rel: dict) -> dict | None:
 
 
 
+# File: src/backup/github_release.py
 # ===== [05] ASSET DOWNLOAD & EXTRACT =========================================  # [05] START
 def _download_asset(asset: dict) -> bytes | None:
     """GitHub 릴리스 자산을 내려받아 바이트로 반환. 실패 시 None."""
@@ -145,11 +146,28 @@ def _download_asset(asset: dict) -> bytes | None:
 
 
 def _extract_zip(data: bytes, dest_dir: Path) -> bool:
-    """ZIP 바이트를 dest_dir에 풀기. 성공 True/실패 False."""
+    """ZIP 바이트를 안전하게 해제(경로 탈출/절대경로/링크 차단)."""
     try:
-        import io, zipfile  # E402 회피: 함수 내부 로컬 임포트
+        import io, zipfile
+        dest = Path(dest_dir).resolve()
         with zipfile.ZipFile(io.BytesIO(data)) as zf:
-            zf.extractall(dest_dir)
+            for info in zf.infolist():
+                # 이름 정규화
+                name = (info.filename or "").lstrip("/")
+                # 상위 경로 탈출 금지
+                parts = Path(name).parts
+                if any(p in ("..", "") for p in parts):
+                    raise ValueError(f"Unsafe zip member path: {info.filename}")
+                target = (dest / name).resolve()
+                if not str(target).startswith(str(dest)):
+                    raise ValueError(f"Zip path escapes root: {info.filename}")
+                # 디렉터리/파일 처리
+                if str(info.filename).endswith("/"):
+                    target.mkdir(parents=True, exist_ok=True)
+                else:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    with zf.open(info, "r") as src, open(target, "wb") as dst:
+                        dst.write(src.read())
         return True
     except Exception as e:
         _log(f"압축 해제 실패(zip): {type(e).__name__}: {e}")
@@ -157,11 +175,10 @@ def _extract_zip(data: bytes, dest_dir: Path) -> bool:
 
 
 def _extract_targz(data: bytes, dest_dir: Path) -> bool:
-    """TAR.GZ / TGZ 바이트를 dest_dir에 풀기."""
+    """TAR.GZ / TGZ 바이트를 안전하게 해제(경로 탈출/링크 차단)."""
     try:
-        import tarfile, io  # E402 회피
-        with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tf:
-            tf.extractall(dest_dir)
+        # 상단 [01] 구획의 안전 해제 루틴 사용
+        extract_release_tar_gz(data, Path(dest_dir))
         return True
     except Exception as e:
         _log(f"압축 해제 실패(tar.gz): {type(e).__name__}: {e}")
@@ -171,9 +188,9 @@ def _extract_targz(data: bytes, dest_dir: Path) -> bool:
 def _extract_gz_to_file(asset_name: str, data: bytes, dest_dir: Path) -> bool:
     """단일 .gz(예: chunks.jsonl.gz)를 dest_dir/<basename>으로 풀기."""
     try:
-        import gzip, io  # E402 회피
+        import gzip, io
         base = asset_name[:-3] if asset_name.lower().endswith(".gz") else asset_name
-        out_path = dest_dir / base
+        out_path = Path(dest_dir) / base
         with gzip.GzipFile(fileobj=io.BytesIO(data), mode="rb") as gf:
             out_path.write_bytes(gf.read())
         return True
@@ -194,6 +211,7 @@ def _extract_auto(asset_name: str, data: bytes, dest_dir: Path) -> bool:
     # 알 수 없는 형식: zip 시도(실패 시 False)
     return _extract_zip(data, dest_dir)
 # [05] END =====================================================================
+
 
 
 # ===== [06] PUBLIC API: restore_latest =======================================  # [06] START
