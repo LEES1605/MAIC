@@ -208,32 +208,63 @@ def _download_asset(asset: Dict[str, Any]) -> Optional[Tuple[str, bytes]]:
     _log(f"asset download failed: {rr.status_code}")
     return None
 # ========================== [04] release discovery — END ============================
-
-
 # ========================= [05] extraction helpers — START ==========================
 def _is_safe_member(base: Path, target: Path) -> bool:
     """Prevent path traversal and absolute extraction."""
     try:
-        return str(target.resolve()).startswith(str(base.resolve()))
+        b = base.resolve()
+        t = target.resolve()
+        # dest 자체거나 하위여야 함
+        return (t == b) or (str(t).startswith(str(b) + os.sep))
     except Exception:
         return False
 
 
 def _safe_extract_zip(zdata: bytes, dest_dir: Path) -> bool:
-    """Extract zip bytes into dest_dir safely."""
+    """
+    Safely extract ZIP bytes into dest_dir.
+    - 경로 탈출 방지, 파일 수/총 바이트 상한, 디렉터리/일반파일만 허용
+    """
     try:
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        max_files = 10000
+        max_bytes = 512 * 1024 * 1024  # 512MB
+        total = 0
+
         with zipfile.ZipFile(io.BytesIO(zdata)) as zf:
             members = zf.infolist()
-            # Dry-run safety check
+            if len(members) > max_files:
+                _log(f"zip blocked: too many members ({len(members)})")
+                return False
+
             for m in members:
-                if m.is_dir():
+                name = m.filename
+                if not name:
                     continue
-                target = (dest_dir / m.filename).resolve()
+
+                # 디렉터리?
+                if name.endswith("/"):
+                    target_dir = (dest_dir / name).resolve()
+                    if not _is_safe_member(dest_dir, target_dir):
+                        _log(f"zip path blocked: {name}")
+                        return False
+                    target_dir.mkdir(parents=True, exist_ok=True)
+                    continue
+
+                target = (dest_dir / name).resolve()
                 if not _is_safe_member(dest_dir, target):
-                    _log(f"zip path blocked: {m.filename}")
+                    _log(f"zip path blocked: {name}")
                     return False
-            # Extract
-            zf.extractall(dest_dir)
+
+                data = zf.read(m)
+                total += len(data)
+                if total > max_bytes:
+                    _log("zip blocked: size budget exceeded")
+                    return False
+
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with open(target, "wb") as out:
+                    out.write(data)
         return True
     except Exception as e:
         _log(f"zip extract failed: {e}")
@@ -241,17 +272,61 @@ def _safe_extract_zip(zdata: bytes, dest_dir: Path) -> bool:
 
 
 def _safe_extract_tar(tdata: bytes, dest_dir: Path) -> bool:
-    """Extract tar.gz/tgz safely."""
+    """
+    Safely extract TAR/TGZ bytes into dest_dir.
+    - 경로 탈출 방지(절대/상위 경로 금지)
+    - 링크/디바이스 항목 차단(issym/islnk/isdev)
+    - 디렉터리/일반파일만 허용
+    - 파일 수/총 바이트 상한
+    """
     try:
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        max_files = 10000
+        max_bytes = 512 * 1024 * 1024  # 512MB
+        total = 0
+
         with tarfile.open(fileobj=io.BytesIO(tdata), mode="r:*") as tf:
-            for m in tf.getmembers():
-                if not m.name:
+            members = tf.getmembers()
+            if len(members) > max_files:
+                _log(f"tar blocked: too many members ({len(members)})")
+                return False
+
+            for m in members:
+                name = m.name or ""
+                if not name:
                     continue
-                target = (dest_dir / m.name).resolve()
-                if not _is_safe_member(dest_dir, target):
-                    _log(f"tar path blocked: {m.name}")
+
+                # 링크/디바이스 차단
+                if m.issym() or m.islnk() or m.isdev():
+                    _log(f"tar blocked: link/dev entry {name}")
                     return False
-            tf.extractall(dest_dir)
+
+                target = (dest_dir / name).resolve()
+                if not _is_safe_member(dest_dir, target):
+                    _log(f"tar path blocked: {name}")
+                    return False
+
+                if m.isdir():
+                    target.mkdir(parents=True, exist_ok=True)
+                    continue
+
+                if not m.isfile():
+                    _log(f"tar blocked: unsupported type {name}")
+                    return False
+
+                f = tf.extractfile(m)
+                if f is None:
+                    _log(f"tar blocked: unreadable file {name}")
+                    return False
+                data = f.read() or b""
+                total += len(data)
+                if total > max_bytes:
+                    _log("tar blocked: size budget exceeded")
+                    return False
+
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with open(target, "wb") as out:
+                    out.write(data)
         return True
     except Exception as e:
         _log(f"tar extract failed: {e}")
@@ -279,11 +354,10 @@ def _find_chunks(root: Path) -> Optional[Path]:
         for cand in root.rglob("chunks.jsonl"):
             if cand.stat().st_size > 0:
                 return cand
-    except Exception:
-        pass
+    except Exception as e:
+        _log(f"find_chunks failed: {e}")
     return None
 # ========================== [05] extraction helpers — END ===========================
-
 
 # ========================= [06] PUBLIC API: restore_latest — START ===================
 def restore_latest(dest_dir: str | Path, repo: Optional[str] = None) -> bool:
@@ -355,8 +429,8 @@ def restore_latest(dest_dir: str | Path, repo: Optional[str] = None) -> bool:
     # mark ready
     try:
         (dest / ".ready").write_text("ok", encoding="utf-8")
-    except Exception:
-        pass
+    except Exception as e:
+        _log(f"mark ready failed: {e}")
 
     _log("restore_latest: done.")
     return True
