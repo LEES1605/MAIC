@@ -206,8 +206,8 @@ def rebuild_index(output_dir: str | Path | None = None) -> Dict[str, Any]:
 
     # ---------- 청킹 ---------------------------------------------------------
     re_paras = re.compile(r"\n{2,}")
-    # HQ 품질: U+2026(ellipsis)도 문장 경계로 인식
-    re_sents = re.compile("(?<=[.!?\\u3002\\uFF01\\uFF1F\\u2026])\\s+")
+    # HQ: U+2026(...)도 문장 경계로 인식
+    re_sents = re.compile(r"(?<=[.!?\u3002\uFF01\uFF1F\u2026])\s+")
 
     def _split_paragraphs(s: str) -> list[str]:
         parts = [p.strip() for p in re_paras.split(s) if p.strip()]
@@ -286,7 +286,7 @@ def rebuild_index(output_dir: str | Path | None = None) -> Dict[str, Any]:
         return count
 
     def _hash_norm(s: str) -> str:
-        # HQ 품질: U+2026을 ASCII ...로 정규화 후 해시 → 중복제거 정밀도 ↑
+        # HQ: ... → ... 정규화 후 해시(중복제거 정밀도 ↑)
         s2 = s.replace("\u2026", "...").lower().strip()
         return hashlib.sha1(s2.encode("utf-8", errors="ignore")).hexdigest()
 
@@ -462,3 +462,4 @@ def rebuild_index(output_dir: str | Path | None = None) -> Dict[str, Any]:
         "files_count": len(manifest_files),
     }
 # ======================== [04] PUBLIC API: rebuild_index — END ========================
+

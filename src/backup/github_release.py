@@ -216,58 +216,31 @@ def _is_safe_member(base: Path, target: Path) -> bool:
     try:
         b = base.resolve()
         t = target.resolve()
-        # target가 base 자신이거나 그 하위여야 함
         return (t == b) or str(t).startswith(str(b) + os.sep)
     except Exception:
         return False
 
 
 def _safe_extract_zip(zdata: bytes, dest_dir: Path) -> bool:
-    """
-    Safely extract ZIP bytes into dest_dir.
-    - 경로 탈출 방지, 링크 차단, 파일 수/총 바이트 상한, 디렉터리/일반파일만 허용
-    """
+    """Extract zip bytes into dest_dir safely (no extractall path traversal)."""
     try:
         dest_dir.mkdir(parents=True, exist_ok=True)
-        max_files = 10_000
-        max_bytes = 512 * 1024 * 1024  # 512MB
-        total = 0
-
         with zipfile.ZipFile(io.BytesIO(zdata)) as zf:
-            members = zf.infolist()
-            if len(members) > max_files:
-                _log(f"zip blocked: too many members ({len(members)})")
-                return False
-
-            for m in members:
+            for m in zf.infolist():
                 name = m.filename
                 if not name:
                     continue
-
-                # symlink 추정: ZipInfo.external_attr의 상위 16비트에 파일 모드가 들어감
-                mode = (m.external_attr >> 16) & 0xFFFF
-                if stat.S_ISLNK(mode):
-                    _log(f"zip blocked: symlink {name}")
-                    return False
-
-                target = (dest_dir / name).resolve()
-                if not _is_safe_member(dest_dir, target):
+                tgt = (dest_dir / name).resolve()
+                if not _is_safe_member(dest_dir, tgt):
                     _log(f"zip path blocked: {name}")
                     return False
-
                 if name.endswith("/"):
-                    target.mkdir(parents=True, exist_ok=True)
+                    tgt.mkdir(parents=True, exist_ok=True)
                     continue
-
                 data = zf.read(m)
-                total += len(data)
-                if total > max_bytes:
-                    _log("zip blocked: size budget exceeded")
-                    return False
-
-                target.parent.mkdir(parents=True, exist_ok=True)
-                with open(target, "wb") as out:
-                    out.write(data)
+                tgt.parent.mkdir(parents=True, exist_ok=True)
+                with open(tgt, "wb") as w:
+                    w.write(data)
         return True
     except Exception as e:
         _log(f"zip extract failed: {e}")
@@ -275,58 +248,29 @@ def _safe_extract_zip(zdata: bytes, dest_dir: Path) -> bool:
 
 
 def _safe_extract_tar(tdata: bytes, dest_dir: Path) -> bool:
-    """
-    Safely extract TAR/TGZ bytes into dest_dir.
-    - 경로 탈출 방지(절대/상위 경로 금지)
-    - 링크/디바이스 항목 차단(issym/islnk/isdev)
-    - 디렉터리/일반파일만 허용
-    - 파일 수/총 바이트 상한
-    """
+    """Extract tar.gz/tgz safely (no extractall path traversal)."""
     try:
         dest_dir.mkdir(parents=True, exist_ok=True)
-        max_files = 10_000
-        max_bytes = 512 * 1024 * 1024  # 512MB
-        total = 0
-
         with tarfile.open(fileobj=io.BytesIO(tdata), mode="r:*") as tf:
-            members = tf.getmembers()
-            if len(members) > max_files:
-                _log(f"tar blocked: too many members ({len(members)})")
-                return False
-
-            for m in members:
-                name = m.name or ""
-                if not name:
+            for m in tf.getmembers():
+                n = m.name or ""
+                if not n:
                     continue
-                if m.issym() or m.islnk() or m.isdev():
-                    _log(f"tar blocked: link/dev entry {name}")
+                tgt = (dest_dir / n).resolve()
+                if not _is_safe_member(dest_dir, tgt):
+                    _log(f"tar path blocked: {n}")
                     return False
-
-                target = (dest_dir / name).resolve()
-                if not _is_safe_member(dest_dir, target):
-                    _log(f"tar path blocked: {name}")
-                    return False
-
                 if m.isdir():
-                    target.mkdir(parents=True, exist_ok=True)
+                    tgt.mkdir(parents=True, exist_ok=True)
                     continue
-                if not m.isfile():
-                    _log(f"tar blocked: unsupported type {name}")
-                    return False
-
                 f = tf.extractfile(m)
                 if f is None:
-                    _log(f"tar blocked: unreadable file {name}")
+                    _log(f"tar blocked: unreadable file {n}")
                     return False
                 data = f.read() or b""
-                total += len(data)
-                if total > max_bytes:
-                    _log("tar blocked: size budget exceeded")
-                    return False
-
-                target.parent.mkdir(parents=True, exist_ok=True)
-                with open(target, "wb") as out:
-                    out.write(data)
+                tgt.parent.mkdir(parents=True, exist_ok=True)
+                with open(tgt, "wb") as w:
+                    w.write(data)
         return True
     except Exception as e:
         _log(f"tar extract failed: {e}")
@@ -357,12 +301,13 @@ def _find_chunks(root: Path) -> Optional[Path]:
     return None
 # ========================== [05] extraction helpers — END ===========================
 
+
 # ========================= [06] PUBLIC API: restore_latest — START ===================
 def restore_latest(dest_dir: str | Path, repo: Optional[str] = None) -> bool:
     """
     Restore latest index artifact into dest_dir.
     - Supports index_*.zip / *.tar.gz / chunks.jsonl(.gz)
-    - Marks '.ready' when chunks.jsonl exists
+    - Marks '.ready' only when chunks.jsonl exists (>0B)
     """
     dest = Path(dest_dir).expanduser().resolve()
     dest.mkdir(parents=True, exist_ok=True)
@@ -413,23 +358,27 @@ def restore_latest(dest_dir: str | Path, repo: Optional[str] = None) -> bool:
 
     # flatten when artifact created a top folder
     chunks = _find_chunks(dest)
-    if chunks and chunks.parent != dest:
+    if not chunks:
+        _log("restore_latest: chunks.jsonl not found after extract")
+        return False
+    if chunks.parent != dest:
         try:
-            target = dest / "chunks.jsonl"
-            target.write_bytes(chunks.read_bytes())
+            (dest / "chunks.jsonl").write_bytes(chunks.read_bytes())
             _log(f"flatten: adopted chunks from {chunks.parent.name}")
         except Exception as e:
             _log(f"flatten failed: {e}")
             return False
 
+    # mark ready (統一: 'ready')
     try:
-        (dest / ".ready").write_text("ok", encoding="utf-8")
+        (dest / ".ready").write_text("ready", encoding="utf-8")
     except Exception as e:
         _log(f"mark ready failed: {e}")
 
     _log("restore_latest: done.")
     return True
 # ========================== [06] PUBLIC API: restore_latest — END ====================
+
 
 # ========================= [07] PUBLIC API: publish_backup — START ===================
 def _zip_dir(src: Path, out_zip: Path) -> bool:
