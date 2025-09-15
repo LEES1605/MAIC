@@ -28,6 +28,9 @@
 - `ui_orchestrator` 로더 None 가드로 **런타임 안정성 향상**
 - `rag_engine` 내부 타입 충돌/미사용 변수 정리
 - Grammar/Passage 템플릿 테스트에서 요구하던 `근거/출처` 섹션 부재 문제 해결.
+- `src/backup/github_release.py`: 누락된 상수/헬퍼로 인한 F821 연쇄 오류와 구획 불일치 수정.
+  - 안전한 압축 해제(경로 탈출 차단), 릴리스 조회/업로드 견고화, 라인 길이 100자 준수.
+  - 유니코드 생략기호 제거로 No‑Ellipsis Gate 통과.
 
 ### Removed
 - 불필요한 `# type: ignore[...]` 주석 다수
