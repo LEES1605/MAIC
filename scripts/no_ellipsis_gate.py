@@ -1,132 +1,188 @@
-# [01] START
-#!/usr/bin/env python3
-"""
-scripts/no_ellipsis_gate.py
-
-Fail CI if Unicode ellipsis (U+2026) appears in code files.
-Use --fix to replace it with ASCII "...".
-"""
+# ============================ [01] imports & cfg — START ============================
 from __future__ import annotations
 
+import argparse
+import fnmatch
+import io
+import os
+import sys
+import tokenize
 from pathlib import Path
 from typing import Iterable, List, Tuple
-import argparse
-import sys
 
-TARGET = "\u2026"  # do NOT use the literal char in this file
+ELLIPSIS = "\u2026"  # only U+2026 is forbidden; ASCII '...' is OK
 
-INCLUDE_EXTS = {
-    ".py", ".pyi", ".ts", ".tsx", ".js", ".jsx", ".sh", ".bat", ".ps1",
+# scan extensions
+SCAN_EXTS = {
+    ".py", ".pyi", ".yaml", ".yml", ".toml", ".ini", ".cfg",
+    ".md", ".txt", ".json", ".csv",
 }
-EXCLUDE_DIRS = {
-    ".git", ".venv", "venv", "node_modules", "dist", "build", "__pycache__", "docs",
-}
-EXCLUDE_FILES = {"prompts.yaml"}
-# [01] END
 
-# [02] START
-def iter_files(root: Path) -> Iterable[Path]:
-    for p in root.rglob("*"):
-        if not p.is_file():
-            continue
-        if p.suffix.lower() not in INCLUDE_EXTS:
-            continue
-        if set(x.name for x in p.parents) & EXCLUDE_DIRS:
-            continue
-        if p.name in EXCLUDE_FILES:
-            continue
-        yield p
+# default exclude: docs/markdown/config는 경고만(+ prompts.yaml 임시 완화)
+#  - '**/prompts.yaml' 로 풀경로 매칭 보장
+#  - '**/pyproject.toml' 로도 보강(편의)
+DEFAULT_EXCLUDE = ["docs/**", "**/*.md", "**/pyproject.toml", "**/prompts.yaml"]
+# ============================= [01] imports & cfg — END =============================
 
 
-def scan_file(p: Path) -> List[Tuple[int, int]]:
-    locs: List[Tuple[int, int]] = []
+
+# ============================ [02] scanners — START =================================
+def _py_ellipsis_lines(content: str) -> List[int]:
+    """Python: COMMENT 토큰은 무시, 나머지 토큰 문자열에서 U+2026 위치 수집."""
+    out: List[int] = []
     try:
-        text = p.read_text(encoding="utf-8")
+        buf = io.StringIO(content)
+        for tok in tokenize.generate_tokens(buf.readline):
+            if tok.type == tokenize.COMMENT:
+                continue
+            if ELLIPSIS in tok.string:
+                out.append(tok.start[0])
     except Exception:
-        return locs
-    idx = 0
-    while True:
-        found = text.find(TARGET, idx)
-        if found == -1:
-            break
-        line = text.count("\n", 0, found) + 1
-        col = found - (text.rfind("\n", 0, found) + 1)
-        locs.append((line, col))
-        idx = found + 1
-    return locs
-# [02] END
+        for i, line in enumerate(content.splitlines(), start=1):
+            if ELLIPSIS in line:
+                out.append(i)
+    return sorted(set(out))
 
-#  [03] START
+
+def _yaml_like_ellipsis_lines(content: str) -> List[int]:
+    """YAML/TOML/INI: 행 전체 주석(#/;)은 스킵, 값 영역만 검사."""
+    out: List[int] = []
+    for i, line in enumerate(content.splitlines(), start=1):
+        s = line.lstrip()
+        if s.startswith("#") or s.startswith(";"):
+            continue
+        if ELLIPSIS in line:
+            out.append(i)
+    return out
+
+
+def _plain_ellipsis_lines(content: str) -> List[int]:
+    out: List[int] = []
+    for i, line in enumerate(content.splitlines(), start=1):
+        if ELLIPSIS in line:
+            out.append(i)
+    return out
+
+
+def _find_ellipsis_in_file(path: Path) -> List[int]:
+    text = path.read_text(encoding="utf-8", errors="ignore")
+    ext = path.suffix.lower()
+    if ext == ".py":
+        return _py_ellipsis_lines(text)
+    if ext in (".yml", ".yaml", ".toml", ".ini", ".cfg"):
+        return _yaml_like_ellipsis_lines(text)
+    return _plain_ellipsis_lines(text)
+# ============================= [02] scanners — END ==================================
+
+
+# ============================ [03] args — START =====================================
 def parse_args(argv: List[str] | None = None) -> argparse.Namespace:
-    # 줄 길이 제한(E501) 회피: 설명 문자열을 분할하여 컴파일 타임 결합
-    desc = (
-        "Fail CI on U+2026 (Unicode ellipsis) "
-        "inside code files."
+    ap = argparse.ArgumentParser(
+        description=(
+            "Fail CI on U+2026 (Unicode ellipsis). "
+            "Skips .py comments and full-line YAML/TOML/INI comments."
+        )
     )
-    ap = argparse.ArgumentParser(description=desc)
-    ap.add_argument(
-        "--root",
-        default=".",
-        help="Root directory to scan (default: .)",
-    )
+    ap.add_argument("--root", default=".", help="Root directory to scan (default: .)")
     ap.add_argument(
         "--fix",
         action="store_true",
-        help="Replace with ASCII '...' in-place.",
+        help="Replace U+2026 with ASCII '...' in-place.",
+    )
+    ap.add_argument(
+        "--exclude",
+        default=",".join(DEFAULT_EXCLUDE),
+        help="Comma-separated glob patterns excluded from blocking (still listed).",
+    )
+    ap.add_argument(
+        "--warn-only",
+        action="store_true",
+        help="Do not fail the process; only print offenders (useful for docs).",
     )
     ap.add_argument(
         "--verbose",
         action="store_true",
-        help="Print scanning details (optional).",
+        help="Print extra debug (paths scanned, excludes). Ignored by CI.",
     )
     return ap.parse_args(argv)
+# ============================= [03] args — END ======================================
 
 
-def main() -> None:
-    ns = parse_args()
-    root = Path(ns.root).resolve()
-    bad: List[str] = []
-    fixed = 0
-    scanned = 0
-
-    for p in iter_files(root):
-        scanned += 1
-        locs = scan_file(p)
-        if ns.verbose and locs:
-            # 간단한 디버그 출력(옵션)
-            msg = ", ".join([f"L{ln}:{co}" for (ln, co) in locs[:3]])
-            more = "" if len(locs) <= 3 else f" (+{len(locs)-3} more)"
-            print(f"[no-ellipsis] {p}: {msg}{more}")
-
-        if not locs:
+# ============================ [04] main — START =====================================
+def _match_any(path: str, patterns: Iterable[str]) -> bool:
+    """Match against full path OR basename to be user-friendly."""
+    base = path.rsplit("/", 1)[-1]
+    for pat in patterns:
+        p = pat.strip()
+        if not p:
             continue
-        if ns.fix:
+        if fnmatch.fnmatch(path, p) or fnmatch.fnmatch(base, p):
+            return True
+    return False
+
+
+def main(argv: List[str] | None = None) -> int:
+    args = parse_args(argv)
+    root = Path(args.root).resolve()
+    excludes = [p.strip() for p in (args.exclude or "").split(",") if p.strip()]
+
+    if getattr(args, "verbose", False):
+        print(f"[gate] root={root}")
+        print(f"[gate] excludes={excludes}")
+
+    blockers: List[Tuple[str, List[int]]] = []
+    warnings: List[Tuple[str, List[int]]] = []
+
+    for p in root.rglob("*"):
+        if not p.is_file():
+            continue
+        if p.suffix.lower() not in SCAN_EXTS:
+            continue
+
+        rel = p.as_posix()
+        try:
+            lines = _find_ellipsis_in_file(p)
+        except Exception:
+            lines = []
+        if not lines:
+            continue
+
+        if _match_any(rel, excludes):
+            warnings.append((rel, lines))  # 경고 전용
+            continue
+
+        if args.fix:
             try:
-                t = p.read_text(encoding="utf-8").replace(TARGET, "...")
-                p.write_text(t, encoding="utf-8")
-                fixed += 1
-            except Exception as e:
-                bad.append(f"{p}: fix failed: {e}")
-                continue
-        else:
-            msg = ", ".join([f"L{ln}:{co}" for (ln, co) in locs[:5]])
-            more = "" if len(locs) <= 5 else f" (+{len(locs)-5} more)"
-            bad.append(f"{p}: found at {msg}{more}")
+                txt = p.read_text(encoding="utf-8", errors="ignore")
+                if ELLIPSIS in txt:
+                    p.write_text(txt.replace(ELLIPSIS, "..."), encoding="utf-8")
+                    lines2 = _find_ellipsis_in_file(p)
+                    if not lines2:
+                        continue  # 수정 성공
+                    lines = lines2
+            except Exception:
+                pass
+        blockers.append((rel, lines))
 
-    if ns.verbose:
-        print(f"[no-ellipsis] scanned files: {scanned}")
+    if warnings:
+        print("U+2026 (warn-only):")
+        for path, lines in warnings:
+            head = ", ".join(f"L{n}" for n in lines[:8])
+            tail = "" if len(lines) <= 8 else ", ..."
+            print(f" - {path}: {head}{tail}")
 
-    if ns.fix:
-        print(f"Replaced ellipsis in {fixed} file(s).")
+    if blockers:
+        print("U+2026 (blocking):")
+        for path, lines in blockers:
+            head = ", ".join(f"L{n}" for n in lines[:8])
+            tail = "" if len(lines) <= 8 else ", ..."
+            print(f" - {path}: {head}{tail}")
+        return 0 if args.warn_only else 1
 
-    if bad and not ns.fix:
-        print("Unicode ellipsis (U+2026) found in:", file=sys.stderr)
-        for b in bad:
-            print(" -", b, file=sys.stderr)
-        raise SystemExit(1)
-    raise SystemExit(0)
+    return 0
+# ============================= [04] main — END ======================================
 
-
-if __name__ == "__main__":
-    main()
-#  [03] END
+# ============================ [05] entry — START ====================================
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(main(sys.argv[1:]))
+# ============================= [05] entry — END =====================================

@@ -1,0 +1,47 @@
+# [01] START: .github/workflows/no-ellipsis-autofix.yml
+name: CI • Autofix Unicode ellipsis
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, edited, reopened]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: no-ellipsis-autofix-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  autofix-ellipsis:
+    runs-on: ubuntu-latest
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event.pull_request.head.ref || github.ref_name }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Autofix ellipsis and touch markers
+        run: python scripts/fix_makers_and_ellipsis.py --root . --apply || true
+
+      - name: Commit if changed
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if ! git diff --quiet; then
+            git add -A
+            git commit -m "ci: autofix U+2026 and normalize guard markers [skip ci]"
+            git push
+          fi
+# [01] END: .github/workflows/no-ellipsis-autofix.yml
