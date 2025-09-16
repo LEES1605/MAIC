@@ -18,7 +18,7 @@ SCAN_EXTS = {
     ".md", ".txt", ".json", ".csv",
 }
 
-# default exclude: docs/markdown/config는 경고만으로 처리(+ prompts.yaml 임시 완화)
+# default exclude: docs/markdown/config는 경고만(+ prompts.yaml 임시 완화)
 DEFAULT_EXCLUDE = ["docs/**", "**/*.md", "pyproject.toml", "prompts.yaml"]
 # ============================= [01] imports & cfg — END =============================
 
