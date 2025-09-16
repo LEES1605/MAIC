@@ -2,44 +2,43 @@
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import io
 import os
 import sys
 import tokenize
 from pathlib import Path
-from typing import List, Tuple
+from typing import Iterable, List, Tuple
 
-ELLIPSIS = "\u2026"  # Unicode ellipsis ONLY (ASCII '...' is OK)
+ELLIPSIS = "\u2026"  # only U+2026 is forbidden; ASCII '...' is OK
 
-# 확장자 정책: 코드/설정/문서 전반을 보되, .py 주석은 무시
+# 기본 스캔 확장자
 SCAN_EXTS = {
     ".py", ".pyi", ".yaml", ".yml", ".toml", ".ini", ".cfg",
     ".md", ".txt", ".json", ".csv",
 }
+
+# 기본 제외(경고만 또는 무시) 후보 — 필요 시 CLI로 덮어쓰기
+DEFAULT_EXCLUDE = [
+    "docs/**",
+    "**/*.md",
+    "pyproject.toml",
+]
 # ============================= [01] imports & cfg — END =============================
 
 
 # ============================ [02] scanners — START =================================
-def _py_ellipsis_lines(path: Path, content: str) -> List[int]:
-    """
-    Python 파일에서 '주석은 건너뛰고' 나머지 토큰에 포함된 U+2026의 라인 번호를 수집.
-    - tokenize 모듈로 COMMENT 토큰을 필터링
-    - STRING/NAME/OP 등 모든 비-주석 토큰은 검사
-    """
+def _py_ellipsis_lines(content: str) -> List[int]:
+    """Python: COMMENT 토큰은 무시, 나머지 토큰 문자열에서 U+2026 위치 수집."""
     out: List[int] = []
     try:
         buf = io.StringIO(content)
         for tok in tokenize.generate_tokens(buf.readline):
-            tok_type = tok.type
-            tok_str = tok.string
-            # 주석은 무시
-            if tok_type == tokenize.COMMENT:
+            if tok.type == tokenize.COMMENT:
                 continue
-            # 나머지 토큰 안에 U+2026이 있으면 해당 시작 라인 기록
-            if ELLIPSIS in tok_str:
+            if ELLIPSIS in tok.string:
                 out.append(tok.start[0])
     except Exception:
-        # 토크나이즈 실패 시 라인 단위 폴백(주석 무시는 못 하지만, 실패를 삼키지 않음)
         for i, line in enumerate(content.splitlines(), start=1):
             if ELLIPSIS in line:
                 out.append(i)
@@ -47,10 +46,7 @@ def _py_ellipsis_lines(path: Path, content: str) -> List[int]:
 
 
 def _yaml_like_ellipsis_lines(content: str) -> List[int]:
-    """
-    YAML/TOML/INI: 라인이 주석으로 '시작'하면 무시.
-    (값 뒤에 오는 '트레일링 주석'까지 완벽 식별하진 않음 — 단순/안전 규칙)
-    """
+    """YAML/TOML/INI: 행 전체 주석(#/;)은 스킵, 값 영역만 검사."""
     out: List[int] = []
     for i, line in enumerate(content.splitlines(), start=1):
         s = line.lstrip()
@@ -62,7 +58,6 @@ def _yaml_like_ellipsis_lines(content: str) -> List[int]:
 
 
 def _plain_ellipsis_lines(content: str) -> List[int]:
-    """그 외 파일 유형: 전체 라인 검사(주석 예외 처리 없음)."""
     out: List[int] = []
     for i, line in enumerate(content.splitlines(), start=1):
         if ELLIPSIS in line:
@@ -73,9 +68,8 @@ def _plain_ellipsis_lines(content: str) -> List[int]:
 def _find_ellipsis_in_file(path: Path) -> List[int]:
     text = path.read_text(encoding="utf-8", errors="ignore")
     ext = path.suffix.lower()
-
     if ext == ".py":
-        return _py_ellipsis_lines(path, text)
+        return _py_ellipsis_lines(text)
     if ext in (".yml", ".yaml", ".toml", ".ini", ".cfg"):
         return _yaml_like_ellipsis_lines(text)
     return _plain_ellipsis_lines(text)
@@ -91,17 +85,33 @@ def parse_args(argv: List[str] | None = None) -> argparse.Namespace:
         )
     )
     ap.add_argument("--root", default=".", help="Root directory to scan (default: .)")
-    ap.add_argument("--fix", action="store_true", help="Replace with ASCII '...' in-place.")
+    ap.add_argument("--fix", action="store_true", help="Replace U+2026 with ASCII '...' in-place.")
+    ap.add_argument(
+        "--exclude",
+        default=",".join(DEFAULT_EXCLUDE),
+        help="Comma-separated glob patterns to exclude from blocking (still listed).",
+    )
+    ap.add_argument(
+        "--warn-only",
+        action="store_true",
+        help="Do not fail the process; only print offenders (useful for docs).",
+    )
     return ap.parse_args(argv)
 # ============================= [03] args — END ======================================
 
 
 # ============================ [04] main — START =====================================
+def _match_any(path: str, patterns: Iterable[str]) -> bool:
+    return any(fnmatch.fnmatch(path, pat.strip()) for pat in patterns if pat.strip())
+
+
 def main(argv: List[str] | None = None) -> int:
     args = parse_args(argv)
     root = Path(args.root).resolve()
+    excludes = [p.strip() for p in (args.exclude or "").split(",") if p.strip()]
 
-    offenders: List[Tuple[str, List[int]]] = []
+    blockers: List[Tuple[str, List[int]]] = []
+    warnings: List[Tuple[str, List[int]]] = []
 
     for p in root.rglob("*"):
         if not p.is_file():
@@ -109,6 +119,7 @@ def main(argv: List[str] | None = None) -> int:
         if p.suffix.lower() not in SCAN_EXTS:
             continue
 
+        rel = p.as_posix()
         try:
             lines = _find_ellipsis_in_file(p)
         except Exception:
@@ -116,30 +127,37 @@ def main(argv: List[str] | None = None) -> int:
         if not lines:
             continue
 
-        # --fix: 파일 내 모든 U+2026 → '...' 치환 (주석 포함 전체 치환)
-        if args.fix:
-            try:
-                txt = p.read_text(encoding="utf-8", errors="ignore")
-                if ELLIPSIS in txt:
-                    p.write_text(txt.replace(ELLIPSIS, "..."), encoding="utf-8")
-                    # 치환 후 재검사(주석/비주석 가릴 필요 없이 없어졌는지만 확인)
-                    recheck = _find_ellipsis_in_file(p)
-                    if not recheck:
-                        continue  # 수정 성공 → 리포팅 제외
-                    lines = recheck
-            except Exception:
-                pass
+        if _match_any(rel, excludes):
+            warnings.append((rel, lines))  # 경고 전용
+        else:
+            if args.fix:
+                try:
+                    txt = p.read_text(encoding="utf-8", errors="ignore")
+                    if ELLIPSIS in txt:
+                        p.write_text(txt.replace(ELLIPSIS, "..."), encoding="utf-8")
+                        lines2 = _find_ellipsis_in_file(p)
+                        if not lines2:
+                            continue  # 수정 성공
+                        lines = lines2
+                except Exception:
+                    pass
+            blockers.append((rel, lines))
 
-        offenders.append((p.as_posix(), lines))
-
-    if offenders:
-        print("Unicode ellipsis (U+2026) found in:")
-        for path, lines in offenders:
-            # 최대 8개까지만 라인 표기(너무 길어지지 않게)
+    if warnings:
+        print("U+2026 (warn-only):")
+        for path, lines in warnings:
             head = ", ".join(f"L{n}" for n in lines[:8])
             tail = "" if len(lines) <= 8 else ", ..."
-            print(f" - {path}: found at {head}{tail}")
-        return 1
+            print(f" - {path}: {head}{tail}")
+
+    if blockers:
+        print("U+2026 (blocking):")
+        for path, lines in blockers:
+            head = ", ".join(f"L{n}" for n in lines[:8])
+            tail = "" if len(lines) <= 8 else ", ..."
+            print(f" - {path}: {head}{tail}")
+        # warn-only면 실패하지 않음
+        return 0 if args.warn_only else 1
 
     return 0
 # ============================= [04] main — END ======================================
