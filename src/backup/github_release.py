@@ -21,16 +21,78 @@ UPLOAD_BASE = "https://uploads.github.com"
 
 # ========================= [02] logging & env helpers — START =======================
 def _log(msg: str) -> None:
-    """Non-sensitive log. If Streamlit is available, echo to UI as well."""
+    """Non-sensitive console log. ASCII only."""
+    try:
+        print(f"[github_release] {msg}")
+    except Exception:
+        pass
+
+
+def _get_env(name: str, default: str = "") -> str:
+    """Read env first; try Streamlit secrets if available."""
+    v = os.getenv(name, "")
+    if v:
+        return v
+    # optional: streamlit secrets (safe and best-effort)
     try:
         import streamlit as st  # type: ignore[import-not-found]
-        st.write(f"[github_release] {msg}")
+        s = st.secrets.get(name)
+        if isinstance(s, str) and s:
+            return s
     except Exception:
-        try:
-            print(f"[github_release] {msg}")
-        except Exception:
-            pass
-# (나머지 함수 _get_env, _resolve_owner_repo, _repo, _branch, _headers, _upload_headers 그대로)
+        pass
+    return default
+
+
+def _resolve_owner_repo() -> Tuple[str, str]:
+    """
+    Resolve (owner, repo) from common env/secrets.
+    Priority:
+      1) GITHUB_REPO = "owner/repo"
+      2) GH_OWNER + GH_REPO
+      3) GITHUB_OWNER + GITHUB_REPO_NAME
+    """
+    combo = _get_env("GITHUB_REPO", "")
+    if combo and "/" in combo:
+        o, r = combo.split("/", 1)
+        return o.strip(), r.strip()
+
+    ow = _get_env("GH_OWNER", "") or _get_env("GITHUB_OWNER", "")
+    rp = _get_env("GH_REPO", "") or _get_env("GITHUB_REPO_NAME", "")
+    return ow.strip(), rp.strip()
+
+
+def _repo() -> str:
+    """Return 'owner/repo' or empty string."""
+    ow, rp = _resolve_owner_repo()
+    if ow and rp:
+        return f"{ow}/{rp}"
+    return ""
+
+
+def _branch() -> str:
+    """Best-effort current branch for tag target."""
+    # CI: GITHUB_REF_NAME exists on GitHub Actions
+    ref = os.getenv("GITHUB_REF_NAME", "")
+    if ref:
+        return ref
+    # default
+    return "main"
+
+
+def _headers() -> Dict[str, str]:
+    """Default GitHub API headers with token if present."""
+    tok = _get_env("GH_TOKEN") or _get_env("GITHUB_TOKEN")
+    h = {"Accept": "application/vnd.github+json"}
+    if tok:
+        h["Authorization"] = f"token {tok}"
+    return h
+
+
+def _upload_headers(content_type: str) -> Dict[str, str]:
+    h = _headers()
+    h["Content-Type"] = content_type
+    return h
 # ========================== [02] logging & env helpers — END ========================
 
 
