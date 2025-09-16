@@ -1,10 +1,10 @@
-# File: pyproject.toml
-# ===== [00] BUILD SYSTEM =====================================================
+# ============================ [01] Build system — START ==============================
 [build-system]
 requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
+# ============================ [01] Build system — END ================================
 
-# ===== [01] PROJECT METADATA ================================================
+# ============================ [02] Project metadata — START ==========================
 [project]
 name = "my-ai-teacher"
 version = "0.1.0"
@@ -13,7 +13,6 @@ description = "Clean scaffold for AI Teacher (Streamlit + RAG)"
 readme = "README.md"
 authors = [{ name = "you" }]
 
-# ===== [02] RUNTIME DEPS =====================================================
 dependencies = [
   "streamlit>=1.32",
   "pydantic>=2,<3",
@@ -21,11 +20,12 @@ dependencies = [
   "llama-index-core>=0.10",
   "google-api-python-client>=2.136.0",
   "google-auth>=2.30.0",
-  # ✅ 보안: pypdf 6.x 이상으로 상향 (GHSA-7hfw-26vp-jp8m 회피)
+  # pypdf 6.x 이상(보안 고지 반영)
   "pypdf>=6,<7",
 ]
+# ============================ [02] Project metadata — END ============================
 
-# ===== [03] DEV DEPS (optional) =============================================
+# ============================ [03] Dev dependencies — START ==========================
 [project.optional-dependencies]
 dev = [
   "mypy>=1.7",
@@ -35,29 +35,16 @@ dev = [
   "types-requests",
   "types-PyYAML",
 ]
+# ============================ [03] Dev dependencies — END ============================
 
-# ===== [04] TOOL CONFIG POINTERS ============================================
+# ============================ [04] Tools — START =====================================
 [tool.mypy]
 config_file = "mypy.ini"
 
-# ===== [05] SETUPTOOLS (package discovery) ==================================
-[tool.setuptools]
-package-dir = {"" = "src"}
-
-[tool.setuptools.packages.find]
-where = ["src"]
-include = ["*"]
-
-# ===== [06] POETRY SETUP (disable package install of the app) ===============
-[tool.poetry]
-package-mode = false
-
-# ============================ [10] Ruff config — START (consolidated) ============================
 [tool.ruff]
-extend = "ruff.toml"
-src = ["src"]
 line-length = 100
 target-version = "py311"
+src = ["src"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
@@ -66,6 +53,18 @@ per-file-ignores = { "scripts/no_ellipsis_gate.py" = ["E501"] }
 
 [tool.ruff.lint.isort]
 known-first-party = ["src"]
-# ============================ [10] Ruff config — END (consolidated) ==============================
+# ============================ [04] Tools — END =======================================
 
+# ============================ [05] Setuptools — START ================================
+[tool.setuptools]
+package-dir = {"" = "src"}
 
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["*"]
+# ============================ [05] Setuptools — END ==================================
+
+# ============================ [06] Poetry — START ====================================
+[tool.poetry]
+package-mode = false
+# ============================ [06] Poetry — END ======================================
