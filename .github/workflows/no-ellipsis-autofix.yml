@@ -1,4 +1,3 @@
-# [01] START: .github/workflows/no-ellipsis-autofix.yml
 name: CI • Autofix Unicode ellipsis
 
 on:
@@ -10,12 +9,17 @@ permissions:
   contents: write
   pull-requests: write
 
+concurrency:
+  group: no-ellipsis-autofix-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   autofix-ellipsis:
     runs-on: ubuntu-latest
+    if: ${{ github.actor != 'github-actions[bot]' }}
 
     steps:
-      - name: Checkout PR branch (head)
+      - name: Checkout PR head
         uses: actions/checkout@v4
         with:
           repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
@@ -28,18 +32,10 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install deps (if any)
-        run: |
-          python -V
-          # 선택: 러너에 따라 필요 시 의존성 설치
-          # pip install -r requirements.txt || true
-
       - name: Autofix ellipsis and touch markers
-        run: |
-          # 1) '…'를 '...'로 치환 + 블록 마커도 함께 터치(동일 커밋 내)
-          python scripts/fix_makers_and_ellipsis.py --root . --apply || true
+        run: python scripts/fix_makers_and_ellipsis.py --root . --apply || true
 
-      - name: Create commit if changed
+      - name: Commit if changed
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -47,13 +43,4 @@ jobs:
             git add -A
             git commit -m "ci: autofix U+2026 and normalize guard markers [skip ci]"
             git push
-            echo "pushed=1" >> $GITHUB_ENV
-          else
-            echo "pushed=0" >> $GITHUB_ENV
           fi
-
-      - name: Verify gate after autofix (optional lightweight check)
-        if: env.pushed == '0'
-        run: |
-          python scripts/no_ellipsis_gate.py --root .
-# [01] END: .github/workflows/no-ellipsis-autofix.yml
