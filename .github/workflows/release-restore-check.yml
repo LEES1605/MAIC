@@ -1,0 +1,33 @@
+# ============================ [01] START: release-restore-check.yml ============================
+name: CI • Release restore self-check
+
+on:
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: "owner/repo (optional; defaults to current repository)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  restore-and-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run restore_and_verify
+        env:
+          GITHUB_REPO: ${{ github.repository }}
+        run: |
+          PYTHONPATH=. python scripts/restore_and_verify.py \
+            --repo "${{ inputs.repo }}"
+# ============================ [01] END: release-restore-check.yml ==============================
