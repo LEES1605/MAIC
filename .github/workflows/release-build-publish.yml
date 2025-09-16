@@ -1,0 +1,58 @@
+# ============================ [01] START: release-build-publish.yml ============================
+name: CI • Build & publish index
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Indexing mode"
+        required: false
+        default: "STD"
+        type: choice
+        options: ["STD", "HQ"]
+      repo:
+        description: "owner/repo (optional; defaults to current)"
+        required: false
+        default: ""
+      skip_publish:
+        description: "Build only (no release upload)"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+permissions:
+  contents: write  # release upload needs write
+
+concurrency:
+  group: release-build-publish
+  cancel-in-progress: false
+
+jobs:
+  build-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install minimal deps
+        run: |
+          python -m pip install --upgrade pip
+          # optional: if your index build needs extra deps, install here
+          # pip install -e ".[dev]"
+
+      - name: Build & (optionally) publish
+        env:
+          GITHUB_REPO: ${{ github.repository }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PYTHONPATH=. python scripts/build_and_publish.py \
+            --mode "${{ inputs.mode }}" \
+            $([ "${{ inputs.repo }}" != "" ] && echo --repo "${{ inputs.repo }}") \
+            $([ "${{ inputs.skip_publish }}" == "true" ] && echo --skip-publish)
+# ============================ [01] END: release-build-publish.yml ==============================
