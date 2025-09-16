@@ -85,13 +85,15 @@ def _find_ellipsis_in_file(path: Path) -> List[int]:
 # ============================ [03] args — START =====================================
 def parse_args(argv: List[str] | None = None) -> argparse.Namespace:
     ap = argparse.ArgumentParser(
-        description="Fail CI on U+2026 in repository. Skips comments in .py and full-line comments in YAML."
+        description=(
+            "Fail CI on U+2026 (Unicode ellipsis). "
+            "Skips .py comments and full-line YAML comments."
+        )
     )
     ap.add_argument("--root", default=".", help="Root directory to scan (default: .)")
     ap.add_argument("--fix", action="store_true", help="Replace with ASCII '...' in-place.")
     return ap.parse_args(argv)
 # ============================= [03] args — END ======================================
-
 
 # ============================ [04] main — START =====================================
 def main(argv: List[str] | None = None) -> int:
