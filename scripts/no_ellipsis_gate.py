@@ -12,18 +12,14 @@ from typing import Iterable, List, Tuple
 
 ELLIPSIS = "\u2026"  # only U+2026 is forbidden; ASCII '...' is OK
 
-# 기본 스캔 확장자
+# scan extensions
 SCAN_EXTS = {
     ".py", ".pyi", ".yaml", ".yml", ".toml", ".ini", ".cfg",
     ".md", ".txt", ".json", ".csv",
 }
 
-# 기본 제외(경고만 또는 무시) 후보 — 필요 시 CLI로 덮어쓰기
-DEFAULT_EXCLUDE = [
-    "docs/**",
-    "**/*.md",
-    "pyproject.toml",
-]
+# default exclude: docs/markdown/config는 경고만으로 처리
+DEFAULT_EXCLUDE = ["docs/**", "**/*.md", "pyproject.toml"]
 # ============================= [01] imports & cfg — END =============================
 
 
@@ -102,7 +98,7 @@ def parse_args(argv: List[str] | None = None) -> argparse.Namespace:
 
 # ============================ [04] main — START =====================================
 def _match_any(path: str, patterns: Iterable[str]) -> bool:
-    return any(fnmatch.fnmatch(path, pat.strip()) for pat in patterns if pat.strip())
+    return any(fnmatch.fnmatch(path, p.strip()) for p in patterns if p.strip())
 
 
 def main(argv: List[str] | None = None) -> int:
@@ -129,19 +125,20 @@ def main(argv: List[str] | None = None) -> int:
 
         if _match_any(rel, excludes):
             warnings.append((rel, lines))  # 경고 전용
-        else:
-            if args.fix:
-                try:
-                    txt = p.read_text(encoding="utf-8", errors="ignore")
-                    if ELLIPSIS in txt:
-                        p.write_text(txt.replace(ELLIPSIS, "..."), encoding="utf-8")
-                        lines2 = _find_ellipsis_in_file(p)
-                        if not lines2:
-                            continue  # 수정 성공
-                        lines = lines2
-                except Exception:
-                    pass
-            blockers.append((rel, lines))
+            continue
+
+        if args.fix:
+            try:
+                txt = p.read_text(encoding="utf-8", errors="ignore")
+                if ELLIPSIS in txt:
+                    p.write_text(txt.replace(ELLIPSIS, "..."), encoding="utf-8")
+                    lines2 = _find_ellipsis_in_file(p)
+                    if not lines2:
+                        continue  # 수정 성공
+                    lines = lines2
+            except Exception:
+                pass
+        blockers.append((rel, lines))
 
     if warnings:
         print("U+2026 (warn-only):")
@@ -156,7 +153,6 @@ def main(argv: List[str] | None = None) -> int:
             head = ", ".join(f"L{n}" for n in lines[:8])
             tail = "" if len(lines) <= 8 else ", ..."
             print(f" - {path}: {head}{tail}")
-        # warn-only면 실패하지 않음
         return 0 if args.warn_only else 1
 
     return 0
