@@ -334,7 +334,7 @@ def _boot_auto_restore_index() -> None:
 
         # ✅ 표준화: 항상 .ready = "ready"
         try:
-            core_mark_ready(p)  # SSOT API
+            core_mark_ready(p)
         except Exception:
             try:
                 (p / ".ready").write_text("ready", encoding="utf-8")
