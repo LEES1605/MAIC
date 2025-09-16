@@ -1,3 +1,4 @@
+# [01] START: .github/workflows/no-ellipsis-autofix.yml
 name: CI • Autofix Unicode ellipsis
 
 on:
@@ -17,7 +18,6 @@ jobs:
   autofix-ellipsis:
     runs-on: ubuntu-latest
     if: ${{ github.actor != 'github-actions[bot]' }}
-
     steps:
       - name: Checkout PR head
         uses: actions/checkout@v4
@@ -44,3 +44,4 @@ jobs:
             git commit -m "ci: autofix U+2026 and normalize guard markers [skip ci]"
             git push
           fi
+# [01] END: .github/workflows/no-ellipsis-autofix.yml
