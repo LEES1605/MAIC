@@ -33,51 +33,15 @@ def _get_env(name: str, default: str = "") -> str:
     v = os.getenv(name, "")
     if v:
         return v
+    # optional: streamlit secrets (safe and best-effort)
     try:
-        import streamlit as st  # type: ignore[import-not-found]
+        import streamlit as st  # (ignore not needed; dependency available)
         s = st.secrets.get(name)
         if isinstance(s, str) and s:
             return s
     except Exception:
         pass
     return default
-
-
-def _resolve_owner_repo() -> Tuple[str, str]:
-    combo = _get_env("GITHUB_REPO", "")
-    if combo and "/" in combo:
-        o, r = combo.split("/", 1)
-        return o.strip(), r.strip()
-
-    ow = _get_env("GH_OWNER", "") or _get_env("GITHUB_OWNER", "")
-    rp = _get_env("GH_REPO", "") or _get_env("GITHUB_REPO_NAME", "")
-    return ow.strip(), rp.strip()
-
-
-def _repo() -> str:
-    ow, rp = _resolve_owner_repo()
-    if ow and rp:
-        return f"{ow}/{rp}"
-    return ""
-
-
-def _branch() -> str:
-    ref = os.getenv("GITHUB_REF_NAME", "")
-    return ref or "main"
-
-
-def _headers() -> Dict[str, str]:
-    tok = _get_env("GH_TOKEN") or _get_env("GITHUB_TOKEN")
-    h = {"Accept": "application/vnd.github+json"}
-    if tok:
-        h["Authorization"] = f"token {tok}"
-    return h
-
-
-def _upload_headers(content_type: str) -> Dict[str, str]:
-    h = _headers()
-    h["Content-Type"] = content_type
-    return h
 # ========================== [02] logging & env helpers — END ========================
 
 # ========================= [03] http helpers (urllib) — START =======================
@@ -289,7 +253,7 @@ def restore_latest(dest_dir: str | Path, repo: Optional[str] = None) -> bool:
     """
     Restore latest index artifact into dest_dir.
     - Supports index_*.zip / *.tar.gz / chunks.jsonl(.gz)
-    - Marks '.ready' only when chunks.jsonl exists (>0B) as 'ready'
+    - Marks '.ready' when chunks.jsonl exists
     """
     dest = Path(dest_dir).expanduser().resolve()
     dest.mkdir(parents=True, exist_ok=True)
@@ -323,10 +287,10 @@ def restore_latest(dest_dir: str | Path, repo: Optional[str] = None) -> bool:
         # gunzip to chunks.jsonl
         try:
             import gzip  # stdlib
-            chunks = dest / "chunks.jsonl"
+            out_path = dest / "chunks.jsonl"
             with gzip.GzipFile(fileobj=io.BytesIO(data), mode="rb") as gz:
                 raw = gz.read()
-            ok = _write_bytes(chunks, raw)
+            ok = _write_bytes(out_path, raw)
         except Exception as e:
             _log(f"gunzip failed: {e}")
             ok = False
@@ -339,20 +303,23 @@ def restore_latest(dest_dir: str | Path, repo: Optional[str] = None) -> bool:
     if not ok:
         return False
 
-    # ensure chunks.jsonl exists in dest (flatten if needed)
-    chunks = _find_chunks(dest)
-    if not chunks or not chunks.exists() or chunks.stat().st_size <= 0:
-        _log("restore_latest: chunks.jsonl not found after extract")
-        return False
-
-    if chunks.parent != dest:
+    # flatten when artifact created a top folder
+    found = _find_chunks(dest)  # Optional[Path]
+    if found and found.parent != dest:
+        # move file into dest
         try:
             target = dest / "chunks.jsonl"
-            target.write_bytes(chunks.read_bytes())
-            _log(f"flatten: adopted chunks from {chunks.parent.name}")
+            target.write_bytes(found.read_bytes())
+            _log(f"flatten: adopted chunks from {found.parent.name}")
         except Exception as e:
             _log(f"flatten failed: {e}")
             return False
+
+    # ensure chunks.jsonl exists in dest
+    chk = dest / "chunks.jsonl"
+    if not chk.exists() or chk.stat().st_size <= 0:
+        _log("restore_latest: chunks.jsonl not found after extract")
+        return False
 
     # mark ready (統一: 'ready')
     try:
