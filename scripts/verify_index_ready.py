@@ -18,12 +18,31 @@ def _effective_persist_dir(cli_dir: Optional[str]) -> Path:
     if cli_dir:
         return Path(cli_dir).expanduser().resolve()
     try:
-        from src.core.persist import effective_persist_dir  # (ignore 제거)
+        from src.core.persist import effective_persist_dir
         p = effective_persist_dir()
         return p if isinstance(p, Path) else Path(str(p)).expanduser().resolve()
     except Exception:
         pass
     return (Path.home() / ".maic" / "persist").resolve()
+
+
+def _check_ready(persist: Path) -> Tuple[bool, str]:
+    """
+    READY 판단 기준:
+      - chunks.jsonl 존재 + 0바이트 초과
+      - .ready 파일 내용이 'ready'
+    """
+    chunks = persist / "chunks.jsonl"
+    ready = persist / ".ready"
+    if not chunks.exists() or chunks.stat().st_size <= 0:
+        return False, "chunks.jsonl missing or empty"
+    try:
+        txt = ready.read_text(encoding="utf-8").strip().lower()
+    except Exception:
+        txt = ""
+    if txt != ASCII_READY:
+        return False, f".ready != '{ASCII_READY}' (got: '{txt or 'EMPTY'}')"
+    return True, "READY"
 # ============================= [02] helpers — END ===================================
 
 # ============================ [03] main — START =====================================
