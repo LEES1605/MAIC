@@ -107,6 +107,7 @@ def parse_args(argv: List[str] | None = None) -> argparse.Namespace:
     return ap.parse_args(argv)
 # ============================= [03] args — END ======================================
 
+
 # ============================ [04] main — START =====================================
 def _match_any(path: str, patterns: Iterable[str]) -> bool:
     """Match against full path OR basename to be user-friendly."""
