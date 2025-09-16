@@ -19,8 +19,11 @@ SCAN_EXTS = {
 }
 
 # default exclude: docs/markdown/config는 경고만(+ prompts.yaml 임시 완화)
-DEFAULT_EXCLUDE = ["docs/**", "**/*.md", "pyproject.toml", "prompts.yaml"]
+#  - '**/prompts.yaml' 로 풀경로 매칭 보장
+#  - '**/pyproject.toml' 로도 보강(편의)
+DEFAULT_EXCLUDE = ["docs/**", "**/*.md", "**/pyproject.toml", "**/prompts.yaml"]
 # ============================= [01] imports & cfg — END =============================
+
 
 
 # ============================ [02] scanners — START =================================
@@ -102,7 +105,15 @@ def parse_args(argv: List[str] | None = None) -> argparse.Namespace:
 
 # ============================ [04] main — START =====================================
 def _match_any(path: str, patterns: Iterable[str]) -> bool:
-    return any(fnmatch.fnmatch(path, p.strip()) for p in patterns if p.strip())
+    """Match against full path OR basename to be user-friendly."""
+    base = path.rsplit("/", 1)[-1]
+    for pat in patterns:
+        p = pat.strip()
+        if not p:
+            continue
+        if fnmatch.fnmatch(path, p) or fnmatch.fnmatch(base, p):
+            return True
+    return False
 
 
 def main(argv: List[str] | None = None) -> int:
@@ -161,6 +172,7 @@ def main(argv: List[str] | None = None) -> int:
 
     return 0
 # ============================= [04] main — END ======================================
+
 
 
 # ============================ [05] entry — START ====================================
