@@ -12,29 +12,9 @@ from typing import List, Tuple
 ELLIPSIS = "\u2026"  # Unicode ellipsis ONLY (ASCII '...' is OK)
 
 # 확장자 정책: 코드/설정/문서 전반을 보되, .py 주석은 무시
-# (핵심만 발췌) 확장자 테이블에 .toml/.ini/.cfg 포함
-SCAN_EXTS = {".py", ".pyi", ".yaml", ".yml", ".toml", ".ini", ".cfg",
-             ".md", ".txt", ".json", ".csv"}
-
-def _yaml_like_ellipsis_lines(content: str) -> list[int]:
-    out = []
-    for i, line in enumerate(content.splitlines(), start=1):
-        s = line.lstrip()
-        if s.startswith("#") or s.startswith(";"):  # TOML/INI 주석
-            continue
-        if "…" in line:
-            out.append(i)
-    return out
-
-def _find_ellipsis_in_file(path: Path) -> list[int]:
-    text = path.read_text(encoding="utf-8", errors="ignore")
-    ext = path.suffix.lower()
-    if ext == ".py":
-        return _py_ellipsis_lines(path, text)
-    if ext in (".yml", ".yaml", ".toml", ".ini", ".cfg"):
-        return _yaml_like_ellipsis_lines(text)  # ← 주석 라인 무시
-    return _plain_ellipsis_lines(text)
-
+SCAN_EXTS = {
+    ".py", ".pyi", ".yaml", ".yml", ".toml", ".ini", ".cfg",
+    ".md", ".txt", ".json", ".csv",
 }
 # ============================= [01] imports & cfg — END =============================
 
@@ -55,7 +35,7 @@ def _py_ellipsis_lines(path: Path, content: str) -> List[int]:
             # 주석은 무시
             if tok_type == tokenize.COMMENT:
                 continue
-            # 나머지 토큰 안에 '…'가 있으면 해당 시작 라인 기록
+            # 나머지 토큰 안에 U+2026이 있으면 해당 시작 라인 기록
             if ELLIPSIS in tok_str:
                 out.append(tok.start[0])
     except Exception:
@@ -66,15 +46,15 @@ def _py_ellipsis_lines(path: Path, content: str) -> List[int]:
     return sorted(set(out))
 
 
-def _yaml_ellipsis_lines(content: str) -> List[int]:
+def _yaml_like_ellipsis_lines(content: str) -> List[int]:
     """
-    YAML: 라인이 주석(#)으로 '시작'하면 무시.
-    (값 뒤에 오는 '트레일링 주석'까지 완벽 식별하진 않음 — 간단/안전한 규칙)
+    YAML/TOML/INI: 라인이 주석으로 '시작'하면 무시.
+    (값 뒤에 오는 '트레일링 주석'까지 완벽 식별하진 않음 — 단순/안전 규칙)
     """
     out: List[int] = []
     for i, line in enumerate(content.splitlines(), start=1):
         s = line.lstrip()
-        if s.startswith("#"):
+        if s.startswith("#") or s.startswith(";"):
             continue
         if ELLIPSIS in line:
             out.append(i)
@@ -96,8 +76,8 @@ def _find_ellipsis_in_file(path: Path) -> List[int]:
 
     if ext == ".py":
         return _py_ellipsis_lines(path, text)
-    if ext in (".yml", ".yaml"):
-        return _yaml_ellipsis_lines(text)
+    if ext in (".yml", ".yaml", ".toml", ".ini", ".cfg"):
+        return _yaml_like_ellipsis_lines(text)
     return _plain_ellipsis_lines(text)
 # ============================= [02] scanners — END ==================================
 
@@ -107,13 +87,14 @@ def parse_args(argv: List[str] | None = None) -> argparse.Namespace:
     ap = argparse.ArgumentParser(
         description=(
             "Fail CI on U+2026 (Unicode ellipsis). "
-            "Skips .py comments and full-line YAML comments."
+            "Skips .py comments and full-line YAML/TOML/INI comments."
         )
     )
     ap.add_argument("--root", default=".", help="Root directory to scan (default: .)")
     ap.add_argument("--fix", action="store_true", help="Replace with ASCII '...' in-place.")
     return ap.parse_args(argv)
 # ============================= [03] args — END ======================================
+
 
 # ============================ [04] main — START =====================================
 def main(argv: List[str] | None = None) -> int:
