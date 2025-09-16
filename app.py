@@ -464,6 +464,7 @@ def _render_index_orchestrator_header() -> None:
         st.caption("Persist Dir")
         st.code(str(persist), language="text")
 
+    # 상태 뱃지
     status_text = "MISSING"
     try:
         from src.rag.index_status import get_index_summary
@@ -471,18 +472,59 @@ def _render_index_orchestrator_header() -> None:
         status_text = "READY" if getattr(s, "ready", False) else "MISSING"
     except Exception:
         status_text = "MISSING"
-
     badge = "🟩 READY" if status_text == "READY" else "🟨 MISSING"
     st.markdown(f"**상태**\n\n{badge}")
 
+    # 액션들
+    cols = st.columns([1, 1, 2]) if _is_admin_view() else [None, None, None]
     if _is_admin_view():
-        cols = st.columns([1, 3])
-        if cols[0].button("⬇️ Release에서 최신 인덱스 복원", use_container_width=True):
+        act_restore = cols[0].button("⬇️ Release에서 최신 인덱스 복원", use_container_width=True)
+        act_verify = cols[1].button("✅ 복원 결과 검증", use_container_width=True)
+        if act_restore:
             try:
                 _boot_auto_restore_index()
-                st.success("Release 복원을 시도했습니다. 상태를 확인하세요.")
+                st.success("Release 복원을 시도했습니다. 아래 '최근 복원 결과'와 상태를 확인하세요.")
             except Exception as e:
                 st.error(f"복원 실행 실패: {e}")
+        if act_verify:
+            # 파일시스템 READY 즉시 검증
+            cj = persist / "chunks.jsonl"
+            rdy = persist / ".ready"
+            txt = ""
+            try:
+                txt = rdy.read_text(encoding="utf-8").strip().lower()
+            except Exception:
+                txt = ""
+            if cj.exists() and cj.stat().st_size > 0 and txt == "ready":
+                st.success("검증 성공: chunks.jsonl 존재 & .ready='ready'")
+            else:
+                st.error("검증 실패: 산출물/ready 상태가 불일치합니다.")
+
+    # 최근 복원 결과 표시
+    with st.expander("최근 복원 결과(Release)", expanded=False):
+        info = {}
+        try:
+            info = json.loads((persist / "restore_status.json").read_text(encoding="utf-8"))
+        except Exception:
+            info = {}
+        if info:
+            ok = bool(info.get("ok"))
+            mark = "🟢 성공" if ok else "🔴 실패"
+            tag = info.get("tag") or "-"
+            asset = info.get("asset") or "-"
+            when = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(int(info.get("ts", 0) or 0)))
+            st.write(
+                {
+                    "결과": mark,
+                    "사유": info.get("why", ""),
+                    "tag": tag,
+                    "asset": asset,
+                    "시각": when,
+                    "persist": info.get("persist", str(persist)),
+                }
+            )
+        else:
+            st.caption("복원 기록이 없습니다. 위의 복원 버튼을 눌러 시도해 보세요.")
 
     st.info(
         "강제 인덱싱(HQ, 느림)·백업과 인덱싱 파일 미리보기는 **관리자 인덱싱 패널**에서 합니다. "
@@ -491,6 +533,7 @@ def _render_index_orchestrator_header() -> None:
     )
     st.markdown("<span id='idx-admin-panel'></span>", unsafe_allow_html=True)
 # ================================= [12] diag header — END =============================
+
 
 # =============================== [13] admin index — START =============================
 def _render_admin_index_panel() -> None:
@@ -680,7 +723,7 @@ def _render_admin_index_panel() -> None:
                     pass
             if cj.exists() and cj.stat().st_size > 0:
                 try:
-                    (used_persist / ".ready").write_text("ok", encoding="utf-8")
+                    (used_persist / ".ready").write_text("ready", encoding="utf-8")  # 통일
                 except Exception:
                     pass
                 _stamp_persist(used_persist)
@@ -805,8 +848,8 @@ def _render_admin_index_panel() -> None:
                     with zipfile.ZipFile(z, "w", zipfile.ZIP_DEFLATED) as zf:
                         for root, _d, _f in os.walk(str(used_persist)):
                             for fn in _f:
-                                pth = Path(root) / fn
-                                zf.write(str(pth), arcname=str(pth.relative_to(used_persist)))
+                                p = Path(root) / fn
+                                zf.write(str(p), arcname=str(p.relative_to(used_persist)))
 
                     tag = f"index-{int(time.time())}"
                     res = _upload_release_zip(ow, rp, tok, tag, z, name=tag, body="MAIC index")
@@ -1285,29 +1328,8 @@ def _render_body() -> None:
 
     _mount_background()
 
-    # ── 추가: READY 보정 헬퍼(구획 내부 전용) ─────────────────────────────────
-    def _ensure_ready_file() -> None:
-        try:
-            p = _persist_dir_safe()
-            cj = p / "chunks.jsonl"
-            if not (cj.exists() and cj.stat().st_size > 0):
-                return
-            r = p / ".ready"
-            try:
-                cur = r.read_text(encoding="utf-8").strip().lower()
-            except Exception:
-                cur = ""
-            if cur != "ready":
-                try:
-                    r.write_text("ready", encoding="utf-8")
-                except Exception:
-                    pass
-        except Exception:
-            pass
-
     # ✅ 헤더 이전에 자동 복원/세션 업데이트 1회 수행 → 첫 렌더부터 READY 일치
     _auto_start_once()
-    _ensure_ready_file()
 
     _header()
 
@@ -1325,8 +1347,6 @@ def _render_body() -> None:
             _render_admin_indexed_sources_panel()
         except Exception:
             pass
-        # 관리자 작업 후에도 .ready 보정
-        _ensure_ready_file()
 
     _inject_chat_styles_once()
     with st.container():
@@ -1363,4 +1383,5 @@ def main() -> None:
 if __name__ == "__main__":
     main()
 # ================================= [19] body & main — END =============================
+
 
