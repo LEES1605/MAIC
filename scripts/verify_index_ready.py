@@ -28,21 +28,26 @@ def _effective_persist_dir(cli_dir: Optional[str]) -> Path:
 
 def _check_ready(persist: Path) -> Tuple[bool, str]:
     """
-    READY 판단 기준:
-      - chunks.jsonl 존재 + 0바이트 초과
-      - .ready 파일 내용이 'ready'
+    SSOT 규칙:
+      - chunks.jsonl 존재 & 0바이트 아님
+      - .ready 파일의 내용이 정확히 "ready"
     """
-    chunks = persist / "chunks.jsonl"
-    ready = persist / ".ready"
-    if not chunks.exists() or chunks.stat().st_size <= 0:
-        return False, "chunks.jsonl missing or empty"
     try:
-        txt = ready.read_text(encoding="utf-8").strip().lower()
-    except Exception:
-        txt = ""
-    if txt != ASCII_READY:
-        return False, f".ready != '{ASCII_READY}' (got: '{txt or 'EMPTY'}')"
-    return True, "READY"
+        cj = persist / "chunks.jsonl"
+        rf = persist / ".ready"
+        if not (cj.exists() and cj.stat().st_size > 0):
+            return False, "MISSING: chunks.jsonl"
+        if not rf.exists():
+            return False, "MISSING: .ready"
+        try:
+            val = (rf.read_text(encoding="utf-8", errors="ignore").strip().lower())
+        except Exception:
+            val = ""
+        if val != ASCII_READY:
+            return False, f'MISSING: .ready != "{ASCII_READY}" (got "{val}")'
+        return True, "READY"
+    except Exception as e:
+        return False, f"ERROR: {e}"
 # ============================= [02] helpers — END ===================================
 
 # ============================ [03] main — START =====================================
