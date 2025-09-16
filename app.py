@@ -211,12 +211,34 @@ def _safe_rerun(tag: str, ttl: int = 1) -> None:
 
 # =============================== [08] header — START ==================================
 def _header() -> None:
+    """
+    헤더 배지는 '파일시스템 READY' 기준(SSOT)을 사용한다.
+    - src.ui.header.render 가 있으면 그대로 사용하고,
+      실패/부재 시에는 persist 상태를 직접 검사해 렌더링한다.
+    """
+    # 1) 외부 헤더가 있으면 먼저 사용
     try:
         from src.ui.header import render as _render_header
         _render_header()
+        return
     except Exception:
-        if st is not None:
-            st.markdown("### LEES AI Teacher")
+        pass
+
+    # 2) 폴백: 파일시스템 READY 기준 표시
+    if st is None:
+        return
+    try:
+        p = _persist_dir_safe()
+        ok = core_is_ready(p)
+    except Exception:
+        ok = False
+        p = _persist_dir_safe()
+
+    badge = "🟢 READY" if ok else "🟡 준비중"
+    st.markdown(f"{badge} **LEES AI Teacher**")
+    with st.container():
+        st.caption("Persist Dir")
+        st.code(str(p), language="text")
 # ================================== [08] header — END =================================
 
 # =============================== [09] background — START ===============================
@@ -313,8 +335,9 @@ def _boot_auto_restore_index() -> None:
         try:
             core_mark_ready(p)
         except Exception:
+            # ✅ 통일: .ready 는 항상 "ready"
             try:
-                (p / ".ready").write_text("ok", encoding="utf-8")
+                (p / ".ready").write_text("ready", encoding="utf-8")
             except Exception:
                 pass
 
@@ -1237,6 +1260,30 @@ def _render_body() -> None:
 
     _mount_background()
 
+    # ── 추가: READY 보정 헬퍼(구획 내부 전용) ─────────────────────────────────
+    def _ensure_ready_file() -> None:
+        try:
+            p = _persist_dir_safe()
+            cj = p / "chunks.jsonl"
+            if not (cj.exists() and cj.stat().st_size > 0):
+                return
+            r = p / ".ready"
+            try:
+                cur = r.read_text(encoding="utf-8").strip().lower()
+            except Exception:
+                cur = ""
+            if cur != "ready":
+                try:
+                    r.write_text("ready", encoding="utf-8")
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    # ✅ 헤더 이전에 자동 복원/세션 업데이트 1회 수행 → 첫 렌더부터 READY 일치
+    _auto_start_once()
+    _ensure_ready_file()
+
     _header()
 
     if _is_admin_view():
@@ -1253,8 +1300,8 @@ def _render_body() -> None:
             _render_admin_indexed_sources_panel()
         except Exception:
             pass
-
-    _auto_start_once()
+        # 관리자 작업 후에도 .ready 보정
+        _ensure_ready_file()
 
     _inject_chat_styles_once()
     with st.container():
@@ -1291,3 +1338,4 @@ def main() -> None:
 if __name__ == "__main__":
     main()
 # ================================= [19] body & main — END =============================
+
