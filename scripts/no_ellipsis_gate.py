@@ -99,9 +99,13 @@ def parse_args(argv: List[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Do not fail the process; only print offenders (useful for docs).",
     )
+    ap.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Print extra debug (paths scanned, excludes). Ignored by CI.",
+    )
     return ap.parse_args(argv)
 # ============================= [03] args — END ======================================
-
 
 # ============================ [04] main — START =====================================
 def _match_any(path: str, patterns: Iterable[str]) -> bool:
@@ -120,6 +124,10 @@ def main(argv: List[str] | None = None) -> int:
     args = parse_args(argv)
     root = Path(args.root).resolve()
     excludes = [p.strip() for p in (args.exclude or "").split(",") if p.strip()]
+
+    if getattr(args, "verbose", False):
+        print(f"[gate] root={root}")
+        print(f"[gate] excludes={excludes}")
 
     blockers: List[Tuple[str, List[int]]] = []
     warnings: List[Tuple[str, List[int]]] = []
@@ -172,8 +180,6 @@ def main(argv: List[str] | None = None) -> int:
 
     return 0
 # ============================= [04] main — END ======================================
-
-
 
 # ============================ [05] entry — START ====================================
 if __name__ == "__main__":  # pragma: no cover
