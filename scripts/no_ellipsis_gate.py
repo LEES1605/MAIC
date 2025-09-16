@@ -12,9 +12,29 @@ from typing import List, Tuple
 ELLIPSIS = "\u2026"  # Unicode ellipsis ONLY (ASCII '...' is OK)
 
 # 확장자 정책: 코드/설정/문서 전반을 보되, .py 주석은 무시
-SCAN_EXTS = {
-    ".py", ".pyi", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf",
-    ".md", ".txt", ".json", ".csv",
+# (핵심만 발췌) 확장자 테이블에 .toml/.ini/.cfg 포함
+SCAN_EXTS = {".py", ".pyi", ".yaml", ".yml", ".toml", ".ini", ".cfg",
+             ".md", ".txt", ".json", ".csv"}
+
+def _yaml_like_ellipsis_lines(content: str) -> list[int]:
+    out = []
+    for i, line in enumerate(content.splitlines(), start=1):
+        s = line.lstrip()
+        if s.startswith("#") or s.startswith(";"):  # TOML/INI 주석
+            continue
+        if "…" in line:
+            out.append(i)
+    return out
+
+def _find_ellipsis_in_file(path: Path) -> list[int]:
+    text = path.read_text(encoding="utf-8", errors="ignore")
+    ext = path.suffix.lower()
+    if ext == ".py":
+        return _py_ellipsis_lines(path, text)
+    if ext in (".yml", ".yaml", ".toml", ".ini", ".cfg"):
+        return _yaml_like_ellipsis_lines(text)  # ← 주석 라인 무시
+    return _plain_ellipsis_lines(text)
+
 }
 # ============================= [01] imports & cfg — END =============================
 
