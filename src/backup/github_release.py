@@ -33,7 +33,6 @@ def _get_env(name: str, default: str = "") -> str:
     v = os.getenv(name, "")
     if v:
         return v
-    # optional: streamlit secrets (safe and best-effort)
     try:
         import streamlit as st  # type: ignore[import-not-found]
         s = st.secrets.get(name)
@@ -45,13 +44,6 @@ def _get_env(name: str, default: str = "") -> str:
 
 
 def _resolve_owner_repo() -> Tuple[str, str]:
-    """
-    Resolve (owner, repo) from common env/secrets.
-    Priority:
-      1) GITHUB_REPO = "owner/repo"
-      2) GH_OWNER + GH_REPO
-      3) GITHUB_OWNER + GITHUB_REPO_NAME
-    """
     combo = _get_env("GITHUB_REPO", "")
     if combo and "/" in combo:
         o, r = combo.split("/", 1)
@@ -63,7 +55,6 @@ def _resolve_owner_repo() -> Tuple[str, str]:
 
 
 def _repo() -> str:
-    """Return 'owner/repo' or empty string."""
     ow, rp = _resolve_owner_repo()
     if ow and rp:
         return f"{ow}/{rp}"
@@ -71,17 +62,11 @@ def _repo() -> str:
 
 
 def _branch() -> str:
-    """Best-effort current branch for tag target."""
-    # CI: GITHUB_REF_NAME exists on GitHub Actions
     ref = os.getenv("GITHUB_REF_NAME", "")
-    if ref:
-        return ref
-    # default
-    return "main"
+    return ref or "main"
 
 
 def _headers() -> Dict[str, str]:
-    """Default GitHub API headers with token if present."""
     tok = _get_env("GH_TOKEN") or _get_env("GITHUB_TOKEN")
     h = {"Accept": "application/vnd.github+json"}
     if tok:
@@ -94,7 +79,6 @@ def _upload_headers(content_type: str) -> Dict[str, str]:
     h["Content-Type"] = content_type
     return h
 # ========================== [02] logging & env helpers — END ========================
-
 
 # ========================= [03] http helpers (urllib) — START =======================
 @dataclass
