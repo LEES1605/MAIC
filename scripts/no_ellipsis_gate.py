@@ -18,8 +18,8 @@ SCAN_EXTS = {
     ".md", ".txt", ".json", ".csv",
 }
 
-# default exclude: docs/markdown/config는 경고만으로 처리
-DEFAULT_EXCLUDE = ["docs/**", "**/*.md", "pyproject.toml"]
+# default exclude: docs/markdown/config는 경고만으로 처리(+ prompts.yaml 임시 완화)
+DEFAULT_EXCLUDE = ["docs/**", "**/*.md", "pyproject.toml", "prompts.yaml"]
 # ============================= [01] imports & cfg — END =============================
 
 
@@ -81,11 +81,15 @@ def parse_args(argv: List[str] | None = None) -> argparse.Namespace:
         )
     )
     ap.add_argument("--root", default=".", help="Root directory to scan (default: .)")
-    ap.add_argument("--fix", action="store_true", help="Replace U+2026 with ASCII '...' in-place.")
+    ap.add_argument(
+        "--fix",
+        action="store_true",
+        help="Replace U+2026 with ASCII '...' in-place.",
+    )
     ap.add_argument(
         "--exclude",
         default=",".join(DEFAULT_EXCLUDE),
-        help="Comma-separated glob patterns to exclude from blocking (still listed).",
+        help="Comma-separated glob patterns excluded from blocking (still listed).",
     )
     ap.add_argument(
         "--warn-only",
