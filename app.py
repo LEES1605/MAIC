@@ -332,7 +332,7 @@ def _boot_auto_restore_index() -> None:
             except StopIteration:
                 pass
 
-        # 표준화: 예외 시에도 항상 .ready = "ready" 로 기록
+        # ✅ 표준화: 항상 .ready = "ready"
         try:
             core_mark_ready(p)  # SSOT API
         except Exception:
@@ -350,6 +350,7 @@ def _boot_auto_restore_index() -> None:
     except Exception:
         return
 # ================================= [10] auto-restore — END ============================
+
 
 # =============================== [11] boot hooks — START ==============================
 def _boot_autoflow_hook() -> None:
@@ -516,6 +517,8 @@ def _render_admin_index_panel() -> None:
     if "st" not in globals() or st is None or not _is_admin_view():
         return
 
+    import datetime as _dt
+
     st.markdown("<h3>🧭 인덱싱(관리자: prepared 전용)</h3>", unsafe_allow_html=True)
 
     def _stamp_persist(p: Path) -> None:
@@ -537,6 +540,10 @@ def _render_admin_index_panel() -> None:
 
     step_names: List[str] = ["스캔", "Persist확정", "인덱싱", "prepared소비", "요약/배지", "ZIP/Release"]
     stall_threshold_sec = 60
+
+    def _now_hms_kst() -> str:
+        off = int(os.getenv("APP_TZ_OFFSET_HOURS", "9"))
+        return (_dt.datetime.utcnow() + _dt.timedelta(hours=off)).strftime("%H:%M:%S")
 
     def _step_reset(names: List[str]) -> None:
         st.session_state["_IDX_STEPS"] = [{"name": n, "state": "idle", "note": ""} for n in names]
@@ -583,13 +590,19 @@ def _render_admin_index_panel() -> None:
         since_start = int(now - start)
         running = any(s["state"] == "run" for s in _steps())
         stalled = running and since_last >= stall_threshold_sec
-        if stalled:
-            text = f"🟥 STALLED · 마지막 업데이트 {since_last}s 전 · 총 경과 {since_start}s"
-        elif running:
-            text = f"🟦 RUNNING · 마지막 업데이트 {since_last}s 전 · 총 경과 {since_start}s"
+
+        if running:
+            text = f"🟦 RUNNING · 마지막 업데이트 {since_last}s 전 · 총 경과 {since_start}s (KST { _now_hms_kst() })"
+            st.session_state["_IDX_PH_STATUS"].markdown(text)
+            # 1초마다 부드럽게 새로고침(간단한 타이머)
+            time.sleep(1.0)
+            _safe_rerun("idx_status_tick", ttl=600)
+        elif stalled:
+            st.session_state["_IDX_PH_STATUS"].markdown(
+                f"🟥 STALLED · 마지막 업데이트 {since_last}s 전 · 총 경과 {since_start}s (KST { _now_hms_kst() })"
+            )
         else:
-            text = f"🟩 IDLE/COMPLETE · 총 경과 {since_start}s"
-        st.session_state["_IDX_PH_STATUS"].markdown(text)
+            st.session_state["_IDX_PH_STATUS"].markdown("🟩 IDLE/COMPLETE")
 
     def _step_set(idx: int, state: str, note: str = "") -> None:
         steps = _steps()
@@ -606,7 +619,7 @@ def _render_admin_index_panel() -> None:
     def _log(msg: str, level: str = "info") -> None:
         buf: List[str] = st.session_state.get("_IDX_LOG", [])
         prefix = {"info": "•", "warn": "⚠", "err": "✖"}.get(level, "•")
-        ts = time.strftime("%H:%M:%S")
+        ts = _now_hms_kst()
         line = f"[{ts}] {prefix} {msg}"
         buf.append(line)
         if len(buf) > 200:
@@ -699,7 +712,7 @@ def _render_admin_index_panel() -> None:
                     pass
             if cj.exists() and cj.stat().st_size > 0:
                 try:
-                    (used_persist / ".ready").write_text("ready", encoding="utf-8")  # 통일
+                    (used_persist / ".ready").write_text("ready", encoding="utf-8")  # 표준화
                 except Exception:
                     pass
                 _stamp_persist(used_persist)
@@ -709,7 +722,9 @@ def _render_admin_index_panel() -> None:
                 chk, mark, dbg2 = _load_prepared_api()
                 info: Dict[str, Any] = {}
                 new_files: List[str] = []
+                cause = "모듈 없음"
                 if callable(chk):
+                    cause = "새 파일 없음"
                     try:
                         info = chk(used_persist, files_list) or {}
                     except TypeError:
@@ -724,7 +739,10 @@ def _render_admin_index_panel() -> None:
                     except TypeError:
                         mark(new_files)
                     _log(f"소비(seen) {len(new_files)}건")
-                _step_set(3, "ok", f"{len(new_files)}건")
+                    _step_set(3, "ok", f"{len(new_files)}건")
+                else:
+                    # 문구 명확화
+                    _step_set(3, "skip" if cause == "모듈 없음" else "ok", f"0건 ({cause})")
             except Exception as e:
                 _step_set(3, "fail", "소비 실패")
                 _log(f"prepared 소비 실패: {e}", "err")
@@ -763,46 +781,37 @@ def _render_admin_index_panel() -> None:
                 tok = _secret("GH_TOKEN") or _secret("GITHUB_TOKEN")
                 ow, rp = _resolve_owner_repo()
                 if tok and ow and rp:
-                    from urllib import request as _rq, error as _er, parse as _ps
+                    from urllib import request as _rq, parse as _ps
                     import zipfile
-
-                    def _gh_api(url: str, token_: str, data: Optional[bytes],
-                                method: str, ctype: str) -> Dict[str, Any]:
-                        req = _rq.Request(url, data=data, method=method)
-                        req.add_header("Authorization", f"token {token_}")
-                        req.add_header("Accept", "application/vnd.github+json")
-                        if ctype:
-                            req.add_header("Content-Type", ctype)
-                        try:
-                            with _rq.urlopen(req, timeout=30) as resp:
-                                txt = resp.read().decode("utf-8", "ignore")
-                                try:
-                                    return json.loads(txt)
-                                except Exception:
-                                    return {"_raw": txt}
-                        except _er.HTTPError as e:
-                            return {"_error": f"HTTP {e.code}", "detail": e.read().decode()}
-                        except Exception:
-                            return {"_error": "network_error"}
 
                     def _upload_release_zip(owner: str, repo: str, token: str,
                                             tag: str, zip_path: Path,
                                             name: Optional[str] = None,
                                             body: str = "") -> Dict[str, Any]:
                         api = "https://api.github.com"
+                        # release get/create
                         get_url = f"{api}/repos/{owner}/{repo}/releases/tags/{_ps.quote(tag)}"
-                        rel = _gh_api(get_url, token, None, "GET", "")
-                        if "_error" in rel:
+                        req = _rq.Request(get_url, headers={
+                            "Authorization": f"token {token}",
+                            "Accept": "application/vnd.github+json"})
+                        try:
+                            with _rq.urlopen(req, timeout=15) as resp:
+                                j = json.loads(resp.read().decode("utf-8", "ignore"))
+                        except Exception:
                             payload = json.dumps({"tag_name": tag, "name": name or tag,
                                                   "body": body}).encode("utf-8")
-                            rel = _gh_api(f"{api}/repos/{owner}/{repo}/releases",
-                                          token, payload, "POST", "application/json")
-                            if "_error" in rel:
-                                return rel
-                        rid = rel.get("id")
+                            req = _rq.Request(f"{api}/repos/{owner}/{repo}/releases",
+                                              data=payload, method="POST",
+                                              headers={"Authorization": f"token {token}",
+                                                       "Accept": "application/vnd.github+json",
+                                                       "Content-Type": "application/json"})
+                            with _rq.urlopen(req, timeout=15) as resp:
+                                j = json.loads(resp.read().decode("utf-8", "ignore"))
+                        rid = j.get("id")
                         if not rid:
                             return {"_error": "no_release_id"}
 
+                        # upload
                         up_url = ("https://uploads.github.com/repos/"
                                   f"{owner}/{repo}/releases/{rid}/assets"
                                   f"?name={_ps.quote(zip_path.name)}")
@@ -812,11 +821,10 @@ def _render_admin_index_panel() -> None:
                         req.add_header("Content-Type", "application/zip")
                         req.add_header("Accept", "application/vnd.github+json")
                         with _rq.urlopen(req, timeout=180) as resp:
-                            txt = resp.read().decode("utf-8", "ignore")
                             try:
-                                return json.loads(txt)
+                                return json.loads(resp.read().decode("utf-8", "ignore"))
                             except Exception:
-                                return {"_raw": txt}
+                                return {"_raw": "uploaded"}
 
                     backup_dir = used_persist / "backups"
                     backup_dir.mkdir(parents=True, exist_ok=True)
@@ -824,8 +832,8 @@ def _render_admin_index_panel() -> None:
                     with zipfile.ZipFile(z, "w", zipfile.ZIP_DEFLATED) as zf:
                         for root, _d, _f in os.walk(str(used_persist)):
                             for fn in _f:
-                                p = Path(root) / fn
-                                zf.write(str(p), arcname=str(p.relative_to(used_persist)))
+                                pth = Path(root) / fn
+                                zf.write(str(pth), arcname=str(pth.relative_to(used_persist)))
 
                     tag = f"index-{int(time.time())}"
                     res = _upload_release_zip(ow, rp, tok, tag, z, name=tag, body="MAIC index")
@@ -834,7 +842,11 @@ def _render_admin_index_panel() -> None:
                     else:
                         _step_set(5, "ok", "업로드 완료")
                 else:
-                    _step_set(5, "skip", "시크릿 없음")
+                    # 분기 명확화
+                    reason = "토글 꺼짐" if not req.get("auto_up") else "시크릿 없음"
+                    _step_set(5, "skip", reason)
+            else:
+                _step_set(5, "skip", "토글 꺼짐")
 
             st.success("강제 재인덱싱 완료 (prepared 전용)")
         except Exception as e:
@@ -1302,7 +1314,7 @@ def _render_body() -> None:
         finally:
             st.session_state["_boot_checked"] = True
 
-    # ✅ 헤더 그리기 전에 상태를 먼저 확정(READY 배지 반영)
+    # ✅ 헤더 렌더링보다 먼저 상태 확정(자동 복원/READY 반영)
     _auto_start_once()
 
     _mount_background()
