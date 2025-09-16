@@ -58,3 +58,15 @@ include = ["*"]
 # ===== [06] POETRY SETUP (disable package install of the app) ===============
 [tool.poetry]
 package-mode = false
+
+# [ruff] START (추가/교체)
+[tool.ruff]
+line-length = 100  # 현재 리포 정책 유지
+
+[tool.ruff.lint]
+# 전역 선택 규칙 예시는 그대로 두고…
+# select = ["E", "F", "I", "UP", "B"]
+
+# 파일별 예외: no_ellipsis_gate는 E501만 무시
+per-file-ignores = { "scripts/no_ellipsis_gate.py" = ["E501"] }
+# [ruff] END
