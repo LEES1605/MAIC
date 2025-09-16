@@ -257,6 +257,7 @@ def _mount_background(**_kw) -> None:
 
 # =============================== [10] auto-restore — START ============================
 def _boot_auto_restore_index() -> None:
+    """GitHub Release 최신본을 복원. 결과는 persist/restore_status.json 에 기록."""
     try:
         if "st" in globals() and st is not None:
             if st.session_state.get("_BOOT_RESTORE_DONE"):
@@ -265,16 +266,29 @@ def _boot_auto_restore_index() -> None:
         pass
 
     p = effective_persist_dir()
+
+    def _save_restore_status(ok: bool, **kw) -> None:
+        try:
+            obj = {"ok": bool(ok), "ts": int(time.time())}
+            obj.update(kw)
+            (p / "restore_status.json").write_text(
+                json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+        except Exception:
+            pass
+
     cj = p / "chunks.jsonl"
-    ready = (p / ".ready").exists()
-    if cj.exists() and cj.stat().st_size > 0 and ready:
+    ready_exists = (p / ".ready").exists()
+    if cj.exists() and cj.stat().st_size > 0 and ready_exists:
         try:
             if "st" in globals() and st is not None:
                 st.session_state["_BOOT_RESTORE_DONE"] = True
         except Exception:
             pass
+        _save_restore_status(True, why="already_ready", persist=str(p))
         return
 
+    # 토큰/리포
     try:
         from src.core.secret import token as _gh_token, resolve_owner_repo as _resolve_owner_repo
         token = _gh_token() or ""
@@ -283,11 +297,11 @@ def _boot_auto_restore_index() -> None:
         token, owner, repo = "", "", ""
 
     if not (token and owner and repo):
+        _save_restore_status(False, why="missing_token_or_repo", persist=str(p))
         return
 
     from urllib import request as _rq
     import zipfile as _zf
-    import json as _json
 
     api_latest = f"https://api.github.com/repos/{owner}/{repo}/releases/latest"
     try:
@@ -296,8 +310,9 @@ def _boot_auto_restore_index() -> None:
             "Accept": "application/vnd.github+json",
         })
         with _rq.urlopen(req, timeout=20) as resp:
-            data = _json.loads(resp.read().decode("utf-8", "ignore"))
-    except Exception:
+            data = json.loads(resp.read().decode("utf-8", "ignore"))
+    except Exception as e:
+        _save_restore_status(False, why=f"release_api_error: {e}", persist=str(p))
         return
 
     asset = None
@@ -307,9 +322,12 @@ def _boot_auto_restore_index() -> None:
             asset = a
             break
     if not asset:
+        _save_restore_status(False, why="no_suitable_asset", tag=str(data.get("tag_name") or ""),
+                             persist=str(p))
         return
     dl = asset.get("browser_download_url")
     if not dl:
+        _save_restore_status(False, why="no_download_url", persist=str(p))
         return
 
     try:
@@ -323,23 +341,20 @@ def _boot_auto_restore_index() -> None:
         except Exception:
             pass
 
-        cj = p / "chunks.jsonl"
+        # nested 산출물 평탄화
         if not (cj.exists() and cj.stat().st_size > 0):
             try:
                 cand = next(p.glob("**/chunks.jsonl"))
-                p = cand.parent
-                cj = cand
+                if cand and cand.exists():
+                    (p / "chunks.jsonl").write_bytes(cand.read_bytes())
             except StopIteration:
                 pass
 
+        # READY 통일: 'ready'
         try:
-            core_mark_ready(p)
+            (p / ".ready").write_text("ready", encoding="utf-8")
         except Exception:
-            # ✅ 통일: .ready 는 항상 "ready"
-            try:
-                (p / ".ready").write_text("ready", encoding="utf-8")
-            except Exception:
-                pass
+            pass
 
         try:
             if "st" in globals() and st is not None:
@@ -347,9 +362,19 @@ def _boot_auto_restore_index() -> None:
                 st.session_state["_BOOT_RESTORE_DONE"] = True
         except Exception:
             pass
-    except Exception:
+
+        _save_restore_status(
+            True,
+            why="extracted",
+            tag=str(data.get("tag_name") or ""),
+            asset=str(asset.get("name") or ""),
+            persist=str(p),
+        )
+    except Exception as e:
+        _save_restore_status(False, why=f"extract_error: {e}", persist=str(p))
         return
 # ================================= [10] auto-restore — END ============================
+
 
 # =============================== [11] boot hooks — START ==============================
 def _boot_autoflow_hook() -> None:
