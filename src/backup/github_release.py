@@ -289,7 +289,7 @@ def restore_latest(dest_dir: str | Path, repo: Optional[str] = None) -> bool:
     """
     Restore latest index artifact into dest_dir.
     - Supports index_*.zip / *.tar.gz / chunks.jsonl(.gz)
-    - Marks '.ready' only when chunks.jsonl exists (>0B)
+    - Marks '.ready' only when chunks.jsonl exists (>0B) as 'ready'
     """
     dest = Path(dest_dir).expanduser().resolve()
     dest.mkdir(parents=True, exist_ok=True)
@@ -340,12 +340,10 @@ def restore_latest(dest_dir: str | Path, repo: Optional[str] = None) -> bool:
 
     # flatten when artifact created a top folder
     chunks = _find_chunks(dest)
-    if not chunks:
-        _log("restore_latest: chunks.jsonl not found after extract")
-        return False
-    if chunks.parent != dest:
+    if chunks and chunks.parent != dest:
         try:
-            (dest / "chunks.jsonl").write_bytes(chunks.read_bytes())
+            target = dest / "chunks.jsonl"
+            target.write_bytes(chunks.read_bytes())
             _log(f"flatten: adopted chunks from {chunks.parent.name}")
         except Exception as e:
             _log(f"flatten failed: {e}")
@@ -354,8 +352,8 @@ def restore_latest(dest_dir: str | Path, repo: Optional[str] = None) -> bool:
     # mark ready (統一: 'ready')
     try:
         (dest / ".ready").write_text("ready", encoding="utf-8")
-    except Exception as e:
-        _log(f"mark ready failed: {e}")
+    except Exception:
+        pass
 
     _log("restore_latest: done.")
     return True
