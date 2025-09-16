@@ -13,7 +13,7 @@ def restore_and_verify(dest: Path, repo: str | None) -> int:
     """
     GitHub Release에서 최신 인덱스를 복원하고, READY 여부를 점검한다.
     """
-    from src.backup.github_release import restore_latest  # type: ignore
+    from src.backup.github_release import restore_latest  # (ignore 제거)
 
     dest.mkdir(parents=True, exist_ok=True)
     ok = restore_latest(dest, repo=repo)
@@ -37,7 +37,6 @@ def restore_and_verify(dest: Path, repo: str | None) -> int:
     print(f"[ok] restored to {dest} and READY")
     return 0
 # ============================= [02] logic — END =====================================
-
 
 # ============================ [03] main — START =====================================
 def main(argv: list[str] | None = None) -> int:
