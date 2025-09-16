@@ -37,13 +37,6 @@ dev = [
 ]
 
 # ===== [04] TOOL CONFIG POINTERS ============================================
-[tool.ruff]
-extend = "ruff.toml"
-src = ["src"]
-
-[tool.ruff.lint.isort]
-known-first-party = ["src"]
-
 [tool.mypy]
 config_file = "mypy.ini"
 
@@ -59,8 +52,10 @@ include = ["*"]
 [tool.poetry]
 package-mode = false
 
-# ============================ [10] Ruff config — START ============================
+# ============================ [10] Ruff config — START (consolidated) ============================
 [tool.ruff]
+extend = "ruff.toml"
+src = ["src"]
 line-length = 100
 target-version = "py311"
 
@@ -68,6 +63,9 @@ target-version = "py311"
 select = ["E", "F", "I", "UP", "B"]
 ignore = []
 per-file-ignores = { "scripts/no_ellipsis_gate.py" = ["E501"] }
-# ============================ [10] Ruff config — END ==============================
+
+[tool.ruff.lint.isort]
+known-first-party = ["src"]
+# ============================ [10] Ruff config — END (consolidated) ==============================
 
 
