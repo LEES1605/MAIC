@@ -42,18 +42,17 @@ def _check_label_ssot() -> None:
 
 
 def _check_mode_ssot() -> None:
+    # canon_mode가 존재하는 설치본을 기준으로 검증.
     from src.core.modes import (
         MODE_GRAMMAR,
         MODE_SENTENCE,
         MODE_PASSAGE,
-        canon_mode,  # may be added in later patch; if missing, adjust tests accordingly
+        canon_mode,
     )
 
-    # English / Korean / short-hands must converge to canonical labels
     assert canon_mode("Grammar") == MODE_GRAMMAR
     assert canon_mode("문장") == MODE_SENTENCE
     assert canon_mode("reading") == MODE_PASSAGE
-    # Canonical labels are idempotent
     assert canon_mode(MODE_GRAMMAR) == MODE_GRAMMAR
     assert canon_mode(MODE_SENTENCE) == MODE_SENTENCE
     assert canon_mode(MODE_PASSAGE) == MODE_PASSAGE
@@ -74,10 +73,30 @@ def _check_prompts_schema_offline() -> None:
     assert "version" in data, "prompts must contain version"
 
 
+def _check_prompt_builder_offline() -> None:
+    """Build system prompt for grammar mode from local sample (no network)."""
+    from src.runtime.prompts_loader import load_prompts
+    from src.runtime.prompt_builder import build_for_mode
+
+    repo_root = Path(__file__).resolve().parents[1]
+    sample = repo_root / "docs" / "_gpt" / "prompts.sample.yaml"
+    prompts = load_prompts(owner="dummy", repo="dummy", local_path=sample)
+
+    res = build_for_mode(prompts, "grammar")
+    assert "ROLE" in res.system_prompt
+    assert "INSTRUCTIONS" in res.system_prompt
+    assert "CITATIONS" in res.system_prompt
+    assert "문법" or "grammar"  # smoke-only sanity
+    assert isinstance(res.model, str) and res.model
+    # 모델 힌트가 들어있으면 gpt-5-pro일 것(샘플 기준)
+    assert res.model in ("gpt-5-pro", "gemini-pro")
+
+
 CHECKS: dict[str, Callable[[], None]] = {
     "label-ssot": _check_label_ssot,
     "mode-ssot": _check_mode_ssot,
     "prompts-schema-offline": _check_prompts_schema_offline,
+    "prompt-builder-offline": _check_prompt_builder_offline,
 }
 
 
