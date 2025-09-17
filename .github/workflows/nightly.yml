@@ -1,11 +1,9 @@
-# ============================ [01] NIGHTLY PRE-RELEASE WORKFLOW — START ============================
 name: Nightly Pre-Release
 
 on:
-  # 매일 00:30 KST (UTC 15:30)
   schedule:
+    # 매일 00:30 KST (UTC 15:30)
     - cron: "30 15 * * *"
-  # 수동 실행 허용
   workflow_dispatch:
 
 permissions:
@@ -17,20 +15,37 @@ concurrency:
 
 jobs:
   gate:
-    name: Build & Gate
+    name: Build & Gate (static + tests)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-python@v5
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: "pip"
           cache-dependency-path: |
             requirements.txt
             pyproject.toml
+
+      - name: Cache ruff
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ruff
+          key: ruff-${{ runner.os }}-py311-${{ hashFiles('**/*.py', 'pyproject.toml', 'requirements*.txt') }}
+          restore-keys: |
+            ruff-${{ runner.os }}-py311-
+
+      - name: Cache mypy
+        uses: actions/cache@v4
+        with:
+          path: .mypy_cache
+          key: mypy-${{ runner.os }}-py311-${{ hashFiles('**/*.py', 'pyproject.toml', 'requirements*.txt') }}
+          restore-keys: |
+            mypy-${{ runner.os }}-py311-
 
       - name: Show tool versions
         run: |
@@ -39,23 +54,27 @@ jobs:
           git rev-parse --short HEAD
           git describe --tags --always || true
 
-      - name: Install build deps
+      - name: Install deps
         run: |
           python -m pip install --upgrade pip
-          pip install build twine
-          if [ -f requirements-dev.txt ]; then
-            pip install -r requirements-dev.txt
-          fi
+          pip install -r requirements.txt || true
+          pip install ruff mypy pytest pytest-xdist build twine
 
       - name: Run static checks
         run: |
-          pip install ruff mypy
           ruff check .
-          mypy --clear-cache
+          ruff format --check .
           mypy .
+
+      - name: Pytest (fast, not slow)
+        run: pytest -n auto -m "not slow" -q
+
+      - name: Pytest (slow, nightly only)
+        run: pytest -n auto -m "slow" -q
 
       - name: Build dist
         run: |
+          set -euo pipefail
           python -m build
           ls -lh dist/
 
@@ -74,7 +93,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-python@v5
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: "pip"
@@ -100,17 +120,6 @@ jobs:
           name: dist-artifacts
           path: dist
 
-      - name: Build release zip
-        shell: bash
-        run: |
-          set -euo pipefail
-          ZIP="maic-${{ steps.vars.outputs.tag }}.zip"
-          rm -f "$ZIP"
-          git ls-files > files.txt
-          # 리포 내용 압축(gihtub 워크플로/캐시 제외)
-          zip -9 -r "$ZIP" -@ < files.txt
-          sha256sum "$ZIP" > "$ZIP.sha256"
-
       - name: Publish pre-release
         uses: softprops/action-gh-release@v2
         with:
@@ -119,8 +128,6 @@ jobs:
           prerelease: true
           generate_release_notes: true
           files: |
-            maic-${{ steps.vars.outputs.tag }}.zip
-            maic-${{ steps.vars.outputs.tag }}.zip.sha256
+            dist/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-# ============================= [01] NIGHTLY PRE-RELEASE WORKFLOW — END =============================
