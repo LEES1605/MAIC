@@ -11,7 +11,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # 변경 파일 종류를 분류하여 문서 전용 변경 시 테스트 Job을 건너뛰기
+  # 변경 파일 분류(문서 전용 변경이면 빠른 게이트만)
   changes:
     runs-on: ubuntu-latest
     outputs:
@@ -33,7 +33,7 @@ jobs:
               - 'docs/**'
               - '**/*.md'
 
-  # 문서 전용 변경일 때 최소 게이트만 수행 (빠름)
+  # 문서 전용 변경일 때 최소 게이트만 수행
   docs-gate:
     needs: changes
     if: needs.changes.outputs.code != 'true'
@@ -42,7 +42,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: No‑Ellipsis Gate
-        run: python3 scripts/no_ellipsis_gate.py --root .
+        run: python scripts/no_ellipsis_gate.py --root .
 
       - name: Pointer check (workspace pointers must exist)
         run: |
@@ -54,7 +54,7 @@ jobs:
           fi
           echo "$hits" | sed -n '1,10p'
 
-  # 코드 변경일 때에만 정식 CI 수행 (병렬 테스트 + 캐시)
+  # 코드 변경일 때 정식 CI(병렬 테스트 + 캐시 + 스모크)
   lint-type-test:
     needs: changes
     if: needs.changes.outputs.code == 'true'
@@ -90,7 +90,7 @@ jobs:
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt || true
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           pip install ruff mypy pytest pytest-xdist
 
       - name: Ruff (lint + format)
@@ -100,6 +100,11 @@ jobs:
 
       - name: Mypy (type check)
         run: mypy .
+
+      - name: Smoke checks (activation)
+        env:
+          PYTHONPATH: src
+        run: python scripts/smoke_checks.py
 
       - name: Pytest (fast group, parallel)
         run: pytest -n auto -m "not slow" -q
