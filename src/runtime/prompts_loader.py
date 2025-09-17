@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import json
 import logging
 import os
@@ -12,7 +13,6 @@ from typing import Any, Dict, Optional
 
 import requests
 import yaml
-from jsonschema import Draft202012Validator
 
 __all__ = ["PromptsLoader", "load_prompts"]
 
@@ -106,6 +106,9 @@ class PromptsLoader:
         yaml_asset = self._find_asset(assets, self.cfg.asset_name)
         sha_asset = self._find_asset(assets, "sha256.txt")
 
+        if yaml_asset is None:
+            raise PromptsLoadError(f"asset not found: {self.cfg.asset_name}")
+
         etag_cached = self._read_meta().get("etag") if not force_refresh else None
         etag, content = self._download_asset(yaml_asset, etag=etag_cached)
         if content is None:
@@ -121,7 +124,7 @@ class PromptsLoader:
         tmp_yaml.write_bytes(content)
 
         # validate checksum if present
-        if sha_asset:
+        if sha_asset is not None:
             sha_txt = self._download_asset_text(sha_asset)
             tmp_sha.write_text(sha_txt, encoding="utf-8")
             expected = self._parse_sha256(sha_txt)
@@ -149,7 +152,11 @@ class PromptsLoader:
         r.raise_for_status()
         return r.json()
 
-    def _find_asset(self, assets: list[dict], name: str) -> Optional[dict]:
+    def _find_asset(
+        self,
+        assets: list[dict[str, Any]],
+        name: str,
+    ) -> Optional[dict[str, Any]]:
         for a in assets:
             if a.get("name") == name:
                 return a
@@ -157,16 +164,13 @@ class PromptsLoader:
 
     def _download_asset(
         self,
-        asset: dict,
+        asset: dict[str, Any],
         *,
         etag: Optional[str],
     ) -> tuple[Optional[str], Optional[bytes]]:
         """
         Return (etag, content). content=None when 304 Not Modified.
         """
-        if not asset:
-            raise PromptsLoadError(f"asset not found: {self.cfg.asset_name}")
-
         url = asset.get("browser_download_url")
         if not url:
             raise PromptsLoadError("asset has no browser_download_url")
@@ -182,7 +186,7 @@ class PromptsLoader:
         new_etag = r.headers.get("ETag", "").strip('"')
         return (new_etag, r.content)
 
-    def _download_asset_text(self, asset: dict) -> str:
+    def _download_asset_text(self, asset: dict[str, Any]) -> str:
         url = asset.get("browser_download_url")
         if not url:
             raise PromptsLoadError("sha asset has no download url")
@@ -223,8 +227,16 @@ class PromptsLoader:
             return yaml.safe_load(f)
 
     def _validate_schema(self, data: Dict[str, Any]) -> None:
-        schema = json.loads(self.schema_path.read_text(encoding="utf-8"))
-        Draft202012Validator(schema).validate(data)
+        # 런타임 의존성: jsonschema. 타입 스텁은 강제하지 않음(동적 임포트).
+        schema_text = self.schema_path.read_text(encoding="utf-8")
+        schema = json.loads(schema_text)
+
+        js = importlib.import_module("jsonschema")  # type: ignore[no-redef]
+        validator_cls: Any = getattr(js, "Draft202012Validator", None)
+        if validator_cls is None:
+            raise PromptsLoadError("jsonschema.Draft202012Validator not found")
+        validator = validator_cls(schema)
+        validator.validate(data)
 
     @staticmethod
     def _parse_sha256(text: str) -> Optional[str]:
@@ -255,9 +267,12 @@ def load_prompts(
     default_cache_dir = str(LoaderConfig.cache_dir)
     env_cache_dir = os.getenv("MAIC_PROMPTS_CACHE_DIR", default_cache_dir)
 
+    owner_str: str = owner if owner is not None else os.getenv("MAIC_GH_OWNER", "")
+    repo_str: str = repo if repo is not None else os.getenv("MAIC_GH_REPO", "")
+
     cfg = LoaderConfig(
-        owner=owner or os.getenv("MAIC_GH_OWNER", ""),
-        repo=repo or os.getenv("MAIC_GH_REPO", ""),
+        owner=owner_str,
+        repo=repo_str,
         tag=os.getenv("MAIC_PROMPTS_TAG", tag),
         asset_name=os.getenv("MAIC_PROMPTS_ASSET", asset_name),
         token=token or os.getenv("MAIC_GH_TOKEN") or None,
