@@ -1,49 +1,56 @@
 #!/usr/bin/env python3
-"""
-Lightweight smoke checks to verify core features are activated.
+"""Simple smoke checks for MAIC project.
 
-- No network, no secrets required.
-- Exit code 0 on success; non-zero on failure.
+Ensures key invariants hold without requiring a full test suite.
 """
 from __future__ import annotations
 
 import sys
-from dataclasses import dataclass
+from pathlib import Path
+from typing import Callable
+
+# Make sure 'src' package is importable regardless of current working dir
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 
-@dataclass(frozen=True)
-class SmokeResult:
-    name: str
-    ok: bool
-    msg: str = ""
+def _run_check(name: str, check: Callable[[], None]) -> bool:
+    """Run an individual smoke check and report the outcome.
 
-
-def check_label_ssot() -> SmokeResult:
+    Returns True when the check succeeds, False otherwise.
     """
-    Policy: "[문법책]" / "[문법서]" 등은 모두 "[문법서적]"으로 정규화되어야 한다.
-    """
+    label = f"[smoke] {name}"
     try:
-        # Lazy import to avoid module import cost if unused in future.
-        from src.rag.labels import canon_label
+        check()
+    except Exception as exc:  # noqa: BLE001 - surface original exception
+        print(f"{label}: FAIL — {name.replace('-', ' ').title()} failed: {exc!r}")
+        return False
+    else:
+        print(f"{label}: OK")
+        return True
 
-        assert canon_label("[문법책]") == "[문법서적]"
-        assert canon_label("[문법서]") == "[문법서적]"
-        assert canon_label("[문법서적]") == "[문법서적]"
-        return SmokeResult("label-ssot", True, "Label SSOT OK")
-    except Exception as e:  # noqa: BLE001
-        return SmokeResult("label-ssot", False, f"Label SSOT failed: {e!r}")
+
+def _check_label_ssot() -> None:
+    from src.rag.labels import canon_label
+
+    # Aliases must normalize to the canonical label
+    assert canon_label("[문법책]") == "[문법서적]"
+    assert canon_label("[문법서]") == "[문법서적]"
+    # Canonical label must be idempotent
+    assert canon_label("[문법서적]") == "[문법서적]"
+
+
+CHECKS: dict[str, Callable[[], None]] = {
+    "label-ssot": _check_label_ssot,
+}
 
 
 def main() -> int:
-    checks = [
-        check_label_ssot(),
-        # TODO: add more smoke checks as features mature (e.g., mode router, pointer presence)
-    ]
-    failed = [c for c in checks if not c.ok]
-    for c in checks:
-        print(f"[smoke] {c.name}: {'OK' if c.ok else 'FAIL'}{(' — '+c.msg) if c.msg else ''}")
-    return 1 if failed else 0
+    """Execute all smoke checks."""
+    results = [_run_check(name, check) for name, check in CHECKS.items()]
+    return 0 if all(results) else 1
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(main())
