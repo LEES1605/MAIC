@@ -539,7 +539,7 @@ def _render_admin_index_panel() -> None:
     if "_IDX_PH_S6" not in st.session_state:
         st.session_state["_IDX_PH_S6"] = st.empty()
 
-    step_names: List[str] = ["스캔", "Persist확정", "인덱싱", "prepared소비", "요약/배지", "ZIP/Release"]
+    step_names: List[Dict[str, str]] | List[str] = ["스캔", "Persist확정", "인덱싱", "prepared소비", "요약/배지", "ZIP/Release"]
     stall_threshold_sec = 60
 
     def _step_reset(names: List[str]) -> None:
@@ -553,7 +553,7 @@ def _render_admin_index_panel() -> None:
 
     def _steps() -> List[Dict[str, str]]:
         if "_IDX_STEPS" not in st.session_state:
-            _step_reset(step_names)
+            _step_reset(["스캔", "Persist확정", "인덱싱", "prepared소비", "요약/배지", "ZIP/Release"])
         return list(st.session_state["_IDX_STEPS"])
 
     def _icon(state: str) -> str:
@@ -650,13 +650,16 @@ def _render_admin_index_panel() -> None:
         c1, c2, c3, c4 = st.columns([1, 2, 2, 1])
         submit_reindex = c1.form_submit_button("🔁 강제 재인덱싱(HQ, prepared)", use_container_width=True)
         show_after = c2.toggle("인덱싱 결과 표시", key="IDX_SHOW_AFTER", value=True)
-        # 기본값 ON (시크릿이 있어야 실제 업로드 성공)
-        auto_up = c3.toggle("인덱싱 후 자동 ZIP 업로드", key="IDX_AUTO_UP", value=True,
-                            help="GH/GITHUB 시크릿이 모두 있으면 켜짐")
+        auto_up = c3.toggle(
+            "인덱싱 후 자동 ZIP 업로드",
+            key="IDX_AUTO_UP",
+            value=True,  # ← 기본값 ON으로 변경
+            help="GH/GITHUB 시크릿이 모두 있으면 켜짐",
+        )
         reset_view = c4.form_submit_button("🧹 화면 초기화")
 
         if reset_view:
-            _step_reset(step_names)
+            _step_reset(["스캔", "Persist확정", "인덱싱", "prepared소비", "요약/배지", "ZIP/Release"])
             st.session_state["_IDX_BAR"] = None
             st.session_state["_IDX_PH_BAR"].empty()
             st.session_state["_IDX_PH_LOG"].empty()
@@ -674,7 +677,7 @@ def _render_admin_index_panel() -> None:
     req = st.session_state.pop("_IDX_REQ", None)
     if req:
         used_persist = _persist_dir_safe()
-        _step_reset(step_names)
+        _step_reset(["스캔", "Persist확정", "인덱싱", "prepared소비", "요약/배지", "ZIP/Release"])
         _render_stepper()
         _render_status()
         st.session_state["_IDX_PH_BAR"].empty()
@@ -704,15 +707,10 @@ def _render_admin_index_panel() -> None:
                     pass
             if cj.exists() and cj.stat().st_size > 0:
                 try:
-                    # 통일: .ready 파일 내용은 "ready"
                     (used_persist / ".ready").write_text("ready", encoding="utf-8")
                 except Exception:
                     pass
                 _stamp_persist(used_persist)
-                try:
-                    _set_brain_status("READY", "인덱싱 완료", "prepared", attached=True)
-                except Exception:
-                    pass
 
             _step_set(3, "run", "prepared 소비 중")
             try:
@@ -834,11 +832,11 @@ def _render_admin_index_panel() -> None:
                     with zipfile.ZipFile(z, "w", zipfile.ZIP_DEFLATED) as zf:
                         for root, _d, _f in os.walk(str(used_persist)):
                             for fn in _f:
-                                pth = Path(root) / fn
-                                zf.write(str(pth), arcname=str(pth.relative_to(used_persist)))
+                                p = Path(root) / fn
+                                zf.write(str(p), arcname=str(p.relative_to(used_persist)))
 
                     tag = f"index-{int(time.time())}"
-                    res = _upload_release_zip(ow, rp, tok, z, name=tag, body="MAIC index")
+                    res = _upload_release_zip(ow, rp, tok, tag, z, name=tag, body="MAIC index")
                     if "_error" in res:
                         _step_set(5, "fail", res.get("_error", "error"))
                     else:
@@ -881,6 +879,7 @@ def _render_admin_index_panel() -> None:
         else:
             st.caption("표시할 로그가 없습니다.")
 # ================================= [13] admin index — END =============================
+
 
 
 # =============================== [14] admin legacy — START ============================
