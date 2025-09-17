@@ -3,6 +3,10 @@ name: Publish Prompts
 on:
   workflow_dispatch:
     inputs:
+      yaml_b64:
+        description: "Base64 of prompts.yaml (if provided, overrides 'path')"
+        required: false
+        type: string
       path:
         description: "Prompts YAML path (default: prompts.yaml → fallback: docs/_gpt/prompts.sample.yaml)"
         required: false
@@ -40,11 +44,28 @@ jobs:
         with:
           fetch-depth: 0
 
+      # If inline content is provided, write it to a temp file
+      - name: Prepare inline YAML
+        id: inline
+        if: inputs.yaml_b64 != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist-prompts-inline
+          echo "${{ inputs.yaml_b64 }}" | base64 -d > dist-prompts-inline/prompts.inline.yaml
+          echo "file=dist-prompts-inline/prompts.inline.yaml" >> "$GITHUB_OUTPUT"
+
       - name: Resolve prompts path
         id: path
         shell: bash
         run: |
           set -euo pipefail
+          INLINE="${{ steps.inline.outputs.file }}"
+          if [ -n "$INLINE" ]; then
+            echo "file=$INLINE" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           IN="${{ inputs.path || '' }}"
           if [ -n "$IN" ] && [ -f "$IN" ]; then
             echo "file=$IN" >> "$GITHUB_OUTPUT"
@@ -56,7 +77,6 @@ jobs:
             echo "No prompts file found." >&2
             exit 2
           fi
-          echo "Using: $(cat $GITHUB_OUTPUT)"
 
       - name: Setup Python
         uses: actions/setup-python@v5
