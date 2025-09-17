@@ -524,7 +524,6 @@ def _render_admin_index_panel() -> None:
         except Exception:
             pass
 
-    # placeholders
     if "_IDX_PH_STEPS" not in st.session_state:
         st.session_state["_IDX_PH_STEPS"] = st.empty()
     if "_IDX_PH_STATUS" not in st.session_state:
@@ -617,7 +616,7 @@ def _render_admin_index_panel() -> None:
         st.session_state["_IDX_LAST_TS"] = time.time()
         _render_status()
 
-    # 0) prepared 목록 미리 보여주기
+    # prepared 목록
     files_list: List[Dict[str, Any]] = []
     lister, dbg1 = _load_prepared_lister()
     if lister:
@@ -643,7 +642,6 @@ def _render_admin_index_panel() -> None:
         else:
             st.caption("일치하는 파일이 없습니다.")
 
-    # 1) 조작 폼
     with st.form("idx_actions_form", clear_on_submit=False):
         c1, c2, c3, c4 = st.columns([1, 2, 2, 1])
         submit_reindex = c1.form_submit_button("🔁 강제 재인덱싱(HQ, prepared)", use_container_width=True)
@@ -652,7 +650,7 @@ def _render_admin_index_panel() -> None:
             "인덱싱 후 자동 ZIP 업로드",
             key="IDX_AUTO_UP",
             value=False,
-            help="필요 시크릿(GH_TOKEN/GITHUB_TOKEN + 레포 식별)이 있으면 업로드 수행",
+            help="GH/GITHUB 시크릿이 모두 있으면 켜짐",
         )
         reset_view = c4.form_submit_button("🧹 화면 초기화")
 
@@ -672,7 +670,6 @@ def _render_admin_index_panel() -> None:
             _log("인덱싱 요청 접수")
             _safe_rerun("idx_submit", ttl=1)
 
-    # 2) 실제 실행
     req = st.session_state.pop("_IDX_REQ", None)
     if req:
         used_persist = _persist_dir_safe()
@@ -682,10 +679,8 @@ def _render_admin_index_panel() -> None:
         st.session_state["_IDX_PH_BAR"].empty()
         st.session_state["_IDX_BAR"] = None
         _log("인덱싱 시작")
-
         try:
             from src.rag import index_build as _idx
-
             _step_set(1, "run", "persist 확인 중")
             _step_set(1, "ok", str(used_persist))
             _log(f"persist={used_persist}")
@@ -697,7 +692,7 @@ def _render_admin_index_panel() -> None:
             _step_set(2, "ok", "완료")
             _log("인덱싱 완료")
 
-            # 산출물 위치 자동조정 + READY 마킹 (표준: 'ready')
+            # ✅ 결과물 확인 및 READY 표준화
             cj = used_persist / "chunks.jsonl"
             if not (cj.exists() and cj.stat().st_size > 0):
                 try:
@@ -714,7 +709,6 @@ def _render_admin_index_panel() -> None:
                     pass
                 _stamp_persist(used_persist)
 
-            # prepared 소비
             _step_set(3, "run", "prepared 소비 중")
             try:
                 chk, mark, dbg2 = _load_prepared_api()
@@ -740,7 +734,6 @@ def _render_admin_index_panel() -> None:
                 _step_set(3, "fail", "소비 실패")
                 _log(f"prepared 소비 실패: {e}", "err")
 
-            # 요약
             _step_set(4, "run", "요약 계산")
             try:
                 from src.rag.index_status import get_index_summary
@@ -751,7 +744,6 @@ def _render_admin_index_panel() -> None:
                 _step_set(4, "ok", "요약 모듈 없음")
                 _log("요약 모듈 없음", "warn")
 
-            # ZIP/Release 업로드 (옵션)
             if req.get("auto_up"):
                 _step_set(5, "run", "ZIP/Release 업로드")
 
@@ -850,12 +842,10 @@ def _render_admin_index_panel() -> None:
                     _step_set(5, "skip", "시크릿 없음")
 
             st.success("강제 재인덱싱 완료 (prepared 전용)")
-
         except Exception as e:
             _step_set(2, "fail", "인덱싱 실패")
             _log(f"인덱싱 실패: {e}", "err")
 
-    # 결과 프리뷰
     if bool(st.session_state.get("IDX_SHOW_AFTER", True)):
         idx_persist = _persist_dir_safe()
         glb_persist = _persist_dir_safe()
@@ -1311,7 +1301,7 @@ def _render_body() -> None:
     if st is None:
         return
 
-    # 1) 부팅 훅: 자동 복원/오토플로우 체크(세션 당 1회)
+    # 1) 부팅 훅
     if not st.session_state.get("_boot_checked"):
         try:
             _boot_auto_restore_index()
@@ -1321,17 +1311,17 @@ def _render_body() -> None:
         finally:
             st.session_state["_boot_checked"] = True
 
-    # 2) ✅ 상태 확정(자동 복원/READY 반영)을 헤더 렌더링보다 먼저 수행
+    # 2) ✅ 상태 확정(자동 복원/READY 반영)을 헤더보다 먼저 수행
     try:
         _auto_start_once()
     except Exception as e:
-        _errlog("auto_start_once failed: {e}", where="[render_body.autostart]", exc=e)
+        _errlog(f"auto_start_once failed: {e}", where="[render_body.autostart]", exc=e)
 
     # 3) 배경/헤더
     _mount_background()
     _header()
 
-    # 4) 관리자 패널들
+    # 4) 관리자 패널
     if _is_admin_view():
         _render_index_orchestrator_header()
         try:
@@ -1385,4 +1375,3 @@ def main() -> None:
 if __name__ == "__main__":
     main()
 # ================================= [19] body & main — END =============================
-

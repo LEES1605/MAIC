@@ -33,9 +33,8 @@ def _get_env(name: str, default: str = "") -> str:
     v = os.getenv(name, "")
     if v:
         return v
-    # optional: streamlit secrets (safe and best-effort)
     try:
-        import streamlit as st  # 런타임 의존성 존재, 별도 ignore 불필요
+        import streamlit as st  # optional
         s = st.secrets.get(name)
         if isinstance(s, str) and s:
             return s
@@ -73,9 +72,7 @@ def _repo() -> str:
 def _branch() -> str:
     """Best-effort current branch for tag target."""
     ref = os.getenv("GITHUB_REF_NAME", "")
-    if ref:
-        return ref
-    return "main"
+    return ref or "main"
 
 
 def _headers() -> Dict[str, str]:

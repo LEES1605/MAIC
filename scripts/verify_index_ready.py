@@ -8,7 +8,6 @@ from typing import Optional, Tuple
 ASCII_READY = "ready"
 # ============================= [01] imports & cfg — END =============================
 
-
 # ============================ [02] helpers — START ==================================
 def _effective_persist_dir(cli_dir: Optional[str]) -> Path:
     """
@@ -18,7 +17,7 @@ def _effective_persist_dir(cli_dir: Optional[str]) -> Path:
     if cli_dir:
         return Path(cli_dir).expanduser().resolve()
     try:
-        from src.core.persist import effective_persist_dir
+        from src.core.persist import effective_persist_dir  # 표준 진입점
         p = effective_persist_dir()
         return p if isinstance(p, Path) else Path(str(p)).expanduser().resolve()
     except Exception:
@@ -27,28 +26,20 @@ def _effective_persist_dir(cli_dir: Optional[str]) -> Path:
 
 
 def _check_ready(persist: Path) -> Tuple[bool, str]:
-    """
-    SSOT 규칙:
-      - chunks.jsonl 존재 & 0바이트 아님
-      - .ready 파일의 내용이 정확히 "ready"
-    """
+    """chunks.jsonl 유무와 .ready 내용('ready') 일치 여부를 검증."""
+    cj = persist / "chunks.jsonl"
+    rd = persist / ".ready"
+    if not cj.exists() or cj.stat().st_size <= 0:
+        return False, "MISSING: chunks.jsonl"
     try:
-        cj = persist / "chunks.jsonl"
-        rf = persist / ".ready"
-        if not (cj.exists() and cj.stat().st_size > 0):
-            return False, "MISSING: chunks.jsonl"
-        if not rf.exists():
-            return False, "MISSING: .ready"
-        try:
-            val = (rf.read_text(encoding="utf-8", errors="ignore").strip().lower())
-        except Exception:
-            val = ""
-        if val != ASCII_READY:
-            return False, f'MISSING: .ready != "{ASCII_READY}" (got "{val}")'
-        return True, "READY"
-    except Exception as e:
-        return False, f"ERROR: {e}"
+        txt = rd.read_text(encoding="utf-8").strip().lower()
+    except Exception:
+        txt = ""
+    if txt != ASCII_READY:
+        return False, f"UNMATCHED: .ready='{txt or '(missing)'}' expected='{ASCII_READY}'"
+    return True, "OK: chunks.jsonl exists and .ready='ready'"
 # ============================= [02] helpers — END ===================================
+
 
 # ============================ [03] main — START =====================================
 def main(argv: list[str] | None = None) -> int:
