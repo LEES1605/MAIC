@@ -11,7 +11,6 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-import requests
 import yaml
 
 __all__ = ["PromptsLoader", "load_prompts"]
@@ -35,14 +34,10 @@ class PromptsLoadError(RuntimeError):
 
 class PromptsLoader:
     """
-    GitHub Releases에서 prompts 번들을 읽어와 캐시/검증/롤백해 주는 로더.
+    GitHub Releases에서 prompts 번들을 읽어와 캐시/검증/롤백하는 로더.
 
-    - 네트워크가 불가능하거나 테스트 상황이면 local_path로 바로 로드
-    - 네트워크 가능 시:
-        1) release tag(기본: prompts-latest)의 assets 조회
-        2) prompts.yaml 자산을 ETag 기반으로 If-None-Match 요청
-        3) 변경 시 내려받아 sha256.txt와 대조, 스키마 검증 후 캐시 갱신
-        4) 실패 시 기존 검증 캐시로 롤백
+    - 오프라인/테스트: local_path로 바로 로드(네트워크 불필요)
+    - 온라인: ETag/sha256 검증 + 캐시/롤백
     """
 
     def __init__(self, cfg: LoaderConfig) -> None:
@@ -52,6 +47,7 @@ class PromptsLoader:
         self.meta_path = self.cache_dir / "meta.json"
         self.yaml_path = self.cache_dir / "prompts.yaml"
         self.sha_path = self.cache_dir / "sha256.txt"
+        self._session: Optional[Any] = None  # requests.Session, 지연 생성
 
         if cfg.schema_path is None:
             # src/runtime/prompts_loader.py → repo_root
@@ -59,16 +55,6 @@ class PromptsLoader:
             self.schema_path = repo_root / "schemas" / "prompts.schema.json"
         else:
             self.schema_path = cfg.schema_path
-
-        self.session = requests.Session()
-        self.session.headers.update(
-            {
-                "Accept": "application/vnd.github+json",
-                "User-Agent": "MAIC-PromptsLoader/1.0",
-            }
-        )
-        if cfg.token:
-            self.session.headers["Authorization"] = f"Bearer {cfg.token}"
 
     # ------------------------------- public API -------------------------------
 
@@ -79,9 +65,9 @@ class PromptsLoader:
         force_refresh: bool = False,
     ) -> Dict[str, Any]:
         """
-        Load prompts from Releases (or local_path for offline).
+        Releases 또는 local_path에서 prompts를 로드한다.
 
-        Returns parsed YAML (dict). Raises PromptsLoadError on failure with no cache.
+        Returns parsed YAML (dict). 원격 실패 시 검증된 캐시로 폴백한다.
         """
         if local_path is not None:
             data = self._read_yaml(local_path)
@@ -91,7 +77,6 @@ class PromptsLoader:
         try:
             return self._load_remote(force_refresh=force_refresh)
         except Exception as exc:  # noqa: BLE001
-            # Fallback to validated cache
             cached = self._load_cache()
             if cached is not None:
                 logging.warning("prompts: remote load failed, using cached copy: %r", exc)
@@ -99,6 +84,27 @@ class PromptsLoader:
             raise PromptsLoadError(f"prompts load failed and no cache: {exc!r}") from exc
 
     # ------------------------------ remote loading ----------------------------
+
+    def _ensure_session(self) -> Any:
+        """requests.Session을 지연 생성한다(원격 접근시에만 필요)."""
+        if self._session is None:
+            try:
+                requests = importlib.import_module("requests")  # type: ignore[no-redef]
+            except Exception as exc:  # noqa: BLE001
+                raise PromptsLoadError(
+                    "requests is required for remote loading (pip install requests)"
+                ) from exc
+            sess = requests.Session()
+            sess.headers.update(
+                {
+                    "Accept": "application/vnd.github+json",
+                    "User-Agent": "MAIC-PromptsLoader/1.0",
+                }
+            )
+            if self.cfg.token:
+                sess.headers["Authorization"] = f"Bearer {self.cfg.token}"
+            self._session = sess
+        return self._session
 
     def _load_remote(self, *, force_refresh: bool) -> Dict[str, Any]:
         rel = self._get_release_by_tag(self.cfg.tag)
@@ -130,7 +136,9 @@ class PromptsLoader:
             expected = self._parse_sha256(sha_txt)
             actual = sha256(content).hexdigest()
             if expected and expected.lower() != actual.lower():
-                raise PromptsLoadError(f"sha256 mismatch: expected {expected}, got {actual}")
+                raise PromptsLoadError(
+                    f"sha256 mismatch: expected {expected}, got {actual}"
+                )
 
         # schema validation
         data = yaml.safe_load(content)
@@ -146,7 +154,7 @@ class PromptsLoader:
 
     def _get_release_by_tag(self, tag: str) -> Dict[str, Any]:
         url = f"https://api.github.com/repos/{self.cfg.owner}/{self.cfg.repo}/releases/tags/{tag}"
-        r = self.session.get(url, timeout=self.cfg.timeout_sec)
+        r = self._ensure_session().get(url, timeout=self.cfg.timeout_sec)
         if r.status_code == 404:
             raise PromptsLoadError(f"release tag not found: {tag!r}")
         r.raise_for_status()
@@ -179,7 +187,7 @@ class PromptsLoader:
         if etag:
             headers["If-None-Match"] = etag
 
-        r = self.session.get(url, headers=headers, timeout=self.cfg.timeout_sec)
+        r = self._ensure_session().get(url, headers=headers, timeout=self.cfg.timeout_sec)
         if r.status_code == 304:
             return (etag, None)
         r.raise_for_status()
@@ -190,7 +198,9 @@ class PromptsLoader:
         url = asset.get("browser_download_url")
         if not url:
             raise PromptsLoadError("sha asset has no download url")
-        r = self.session.get(url, headers={"Accept": "text/plain"}, timeout=self.cfg.timeout_sec)
+        r = self._ensure_session().get(
+            url, headers={"Accept": "text/plain"}, timeout=self.cfg.timeout_sec
+        )
         r.raise_for_status()
         return r.text
 
@@ -231,7 +241,7 @@ class PromptsLoader:
         schema_text = self.schema_path.read_text(encoding="utf-8")
         schema = json.loads(schema_text)
 
-        js = importlib.import_module("jsonschema")
+        js = importlib.import_module("jsonschema")  # type: ignore[no-redef]
         validator_cls: Any = getattr(js, "Draft202012Validator", None)
         if validator_cls is None:
             raise PromptsLoadError("jsonschema.Draft202012Validator not found")
