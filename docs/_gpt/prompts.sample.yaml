@@ -13,7 +13,7 @@ modes:
     guardrails: { pii: true, politics: "cautious" }
     examples:
       - user: "a/an 규칙 설명해줘"
-        assistant: "핵심규칙… (간단 예시)"
+        assistant: "핵심규칙... (간단 예시)"
     citations_policy: "[이유문법]/[문법서적]/[AI지식]"
     routing_hints: { model: "gpt-5-pro", max_tokens: 800, temperature: 0.2 }
 
