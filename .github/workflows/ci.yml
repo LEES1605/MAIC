@@ -5,11 +5,13 @@ on:
   push:
     branches: [ main ]
 
+# 같은 브랜치로 연속 푸시 시 이전 CI 자동 취소
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  # 변경 파일 종류를 분류하여 문서 전용 변경 시 테스트 Job을 건너뛰기
   changes:
     runs-on: ubuntu-latest
     outputs:
@@ -32,6 +34,7 @@ jobs:
               - 'docs/**'
               - '**/*.md'
 
+  # 문서 전용 변경일 때 최소 게이트만 수행 (빠름)
   docs-gate:
     needs: changes
     if: needs.changes.outputs.code != 'true'
@@ -52,6 +55,7 @@ jobs:
           fi
           echo "$hits" | sed -n '1,10p'
 
+  # 코드 변경일 때에만 정식 CI 수행 (병렬 테스트 + 캐시)
   lint-type-test:
     needs: changes
     if: needs.changes.outputs.code == 'true'
@@ -88,7 +92,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-          pip install ruff mypy pytest pytest-xdist pyyaml jsonschema
+          pip install ruff mypy pytest pytest-xdist pyyaml jsonschema requests
 
       - name: Ruff (lint + format)
         run: |

@@ -46,7 +46,7 @@ def _check_mode_ssot() -> None:
         MODE_GRAMMAR,
         MODE_SENTENCE,
         MODE_PASSAGE,
-        canon_mode,
+        canon_mode,  # may be added in later patch; if missing, adjust tests accordingly
     )
 
     # English / Korean / short-hands must converge to canonical labels
@@ -59,9 +59,25 @@ def _check_mode_ssot() -> None:
     assert canon_mode(MODE_PASSAGE) == MODE_PASSAGE
 
 
+def _check_prompts_schema_offline() -> None:
+    """Load prompts from local sample via runtime loader (no network)."""
+    from src.runtime.prompts_loader import load_prompts
+
+    repo_root = Path(__file__).resolve().parents[1]
+    sample = repo_root / "docs" / "_gpt" / "prompts.sample.yaml"
+    data = load_prompts(
+        owner="dummy",  # not used in offline mode
+        repo="dummy",
+        local_path=sample,  # force offline
+    )
+    assert isinstance(data, dict), "prompts must be a dict"
+    assert "version" in data, "prompts must contain version"
+
+
 CHECKS: dict[str, Callable[[], None]] = {
     "label-ssot": _check_label_ssot,
     "mode-ssot": _check_mode_ssot,
+    "prompts-schema-offline": _check_prompts_schema_offline,
 }
 
 
