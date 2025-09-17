@@ -1,0 +1,12 @@
+name: "MAIC CodeQL — Weekly (full)"
+paths:
+  - src
+  - scripts
+paths-ignore:
+  - .github
+  - .venv
+  - venv
+  - "**/*.md"
+queries:
+  # 주기 스캔에서 품질까지 포함해 심층 점검
+  - uses: security-and-quality

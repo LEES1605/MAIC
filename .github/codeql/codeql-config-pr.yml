@@ -1,0 +1,14 @@
+name: "MAIC CodeQL — PR (light)"
+paths:
+  - src
+  - scripts
+paths-ignore:
+  - tests
+  - docs
+  - .github
+  - .venv
+  - venv
+  - "**/*.md"
+queries:
+  # PR에서는 'security-extended' 사용: 기본 보안 쿼리 + 확장 보안 쿼리(품질 제외)로 상대적으로 가벼움
+  - uses: security-extended
