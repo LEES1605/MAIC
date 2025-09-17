@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 try:
-    import yaml  # type: ignore
+    import yaml
 except Exception as exc:  # noqa: BLE001
     print("[prompts] PyYAML not installed. run: pip install pyyaml", file=sys.stderr)
     raise
