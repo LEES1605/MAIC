@@ -2,6 +2,12 @@
 
 본 문서는 최근 관측된 증상(복원 검증 실패, 자동 업로드 미반영, RAG 미활용, 테스트 중복)을 한 번에 진단하고, 단기/중기 우선순위 패치 계획을 제시합니다.  
 본 보고서는 SSOT 원칙에 따라 다음 경로를 기준으로 보관됩니다: `docs/_gpt/_reports/`.
+> **SESSION HANDOFF**
+> - 기준 문서: `docs/_gpt/_reports/AUDIT_INDEX_RAG_2025-09-17.md`
+> - 오늘의 목표: 부록 B 패치 1) `.ready='ready'` 통일 적용
+> - 브랜치 네이밍: `fix/ready-standard-and-verify`
+> - PR 제목 규약: `fix: unify .ready='ready' + verify accepts ok (temporary)`
+> - 다음 단계: RAG 컨텍스트 주입 패치
 
 ---
 
