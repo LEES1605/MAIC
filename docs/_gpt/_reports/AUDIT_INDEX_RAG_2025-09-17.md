@@ -159,23 +159,24 @@
 
 #### 2) 시스템 다이어그램 (Flow)
 
-```mermaid
 flowchart LR
-    A[Admin UI\n붙여넣기+미리보기+테스트] --> B[Normalizer\n스키마화+린트+서명]
-    B --> C1[(Drive: prepared/prompts.yaml)]
-    B --> C2[(GitHub Releases\nprompts-vYYYYMMDD-###,\nprompts-latest)]
-    C1 --> D[Runtime Loader\nETag/sha256, 캐시, 롤백]
-    C2 --> D
-    D --> E[Mode Router\n문법/문장/지문]
-    E --> F[Prompt Composer\n페르소나+가드레일+톤\n+ RAG 컨텍스트]
-    F --> G[(LLM Providers)]
-    G --> H[Answer+Labels\n[이유문법|문법서적|AI지식]]
-    subgraph RAG
-      I[Indexer\n청킹/중복제거] --> J[(chunks.jsonl + .ready)]
-      K[Searcher\nTF-IDF/임베딩] --> F
-    end
-    I --- D
-    J --- D
+  A[Admin UI<br/>붙여넣기/미리보기/테스트] --> B[Normalizer<br/>스키마화/린트/서명]
+  B --> C1[(Drive: prepared/prompts.yaml)]
+  B --> C2[(GitHub Releases<br/>prompts-vYYYYMMDD-###,<br/>prompts-latest)]
+  C1 --> D[Runtime Loader<br/>ETag/sha256, 캐시, 롤백]
+  C2 --> D
+  D --> E[Mode Router<br/>문법/문장/지문]
+  E --> F[Prompt Composer<br/>페르소나/가드레일/톤 + RAG 컨텍스트]
+  F --> G[(LLM Providers)]
+  G --> H[Answer + Labels<br/>이유문법/문법서적/AI지식]
+
+  subgraph RAG
+    I[Indexing<br/>청킹/중복제거] --> J[(chunks.jsonl + .ready)]
+    K[Searcher<br/>TF-IDF/임베딩] --> F
+  end
+
+  I --- D
+  J --- D
 
 [Admin UI] -> [Normalizer] -> [Drive HEAD / Releases]
                      |               |
