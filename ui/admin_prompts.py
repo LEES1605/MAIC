@@ -33,11 +33,13 @@ import yaml
 
 # ----------------------------- Utilities -----------------------------
 
+ELLIPSIS_UC = "\u2026"  # Unicode ellipsis. Keep source free of the actual character.
+
 
 def _sanitize_ellipsis(text: str) -> Tuple[str, int]:
     """Replace Unicode ellipsis U+2026(...) with ASCII '...' to pass our CI gate."""
-    count = text.count("…")
-    return (text.replace("…", "..."), count)
+    count = text.count(ELLIPSIS_UC)
+    return (text.replace(ELLIPSIS_UC, "..."), count)
 
 
 def _load_schema() -> Dict[str, Any]:
