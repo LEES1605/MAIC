@@ -539,7 +539,7 @@ def _render_admin_index_panel() -> None:
     if "_IDX_PH_S6" not in st.session_state:
         st.session_state["_IDX_PH_S6"] = st.empty()
 
-    step_names: List[Dict[str, str]] | List[str] = ["스캔", "Persist확정", "인덱싱", "prepared소비", "요약/배지", "ZIP/Release"]
+    step_names: List[str] = ["스캔", "Persist확정", "인덱싱", "prepared소비", "요약/배지", "ZIP/Release"]
     stall_threshold_sec = 60
 
     def _step_reset(names: List[str]) -> None:
@@ -553,7 +553,7 @@ def _render_admin_index_panel() -> None:
 
     def _steps() -> List[Dict[str, str]]:
         if "_IDX_STEPS" not in st.session_state:
-            _step_reset(["스캔", "Persist확정", "인덱싱", "prepared소비", "요약/배지", "ZIP/Release"])
+            _step_reset(step_names)
         return list(st.session_state["_IDX_STEPS"])
 
     def _icon(state: str) -> str:
@@ -653,13 +653,13 @@ def _render_admin_index_panel() -> None:
         auto_up = c3.toggle(
             "인덱싱 후 자동 ZIP 업로드",
             key="IDX_AUTO_UP",
-            value=True,  # ← 기본값 ON으로 변경
+            value=True,  # ← 기본값 ON
             help="GH/GITHUB 시크릿이 모두 있으면 켜짐",
         )
         reset_view = c4.form_submit_button("🧹 화면 초기화")
 
         if reset_view:
-            _step_reset(["스캔", "Persist확정", "인덱싱", "prepared소비", "요약/배지", "ZIP/Release"])
+            _step_reset(step_names)
             st.session_state["_IDX_BAR"] = None
             st.session_state["_IDX_PH_BAR"].empty()
             st.session_state["_IDX_PH_LOG"].empty()
@@ -677,7 +677,7 @@ def _render_admin_index_panel() -> None:
     req = st.session_state.pop("_IDX_REQ", None)
     if req:
         used_persist = _persist_dir_safe()
-        _step_reset(["스캔", "Persist확정", "인덱싱", "prepared소비", "요약/배지", "ZIP/Release"])
+        _step_reset(step_names)
         _render_stepper()
         _render_status()
         st.session_state["_IDX_PH_BAR"].empty()
@@ -707,7 +707,7 @@ def _render_admin_index_panel() -> None:
                     pass
             if cj.exists() and cj.stat().st_size > 0:
                 try:
-                    (used_persist / ".ready").write_text("ready", encoding="utf-8")
+                    (used_persist / ".ready").write_text("ready", encoding="utf-8")  # ← 'ready'로 통일
                 except Exception:
                     pass
                 _stamp_persist(used_persist)
@@ -832,8 +832,8 @@ def _render_admin_index_panel() -> None:
                     with zipfile.ZipFile(z, "w", zipfile.ZIP_DEFLATED) as zf:
                         for root, _d, _f in os.walk(str(used_persist)):
                             for fn in _f:
-                                p = Path(root) / fn
-                                zf.write(str(p), arcname=str(p.relative_to(used_persist)))
+                                pth = Path(root) / fn
+                                zf.write(str(pth), arcname=str(pth.relative_to(used_persist)))
 
                     tag = f"index-{int(time.time())}"
                     res = _upload_release_zip(ow, rp, tok, tag, z, name=tag, body="MAIC index")
@@ -879,8 +879,6 @@ def _render_admin_index_panel() -> None:
         else:
             st.caption("표시할 로그가 없습니다.")
 # ================================= [13] admin index — END =============================
-
-
 
 # =============================== [14] admin legacy — START ============================
 def _render_admin_panels() -> None:
