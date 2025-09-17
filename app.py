@@ -332,11 +332,11 @@ def _boot_auto_restore_index() -> None:
             except StopIteration:
                 pass
 
-        # ✅ 표준화: 항상 .ready = "ready"
         try:
             core_mark_ready(p)
         except Exception:
             try:
+                # 통일: .ready 파일 내용은 "ready"
                 (p / ".ready").write_text("ready", encoding="utf-8")
             except Exception:
                 pass
@@ -441,7 +441,6 @@ def _render_index_orchestrator_header() -> None:
         st.caption("Persist Dir")
         st.code(str(persist), language="text")
 
-    # 상태 뱃지
     status_text = "MISSING"
     try:
         from src.rag.index_status import get_index_summary
@@ -449,59 +448,64 @@ def _render_index_orchestrator_header() -> None:
         status_text = "READY" if getattr(s, "ready", False) else "MISSING"
     except Exception:
         status_text = "MISSING"
+
     badge = "🟩 READY" if status_text == "READY" else "🟨 MISSING"
     st.markdown(f"**상태**\n\n{badge}")
 
-    # 액션들
-    cols = st.columns([1, 1, 2]) if _is_admin_view() else [None, None, None]
+    # 헤더 배지(준비중/READY)와 동기화
+    try:
+        if status_text == "READY":
+            _set_brain_status("READY", "인덱스 사용 가능", "index", attached=True)
+        else:
+            _set_brain_status("MISSING", "인덱스 없음", "index", attached=False)
+    except Exception:
+        pass
+
     if _is_admin_view():
-        act_restore = cols[0].button("⬇️ Release에서 최신 인덱스 복원", use_container_width=True)
-        act_verify = cols[1].button("✅ 복원 결과 검증", use_container_width=True)
-        if act_restore:
+        cols = st.columns([1, 1, 2])
+        if cols[0].button("⬇️ Release에서 최신 인덱스 복원", use_container_width=True):
             try:
                 _boot_auto_restore_index()
-                st.success("Release 복원을 시도했습니다. 아래 '최근 복원 결과'와 상태를 확인하세요.")
+                st.success("Release 복원을 시도했습니다. 상태를 확인하세요.")
             except Exception as e:
                 st.error(f"복원 실행 실패: {e}")
-        if act_verify:
-            # 파일시스템 READY 즉시 검증
-            cj = persist / "chunks.jsonl"
-            rdy = persist / ".ready"
-            txt = ""
-            try:
-                txt = rdy.read_text(encoding="utf-8").strip().lower()
-            except Exception:
-                txt = ""
-            if cj.exists() and cj.stat().st_size > 0 and txt == "ready":
-                st.success("검증 성공: chunks.jsonl 존재 & .ready='ready'")
-            else:
-                st.error("검증 실패: 산출물/ready 상태가 불일치합니다.")
 
-    # 최근 복원 결과 표시
-    with st.expander("최근 복원 결과(Release)", expanded=False):
-        info = {}
-        try:
-            info = json.loads((persist / "restore_status.json").read_text(encoding="utf-8"))
-        except Exception:
-            info = {}
-        if info:
-            ok = bool(info.get("ok"))
-            mark = "🟢 성공" if ok else "🔴 실패"
-            tag = info.get("tag") or "-"
-            asset = info.get("asset") or "-"
-            when = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(int(info.get("ts", 0) or 0)))
-            st.write(
-                {
-                    "결과": mark,
-                    "사유": info.get("why", ""),
-                    "tag": tag,
-                    "asset": asset,
-                    "시각": when,
-                    "persist": info.get("persist", str(persist)),
+        if cols[1].button("✅ 복원 결과 검증", use_container_width=True):
+            try:
+                cj = persist / "chunks.jsonl"
+                rf = persist / ".ready"
+                ready_txt = ""
+                if rf.exists():
+                    try:
+                        ready_txt = rf.read_text(encoding="utf-8").strip().lower()
+                    except Exception:
+                        ready_txt = ""
+
+                ok = cj.exists() and cj.stat().st_size > 0 and (ready_txt == "ready")
+                rec = {
+                    "result": "성공" if ok else "실패",
+                    "chunk": str(cj),
+                    "ready": ready_txt or "(없음)",
+                    "persist": str(persist),
+                    "ts": int(time.time()),
                 }
-            )
-        else:
-            st.caption("복원 기록이 없습니다. 위의 복원 버튼을 눌러 시도해 보세요.")
+                st.session_state["_LAST_RESTORE_CHECK"] = rec
+
+                if ok:
+                    _set_brain_status("READY", "복원 완료", "release", attached=True)
+                    st.success("검증 성공: chunks.jsonl 존재 & .ready='ready'")
+                else:
+                    _set_brain_status("MISSING", "산출물/ready 불일치", "release", attached=False)
+                    st.error("검증 실패: 산출물/ready 상태가 불일치합니다.")
+            except Exception as e:
+                st.error(f"검증 실행 실패: {e}")
+
+        with st.expander("최근 복원 결과(Release)", expanded=False):
+            rec = st.session_state.get("_LAST_RESTORE_CHECK")
+            if rec:
+                st.json(rec)
+            else:
+                st.caption("복원 기록이 없습니다. 위의 복원 버튼 또는 검증 버튼을 사용해 보세요.")
 
     st.info(
         "강제 인덱싱(HQ, 느림)·백업과 인덱싱 파일 미리보기는 **관리자 인덱싱 패널**에서 합니다. "
@@ -649,7 +653,7 @@ def _render_admin_index_panel() -> None:
         auto_up = c3.toggle(
             "인덱싱 후 자동 ZIP 업로드",
             key="IDX_AUTO_UP",
-            value=False,
+            value=True,  # ← 기본값 ON
             help="GH/GITHUB 시크릿이 모두 있으면 켜짐",
         )
         reset_view = c4.form_submit_button("🧹 화면 초기화")
@@ -692,7 +696,6 @@ def _render_admin_index_panel() -> None:
             _step_set(2, "ok", "완료")
             _log("인덱싱 완료")
 
-            # ✅ 결과물 확인 및 READY 표준화
             cj = used_persist / "chunks.jsonl"
             if not (cj.exists() and cj.stat().st_size > 0):
                 try:
@@ -704,7 +707,7 @@ def _render_admin_index_panel() -> None:
                     pass
             if cj.exists() and cj.stat().st_size > 0:
                 try:
-                    (used_persist / ".ready").write_text("ready", encoding="utf-8")
+                    (used_persist / ".ready").write_text("ready", encoding="utf-8")  # ← 'ready'로 통일
                 except Exception:
                     pass
                 _stamp_persist(used_persist)
@@ -876,7 +879,6 @@ def _render_admin_index_panel() -> None:
         else:
             st.caption("표시할 로그가 없습니다.")
 # ================================= [13] admin index — END =============================
-
 
 # =============================== [14] admin legacy — START ============================
 def _render_admin_panels() -> None:
