@@ -35,7 +35,7 @@ import yaml
 
 
 def _sanitize_ellipsis(text: str) -> Tuple[str, int]:
-    """Replace Unicode ellipsis U+2026(…) with ASCII '...' to pass our CI gate."""
+    """Replace Unicode ellipsis U+2026(...) with ASCII '...' to pass our CI gate."""
     count = text.count("…")
     return (text.replace("…", "..."), count)
 
@@ -91,7 +91,7 @@ def _gh_dispatch_workflow(
     """Trigger GitHub Actions workflow_dispatch with inline YAML (base64)."""
     sanitized, replaced = _sanitize_ellipsis(yaml_text)
     if replaced:
-        st.info(f"U+2026(…) {replaced}개를 '...'로 치환했습니다.")
+        st.info(f"U+2026(...) {replaced}개를 '...'로 치환했습니다.")
 
     yaml_b64 = base64.b64encode(sanitized.encode("utf-8")).decode("ascii")
     url = f"https://api.github.com/repos/{owner}/{repo}/actions/workflows/{workflow}/dispatches"
@@ -117,7 +117,7 @@ def _default_yaml() -> str:
     candidate = Path("docs/_gpt/prompts.sample.yaml")
     if candidate.exists():
         return candidate.read_text(encoding="utf-8")
-    # Minimal fallback (schema‑conform)
+    # Minimal fallback (schema-conform)
     return """version: "1970-01-01T00:00:00Z#000"
 modes:
   grammar:
