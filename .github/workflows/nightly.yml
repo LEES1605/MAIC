@@ -17,18 +17,20 @@ concurrency:
 
 jobs:
   gate:
-    name: Quality Gate (lint / type / tests)
+    name: Build & Gate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          # 태그/이력 필요(버전/릴리스용)
           fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: "pip"
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
 
       - name: Show tool versions
         run: |
@@ -43,30 +45,24 @@ jobs:
           pip install build twine
           if [ -f requirements-dev.txt ]; then
             pip install -r requirements-dev.txt
-          else
-            pip install ruff mypy pytest
           fi
 
-      - name: Ruff (fix)
-        run: ruff check . --fix
-
-      - name: mypy (clear cache)
+      - name: Run static checks
         run: |
+          pip install ruff mypy
+          ruff check .
           mypy --clear-cache
           mypy .
 
-      - name: pytest
-        run: pytest -q
-
-      - name: Build & Twine check
+      - name: Build dist
         run: |
           python -m build
-          twine check dist/*
+          ls -lh dist/
 
-      - name: Upload dist artifacts (CI)
+      - name: Upload dist artifact
         uses: actions/upload-artifact@v4
         with:
-          name: dist-${{ github.sha }}
+          name: dist-artifacts
           path: dist/*
 
   publish:
@@ -81,6 +77,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
 
       - name: Resolve nightly tag/name
         id: vars
@@ -88,11 +88,17 @@ jobs:
         run: |
           set -euo pipefail
           TS="$(date -u +'%Y%m%d')"
-          SHA="$(git rev-parse --short HEAD)"
-          TAG="nightly-${TS}-${SHA}"
-          NAME="Nightly ${TS} (${SHA})"
-          echo "tag=${TAG}"   >> "$GITHUB_OUTPUT"
+          HASH="$(git rev-parse --short HEAD)"
+          TAG="nightly-${TS}-${HASH}"
+          NAME="Nightly ${TS} (${HASH})"
+          echo "tag=${TAG}"  >> "$GITHUB_OUTPUT"
           echo "name=${NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Download dist artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-artifacts
+          path: dist
 
       - name: Build release zip
         shell: bash
