@@ -5,8 +5,59 @@ on:
   push:
     branches: [ main ]
 
+# 같은 브랜치로 연속 푸시 시 이전 CI 자동 취소
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  # 변경 파일 종류를 분류하여 문서 전용 변경 시 테스트 Job을 건너뛰기
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+      docs: ${{ steps.filter.outputs.docs }}
+    steps:
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          filters: |
+            code:
+              - 'src/**'
+              - 'scripts/**'
+              - 'tests/**'
+              - 'pyproject.toml'
+              - 'requirements*.txt'
+            docs:
+              - 'docs/**'
+              - '**/*.md'
+
+  # 문서 전용 변경일 때 최소 게이트만 수행 (빠름)
+  docs-gate:
+    needs: changes
+    if: needs.changes.outputs.code != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: No‑Ellipsis Gate
+        run: python3 scripts/no_ellipsis_gate.py --root .
+
+      - name: Pointer check (workspace pointers must exist)
+        run: |
+          set -e
+          hits=$(grep -R "Source-of-Truth:" -n || true)
+          if [ -z "$hits" ]; then
+            echo "[pointer] Source-of-Truth 라인을 찾지 못했습니다."
+            exit 2
+          fi
+          echo "$hits" | sed -n '1,10p'
+
+  # 코드 변경일 때에만 정식 CI 수행 (병렬 테스트 + 캐시)
   lint-type-test:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -15,18 +66,34 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: "pip"
+          cache: 'pip'
           cache-dependency-path: |
             requirements.txt
             pyproject.toml
+
+      - name: Cache ruff
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ruff
+          key: ruff-${{ runner.os }}-py311-${{ hashFiles('**/*.py', 'pyproject.toml', 'requirements*.txt') }}
+          restore-keys: |
+            ruff-${{ runner.os }}-py311-
+
+      - name: Cache mypy
+        uses: actions/cache@v4
+        with:
+          path: .mypy_cache
+          key: mypy-${{ runner.os }}-py311-${{ hashFiles('**/*.py', 'pyproject.toml', 'requirements*.txt') }}
+          restore-keys: |
+            mypy-${{ runner.os }}-py311-
 
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt || true
-          pip install ruff mypy pytest
+          pip install ruff mypy pytest pytest-xdist
 
-      - name: Ruff (lint + fix import order)
+      - name: Ruff (lint + format)
         run: |
           ruff check --fix .
           ruff format .
@@ -34,8 +101,8 @@ jobs:
       - name: Mypy (type check)
         run: mypy .
 
-      - name: Pytest
-        run: pytest -q
+      - name: Pytest (fast group, parallel)
+        run: pytest -n auto -m "not slow" -q
 
       - name: No‑Ellipsis Gate
         run: python scripts/no_ellipsis_gate.py --root .
