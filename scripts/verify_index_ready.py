@@ -9,37 +9,38 @@ ASCII_READY = "ready"
 # ============================= [01] imports & cfg — END =============================
 
 # ============================ [02] helpers — START ==================================
-def _effective_persist_dir(cli_dir: Optional[str]) -> Path:
+def _check_ready(persist: Path) -> tuple[bool, str]:
     """
-    SSOT 우선: src.core.persist.effective_persist_dir()
-    실패 시: CLI 인자 → ~/.maic/persist 순으로 폴백.
+    준비 상태 판단:
+      - chunks.jsonl 존재 & 크기 > 0
+      - .ready 파일의 내용이 ASCII "ready"
     """
-    if cli_dir:
-        return Path(cli_dir).expanduser().resolve()
     try:
-        from src.core.persist import effective_persist_dir  # 표준 진입점
-        p = effective_persist_dir()
-        return p if isinstance(p, Path) else Path(str(p)).expanduser().resolve()
-    except Exception:
-        pass
-    return (Path.home() / ".maic" / "persist").resolve()
+        cj = persist / "chunks.jsonl"
+        r = persist / ".ready"
 
+        has_chunks = cj.exists() and cj.stat().st_size > 0
+        ready_text = ""
+        if r.exists():
+            try:
+                ready_text = r.read_text(encoding="utf-8").strip().lower()
+            except Exception:
+                ready_text = ""
 
-def _check_ready(persist: Path) -> Tuple[bool, str]:
-    """chunks.jsonl 유무와 .ready 내용('ready') 일치 여부를 검증."""
-    cj = persist / "chunks.jsonl"
-    rd = persist / ".ready"
-    if not cj.exists() or cj.stat().st_size <= 0:
-        return False, "MISSING: chunks.jsonl"
-    try:
-        txt = rd.read_text(encoding="utf-8").strip().lower()
-    except Exception:
-        txt = ""
-    if txt != ASCII_READY:
-        return False, f"UNMATCHED: .ready='{txt or '(missing)'}' expected='{ASCII_READY}'"
-    return True, "OK: chunks.jsonl exists and .ready='ready'"
+        ok = has_chunks and (ready_text == ASCII_READY)
+        if ok:
+            return True, f"READY · chunks={cj.stat().st_size} bytes"
+        reasons = []
+        if not cj.exists():
+            reasons.append("no chunks.jsonl")
+        elif cj.stat().st_size <= 0:
+            reasons.append("chunks.jsonl empty")
+        if ready_text != ASCII_READY:
+            reasons.append(f".ready='{ready_text or ''}'")
+        return False, " / ".join(reasons) if reasons else "unknown"
+    except Exception as e:
+        return False, f"error: {e}"
 # ============================= [02] helpers — END ===================================
-
 
 # ============================ [03] main — START =====================================
 def main(argv: list[str] | None = None) -> int:
