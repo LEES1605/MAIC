@@ -1,5 +1,5 @@
-# ===== [00] META =============================================================  # [00] START
 name: Release
+
 on:
   push:
     tags:
@@ -9,10 +9,13 @@ on:
       version:
         description: "Release version (e.g., v1.2.3)"
         required: true
+
 permissions:
   contents: write
+
 concurrency:
   group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -25,7 +28,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-python@v5
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: "pip"
@@ -33,42 +37,58 @@ jobs:
             requirements.txt
             pyproject.toml
 
+      - name: Resolve version tag
+        id: ver
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          set -euo pipefail
+          TAG="${INPUT_VERSION:-}"
+          if [ -z "$TAG" ]; then
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          if [ -z "$TAG" ]; then
+            echo "ERROR: Cannot resolve release tag." >&2
+            exit 1
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Resolved tag: ${TAG}"
+
       - name: Show tool versions
         run: |
           python -V
           pip -V
           git rev-parse --short HEAD
 
-      - name: Resolve version
-        id: ver
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ -n "${{ github.event.inputs.version }}" ]; then
-            TAG="${{ github.event.inputs.version }}"
-          else
-            TAG="${GITHUB_REF_NAME}"
-          fi
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-
       - name: Install build deps
         run: |
           python -m pip install --upgrade pip
           pip install build twine
+          if [ -f requirements-dev.txt ]; then
+            pip install -r requirements-dev.txt
+          fi
 
-      - name: Build dist
+      - name: Build distributions
         run: |
+          set -euo pipefail
           python -m build
           ls -lh dist/
 
-      - name: Upload dist artifact
+      - name: Generate checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd dist && sha256sum * > SHA256SUMS.txt)
+          cat dist/SHA256SUMS.txt
+
+      - name: Upload dist artifacts
         uses: actions/upload-artifact@v4
         with:
           name: dist-artifacts
           path: dist/*
-# [00] END
+          if-no-files-found: error
 
-# [02] START
   publish:
     name: Publish GitHub Release
     needs: [build]
@@ -80,16 +100,14 @@ jobs:
           name: dist-artifacts
           path: dist
 
-      - name: Publish GitHub Release
+      - name: Publish Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.ver.outputs.tag }}
-          name: Release ${{ steps.ver.outputs.tag }}
+          tag_name: ${{ needs.build.outputs.tag }}
+          name: Release ${{ needs.build.outputs.tag }}
           prerelease: false
           generate_release_notes: true
           files: |
-            dist/maic-${{ steps.ver.outputs.tag }}.zip
-            dist/maic-${{ steps.ver.outputs.tag }}.zip.sha256
+            dist/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-# [02] END
