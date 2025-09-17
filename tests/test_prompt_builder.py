@@ -8,7 +8,12 @@ from src.runtime.prompts_loader import load_prompts
 
 def _load_sample():
     root = Path(__file__).resolve().parents[1]
-    return load_prompts(owner="dummy", repo="dummy", local_path=root / "docs" / "_gpt" / "prompts.sample.yaml")
+    sample_path = root / "docs" / "_gpt" / "prompts.sample.yaml"
+    return load_prompts(
+        owner="dummy",
+        repo="dummy",
+        local_path=sample_path,
+    )
 
 
 def test_build_for_grammar_contains_persona_and_citations() -> None:
