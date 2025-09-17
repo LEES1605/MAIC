@@ -222,7 +222,12 @@ def main() -> None:
 
     with tab_yaml:
         st.subheader("YAML 직접 편집")
-        yaml_text = st.text_area("Prompts YAML", value=_default_yaml(), height=420, placeholder="여기에 YAML을 붙여넣으세요.")
+        yaml_text = st.text_area(
+            "Prompts YAML",
+            value=_default_yaml(),
+            height=420,
+            placeholder="여기에 YAML을 붙여넣으세요.",
+        )
         col1, col2 = st.columns(2)
         with col1:
             if st.button("🔎 스키마 검증", use_container_width=True):
@@ -252,7 +257,8 @@ def main() -> None:
                         )
                         st.success("출판 요청 전송 완료 — Actions에서 처리 중입니다.")
                         st.markdown(
-                            f"[열기: Actions › {workflow}](https://github.com/{owner}/{repo}/actions/workflows/{workflow})"
+                            f"[열기: Actions › {workflow}]"
+                            f"(https://github.com/{owner}/{repo}/actions/workflows/{workflow})"
                         )
                     except Exception as e:  # noqa: BLE001
                         st.exception(e)
@@ -326,7 +332,8 @@ def main() -> None:
                         )
                         st.success("출판 요청 전송 완료 — Actions에서 처리 중입니다.")
                         st.markdown(
-                            f"[열기: Actions › {workflow}](https://github.com/{owner}/{repo}/actions/workflows/{workflow})"
+                            f"[열기: Actions › {workflow}]"
+                            f"(https://github.com/{owner}/{repo}/actions/workflows/{workflow})"
                         )
                     except Exception as e:  # noqa: BLE001
                         st.exception(e)
