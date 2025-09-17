@@ -1,0 +1,121 @@
+name: Publish Prompts
+
+on:
+  workflow_dispatch:
+    inputs:
+      path:
+        description: "Prompts YAML path (default: prompts.yaml → fallback: docs/_gpt/prompts.sample.yaml)"
+        required: false
+        type: string
+      prerelease:
+        description: "Mark release as prerelease"
+        required: false
+        default: false
+        type: boolean
+      promote_latest:
+        description: "Also update 'prompts-latest' tag/release"
+        required: false
+        default: true
+        type: boolean
+  push:
+    paths:
+      - "prompts.yaml"
+      - "docs/_gpt/prompts*.yaml"
+  repository_dispatch:
+    types: [publish-prompts]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-prompts-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve prompts path
+        id: path
+        shell: bash
+        run: |
+          set -euo pipefail
+          IN="${{ inputs.path || '' }}"
+          if [ -n "$IN" ] && [ -f "$IN" ]; then
+            echo "file=$IN" >> "$GITHUB_OUTPUT"
+          elif [ -f "prompts.yaml" ]; then
+            echo "file=prompts.yaml" >> "$GITHUB_OUTPUT"
+          elif [ -f "docs/_gpt/prompts.sample.yaml" ]; then
+            echo "file=docs/_gpt/prompts.sample.yaml" >> "$GITHUB_OUTPUT"
+          else
+            echo "No prompts file found." >&2
+            exit 2
+          fi
+          echo "Using: $(cat $GITHUB_OUTPUT)"
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
+
+      - name: Install tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyyaml jsonschema
+
+      - name: Validate prompts (schema)
+        run: |
+          python scripts/validate_prompts.py "${{ steps.path.outputs.file }}"
+
+      - name: Build prompts bundle
+        run: |
+          python scripts/build_prompts_bundle.py --in "${{ steps.path.outputs.file }}" --out dist-prompts
+          ls -lh dist-prompts/
+
+      - name: Resolve tag/name
+        id: tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          TS="$(date -u +'%Y%m%d%H%M%S')"
+          HASH="$(git rev-parse --short HEAD)"
+          TAG="prompts-${TS}-${HASH}"
+          NAME="Prompts ${TS} (${HASH})"
+          echo "tag=${TAG}"  >> "$GITHUB_OUTPUT"
+          echo "name=${NAME}" >> "$GITHUB_OUTPUT"
+          echo "Tag: $TAG"
+
+      - name: Publish immutable release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name:     ${{ steps.tag.outputs.name }}
+          prerelease: ${{ inputs.prerelease }}
+          generate_release_notes: true
+          files: |
+            dist-prompts/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Promote 'prompts-latest'
+        if: inputs.promote_latest == true
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: prompts-latest
+          name: Prompts Latest
+          make_latest: true
+          prerelease: false
+          generate_release_notes: false
+          files: |
+            dist-prompts/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
