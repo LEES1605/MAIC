@@ -26,9 +26,10 @@ import json
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
-import requests
-import streamlit as st
-import yaml
+# mypy: 외부 라이브러리 타입 스텁 이슈를 피하기 위해 동적 임포트 사용
+st: Any = importlib.import_module("streamlit")
+req: Any = importlib.import_module("requests")
+import yaml  # pyyaml은 보통 타입 스텁 없이 사용해도 무방
 
 
 # ----------------------------- Utilities -----------------------------
@@ -96,7 +97,10 @@ def _gh_dispatch_workflow(
         st.info(f"U+2026(...) {replaced}개를 '...'로 치환했습니다.")
 
     yaml_b64 = base64.b64encode(sanitized.encode("utf-8")).decode("ascii")
-    url = f"https://api.github.com/repos/{owner}/{repo}/actions/workflows/{workflow}/dispatches"
+    url = (
+        f"https://api.github.com/repos/{owner}/{repo}"
+        f"/actions/workflows/{workflow}/dispatches"
+    )
     payload = {
         "ref": ref,
         "inputs": {
@@ -109,7 +113,7 @@ def _gh_dispatch_workflow(
     if token:
         headers["Authorization"] = f"Bearer {token}"
 
-    r = requests.post(url, headers=headers, json=payload, timeout=20)
+    r = req.post(url, headers=headers, json=payload, timeout=20)
     if r.status_code not in (201, 204):
         raise RuntimeError(f"workflow_dispatch failed: HTTP {r.status_code} — {r.text}")
 
