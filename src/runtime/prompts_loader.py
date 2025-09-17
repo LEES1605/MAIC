@@ -72,7 +72,12 @@ class PromptsLoader:
 
     # ------------------------------- public API -------------------------------
 
-    def load(self, *, local_path: Optional[Path] = None, force_refresh: bool = False) -> Dict[str, Any]:
+    def load(
+        self,
+        *,
+        local_path: Optional[Path] = None,
+        force_refresh: bool = False,
+    ) -> Dict[str, Any]:
         """
         Load prompts from Releases (or local_path for offline).
 
@@ -150,7 +155,12 @@ class PromptsLoader:
                 return a
         return None
 
-    def _download_asset(self, asset: dict, *, etag: Optional[str]) -> tuple[Optional[str], Optional[bytes]]:
+    def _download_asset(
+        self,
+        asset: dict,
+        *,
+        etag: Optional[str],
+    ) -> tuple[Optional[str], Optional[bytes]]:
         """
         Return (etag, content). content=None when 304 Not Modified.
         """
@@ -242,17 +252,21 @@ def load_prompts(
       MAIC_PROMPTS_TAG / MAIC_PROMPTS_ASSET
       MAIC_PROMPTS_CACHE_DIR / MAIC_PROMPTS_LOCAL_PATH
     """
+    default_cache_dir = str(LoaderConfig.cache_dir)
+    env_cache_dir = os.getenv("MAIC_PROMPTS_CACHE_DIR", default_cache_dir)
+
     cfg = LoaderConfig(
         owner=owner or os.getenv("MAIC_GH_OWNER", ""),
         repo=repo or os.getenv("MAIC_GH_REPO", ""),
         tag=os.getenv("MAIC_PROMPTS_TAG", tag),
         asset_name=os.getenv("MAIC_PROMPTS_ASSET", asset_name),
         token=token or os.getenv("MAIC_GH_TOKEN") or None,
-        cache_dir=cache_dir or Path(os.getenv("MAIC_PROMPTS_CACHE_DIR", str(LoaderConfig.cache_dir))),
+        cache_dir=cache_dir or Path(env_cache_dir),
     )
     if not cfg.owner or not cfg.repo:
         raise PromptsLoadError("missing owner/repo (set params or MAIC_GH_OWNER/MAIC_GH_REPO)")
 
     loader = PromptsLoader(cfg)
-    lp = local_path or (Path(os.getenv("MAIC_PROMPTS_LOCAL_PATH")) if os.getenv("MAIC_PROMPTS_LOCAL_PATH") else None)
+    env_local = os.getenv("MAIC_PROMPTS_LOCAL_PATH")
+    lp = local_path or (Path(env_local) if env_local else None)
     return loader.load(local_path=lp, force_refresh=force_refresh)
