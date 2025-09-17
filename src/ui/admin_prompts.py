@@ -26,10 +26,11 @@ import json
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
+import yaml  # <- ruff E402 방지: 표준 임포트는 파일 상단에 위치
+
 # mypy: 외부 라이브러리 타입 스텁 이슈를 피하기 위해 동적 임포트 사용
 st: Any = importlib.import_module("streamlit")
 req: Any = importlib.import_module("requests")
-import yaml  # pyyaml은 보통 타입 스텁 없이 사용해도 무방
 
 
 # ----------------------------- Utilities -----------------------------
