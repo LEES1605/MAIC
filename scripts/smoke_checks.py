@@ -24,7 +24,7 @@ def check_label_ssot() -> SmokeResult:
     """
     try:
         # Lazy import to avoid module import cost if unused in future.
-        from src.rag.labels import canon_label  # type: ignore
+        from src.rag.labels import canon_label
 
         assert canon_label("[문법책]") == "[문법서적]"
         assert canon_label("[문법서]") == "[문법서적]"
