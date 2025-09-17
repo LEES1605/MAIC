@@ -1,7 +1,6 @@
-# [P4] START: src/core/modes.py
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Final
 
 
 @dataclass(frozen=True)
@@ -14,6 +13,11 @@ class ModeSpec:
     prompt_rules: List[str]  # 프롬프트 핵심 규칙
     enabled: bool = True     # UI 노출 여부
 
+
+# SSOT — canonical labels (Korean, 외부노출용)
+MODE_GRAMMAR: Final[str] = "문법"
+MODE_SENTENCE: Final[str] = "문장"
+MODE_PASSAGE: Final[str] = "지문"
 
 # 평가 루브릭용(라우팅은 SSOT 우선)
 MODES: Dict[str, ModeSpec] = {
@@ -75,4 +79,49 @@ def find_mode_by_label(label: str) -> Optional[ModeSpec]:
         if m.label == label:
             return m
     return None
-# [P4] END: src/core/modes.py
+
+
+# ---------------- SSOT 정규화 유틸 (내부/외부에서 공통 사용) ----------------
+
+# 약어/영문/한글 섞인 토큰을 표준 라벨로 정규화
+#  - 반환값은 한글 라벨(외부 노출 기준): "문법" / "문장" / "지문"
+_CANON_MAP: Dict[str, str] = {
+    # 문법
+    "문법": MODE_GRAMMAR,
+    "grammar": MODE_GRAMMAR,
+    "gram": MODE_GRAMMAR,
+    "g": MODE_GRAMMAR,
+    # 문장
+    "문장": MODE_SENTENCE,
+    "sentence": MODE_SENTENCE,
+    "sent": MODE_SENTENCE,
+    "s": MODE_SENTENCE,
+    # 지문
+    "지문": MODE_PASSAGE,
+    "passage": MODE_PASSAGE,
+    "reading": MODE_PASSAGE,
+    "read": MODE_PASSAGE,
+    "p": MODE_PASSAGE,
+}
+
+
+def canon_mode(value: str) -> str:
+    """
+    주어진 토큰을 표준 라벨(문법/문장/지문)로 정규화한다.
+
+    Examples
+    --------
+    >>> canon_mode("Grammar")
+    '문법'
+    >>> canon_mode("문장")
+    '문장'
+    >>> canon_mode("reading")
+    '지문'
+    """
+    token = value.strip().lower()
+    if not token:
+        raise ValueError("empty mode token")
+    try:
+        return _CANON_MAP[token]
+    except KeyError as exc:
+        raise ValueError(f"unknown mode token: {value!r}") from exc

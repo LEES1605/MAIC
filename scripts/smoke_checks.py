@@ -41,8 +41,27 @@ def _check_label_ssot() -> None:
     assert canon_label("[문법서적]") == "[문법서적]"
 
 
+def _check_mode_ssot() -> None:
+    from src.core.modes import (
+        MODE_GRAMMAR,
+        MODE_SENTENCE,
+        MODE_PASSAGE,
+        canon_mode,
+    )
+
+    # English / Korean / short-hands must converge to canonical labels
+    assert canon_mode("Grammar") == MODE_GRAMMAR
+    assert canon_mode("문장") == MODE_SENTENCE
+    assert canon_mode("reading") == MODE_PASSAGE
+    # Canonical labels are idempotent
+    assert canon_mode(MODE_GRAMMAR) == MODE_GRAMMAR
+    assert canon_mode(MODE_SENTENCE) == MODE_SENTENCE
+    assert canon_mode(MODE_PASSAGE) == MODE_PASSAGE
+
+
 CHECKS: dict[str, Callable[[], None]] = {
     "label-ssot": _check_label_ssot,
+    "mode-ssot": _check_mode_ssot,
 }
 
 
