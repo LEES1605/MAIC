@@ -11,8 +11,6 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-import yaml
-
 __all__ = ["PromptsLoader", "load_prompts"]
 
 
@@ -67,10 +65,10 @@ class PromptsLoader:
         """
         Releases 또는 local_path에서 prompts를 로드한다.
 
-        Returns parsed YAML (dict). 원격 실패 시 검증된 캐시로 폴백한다.
+        Returns parsed mapping(dict). 원격 실패 시 검증된 캐시로 폴백한다.
         """
         if local_path is not None:
-            data = self._read_yaml(local_path)
+            data = self._read_prompts_file(local_path)
             self._validate_schema(data)
             return data
 
@@ -140,8 +138,9 @@ class PromptsLoader:
                     f"sha256 mismatch: expected {expected}, got {actual}"
                 )
 
-        # schema validation
-        data = yaml.safe_load(content)
+        # parse + schema validation
+        asset_name = str(yaml_asset.get("name") or self.cfg.asset_name)
+        data = self._parse_bytes(content, ext_hint=Path(asset_name).suffix.lower())
         self._validate_schema(data)
 
         # commit
@@ -204,18 +203,54 @@ class PromptsLoader:
         r.raise_for_status()
         return r.text
 
-    # --------------------------------- cache ----------------------------------
+    # --------------------------------- cache/local -----------------------------
 
     def _load_cache(self) -> Optional[Dict[str, Any]]:
         if not self.yaml_path.exists():
             return None
-        data = self._read_yaml(self.yaml_path)
+        data = self._read_prompts_file(self.yaml_path)
         try:
             self._validate_schema(data)
         except Exception as exc:  # noqa: BLE001
             logging.warning("prompts: cached schema validation failed: %r", exc)
             return None
         return data
+
+    def _read_prompts_file(self, path: Path) -> Dict[str, Any]:
+        """
+        로컬 파일을 확장자에 따라 읽는다. (.yaml/.yml 또는 .json)
+        YAML 파서는 필요할 때만 동적 임포트한다.
+        """
+        suffix = path.suffix.lower()
+        text = path.read_text(encoding="utf-8")
+        return self._parse_text(text, ext_hint=suffix)
+
+    # --------------------------------- parsing --------------------------------
+
+    def _parse_bytes(self, content: bytes, *, ext_hint: str) -> Dict[str, Any]:
+        text = content.decode("utf-8")
+        return self._parse_text(text, ext_hint=ext_hint)
+
+    def _parse_text(self, text: str, *, ext_hint: str) -> Dict[str, Any]:
+        ext = ext_hint.lower().lstrip(".")
+        if ext in {"json"}:
+            obj = json.loads(text)
+            if not isinstance(obj, dict):
+                raise PromptsLoadError("JSON prompts must be an object at root")
+            return obj
+
+        # default: YAML
+        try:
+            yaml_mod = importlib.import_module("yaml")  # type: ignore[no-redef]
+        except Exception as exc:  # noqa: BLE001
+            raise PromptsLoadError("PyYAML is required for YAML prompts (pip install pyyaml)") from exc
+
+        obj = yaml_mod.safe_load(text)
+        if not isinstance(obj, dict):
+            raise PromptsLoadError("YAML prompts must be a mapping at root")
+        return obj
+
+    # --------------------------------- utils ----------------------------------
 
     def _read_meta(self) -> Dict[str, Any]:
         if self.meta_path.exists():
@@ -229,12 +264,6 @@ class PromptsLoader:
         tmp = self.meta_path.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
         tmp.replace(self.meta_path)
-
-    # --------------------------------- utils ----------------------------------
-
-    def _read_yaml(self, path: Path) -> Dict[str, Any]:
-        with path.open("r", encoding="utf-8") as f:
-            return yaml.safe_load(f)
 
     def _validate_schema(self, data: Dict[str, Any]) -> None:
         # 런타임 의존성: jsonschema. 타입 스텁은 강제하지 않음(동적 임포트).
