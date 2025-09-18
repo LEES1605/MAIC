@@ -1,3 +1,4 @@
+# =============================== [FILE: src/ui/admin_prompts.py] — START ===============================
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
@@ -20,14 +21,26 @@ from typing import Any, Dict, Tuple
 
 import yaml
 
+# ===== [01] imports — START =====
+# 내부 모듈(정적 import): ensure_admin_sidebar 경로 호환
+try:
+    from src.ui.utils.sider import ensure_admin_sidebar  # 신규 경로
+except Exception:
+    try:
+        from src.ui.utils.sidebar import ensure_admin_sidebar  # 레거시 경로
+    except Exception:
+        def ensure_admin_sidebar() -> None:  # type: ignore[return-value]
+            """No-op if sidebar util is unavailable."""
+            return
+
+from src.ui.assist.prompt_normalizer import normalize_to_yaml
+
 # 외부 라이브러리(streamlit/requests)는 타입 스텁 회피를 위해 동적 임포트 사용
 st: Any = importlib.import_module("streamlit")
 req: Any = importlib.import_module("requests")
+# ===== [01] imports — END =====
 
-from src.ui.utils.sidebar import ensure_admin_sidebar
-from src.ui.assist.prompt_normalizer import normalize_to_yaml
-
-# ----------------------------- Utilities -----------------------------
+# ===== [02] helpers — START =====
 
 ELLIPSIS_UC = "\u2026"
 
@@ -75,7 +88,9 @@ def _validate_yaml_text(yaml_text: str) -> Tuple[bool, list[str]]:
         return (False, msgs)
     return (True, [])
 
+# ===== [02] helpers — END =====
 
+# ===== [03] gh_dispatch — START =====
 def _gh_dispatch_workflow(
     *,
     owner: str,
@@ -108,8 +123,9 @@ def _gh_dispatch_workflow(
     r = req.post(url, headers=headers, json=payload, timeout=20)
     if r.status_code not in (201, 204):
         raise RuntimeError(f"workflow_dispatch failed: HTTP {r.status_code} — {r.text}")
+# ===== [03] gh_dispatch — END =====
 
-
+# ===== [04] default_yaml — START =====
 def _default_yaml() -> str:
     candidate = Path("docs/_gpt/prompts.sample.yaml")
     if candidate.exists():
@@ -138,8 +154,9 @@ modes:
     citations_policy: "[이유문법]/[문법서적]/[AI지식]"
     routing_hints: { model: "gpt-5-pro" }
 """
+# ===== [04] default_yaml — END =====
 
-
+# ===== [05] build_yaml_from_simple_inputs — START =====
 def _build_yaml_from_simple_inputs(
     *,
     grammar_persona: str,
@@ -179,11 +196,11 @@ def _build_yaml_from_simple_inputs(
         },
     }
     return yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
-
+# ===== [05] build_yaml_from_simple_inputs — END =====
 
 # ----------------------------- UI -----------------------------
 
-
+# ===== [06] ui_admin_gate — START =====
 def _admin_gate() -> None:
     st.set_page_config(page_title="Prompts Admin", page_icon="🛠️", layout="wide")
     with st.sidebar:
@@ -203,8 +220,9 @@ def _admin_gate() -> None:
         st.stop()
     # 관리자 모드: 사이드바 보이기
     ensure_admin_sidebar()
+# ===== [06] ui_admin_gate — END =====
 
-
+# ===== [07] main — START =====
 def main() -> None:
     _admin_gate()
 
@@ -240,7 +258,12 @@ def main() -> None:
                     st.error("스키마 검증 실패")
                     st.write("\n".join(f"- {m}" for m in msgs))
         with col2:
-            if st.button("🚀 출판(Publish)", type="primary", use_container_width=True, key="p_yaml"):
+            if st.button(
+                "🚀 출판(Publish)",
+                type="primary",
+                use_container_width=True,
+                key="p_yaml",
+            ):
                 ok, msgs = _validate_yaml_text(yaml_text)
                 if not ok:
                     st.error("스키마 검증 실패 — 먼저 오류를 해결하세요.")
@@ -335,9 +358,21 @@ def main() -> None:
     # ---------------- 한글 → LLM 정리 → YAML ----------------
     with tab_llm:
         st.subheader("자연어로 쓰면 LLM이 YAML로 정리합니다")
-        g = st.text_area("문법 원문", height=100, placeholder="문법 페르소나/지시를 자유롭게 적어주세요.")
-        s = st.text_area("문장 원문", height=100, placeholder="문장 페르소나/지시를 자유롭게 적어주세요.")
-        p = st.text_area("지문 원문", height=100, placeholder="지문 페르소나/지시를 자유롭게 적어주세요.")
+        g = st.text_area(
+            "문법 원문",
+            height=100,
+            placeholder="문법 페르소나/지시를 자유롭게 적어주세요.",
+        )
+        s = st.text_area(
+            "문장 원문",
+            height=100,
+            placeholder="문장 페르소나/지시를 자유롭게 적어주세요.",
+        )
+        p = st.text_area(
+            "지문 원문",
+            height=100,
+            placeholder="지문 페르소나/지시를 자유롭게 적어주세요.",
+        )
 
         if st.button("🧩 정리하기(LLM)", use_container_width=True, key="llm_build"):
             openai_key = st.secrets.get("OPENAI_API_KEY")
@@ -384,3 +419,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+# ===== [07] main — END =====
+# =============================== [FILE: src/ui/admin_prompts.py] — END ===============================
