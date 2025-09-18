@@ -30,7 +30,7 @@ def main() -> int:
     ap.add_argument(
         "--tags",
         nargs="*",
-        default=["indices-latest", "index-latest"],
+        default=["indices-latest", "index-latest", "latest"],
     )
     ap.add_argument(
         "--assets",
