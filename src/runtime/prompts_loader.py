@@ -152,7 +152,10 @@ class PromptsLoader:
         return data
 
     def _get_release_by_tag(self, tag: str) -> Dict[str, Any]:
-        url = f"https://api.github.com/repos/{self.cfg.owner}/{self.cfg.repo}/releases/tags/{tag}"
+        url = (
+            f"https://api.github.com/repos/{self.cfg.owner}/"
+            f"{self.cfg.repo}/releases/tags/{tag}"
+        )
         r = self._ensure_session().get(url, timeout=self.cfg.timeout_sec)
         if r.status_code == 404:
             raise PromptsLoadError(f"release tag not found: {tag!r}")
@@ -243,7 +246,11 @@ class PromptsLoader:
         try:
             yaml_mod = importlib.import_module("yaml")  # type: ignore[no-redef]
         except Exception as exc:  # noqa: BLE001
-            raise PromptsLoadError("PyYAML is required for YAML prompts (pip install pyyaml)") from exc
+            msg = (
+                "PyYAML is required for YAML prompts "
+                "(pip install pyyaml)"
+            )
+            raise PromptsLoadError(msg) from exc
 
         obj = yaml_mod.safe_load(text)
         if not isinstance(obj, dict):
