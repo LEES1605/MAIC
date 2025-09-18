@@ -106,10 +106,27 @@ def _bootstrap_env() -> None:
 _bootstrap_env()
 if st:
     try:
-        st.set_page_config(page_title="LEES AI Teacher", layout="wide")
+        st.set_page_config(page_title="LEES AI Teacher", layout="wide", initial_sidebar_state="collapsed")
     except Exception:
         pass
+    # 권한에 따라 사이드바 정책 적용(관리자는 즉시 펼침)
+    try:
+        # (1) 과거 경로 호환: src.ui.utils.sidebar → (2) 현행 경로: src.ui.utils.sider
+        _sider_mod = None
+        try:
+            _sider_mod = importlib.import_module("src.ui.utils.sidebar")
+        except Exception:
+            try:
+                _sider_mod = importlib.import_module("src.ui.utils.sider")
+            except Exception:
+                _sider_mod = None
+        if _sider_mod:
+            getattr(_sider_mod, "ensure_admin_sidebar", lambda: None)()
+    except Exception:
+        # 미존재/예외는 무시(학생 모드 기본값 유지)
+        pass
 # ================================ [04] bootstrap env — END ============================
+
 
 # =============================== [05] path & logger — START ===========================
 PERSIST_DIR: Path = effective_persist_dir()

@@ -1,3 +1,4 @@
+# [FILE: src/ui/admin_prompts.py] START
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
@@ -6,7 +7,7 @@ Admin UI — Prompts SSOT (Publish to GitHub Releases)
 탭:
 - YAML 직접 편집
 - 한글 → YAML 템플릿
-- 한글 → LLM 정리 → YAML  ← 신규
+- 한글 → LLM 정리 → YAML
 
 출판은 GitHub Actions workflow_dispatch로 트리거합니다.
 """
@@ -16,16 +17,31 @@ import base64
 import importlib
 import json
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Any, Callable, Dict, Tuple
 
 import yaml
 
-# 외부 라이브러리(streamlit/requests)는 타입 스텁 회피를 위해 동적 임포트 사용
+# ---- 정적 import(파일 상단 유지: ruff E402 대응) ----
+from src.ui.assist.prompt_normalizer import normalize_to_yaml  # noqa: E402
+
+# ---- ensure_admin_sidebar: 동적 import 폴백 (mypy-safe) ----
+#   - 우선순위: src.ui.utils.sider → src.ui.utils.sidebar → no-op
+ensure_admin_sidebar: Callable[[], None]
+try:
+    _mod = importlib.import_module("src.ui.utils.sider")
+    ensure_admin_sidebar = getattr(_mod, "ensure_admin_sidebar")
+except Exception:
+    try:
+        _mod = importlib.import_module("src.ui.utils.sidebar")
+        ensure_admin_sidebar = getattr(_mod, "ensure_admin_sidebar")
+    except Exception:
+        def _noop() -> None:
+            return
+        ensure_admin_sidebar = _noop
+
+# ---- 외부 라이브러리 동적 import ----
 st: Any = importlib.import_module("streamlit")
 req: Any = importlib.import_module("requests")
-
-from src.ui.utils.sidebar import ensure_admin_sidebar
-from src.ui.assist.prompt_normalizer import normalize_to_yaml
 
 # ----------------------------- Utilities -----------------------------
 
@@ -34,7 +50,7 @@ ELLIPSIS_UC = "\u2026"
 
 def _sanitize_ellipsis(text: str) -> Tuple[str, int]:
     count = text.count(ELLIPSIS_UC)
-    return (text.replace(ELLIPSIS_UC, "..."), count)
+    return text.replace(ELLIPSIS_UC, "..."), count
 
 
 def _load_schema() -> Dict[str, Any]:
@@ -49,19 +65,19 @@ def _validate_yaml_text(yaml_text: str) -> Tuple[bool, list[str]]:
     try:
         data = yaml.safe_load(yaml_text)
         if not isinstance(data, dict):
-            return (False, ["<root>: YAML must be a mapping (object)."])
+            return False, ["<root>: YAML must be a mapping (object)."]
     except Exception as exc:  # noqa: BLE001
-        return (False, [f"YAML parse error: {exc}"])
+        return False, [f"YAML parse error: {exc}"]
 
     schema = _load_schema()
     try:
         js = importlib.import_module("jsonschema")
     except Exception as exc:  # noqa: BLE001
-        return (False, [f"jsonschema import failed: {exc}"])
+        return False, [f"jsonschema import failed: {exc}"]
 
     validator_cls = getattr(js, "Draft202012Validator", None)
     if validator_cls is None:
-        return (False, ["jsonschema.Draft202012Validator not found"])
+        return False, ["jsonschema.Draft202012Validator not found"]
 
     validation_errors = sorted(
         validator_cls(schema).iter_errors(data),
@@ -72,8 +88,8 @@ def _validate_yaml_text(yaml_text: str) -> Tuple[bool, list[str]]:
         for verr in validation_errors:
             loc = "/".join(str(p) for p in verr.path) or "<root>"
             msgs.append(f"{loc}: {verr.message}")
-        return (False, msgs)
-    return (True, [])
+        return False, msgs
+    return True, []
 
 
 def _gh_dispatch_workflow(
@@ -158,7 +174,11 @@ def _build_yaml_from_simple_inputs(
                 "guardrails": {"pii": True},
                 "examples": [],
                 "citations_policy": "[이유문법]/[문법서적]/[AI지식]",
-                "routing_hints": {"model": "gpt-5-pro", "max_tokens": 800, "temperature": 0.2},
+                "routing_hints": {
+                    "model": "gpt-5-pro",
+                    "max_tokens": 800,
+                    "temperature": 0.2,
+                },
             },
             "sentence": {
                 "persona": sentence_persona.strip(),
@@ -166,7 +186,11 @@ def _build_yaml_from_simple_inputs(
                 "guardrails": {"pii": True},
                 "examples": [],
                 "citations_policy": "[이유문법]/[문법서적]/[AI지식]",
-                "routing_hints": {"model": "gemini-pro", "max_tokens": 700, "temperature": 0.3},
+                "routing_hints": {
+                    "model": "gemini-pro",
+                    "max_tokens": 700,
+                    "temperature": 0.3,
+                },
             },
             "passage": {
                 "persona": passage_persona.strip(),
@@ -174,7 +198,11 @@ def _build_yaml_from_simple_inputs(
                 "guardrails": {"pii": True},
                 "examples": [],
                 "citations_policy": "[이유문법]/[문법서적]/[AI지식]",
-                "routing_hints": {"model": "gpt-5-pro", "max_tokens": 900, "temperature": 0.4},
+                "routing_hints": {
+                    "model": "gpt-5-pro",
+                    "max_tokens": 900,
+                    "temperature": 0.4,
+                },
             },
         },
     }
@@ -182,7 +210,6 @@ def _build_yaml_from_simple_inputs(
 
 
 # ----------------------------- UI -----------------------------
-
 
 def _admin_gate() -> None:
     st.set_page_config(page_title="Prompts Admin", page_icon="🛠️", layout="wide")
@@ -240,7 +267,12 @@ def main() -> None:
                     st.error("스키마 검증 실패")
                     st.write("\n".join(f"- {m}" for m in msgs))
         with col2:
-            if st.button("🚀 출판(Publish)", type="primary", use_container_width=True, key="p_yaml"):
+            if st.button(
+                "🚀 출판(Publish)",
+                type="primary",
+                use_container_width=True,
+                key="p_yaml",
+            ):
                 ok, msgs = _validate_yaml_text(yaml_text)
                 if not ok:
                     st.error("스키마 검증 실패 — 먼저 오류를 해결하세요.")
@@ -335,9 +367,21 @@ def main() -> None:
     # ---------------- 한글 → LLM 정리 → YAML ----------------
     with tab_llm:
         st.subheader("자연어로 쓰면 LLM이 YAML로 정리합니다")
-        g = st.text_area("문법 원문", height=100, placeholder="문법 페르소나/지시를 자유롭게 적어주세요.")
-        s = st.text_area("문장 원문", height=100, placeholder="문장 페르소나/지시를 자유롭게 적어주세요.")
-        p = st.text_area("지문 원문", height=100, placeholder="지문 페르소나/지시를 자유롭게 적어주세요.")
+        g = st.text_area(
+            "문법 원문",
+            height=100,
+            placeholder="문법 페르소나/지시를 자유롭게 적어주세요.",
+        )
+        s = st.text_area(
+            "문장 원문",
+            height=100,
+            placeholder="문장 페르소나/지시를 자유롭게 적어주세요.",
+        )
+        p = st.text_area(
+            "지문 원문",
+            height=100,
+            placeholder="지문 페르소나/지시를 자유롭게 적어주세요.",
+        )
 
         if st.button("🧩 정리하기(LLM)", use_container_width=True, key="llm_build"):
             openai_key = st.secrets.get("OPENAI_API_KEY")
@@ -384,3 +428,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+# [FILE: src/ui/admin_prompts.py] END

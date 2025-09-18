@@ -19,7 +19,7 @@ def _effective_persist_dir(cli_dir: Optional[str]) -> Path:
         return Path(cli_dir).expanduser().resolve()
     try:
         # SSOT: 앱이 사용하는 헬퍼와 동일 경로 사용
-        from src.core.persist import effective_persist_dir  # noqa: WPS433 (런타임 임포트 의도)
+        from src.core.persist import effective_persist_dir
         p = effective_persist_dir()
         return p if isinstance(p, Path) else Path(str(p)).expanduser().resolve()
     except Exception:
@@ -41,20 +41,15 @@ def _check_ready(persist: Path) -> Tuple[bool, str]:
         if root_chunks.exists() and root_chunks.stat().st_size > 0:
             chunks = root_chunks
         else:
-            for cand in persist.rglob("chunks.jsonl"):
-                if cand.stat().st_size > 0:
-                    chunks = cand
+            for p in persist.rglob("chunks.jsonl"):
+                if p.is_file() and p.stat().st_size > 0:
+                    chunks = p
                     break
         if chunks is None:
             return False, "missing: chunks.jsonl"
 
-        # 2) .ready 탐색 (루트 우선, 없으면 chunks 위치에 있는지 확인)
+        # 2) .ready 검사
         ready_path = persist / ".ready"
-        if not ready_path.exists() and chunks is not None:
-            alt = chunks.parent / ".ready"
-            if alt.exists():
-                ready_path = alt
-
         if not ready_path.exists():
             return False, "missing: .ready"
 

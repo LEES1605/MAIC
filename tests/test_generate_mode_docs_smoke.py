@@ -15,7 +15,7 @@ def test_generate_mode_docs_smoke(tmp_path: Path, monkeypatch) -> None:
     if str(repo_root) not in sys.path:
         sys.path.insert(0, str(repo_root))
 
-    from tools.generate_mode_docs import main  # noqa: WPS433
+    from tools.generate_mode_docs import main
 
     # 실행
     rc = main()
