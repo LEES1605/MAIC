@@ -1,4 +1,4 @@
-# =============================== [01] sider visibility controls — START ==================
+# ============= [01] sider visibility controls — START =======
 from __future__ import annotations
 
 from typing import Any
@@ -45,8 +45,8 @@ def hide_sidebar() -> None:
 
 
 def ensure_admin_sidebar() -> None:
-    """학생은 사이드바 완전 숨김, 관리자는 펼침.
-    신뢰 플래그: session_state['_admin_ok'] 또는 session_state['admin_mode'] 중 하나라도 True면 관리자 취급.
+    """학생은 사이드바 완전 숨김, 관리자는 펼칩니다.
+    세션 플래그 '_admin_ok' 또는 'admin_mode' 중 하나라도 True면 관리자 취급합니다.
     """
     st = _st()
     ss = getattr(st, "session_state", {})
