@@ -11,9 +11,6 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-import requests
-import yaml
-
 __all__ = ["PromptsLoader", "load_prompts"]
 
 
@@ -35,14 +32,10 @@ class PromptsLoadError(RuntimeError):
 
 class PromptsLoader:
     """
-    GitHub Releases에서 prompts 번들을 읽어와 캐시/검증/롤백해 주는 로더.
+    GitHub Releases에서 prompts 번들을 읽어와 캐시/검증/롤백하는 로더.
 
-    - 네트워크가 불가능하거나 테스트 상황이면 local_path로 바로 로드
-    - 네트워크 가능 시:
-        1) release tag(기본: prompts-latest)의 assets 조회
-        2) prompts.yaml 자산을 ETag 기반으로 If-None-Match 요청
-        3) 변경 시 내려받아 sha256.txt와 대조, 스키마 검증 후 캐시 갱신
-        4) 실패 시 기존 검증 캐시로 롤백
+    - 오프라인/테스트: local_path로 바로 로드(네트워크 불필요)
+    - 온라인: ETag/sha256 검증 + 캐시/롤백
     """
 
     def __init__(self, cfg: LoaderConfig) -> None:
@@ -52,6 +45,7 @@ class PromptsLoader:
         self.meta_path = self.cache_dir / "meta.json"
         self.yaml_path = self.cache_dir / "prompts.yaml"
         self.sha_path = self.cache_dir / "sha256.txt"
+        self._session: Optional[Any] = None  # requests.Session, 지연 생성
 
         if cfg.schema_path is None:
             # src/runtime/prompts_loader.py → repo_root
@@ -59,16 +53,6 @@ class PromptsLoader:
             self.schema_path = repo_root / "schemas" / "prompts.schema.json"
         else:
             self.schema_path = cfg.schema_path
-
-        self.session = requests.Session()
-        self.session.headers.update(
-            {
-                "Accept": "application/vnd.github+json",
-                "User-Agent": "MAIC-PromptsLoader/1.0",
-            }
-        )
-        if cfg.token:
-            self.session.headers["Authorization"] = f"Bearer {cfg.token}"
 
     # ------------------------------- public API -------------------------------
 
@@ -79,19 +63,18 @@ class PromptsLoader:
         force_refresh: bool = False,
     ) -> Dict[str, Any]:
         """
-        Load prompts from Releases (or local_path for offline).
+        Releases 또는 local_path에서 prompts를 로드한다.
 
-        Returns parsed YAML (dict). Raises PromptsLoadError on failure with no cache.
+        Returns parsed mapping(dict). 원격 실패 시 검증된 캐시로 폴백한다.
         """
         if local_path is not None:
-            data = self._read_yaml(local_path)
+            data = self._read_prompts_file(local_path)
             self._validate_schema(data)
             return data
 
         try:
             return self._load_remote(force_refresh=force_refresh)
         except Exception as exc:  # noqa: BLE001
-            # Fallback to validated cache
             cached = self._load_cache()
             if cached is not None:
                 logging.warning("prompts: remote load failed, using cached copy: %r", exc)
@@ -99,6 +82,26 @@ class PromptsLoader:
             raise PromptsLoadError(f"prompts load failed and no cache: {exc!r}") from exc
 
     # ------------------------------ remote loading ----------------------------
+
+    def _ensure_session(self) -> Any:
+        """requests.Session을 지연 생성한다(원격 접근시에만 필요)."""
+        if self._session is None:
+            try:
+                requests = importlib.import_module("requests")
+            except Exception as exc:  # noqa: BLE001
+                msg = "requests is required for remote loading (pip install requests)"
+                raise PromptsLoadError(msg) from exc
+            sess = requests.Session()
+            sess.headers.update(
+                {
+                    "Accept": "application/vnd.github+json",
+                    "User-Agent": "MAIC-PromptsLoader/1.0",
+                }
+            )
+            if self.cfg.token:
+                sess.headers["Authorization"] = f"Bearer {self.cfg.token}"
+            self._session = sess
+        return self._session
 
     def _load_remote(self, *, force_refresh: bool) -> Dict[str, Any]:
         rel = self._get_release_by_tag(self.cfg.tag)
@@ -130,10 +133,13 @@ class PromptsLoader:
             expected = self._parse_sha256(sha_txt)
             actual = sha256(content).hexdigest()
             if expected and expected.lower() != actual.lower():
-                raise PromptsLoadError(f"sha256 mismatch: expected {expected}, got {actual}")
+                raise PromptsLoadError(
+                    f"sha256 mismatch: expected {expected}, got {actual}"
+                )
 
-        # schema validation
-        data = yaml.safe_load(content)
+        # parse + schema validation
+        asset_name = str(yaml_asset.get("name") or self.cfg.asset_name)
+        data = self._parse_bytes(content, ext_hint=Path(asset_name).suffix.lower())
         self._validate_schema(data)
 
         # commit
@@ -145,8 +151,11 @@ class PromptsLoader:
         return data
 
     def _get_release_by_tag(self, tag: str) -> Dict[str, Any]:
-        url = f"https://api.github.com/repos/{self.cfg.owner}/{self.cfg.repo}/releases/tags/{tag}"
-        r = self.session.get(url, timeout=self.cfg.timeout_sec)
+        url = (
+            f"https://api.github.com/repos/{self.cfg.owner}/"
+            f"{self.cfg.repo}/releases/tags/{tag}"
+        )
+        r = self._ensure_session().get(url, timeout=self.cfg.timeout_sec)
         if r.status_code == 404:
             raise PromptsLoadError(f"release tag not found: {tag!r}")
         r.raise_for_status()
@@ -179,7 +188,7 @@ class PromptsLoader:
         if etag:
             headers["If-None-Match"] = etag
 
-        r = self.session.get(url, headers=headers, timeout=self.cfg.timeout_sec)
+        r = self._ensure_session().get(url, headers=headers, timeout=self.cfg.timeout_sec)
         if r.status_code == 304:
             return (etag, None)
         r.raise_for_status()
@@ -190,22 +199,64 @@ class PromptsLoader:
         url = asset.get("browser_download_url")
         if not url:
             raise PromptsLoadError("sha asset has no download url")
-        r = self.session.get(url, headers={"Accept": "text/plain"}, timeout=self.cfg.timeout_sec)
+        r = self._ensure_session().get(
+            url, headers={"Accept": "text/plain"}, timeout=self.cfg.timeout_sec
+        )
         r.raise_for_status()
         return r.text
 
-    # --------------------------------- cache ----------------------------------
+    # --------------------------------- cache/local -----------------------------
 
     def _load_cache(self) -> Optional[Dict[str, Any]]:
         if not self.yaml_path.exists():
             return None
-        data = self._read_yaml(self.yaml_path)
+        data = self._read_prompts_file(self.yaml_path)
         try:
             self._validate_schema(data)
         except Exception as exc:  # noqa: BLE001
             logging.warning("prompts: cached schema validation failed: %r", exc)
             return None
         return data
+
+    def _read_prompts_file(self, path: Path) -> Dict[str, Any]:
+        """
+        로컬 파일을 확장자에 따라 읽는다. (.yaml/.yml 또는 .json)
+        YAML 파서는 필요할 때만 동적 임포트한다.
+        """
+        suffix = path.suffix.lower()
+        text = path.read_text(encoding="utf-8")
+        return self._parse_text(text, ext_hint=suffix)
+
+    # --------------------------------- parsing --------------------------------
+
+    def _parse_bytes(self, content: bytes, *, ext_hint: str) -> Dict[str, Any]:
+        text = content.decode("utf-8")
+        return self._parse_text(text, ext_hint=ext_hint)
+
+    def _parse_text(self, text: str, *, ext_hint: str) -> Dict[str, Any]:
+        ext = ext_hint.lower().lstrip(".")
+        if ext in {"json"}:
+            obj = json.loads(text)
+            if not isinstance(obj, dict):
+                raise PromptsLoadError("JSON prompts must be an object at root")
+            return obj
+
+        # default: YAML
+        try:
+            yaml_mod = importlib.import_module("yaml")
+        except Exception as exc:  # noqa: BLE001
+            msg = (
+                "PyYAML is required for YAML prompts "
+                "(pip install pyyaml)"
+            )
+            raise PromptsLoadError(msg) from exc
+
+        obj = yaml_mod.safe_load(text)
+        if not isinstance(obj, dict):
+            raise PromptsLoadError("YAML prompts must be a mapping at root")
+        return obj
+
+    # --------------------------------- utils ----------------------------------
 
     def _read_meta(self) -> Dict[str, Any]:
         if self.meta_path.exists():
@@ -220,23 +271,59 @@ class PromptsLoader:
         tmp.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
         tmp.replace(self.meta_path)
 
-    # --------------------------------- utils ----------------------------------
-
-    def _read_yaml(self, path: Path) -> Dict[str, Any]:
-        with path.open("r", encoding="utf-8") as f:
-            return yaml.safe_load(f)
-
     def _validate_schema(self, data: Dict[str, Any]) -> None:
-        # 런타임 의존성: jsonschema. 타입 스텁은 강제하지 않음(동적 임포트).
+        """
+        JSON Schema가 있으면 엄격 검증, 없으면 미니멀 검증으로 폴백.
+        - 엄격 모드 강제: MAIC_PROMPTS_REQUIRE_SCHEMA=1
+        """
+        require = os.getenv("MAIC_PROMPTS_REQUIRE_SCHEMA", "0") == "1"
+
+        # 1) jsonschema 사용 가능하면 정식 검증
+        try:
+            js = importlib.import_module("jsonschema")
+        except Exception as exc:  # noqa: BLE001
+            if require:
+                msg = (
+                    "jsonschema is required "
+                    "(set MAIC_PROMPTS_REQUIRE_SCHEMA=0 to allow fallback)"
+                )
+                # B904: except 절에서 재발생은 원인 예외 연결
+                raise PromptsLoadError(msg) from exc
+
+            # 2) 미니멀 검증(테스트/경량 환경)
+            self._minimal_validate(data)
+            logging.warning("prompts: jsonschema unavailable; minimal validation was applied")
+            return
+
         schema_text = self.schema_path.read_text(encoding="utf-8")
         schema = json.loads(schema_text)
 
-        js = importlib.import_module("jsonschema")
         validator_cls: Any = getattr(js, "Draft202012Validator", None)
         if validator_cls is None:
-            raise PromptsLoadError("jsonschema.Draft202012Validator not found")
+            if require:
+                # except 블록이 아니므로 from None 사용(B904 회피)
+                raise PromptsLoadError("jsonschema.Draft202012Validator not found") from None
+            self._minimal_validate(data)
+            logging.warning(
+                "prompts: jsonschema has no Draft202012Validator; "
+                "minimal validation applied"
+            )
+            return
+
         validator = validator_cls(schema)
         validator.validate(data)
+
+    @staticmethod
+    def _minimal_validate(data: Dict[str, Any]) -> None:
+        """스키마가 없을 때 수행하는 간단한 구조 검증."""
+        if not isinstance(data, dict):
+            raise PromptsLoadError("prompts must be a mapping at root")
+        if "modes" not in data or not isinstance(data["modes"], dict):
+            raise PromptsLoadError("prompts must contain 'modes' as a mapping")
+        # 각 모드가 dict인지 정도만 확인(필드 상세는 빌더/런타임에서 추가 검증됨)
+        for key, entry in data["modes"].items():
+            if not isinstance(entry, dict):
+                raise PromptsLoadError(f"mode '{key}' must be a mapping")
 
     @staticmethod
     def _parse_sha256(text: str) -> Optional[str]:

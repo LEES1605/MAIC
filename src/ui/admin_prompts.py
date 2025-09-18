@@ -26,9 +26,11 @@ import json
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
-import requests
-import streamlit as st
-import yaml
+import yaml  # <- ruff E402 방지: 표준 임포트는 파일 상단에 위치
+
+# mypy: 외부 라이브러리 타입 스텁 이슈를 피하기 위해 동적 임포트 사용
+st: Any = importlib.import_module("streamlit")
+req: Any = importlib.import_module("requests")
 
 
 # ----------------------------- Utilities -----------------------------
@@ -96,7 +98,10 @@ def _gh_dispatch_workflow(
         st.info(f"U+2026(...) {replaced}개를 '...'로 치환했습니다.")
 
     yaml_b64 = base64.b64encode(sanitized.encode("utf-8")).decode("ascii")
-    url = f"https://api.github.com/repos/{owner}/{repo}/actions/workflows/{workflow}/dispatches"
+    url = (
+        f"https://api.github.com/repos/{owner}/{repo}"
+        f"/actions/workflows/{workflow}/dispatches"
+    )
     payload = {
         "ref": ref,
         "inputs": {
@@ -109,7 +114,7 @@ def _gh_dispatch_workflow(
     if token:
         headers["Authorization"] = f"Bearer {token}"
 
-    r = requests.post(url, headers=headers, json=payload, timeout=20)
+    r = req.post(url, headers=headers, json=payload, timeout=20)
     if r.status_code not in (201, 204):
         raise RuntimeError(f"workflow_dispatch failed: HTTP {r.status_code} — {r.text}")
 
@@ -222,7 +227,12 @@ def main() -> None:
 
     with tab_yaml:
         st.subheader("YAML 직접 편집")
-        yaml_text = st.text_area("Prompts YAML", value=_default_yaml(), height=420, placeholder="여기에 YAML을 붙여넣으세요.")
+        yaml_text = st.text_area(
+            "Prompts YAML",
+            value=_default_yaml(),
+            height=420,
+            placeholder="여기에 YAML을 붙여넣으세요.",
+        )
         col1, col2 = st.columns(2)
         with col1:
             if st.button("🔎 스키마 검증", use_container_width=True):
@@ -252,7 +262,8 @@ def main() -> None:
                         )
                         st.success("출판 요청 전송 완료 — Actions에서 처리 중입니다.")
                         st.markdown(
-                            f"[열기: Actions › {workflow}](https://github.com/{owner}/{repo}/actions/workflows/{workflow})"
+                            f"[열기: Actions › {workflow}]"
+                            f"(https://github.com/{owner}/{repo}/actions/workflows/{workflow})"
                         )
                     except Exception as e:  # noqa: BLE001
                         st.exception(e)
@@ -326,7 +337,8 @@ def main() -> None:
                         )
                         st.success("출판 요청 전송 완료 — Actions에서 처리 중입니다.")
                         st.markdown(
-                            f"[열기: Actions › {workflow}](https://github.com/{owner}/{repo}/actions/workflows/{workflow})"
+                            f"[열기: Actions › {workflow}]"
+                            f"(https://github.com/{owner}/{repo}/actions/workflows/{workflow})"
                         )
                     except Exception as e:  # noqa: BLE001
                         st.exception(e)
