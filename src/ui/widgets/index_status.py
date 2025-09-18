@@ -8,18 +8,6 @@ from typing import Any, Iterable, Optional
 from src.runtime.gh_release import GHConfig, GHReleases, GHError
 
 
-def _fmt_bytes(n: int) -> str:
-    units = ["B", "KB", "MB", "GB", "TB"]
-    v = float(n)
-    for u in units:
-        if v < 1024 or u == units[-1]:
-            if u == "B":
-                return f"{int(v)} {u}"
-            return f"{v:.1f} {u}"
-        v /= 1024.0
-    return f"{v:.1f} TB"
-
-
 def _count_files(dest: Path) -> int:
     if not dest.exists():
         return 0
@@ -45,10 +33,8 @@ def render_index_status_panel(
     repo_full: Optional[str] = None,
     token: Optional[str] = None,
 ) -> None:
-    """Render status panel with badges and action buttons."""
     st: Any = importlib.import_module("streamlit")
 
-    # repo / token
     repo_full = repo_full or st.secrets.get("GITHUB_REPO", os.getenv("GITHUB_REPO", ""))
     token = token or st.secrets.get("GITHUB_TOKEN", os.getenv("GITHUB_TOKEN"))
 
@@ -58,12 +44,15 @@ def render_index_status_panel(
     owner, repo = repo_full.split("/", 1)
     gh = GHReleases(GHConfig(owner=owner, repo=repo, token=token))
 
-    # read release meta
     rel = None
     chosen_tag = None
-    for t in tag_candidates:
+    for t in list(tag_candidates) + ["latest"]:
         try:
-            rel = gh.get_release_by_tag(t)
+            rel = (
+                gh.get_latest_release()
+                if t == "latest"
+                else gh.get_release_by_tag(t)
+            )
             chosen_tag = t
             break
         except Exception:  # noqa: BLE001
@@ -72,13 +61,11 @@ def render_index_status_panel(
     assets = (rel or {}).get("assets") or []
     asset = _pick_asset(assets, asset_candidates) if rel else None
 
-    # badges
     left, mid, right = st.columns(3)
     left.metric("Release Tag", chosen_tag or "(none)")
     mid.metric("Asset", (asset or {}).get("name", "(none)"))
     right.metric("Files", _count_files(dest_dir))
 
-    # meta/controls
     with st.expander("Release 메타데이터", expanded=False):
         if rel:
             st.json(rel)
@@ -100,4 +87,4 @@ def render_index_status_panel(
 
     with col2:
         if st.button("📂 현재 persist 파일 수 갱신", use_container_width=True):
-            st.toast("파일 수를 갱신했습니다.")
+            st.toast(f"파일 수: {_count_files(dest_dir)}")
