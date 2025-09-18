@@ -1,4 +1,5 @@
 name: _paths_filter
+
 on:
   workflow_call:
     inputs:
@@ -15,22 +16,41 @@ on:
         required: false
         type: string
     outputs:
-      changed:
-        description: "JSON map of filter results (true/false)"
-        value: ${{ jobs.paths.outputs.changed }}
-      files_json:
-        description: "JSON map of matched files per filter"
-        value: ${{ jobs.paths.outputs.files_json }}
+      python_changed:
+        description: "true if 'python' filter matched"
+        value: ${{ jobs.paths.outputs.python_changed }}
+      workflows_changed:
+        description: "true if 'workflows' filter matched"
+        value: ${{ jobs.paths.outputs.workflows_changed }}
+      prompts_changed:
+        description: "true if 'prompts' filter matched"
+        value: ${{ jobs.paths.outputs.prompts_changed }}
+      python_files:
+        description: "JSON array of files matched by 'python'"
+        value: ${{ jobs.paths.outputs.python_files }}
+      workflows_files:
+        description: "JSON array of files matched by 'workflows'"
+        value: ${{ jobs.paths.outputs.workflows_files }}
+      prompts_files:
+        description: "JSON array of files matched by 'prompts'"
+        value: ${{ jobs.paths.outputs.prompts_files }}
     secrets:
       GITHUB_TOKEN:
         required: true
+
+permissions:
+  contents: read
 
 jobs:
   paths:
     runs-on: ubuntu-latest
     outputs:
-      changed: ${{ steps.collect.outputs.changed }}
-      files_json: ${{ steps.collect.outputs.files_json }}
+      python_changed:   ${{ steps.filter.outputs.python }}
+      workflows_changed:${{ steps.filter.outputs.workflows }}
+      prompts_changed:  ${{ steps.filter.outputs.prompts }}
+      python_files:     ${{ steps.filter.outputs.python_files }}
+      workflows_files:  ${{ steps.filter.outputs.workflows_files }}
+      prompts_files:    ${{ steps.filter.outputs.prompts_files }}
     steps:
       - name: Checkout (root, full history)
         uses: actions/checkout@v4
@@ -42,59 +62,11 @@ jobs:
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Paths filter
-        id: changes
+        id: filter
         uses: dorny/paths-filter@v3
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           base: ${{ inputs.base || (github.event_name == 'pull_request' && github.event.pull_request.base.sha) || 'refs/heads/main' }}
           ref:  ${{ inputs.ref  || (github.event_name == 'pull_request' && github.event.pull_request.head.sha) || github.sha }}
+          list-files: json
           filters: ${{ inputs.filters }}
-
-      - name: Collect outputs as JSON
-        id: collect
-        shell: bash
-        run: |
-          # dorny는 각 필터 키에 대해 steps.changes.outputs.<key> 로 true/false를 내보냅니다.
-          # filters YAML의 최상위 키 목록을 추출하기 위해 yq가 없으므로 간단 파서 사용.
-          echo '${{ inputs.filters }}' > filters.yml
-          keys=$(python - <<'PY'
-import sys, yaml, json
-d=yaml.safe_load(open("filters.yml","r",encoding="utf-8"))
-print(json.dumps(list(d.keys())))
-PY
-)
-          python - <<'PY'
-import json, os, sys
-keys=json.loads(os.environ["KEYS"])
-out={}
-for k in keys:
-  v=os.environ.get(f"CH_{k}")
-  out[k]=(v=="true")
-print(json.dumps(out))
-PY
-        env:
-          KEYS: ${{ steps.collect.outputs.keys || '' }}
-          # 개별 키별 true/false를 환경변수로 주입
-          # GitHub Expression은 동적 키 접근이 어렵기 때문에,
-          # 통상 사용하는 몇 가지 키에 대해 주입 예시를 제공합니다.
-          CH_python: ${{ steps.changes.outputs.python }}
-          CH_workflows: ${{ steps.changes.outputs.workflows }}
-          CH_prompts: ${{ steps.changes.outputs.prompts }}
-
-      - name: Expose JSON outputs
-        id: expose
-        shell: bash
-        run: |
-          # 최소 공통 키들만 JSON으로 노출. 필요 시 확장
-          changed_json=$(jq -n \
-            --arg py  "${{ steps.changes.outputs.python }}" \
-            --arg wf  "${{ steps.changes.outputs.workflows }}" \
-            --arg pr  "${{ steps.changes.outputs.prompts }}" \
-            '{python: ($py=="true"), workflows: ($wf=="true"), prompts: ($pr=="true")}')
-          files_json=$(jq -n \
-            --arg pyf "${{ steps.changes.outputs.python_files }}" \
-            --arg wff "${{ steps.changes.outputs.workflows_files }}" \
-            --arg prf "${{ steps.changes.outputs.prompts_files }}" \
-            '{python: $pyf, workflows: $wff, prompts: $prf}')
-          echo "changed=$changed_json" >> $GITHUB_OUTPUT
-          echo "files_json=$files_json" >> $GITHUB_OUTPUT
