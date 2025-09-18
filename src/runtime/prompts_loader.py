@@ -87,11 +87,10 @@ class PromptsLoader:
         """requests.Session을 지연 생성한다(원격 접근시에만 필요)."""
         if self._session is None:
             try:
-                requests = importlib.import_module("requests") 
+                requests = importlib.import_module("requests")
             except Exception as exc:  # noqa: BLE001
-                raise PromptsLoadError(
-                    "requests is required for remote loading (pip install requests)"
-                ) from exc
+                msg = "requests is required for remote loading (pip install requests)"
+                raise PromptsLoadError(msg) from exc
             sess = requests.Session()
             sess.headers.update(
                 {
@@ -282,11 +281,15 @@ class PromptsLoader:
         # 1) jsonschema 사용 가능하면 정식 검증
         try:
             js = importlib.import_module("jsonschema")
-        except Exception:
+        except Exception as exc:  # noqa: BLE001
             if require:
-                raise PromptsLoadError(
-                    "jsonschema is required (set MAIC_PROMPTS_REQUIRE_SCHEMA=0 to allow fallback)"
+                msg = (
+                    "jsonschema is required "
+                    "(set MAIC_PROMPTS_REQUIRE_SCHEMA=0 to allow fallback)"
                 )
+                # B904: except 절에서 재발생은 원인 예외 연결
+                raise PromptsLoadError(msg) from exc
+
             # 2) 미니멀 검증(테스트/경량 환경)
             self._minimal_validate(data)
             logging.warning("prompts: jsonschema unavailable; minimal validation was applied")
@@ -298,9 +301,13 @@ class PromptsLoader:
         validator_cls: Any = getattr(js, "Draft202012Validator", None)
         if validator_cls is None:
             if require:
-                raise PromptsLoadError("jsonschema.Draft202012Validator not found")
+                # except 블록이 아니므로 from None 사용(B904 회피)
+                raise PromptsLoadError("jsonschema.Draft202012Validator not found") from None
             self._minimal_validate(data)
-            logging.warning("prompts: jsonschema has no Draft202012Validator; minimal validation applied")
+            logging.warning(
+                "prompts: jsonschema has no Draft202012Validator; "
+                "minimal validation applied"
+            )
             return
 
         validator = validator_cls(schema)
