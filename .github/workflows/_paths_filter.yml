@@ -1,0 +1,72 @@
+name: _paths_filter
+
+on:
+  workflow_call:
+    inputs:
+      filters:
+        description: "dorny/paths-filter filters YAML"
+        required: true
+        type: string
+      base:
+        description: "Base ref or SHA (optional)"
+        required: false
+        type: string
+      ref:
+        description: "Head ref or SHA (optional)"
+        required: false
+        type: string
+    outputs:
+      python_changed:
+        description: "true if 'python' filter matched"
+        value: ${{ jobs.paths.outputs.python_changed }}
+      workflows_changed:
+        description: "true if 'workflows' filter matched"
+        value: ${{ jobs.paths.outputs.workflows_changed }}
+      prompts_changed:
+        description: "true if 'prompts' filter matched"
+        value: ${{ jobs.paths.outputs.prompts_changed }}
+      python_files:
+        description: "JSON array of files matched by 'python'"
+        value: ${{ jobs.paths.outputs.python_files }}
+      workflows_files:
+        description: "JSON array of files matched by 'workflows'"
+        value: ${{ jobs.paths.outputs.workflows_files }}
+      prompts_files:
+        description: "JSON array of files matched by 'prompts'"
+        value: ${{ jobs.paths.outputs.prompts_files }}
+    secrets:
+      GITHUB_TOKEN:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  paths:
+    runs-on: ubuntu-latest
+    outputs:
+      python_changed:   ${{ steps.filter.outputs.python }}
+      workflows_changed:${{ steps.filter.outputs.workflows }}
+      prompts_changed:  ${{ steps.filter.outputs.prompts }}
+      python_files:     ${{ steps.filter.outputs.python_files }}
+      workflows_files:  ${{ steps.filter.outputs.workflows_files }}
+      prompts_files:    ${{ steps.filter.outputs.prompts_files }}
+    steps:
+      - name: Checkout (root, full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          clean: true
+
+      - name: Mark repo as safe for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Paths filter
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          base: ${{ inputs.base || (github.event_name == 'pull_request' && github.event.pull_request.base.sha) || 'refs/heads/main' }}
+          ref:  ${{ inputs.ref  || (github.event_name == 'pull_request' && github.event.pull_request.head.sha) || github.sha }}
+          list-files: json
+          filters: ${{ inputs.filters }}
