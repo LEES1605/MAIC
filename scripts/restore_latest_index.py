@@ -9,12 +9,39 @@ from src.runtime.gh_release import GHConfig, GHReleases, GHError
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Restore latest index bundle from GitHub Releases")
-    ap.add_argument("--repo", required=False, help="OWNER/REPO (default from GITHUB_REPO)")
-    ap.add_argument("--token", required=False, help="GitHub token (default from GITHUB_TOKEN)")
-    ap.add_argument("--dest", required=False, default=str(Path.home() / ".maic" / "persist"))
-    ap.add_argument("--tags", nargs="*", default=["indices-latest", "index-latest"])
-    ap.add_argument("--assets", nargs="*", default=["indices.zip", "persist.zip", "hq_index.zip", "prepared.zip"])
+    ap = argparse.ArgumentParser(
+        description="Restore latest index bundle from GitHub Releases"
+    )
+    ap.add_argument(
+        "--repo",
+        required=False,
+        help="OWNER/REPO (default from GITHUB_REPO)",
+    )
+    ap.add_argument(
+        "--token",
+        required=False,
+        help="GitHub token (default from GITHUB_TOKEN)",
+    )
+    ap.add_argument(
+        "--dest",
+        required=False,
+        default=str(Path.home() / ".maic" / "persist"),
+    )
+    ap.add_argument(
+        "--tags",
+        nargs="*",
+        default=["indices-latest", "index-latest"],
+    )
+    ap.add_argument(
+        "--assets",
+        nargs="*",
+        default=[
+            "indices.zip",
+            "persist.zip",
+            "hq_index.zip",
+            "prepared.zip",
+        ],
+    )
     args = ap.parse_args()
 
     repo_full = args.repo or os.getenv("GITHUB_REPO", "")
