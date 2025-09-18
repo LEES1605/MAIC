@@ -26,12 +26,11 @@ import json
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
-import yaml  # <- ruff E402 방지: 표준 임포트는 파일 상단에 위치
+import yaml  # 표준 임포트는 파일 상단에 배치(E402 예방)
 
-# mypy: 외부 라이브러리 타입 스텁 이슈를 피하기 위해 동적 임포트 사용
+# 외부 라이브러리(streamlit/requests)는 타입 스텁 회피를 위해 동적 임포트 사용
 st: Any = importlib.import_module("streamlit")
 req: Any = importlib.import_module("requests")
-
 
 # ----------------------------- Utilities -----------------------------
 
@@ -59,24 +58,29 @@ def _validate_yaml_text(yaml_text: str) -> Tuple[bool, list[str]]:
         data = yaml.safe_load(yaml_text)
         if not isinstance(data, dict):
             return (False, ["<root>: YAML must be a mapping (object)."])
-    except Exception as e:  # noqa: BLE001
-        return (False, [f"YAML parse error: {e}"])
+    except Exception as exc:  # noqa: BLE001
+        return (False, [f"YAML parse error: {exc}"])
 
     schema = _load_schema()
     try:
         js = importlib.import_module("jsonschema")
-    except Exception as e:  # noqa: BLE001
-        return (False, [f"jsonschema import failed: {e}"])
+    except Exception as exc:  # noqa: BLE001
+        return (False, [f"jsonschema import failed: {exc}"])
 
     validator_cls = getattr(js, "Draft202012Validator", None)
     if validator_cls is None:
         return (False, ["jsonschema.Draft202012Validator not found"])
-    errors = sorted(validator_cls(schema).iter_errors(data), key=lambda e: list(e.path))
-    if errors:
-        msgs = []
-        for e in errors:
-            loc = "/".join(str(p) for p in e.path) or "<root>"
-            msgs.append(f"{loc}: {e.message}")
+
+    # 변수명 'e'를 예외 변수와 중복 사용하지 않도록 수정
+    validation_errors = sorted(
+        validator_cls(schema).iter_errors(data),
+        key=lambda err: list(err.path),
+    )
+    if validation_errors:
+        msgs: list[str] = []
+        for verr in validation_errors:
+            loc = "/".join(str(p) for p in verr.path) or "<root>"
+            msgs.append(f"{loc}: {verr.message}")
         return (False, msgs)
     return (True, [])
 
@@ -98,10 +102,7 @@ def _gh_dispatch_workflow(
         st.info(f"U+2026(...) {replaced}개를 '...'로 치환했습니다.")
 
     yaml_b64 = base64.b64encode(sanitized.encode("utf-8")).decode("ascii")
-    url = (
-        f"https://api.github.com/repos/{owner}/{repo}"
-        f"/actions/workflows/{workflow}/dispatches"
-    )
+    url = f"https://api.github.com/repos/{owner}/{repo}/actions/workflows/{workflow}/dispatches"
     payload = {
         "ref": ref,
         "inputs": {
@@ -243,7 +244,7 @@ def main() -> None:
                     st.error("스키마 검증 실패")
                     st.write("\n".join(f"- {m}" for m in msgs))
         with col2:
-            if st.button("🚀 출판(Publish)", type="primary", use_container_width=True):
+            if st.button("🚀 출판(Publish)", use_container_width=True, type="primary"):
                 ok, msgs = _validate_yaml_text(yaml_text)
                 if not ok:
                     st.error("스키마 검증 실패 — 먼저 오류를 해결하세요.")
@@ -265,8 +266,8 @@ def main() -> None:
                             f"[열기: Actions › {workflow}]"
                             f"(https://github.com/{owner}/{repo}/actions/workflows/{workflow})"
                         )
-                    except Exception as e:  # noqa: BLE001
-                        st.exception(e)
+                    except Exception as exc:  # noqa: BLE001
+                        st.exception(exc)
 
     with tab_simple:
         st.subheader("한글 입력으로 YAML 생성(간단 템플릿)")
@@ -320,7 +321,7 @@ def main() -> None:
                     st.error("스키마 검증 실패(템플릿)")
                     st.write("\n".join(f"- {m}" for m in msgs))
         with col4:
-            if st.button("🚀 출판(Publish, 템플릿)", type="primary", use_container_width=True):
+            if st.button("🚀 출판(Publish, 템플릿)", use_container_width=True, type="primary"):
                 ok, msgs = _validate_yaml_text(built_yaml)
                 if not ok:
                     st.error("스키마 검증 실패 — 먼저 오류를 해결하세요.")
@@ -340,8 +341,8 @@ def main() -> None:
                             f"[열기: Actions › {workflow}]"
                             f"(https://github.com/{owner}/{repo}/actions/workflows/{workflow})"
                         )
-                    except Exception as e:  # noqa: BLE001
-                        st.exception(e)
+                    except Exception as exc:  # noqa: BLE001
+                        st.exception(exc)
 
 
 if __name__ == "__main__":
