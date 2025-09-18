@@ -244,7 +244,7 @@ class PromptsLoader:
 
         # default: YAML
         try:
-            yaml_mod = importlib.import_module("yaml")  # type: ignore[no-redef]
+            yaml_mod = importlib.import_module("yaml")
         except Exception as exc:  # noqa: BLE001
             msg = (
                 "PyYAML is required for YAML prompts "
@@ -277,7 +277,7 @@ class PromptsLoader:
         schema_text = self.schema_path.read_text(encoding="utf-8")
         schema = json.loads(schema_text)
 
-        js = importlib.import_module("jsonschema")  # type: ignore[no-redef]
+        js = importlib.import_module("jsonschema")
         validator_cls: Any = getattr(js, "Draft202012Validator", None)
         if validator_cls is None:
             raise PromptsLoadError("jsonschema.Draft202012Validator not found")
