@@ -4,7 +4,6 @@ import importlib
 import io
 import json
 import logging
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Optional
@@ -71,7 +70,6 @@ class GHReleases:
 
     def _delete(self, url: str) -> None:
         r = self._sess().delete(url, timeout=self.cfg.timeout)
-        # 204 expected for deletes; ignore 404
         if r.status_code not in (200, 201, 202, 204, 404):
             r.raise_for_status()
 
@@ -81,6 +79,13 @@ class GHReleases:
         url = (
             f"https://api.github.com/repos/{self.cfg.owner}/"
             f"{self.cfg.repo}/releases/tags/{tag}"
+        )
+        return self._get(url).json()
+
+    def get_latest_release(self) -> dict:
+        url = (
+            f"https://api.github.com/repos/{self.cfg.owner}/"
+            f"{self.cfg.repo}/releases/latest"
         )
         return self._get(url).json()
 
@@ -112,13 +117,11 @@ class GHReleases:
         *,
         label: Optional[str] = None,
     ) -> None:
-        """Upload file as release asset (replaces if same name exists)."""
         if not file_path.exists():
             raise GHError(f"asset file not found: {file_path}")
         fname = file_path.name
         self.delete_asset_if_exists(rel, fname)
 
-        # upload_url template: .../assets{?name,label}
         upload_url_tpl = rel.get("upload_url", "")
         base = upload_url_tpl.split("{", 1)[0]
         label_q = f"&label={label}" if label else ""
@@ -150,7 +153,6 @@ class GHReleases:
         dest.mkdir(parents=True, exist_ok=True)
         with ZipFile(io.BytesIO(zip_bytes)) as zf:
             for info in zf.infolist():
-                # Avoid absolute/parent paths
                 rel = Path(info.filename)
                 if rel.is_absolute() or ".." in rel.parts:
                     raise GHError(f"unsafe path in zip: {info.filename}")
@@ -165,12 +167,24 @@ class GHReleases:
         clean_dest: bool = True,
     ) -> str:
         """
-        Try tags and asset names in order, extract to dest.
-        Returns a short human log.
+        Try tags and asset names in order, then fall back to /releases/latest.
         """
         tried: list[str] = []
         last_err: Optional[str] = None
 
+        def _pick_zip(assets: list[dict]) -> Optional[dict]:
+            # exact match first
+            for name in asset_candidates:
+                for a in assets:
+                    if a.get("name") == name:
+                        return a
+            # then any *.zip
+            for a in assets:
+                if str(a.get("name", "")).lower().endswith(".zip"):
+                    return a
+            return None
+
+        # 1) try provided tags
         for tag in tag_candidates:
             try:
                 rel = self.get_release_by_tag(tag)
@@ -179,22 +193,7 @@ class GHReleases:
                 last_err = str(exc)
                 continue
 
-            assets = rel.get("assets") or []
-            picked: Optional[dict] = None
-            # Exact name first, then any *.zip as fallback
-            for name in asset_candidates:
-                for a in assets:
-                    if a.get("name") == name:
-                        picked = a
-                        break
-                if picked:
-                    break
-            if not picked:
-                for a in assets:
-                    if str(a.get("name", "")).lower().endswith(".zip"):
-                        picked = a
-                        break
-
+            picked = _pick_zip(rel.get("assets") or [])
             if not picked:
                 tried.append(f"tag:{tag}=no-zip")
                 continue
@@ -216,6 +215,32 @@ class GHReleases:
             name = picked.get("name", "unknown.zip")
             return f"OK: tag={tag}, asset={name}, files restored to {dest}"
 
+        # 2) fall back to latest release
+        try:
+            rel = self.get_latest_release()
+            picked = _pick_zip(rel.get("assets") or [])
+            if picked:
+                content = self._download_asset_bytes(picked)
+                if clean_dest and dest.exists():
+                    for p in dest.glob("*"):
+                        try:
+                            if p.is_dir():
+                                for q in p.rglob("*"):
+                                    if q.is_file():
+                                        q.unlink(missing_ok=True)
+                                p.rmdir()
+                            else:
+                                p.unlink(missing_ok=True)
+                        except Exception:  # noqa: BLE001
+                            pass
+                self._safe_extract_zip(content, dest)
+                name = picked.get("name", "unknown.zip")
+                return f"OK: tag=latest, asset={name}, files restored to {dest}"
+            tried.append("latest=no-zip")
+        except Exception as exc:  # noqa: BLE001
+            tried.append("latest=error")
+            last_err = str(exc)
+
         detail = "; ".join(tried)
         raise GHError(f"no matching release asset. tried: {detail}. last={last_err}")
 
@@ -227,7 +252,6 @@ class GHReleases:
         zip_path: Path,
         make_tag: bool = True,
     ) -> str:
-        """Create/update tag release and upload zip as asset; returns log."""
         rel = self.ensure_release(tag, name=name or f"Indices {tag}")
         self.upload_asset(rel, zip_path, label=None)
         return f"OK: uploaded {zip_path.name} to tag={tag}"
