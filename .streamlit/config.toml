@@ -12,3 +12,7 @@ gatherUsageStats = false
 
 [theme]
 base = "light"  # 또는 "dark"
+
+[client]
+showSidebarNavigation = true
+
