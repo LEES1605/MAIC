@@ -1,3 +1,4 @@
+# ======================= [FILE: src/ui/assist/prompt_normalizer.py] — START =======================
 from __future__ import annotations
 
 import importlib
@@ -6,10 +7,11 @@ from typing import Any, Dict, Optional
 
 import yaml
 
-
+# ===== [01] imports — START =====
 ELLIPSIS_UC = "\u2026"
+# ===== [01] imports — END =====
 
-
+# ===== [02] helpers — START =====
 def _sanitize_ellipsis(text: str) -> str:
     return text.replace(ELLIPSIS_UC, "...")
 
@@ -62,8 +64,9 @@ def _build_prompt(grammar: str, sentence: str, passage: str) -> list[dict]:
         "위 내용을 기반으로 스키마에 맞는 YAML을 작성해 주세요."
     )
     return [{"role": "system", "content": sys}, {"role": "user", "content": user}]
+# ===== [02] helpers — END =====
 
-
+# ===== [03] normalize_to_yaml — START =====
 def normalize_to_yaml(
     *,
     grammar_text: str,
@@ -133,12 +136,32 @@ def normalize_to_yaml(
         obj = {
             "version": "auto",
             "modes": {
-                "grammar": {"persona": grammar_text, "system_instructions": "", "guardrails": {}, "examples": [],
-                            "citations_policy": "[이유문법]/[문법서적]/[AI지식]", "routing_hints": {"model": "gpt-5-pro"}},
-                "sentence": {"persona": sentence_text, "system_instructions": "", "guardrails": {}, "examples": [],
-                             "citations_policy": "[이유문법]/[문법서적]/[AI지식]", "routing_hints": {"model": "gemini-pro"}},
-                "passage": {"persona": passage_text, "system_instructions": "", "guardrails": {}, "examples": [],
-                            "citations_policy": "[이유문법]/[문법서적]/[AI지식]", "routing_hints": {"model": "gpt-5-pro"}},
+                "grammar": {
+                    "persona": grammar_text,
+                    "system_instructions": "",
+                    "guardrails": {},
+                    "examples": [],
+                    "citations_policy": "[이유문법]/[문법서적]/[AI지식]",
+                    "routing_hints": {"model": "gpt-5-pro"},
+                },
+                "sentence": {
+                    "persona": sentence_text,
+                    "system_instructions": "",
+                    "guardrails": {},
+                    "examples": [],
+                    "citations_policy": "[이유문법]/[문법서적]/[AI지식]",
+                    "routing_hints": {"model": "gemini-pro"},
+                },
+                "passage": {
+                    "persona": passage_text,
+                    "system_instructions": "",
+                    "guardrails": {},
+                    "examples": [],
+                    "citations_policy": "[이유문법]/[문법서적]/[AI지식]",
+                    "routing_hints": {"model": "gpt-5-pro"},
+                },
             },
         }
     return yaml.safe_dump(obj, allow_unicode=True, sort_keys=False)
+# ===== [03] normalize_to_yaml — END =====
+# ======================= [FILE: src/ui/assist/prompt_normalizer.py] — END =======================
