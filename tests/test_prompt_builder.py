@@ -8,7 +8,7 @@ from src.runtime.prompts_loader import load_prompts
 
 def _load_sample():
     root = Path(__file__).resolve().parents[1]
-    sample_path = root / "docs" / "_gpt" / "prompts.sample.yaml"
+    sample_path = root / "docs" / "_gpt" / "prompts.sample.json"
     return load_prompts(
         owner="dummy",
         repo="dummy",
@@ -21,7 +21,7 @@ def test_build_for_grammar_contains_persona_and_citations() -> None:
     res = build_for_mode(prompts, "grammar")
     assert "[ROLE]" in res.system_prompt
     assert "[INSTRUCTIONS]" in res.system_prompt
-    assert "이유문법" in res.system_prompt  # 샘플의 persona/설명에 포함
+    assert "이유문법" in res.system_prompt  # 샘플 내용에 포함
     assert "CITATIONS" in res.system_prompt
     assert res.model  # 존재 확인
 
