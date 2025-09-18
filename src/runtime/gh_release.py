@@ -105,7 +105,13 @@ class GHReleases:
                     )
                     self._delete(url)
 
-    def upload_asset(self, rel: dict, file_path: Path, *, label: Optional[str] = None) -> None:
+    def upload_asset(
+        self,
+        rel: dict,
+        file_path: Path,
+        *,
+        label: Optional[str] = None,
+    ) -> None:
         """Upload file as release asset (replaces if same name exists)."""
         if not file_path.exists():
             raise GHError(f"asset file not found: {file_path}")
@@ -130,7 +136,11 @@ class GHReleases:
         url = asset.get("browser_download_url")
         if not url:
             raise GHError("asset has no browser_download_url")
-        r = self._sess().get(url, headers={"Accept": "application/octet-stream"}, timeout=self.cfg.timeout)
+        r = self._sess().get(
+            url,
+            headers={"Accept": "application/octet-stream"},
+            timeout=self.cfg.timeout,
+        )
         r.raise_for_status()
         return r.content
 
