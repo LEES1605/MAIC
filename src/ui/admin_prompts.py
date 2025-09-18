@@ -1,4 +1,4 @@
-# =========== [FILE: src/ui/admin_prompts.py] — START =============
+# [FILE: src/ui/admin_prompts.py] START
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
@@ -7,7 +7,7 @@ Admin UI — Prompts SSOT (Publish to GitHub Releases)
 탭:
 - YAML 직접 편집
 - 한글 → YAML 템플릿
-- 한글 → LLM 정리 → YAML  ← 신규
+- 한글 → LLM 정리 → YAML
 
 출판은 GitHub Actions workflow_dispatch로 트리거합니다.
 """
@@ -17,37 +17,40 @@ import base64
 import importlib
 import json
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Any, Callable, Dict, Tuple
 
 import yaml
 
-# ===== [01] imports — START =====
-# 내부 모듈(정적 import): ensure_admin_sidebar 경로 호환
+# ---- 정적 import(파일 상단 유지: ruff E402 대응) ----
+from src.ui.assist.prompt_normalizer import normalize_to_yaml  # noqa: E402
+
+# ---- ensure_admin_sidebar: 동적 import 폴백 (mypy-safe) ----
+#   - 우선순위: src.ui.utils.sider → src.ui.utils.sidebar → no-op
+ensure_admin_sidebar: Callable[[], None]
 try:
-    from src.ui.utils.sider import ensure_admin_sidebar  # 신규 경로
+    _mod = importlib.import_module("src.ui.utils.sider")
+    ensure_admin_sidebar = getattr(_mod, "ensure_admin_sidebar")
 except Exception:
     try:
-        from src.ui.utils.sidebar import ensure_admin_sidebar  # 레거시 경로
+        _mod = importlib.import_module("src.ui.utils.sidebar")
+        ensure_admin_sidebar = getattr(_mod, "ensure_admin_sidebar")
     except Exception:
-        def ensure_admin_sidebar() -> None:  # type: ignore[return-value]
-            """No-op if sidebar util is unavailable."""
+        def _noop() -> None:
             return
+        ensure_admin_sidebar = _noop
 
-from src.ui.assist.prompt_normalizer import normalize_to_yaml
-
-# 외부 라이브러리(streamlit/requests)는 타입 스텁 회피를 위해 동적 임포트 사용
+# ---- 외부 라이브러리 동적 import ----
 st: Any = importlib.import_module("streamlit")
 req: Any = importlib.import_module("requests")
-# ===== [01] imports — END =====
 
-# ===== [02] helpers — START =====
+# ----------------------------- Utilities -----------------------------
 
 ELLIPSIS_UC = "\u2026"
 
 
 def _sanitize_ellipsis(text: str) -> Tuple[str, int]:
     count = text.count(ELLIPSIS_UC)
-    return (text.replace(ELLIPSIS_UC, "..."), count)
+    return text.replace(ELLIPSIS_UC, "..."), count
 
 
 def _load_schema() -> Dict[str, Any]:
@@ -62,19 +65,19 @@ def _validate_yaml_text(yaml_text: str) -> Tuple[bool, list[str]]:
     try:
         data = yaml.safe_load(yaml_text)
         if not isinstance(data, dict):
-            return (False, ["<root>: YAML must be a mapping (object)."])
+            return False, ["<root>: YAML must be a mapping (object)."]
     except Exception as exc:  # noqa: BLE001
-        return (False, [f"YAML parse error: {exc}"])
+        return False, [f"YAML parse error: {exc}"]
 
     schema = _load_schema()
     try:
         js = importlib.import_module("jsonschema")
     except Exception as exc:  # noqa: BLE001
-        return (False, [f"jsonschema import failed: {exc}"])
+        return False, [f"jsonschema import failed: {exc}"]
 
     validator_cls = getattr(js, "Draft202012Validator", None)
     if validator_cls is None:
-        return (False, ["jsonschema.Draft202012Validator not found"])
+        return False, ["jsonschema.Draft202012Validator not found"]
 
     validation_errors = sorted(
         validator_cls(schema).iter_errors(data),
@@ -85,12 +88,10 @@ def _validate_yaml_text(yaml_text: str) -> Tuple[bool, list[str]]:
         for verr in validation_errors:
             loc = "/".join(str(p) for p in verr.path) or "<root>"
             msgs.append(f"{loc}: {verr.message}")
-        return (False, msgs)
-    return (True, [])
+        return False, msgs
+    return True, []
 
-# ===== [02] helpers — END =====
 
-# ===== [03] gh_dispatch — START =====
 def _gh_dispatch_workflow(
     *,
     owner: str,
@@ -123,9 +124,8 @@ def _gh_dispatch_workflow(
     r = req.post(url, headers=headers, json=payload, timeout=20)
     if r.status_code not in (201, 204):
         raise RuntimeError(f"workflow_dispatch failed: HTTP {r.status_code} — {r.text}")
-# ===== [03] gh_dispatch — END =====
 
-# ===== [04] default_yaml — START =====
+
 def _default_yaml() -> str:
     candidate = Path("docs/_gpt/prompts.sample.yaml")
     if candidate.exists():
@@ -154,9 +154,8 @@ modes:
     citations_policy: "[이유문법]/[문법서적]/[AI지식]"
     routing_hints: { model: "gpt-5-pro" }
 """
-# ===== [04] default_yaml — END =====
 
-# ===== [05] build_yaml_from_simple_inputs — START =====
+
 def _build_yaml_from_simple_inputs(
     *,
     grammar_persona: str,
@@ -175,7 +174,11 @@ def _build_yaml_from_simple_inputs(
                 "guardrails": {"pii": True},
                 "examples": [],
                 "citations_policy": "[이유문법]/[문법서적]/[AI지식]",
-                "routing_hints": {"model": "gpt-5-pro", "max_tokens": 800, "temperature": 0.2},
+                "routing_hints": {
+                    "model": "gpt-5-pro",
+                    "max_tokens": 800,
+                    "temperature": 0.2,
+                },
             },
             "sentence": {
                 "persona": sentence_persona.strip(),
@@ -183,7 +186,11 @@ def _build_yaml_from_simple_inputs(
                 "guardrails": {"pii": True},
                 "examples": [],
                 "citations_policy": "[이유문법]/[문법서적]/[AI지식]",
-                "routing_hints": {"model": "gemini-pro", "max_tokens": 700, "temperature": 0.3},
+                "routing_hints": {
+                    "model": "gemini-pro",
+                    "max_tokens": 700,
+                    "temperature": 0.3,
+                },
             },
             "passage": {
                 "persona": passage_persona.strip(),
@@ -191,16 +198,19 @@ def _build_yaml_from_simple_inputs(
                 "guardrails": {"pii": True},
                 "examples": [],
                 "citations_policy": "[이유문법]/[문법서적]/[AI지식]",
-                "routing_hints": {"model": "gpt-5-pro", "max_tokens": 900, "temperature": 0.4},
+                "routing_hints": {
+                    "model": "gpt-5-pro",
+                    "max_tokens": 900,
+                    "temperature": 0.4,
+                },
             },
         },
     }
     return yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
-# ===== [05] build_yaml_from_simple_inputs — END =====
+
 
 # ----------------------------- UI -----------------------------
 
-# ===== [06] ui_admin_gate — START =====
 def _admin_gate() -> None:
     st.set_page_config(page_title="Prompts Admin", page_icon="🛠️", layout="wide")
     with st.sidebar:
@@ -220,9 +230,8 @@ def _admin_gate() -> None:
         st.stop()
     # 관리자 모드: 사이드바 보이기
     ensure_admin_sidebar()
-# ===== [06] ui_admin_gate — END =====
 
-# ===== [07] main — START =====
+
 def main() -> None:
     _admin_gate()
 
@@ -419,5 +428,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-# ===== [07] main — END =====
-# ================= [FILE: src/ui/admin_prompts.py] — END =================
+# [FILE: src/ui/admin_prompts.py] END
