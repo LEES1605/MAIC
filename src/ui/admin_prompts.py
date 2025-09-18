@@ -3,20 +3,12 @@
 """
 Admin UI — Prompts SSOT (Publish to GitHub Releases)
 
-기능
-- 탭1: YAML 직접 편집 → 스키마 검증 → 출판
-- 탭2: 한글 입력으로 간단 템플릿 YAML 생성 → 검증 → 출판
-- 출판은 GitHub Actions workflow_dispatch (publish-prompts.yml / inputs.yaml_b64)
+탭:
+- YAML 직접 편집
+- 한글 → YAML 템플릿
+- 한글 → LLM 정리 → YAML  ← 신규
 
-필수 secrets (.streamlit/secrets.toml)
-- APP_ADMIN_PASSWORD          : 간단 비밀번호 게이트
-- GITHUB_REPO                 : "OWNER/REPO" (예: "LEES1605/MAIC")
-- GITHUB_TOKEN                : GitHub PAT (공개 repo면 생략 가능)
-- GITHUB_BRANCH               : ref (기본 "main")
-- GITHUB_WORKFLOW             : "publish-prompts.yml" (워크플로 파일명)
-
-의존:
-- requests, pyyaml (UI 실행 환경)
+출판은 GitHub Actions workflow_dispatch로 트리거합니다.
 """
 from __future__ import annotations
 
@@ -26,25 +18,26 @@ import json
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
-import yaml  # 표준 임포트는 파일 상단에 배치(E402 예방)
+import yaml
 
 # 외부 라이브러리(streamlit/requests)는 타입 스텁 회피를 위해 동적 임포트 사용
 st: Any = importlib.import_module("streamlit")
 req: Any = importlib.import_module("requests")
 
+from src.ui.utils.sidebar import ensure_admin_sidebar
+from src.ui.assist.prompt_normalizer import normalize_to_yaml
+
 # ----------------------------- Utilities -----------------------------
 
-ELLIPSIS_UC = "\u2026"  # Unicode ellipsis. Keep source free of the actual character.
+ELLIPSIS_UC = "\u2026"
 
 
 def _sanitize_ellipsis(text: str) -> Tuple[str, int]:
-    """Replace Unicode ellipsis U+2026(...) with ASCII '...' to pass our CI gate."""
     count = text.count(ELLIPSIS_UC)
     return (text.replace(ELLIPSIS_UC, "..."), count)
 
 
 def _load_schema() -> Dict[str, Any]:
-    """Load JSON Schema from repo (schemas/prompts.schema.json)."""
     root = Path(__file__).resolve().parents[1]
     sp = root / "schemas" / "prompts.schema.json"
     if not sp.exists():
@@ -53,7 +46,6 @@ def _load_schema() -> Dict[str, Any]:
 
 
 def _validate_yaml_text(yaml_text: str) -> Tuple[bool, list[str]]:
-    """Validate YAML (string) against Prompts schema; returns (ok, messages)."""
     try:
         data = yaml.safe_load(yaml_text)
         if not isinstance(data, dict):
@@ -71,7 +63,6 @@ def _validate_yaml_text(yaml_text: str) -> Tuple[bool, list[str]]:
     if validator_cls is None:
         return (False, ["jsonschema.Draft202012Validator not found"])
 
-    # 변수명 'e'를 예외 변수와 중복 사용하지 않도록 수정
     validation_errors = sorted(
         validator_cls(schema).iter_errors(data),
         key=lambda err: list(err.path),
@@ -96,7 +87,6 @@ def _gh_dispatch_workflow(
     prerelease: bool = False,
     promote_latest: bool = True,
 ) -> None:
-    """Trigger GitHub Actions workflow_dispatch with inline YAML (base64)."""
     sanitized, replaced = _sanitize_ellipsis(yaml_text)
     if replaced:
         st.info(f"U+2026(...) {replaced}개를 '...'로 치환했습니다.")
@@ -121,11 +111,9 @@ def _gh_dispatch_workflow(
 
 
 def _default_yaml() -> str:
-    """Load sample YAML from repo or return minimal template."""
     candidate = Path("docs/_gpt/prompts.sample.yaml")
     if candidate.exists():
         return candidate.read_text(encoding="utf-8")
-    # Minimal fallback (schema-conform)
     return """version: "1970-01-01T00:00:00Z#000"
 modes:
   grammar:
@@ -162,7 +150,7 @@ def _build_yaml_from_simple_inputs(
     passage_sys: str,
 ) -> str:
     data: Dict[str, Any] = {
-        "version": "auto",  # 서버(워크플로)에서 최종 태깅
+        "version": "auto",
         "modes": {
             "grammar": {
                 "persona": grammar_persona.strip(),
@@ -198,23 +186,28 @@ def _build_yaml_from_simple_inputs(
 
 def _admin_gate() -> None:
     st.set_page_config(page_title="Prompts Admin", page_icon="🛠️", layout="wide")
-    st.title("Prompts Admin")
     with st.sidebar:
         st.subheader("Admin")
-        pw = st.text_input("Password", type="password")
-        if st.button("Unlock"):
-            if pw and pw == st.secrets.get("APP_ADMIN_PASSWORD", ""):
-                st.session_state["_admin_ok"] = True
-            else:
-                st.error("비밀번호가 올바르지 않습니다.")
+        if st.session_state.get("_admin_ok"):
+            st.success("관리자 모드 활성")
+        else:
+            pw = st.text_input("Password", type="password")
+            if st.button("Unlock"):
+                if pw and pw == st.secrets.get("APP_ADMIN_PASSWORD", ""):
+                    st.session_state["_admin_ok"] = True
+                else:
+                    st.error("비밀번호가 올바르지 않습니다.")
     if not st.session_state.get("_admin_ok"):
+        # 학생 모드: 사이드바 숨김
+        ensure_admin_sidebar()  # 내부에서 숨김 처리
         st.stop()
+    # 관리자 모드: 사이드바 보이기
+    ensure_admin_sidebar()
 
 
 def main() -> None:
     _admin_gate()
 
-    # Secrets → owner/repo/workflow/ref
     repo_full = st.secrets.get("GITHUB_REPO", "")
     if "/" not in repo_full:
         st.error("GITHUB_REPO 형식이 잘못되었습니다. 예: 'OWNER/REPO'")
@@ -224,8 +217,11 @@ def main() -> None:
     ref = st.secrets.get("GITHUB_BRANCH", "main")
     workflow = st.secrets.get("GITHUB_WORKFLOW", "publish-prompts.yml")
 
-    tab_yaml, tab_simple = st.tabs(["YAML 편집", "한글 → YAML 템플릿"])
+    tab_yaml, tab_simple, tab_llm = st.tabs(
+        ["YAML 편집", "한글 → YAML 템플릿", "한글 → LLM 정리 → YAML"]
+    )
 
+    # ---------------- YAML 직접 편집 ----------------
     with tab_yaml:
         st.subheader("YAML 직접 편집")
         yaml_text = st.text_area(
@@ -236,7 +232,7 @@ def main() -> None:
         )
         col1, col2 = st.columns(2)
         with col1:
-            if st.button("🔎 스키마 검증", use_container_width=True):
+            if st.button("🔎 스키마 검증", use_container_width=True, key="v_yaml"):
                 ok, msgs = _validate_yaml_text(yaml_text)
                 if ok:
                     st.success("스키마 검증 통과")
@@ -244,7 +240,7 @@ def main() -> None:
                     st.error("스키마 검증 실패")
                     st.write("\n".join(f"- {m}" for m in msgs))
         with col2:
-            if st.button("🚀 출판(Publish)", use_container_width=True, type="primary"):
+            if st.button("🚀 출판(Publish)", type="primary", use_container_width=True, key="p_yaml"):
                 ok, msgs = _validate_yaml_text(yaml_text)
                 if not ok:
                     st.error("스키마 검증 실패 — 먼저 오류를 해결하세요.")
@@ -269,6 +265,7 @@ def main() -> None:
                     except Exception as exc:  # noqa: BLE001
                         st.exception(exc)
 
+    # ---------------- 한글 → 템플릿 ----------------
     with tab_simple:
         st.subheader("한글 입력으로 YAML 생성(간단 템플릿)")
         with st.expander("문법(Grammar)", expanded=True):
@@ -310,18 +307,13 @@ def main() -> None:
             passage_sys=p_sys,
         )
         st.code(built_yaml, language="yaml")
-
-        col3, col4 = st.columns(2)
-        with col3:
-            if st.button("🔎 스키마 검증(템플릿)", use_container_width=True):
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("🔎 검증(템플릿)", use_container_width=True, key="v_tpl"):
                 ok, msgs = _validate_yaml_text(built_yaml)
-                if ok:
-                    st.success("스키마 검증 통과(템플릿)")
-                else:
-                    st.error("스키마 검증 실패(템플릿)")
-                    st.write("\n".join(f"- {m}" for m in msgs))
-        with col4:
-            if st.button("🚀 출판(Publish, 템플릿)", use_container_width=True, type="primary"):
+                st.success("검증 통과") if ok else st.error("\n".join(f"- {m}" for m in msgs))
+        with c2:
+            if st.button("🚀 출판(템플릿)", type="primary", use_container_width=True, key="p_tpl"):
                 ok, msgs = _validate_yaml_text(built_yaml)
                 if not ok:
                     st.error("스키마 검증 실패 — 먼저 오류를 해결하세요.")
@@ -337,12 +329,57 @@ def main() -> None:
                             yaml_text=built_yaml,
                         )
                         st.success("출판 요청 전송 완료 — Actions에서 처리 중입니다.")
-                        st.markdown(
-                            f"[열기: Actions › {workflow}]"
-                            f"(https://github.com/{owner}/{repo}/actions/workflows/{workflow})"
-                        )
                     except Exception as exc:  # noqa: BLE001
                         st.exception(exc)
+
+    # ---------------- 한글 → LLM 정리 → YAML ----------------
+    with tab_llm:
+        st.subheader("자연어로 쓰면 LLM이 YAML로 정리합니다")
+        g = st.text_area("문법 원문", height=100, placeholder="문법 페르소나/지시를 자유롭게 적어주세요.")
+        s = st.text_area("문장 원문", height=100, placeholder="문장 페르소나/지시를 자유롭게 적어주세요.")
+        p = st.text_area("지문 원문", height=100, placeholder="지문 페르소나/지시를 자유롭게 적어주세요.")
+
+        if st.button("🧩 정리하기(LLM)", use_container_width=True, key="llm_build"):
+            openai_key = st.secrets.get("OPENAI_API_KEY")
+            yaml_out = normalize_to_yaml(
+                grammar_text=g,
+                sentence_text=s,
+                passage_text=p,
+                openai_key=openai_key,
+                openai_model=st.secrets.get("OPENAI_MODEL", "gpt-4o-mini"),
+            )
+            st.code(yaml_out, language="yaml")
+            st.session_state["_llm_yaml"] = yaml_out
+
+        if st.session_state.get("_llm_yaml"):
+            colx, coly = st.columns(2)
+            with colx:
+                if st.button("🔎 검증(LLM)", use_container_width=True, key="v_llm"):
+                    ok, msgs = _validate_yaml_text(st.session_state["_llm_yaml"])
+                    if ok:
+                        st.success("스키마 검증 통과")
+                    else:
+                        st.error("스키마 검증 실패")
+                        st.write("\n".join(f"- {m}" for m in msgs))
+            with coly:
+                if st.button("🚀 출판(LLM)", type="primary", use_container_width=True, key="p_llm"):
+                    ok, msgs = _validate_yaml_text(st.session_state["_llm_yaml"])
+                    if not ok:
+                        st.error("스키마 검증 실패 — 먼저 오류를 해결하세요.")
+                        st.write("\n".join(f"- {m}" for m in msgs))
+                    else:
+                        try:
+                            _gh_dispatch_workflow(
+                                owner=owner,
+                                repo=repo,
+                                workflow=workflow,
+                                ref=ref,
+                                token=token,
+                                yaml_text=st.session_state["_llm_yaml"],
+                            )
+                            st.success("출판 요청 전송 완료 — Actions에서 처리 중입니다.")
+                        except Exception as exc:  # noqa: BLE001
+                            st.exception(exc)
 
 
 if __name__ == "__main__":
