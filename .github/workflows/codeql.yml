@@ -3,21 +3,18 @@ name: CodeQL
 on:
   push:
     branches: [ "main" ]
-    # 코드 변화가 없고 문서만 바뀐 커밋이면 자동으로 건너뜁니다.
     paths:
-      - "**.py"
+      - "**/*.py"
       - "src/**"
       - ".github/workflows/codeql.yml"
   pull_request:
     branches: [ "main" ]
-    # PR에서 문서만 바뀌면 자동으로 건너뜁니다.
     paths:
-      - "**.py"
+      - "**/*.py"
       - "src/**"
       - ".github/workflows/codeql.yml"
   schedule:
-    - cron: "0 3 * * 0"  # 주 1회(UTC 03:00)
-
+    - cron: "0 3 * * 0"  # weekly
   workflow_dispatch:
 
 permissions:
@@ -29,28 +26,24 @@ jobs:
   analyze:
     name: CodeQL (Python)
     runs-on: ubuntu-latest
-
     strategy:
       fail-fast: false
       matrix:
         language: [ "python" ]
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # Python 프로젝트는 빌드가 필요 없습니다(autobuild 생략).
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3
         with:
           languages: ${{ matrix.language }}
-          # config-file: .github/codeql/codeql-config.yml  # 별도 설정이 있으면 주석 해제
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v3
         with:
-          # category는 생략(콜론/따옴표로 YAML이 꼬이는 사례가 많음)
-          # category: "/language:${{ matrix.language }}"
+          # ✅ 기준 브랜치와 동일한 카테고리로 업로드 (비교 가능)
+          category: "/language:${{ matrix.language }}"
           upload: true
