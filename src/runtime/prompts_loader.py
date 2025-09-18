@@ -87,7 +87,7 @@ class PromptsLoader:
         """requests.Session을 지연 생성한다(원격 접근시에만 필요)."""
         if self._session is None:
             try:
-                requests = importlib.import_module("requests")
+                requests = importlib.import_module("requests") 
             except Exception as exc:  # noqa: BLE001
                 raise PromptsLoadError(
                     "requests is required for remote loading (pip install requests)"
@@ -273,16 +273,50 @@ class PromptsLoader:
         tmp.replace(self.meta_path)
 
     def _validate_schema(self, data: Dict[str, Any]) -> None:
-        # 런타임 의존성: jsonschema. 타입 스텁은 강제하지 않음(동적 임포트).
+        """
+        JSON Schema가 있으면 엄격 검증, 없으면 미니멀 검증으로 폴백.
+        - 엄격 모드 강제: MAIC_PROMPTS_REQUIRE_SCHEMA=1
+        """
+        require = os.getenv("MAIC_PROMPTS_REQUIRE_SCHEMA", "0") == "1"
+
+        # 1) jsonschema 사용 가능하면 정식 검증
+        try:
+            js = importlib.import_module("jsonschema")
+        except Exception:
+            if require:
+                raise PromptsLoadError(
+                    "jsonschema is required (set MAIC_PROMPTS_REQUIRE_SCHEMA=0 to allow fallback)"
+                )
+            # 2) 미니멀 검증(테스트/경량 환경)
+            self._minimal_validate(data)
+            logging.warning("prompts: jsonschema unavailable; minimal validation was applied")
+            return
+
         schema_text = self.schema_path.read_text(encoding="utf-8")
         schema = json.loads(schema_text)
 
-        js = importlib.import_module("jsonschema")
         validator_cls: Any = getattr(js, "Draft202012Validator", None)
         if validator_cls is None:
-            raise PromptsLoadError("jsonschema.Draft202012Validator not found")
+            if require:
+                raise PromptsLoadError("jsonschema.Draft202012Validator not found")
+            self._minimal_validate(data)
+            logging.warning("prompts: jsonschema has no Draft202012Validator; minimal validation applied")
+            return
+
         validator = validator_cls(schema)
         validator.validate(data)
+
+    @staticmethod
+    def _minimal_validate(data: Dict[str, Any]) -> None:
+        """스키마가 없을 때 수행하는 간단한 구조 검증."""
+        if not isinstance(data, dict):
+            raise PromptsLoadError("prompts must be a mapping at root")
+        if "modes" not in data or not isinstance(data["modes"], dict):
+            raise PromptsLoadError("prompts must contain 'modes' as a mapping")
+        # 각 모드가 dict인지 정도만 확인(필드 상세는 빌더/런타임에서 추가 검증됨)
+        for key, entry in data["modes"].items():
+            if not isinstance(entry, dict):
+                raise PromptsLoadError(f"mode '{key}' must be a mapping")
 
     @staticmethod
     def _parse_sha256(text: str) -> Optional[str]:
