@@ -15,7 +15,7 @@ from src.ui.widgets.index_status import render_index_status_panel
 def main() -> None:
     persist_dir = Path(os.path.expanduser("~/.maic/persist"))
 
-    tag_candidates = ["indices-latest", "index-latest"]
+    tag_candidates = ["indices-latest", "index-latest", "latest"]
     asset_candidates = ["indices.zip", "persist.zip", "hq_index.zip", "prepared.zip"]
 
     render_index_status_panel(
