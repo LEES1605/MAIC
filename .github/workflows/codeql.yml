@@ -1,82 +1,56 @@
 name: CodeQL
 
 on:
-  pull_request:
-    branches: [ main ]
   push:
-    branches: [ main ]
+    branches: [ "main" ]
+    # 코드 변화가 없고 문서만 바뀐 커밋이면 자동으로 건너뜁니다.
+    paths:
+      - "**.py"
+      - "src/**"
+      - ".github/workflows/codeql.yml"
+  pull_request:
+    branches: [ "main" ]
+    # PR에서 문서만 바뀌면 자동으로 건너뜁니다.
+    paths:
+      - "**.py"
+      - "src/**"
+      - ".github/workflows/codeql.yml"
   schedule:
-    # 매주 일요일 16:30 UTC (월요일 01:30 KST 근사)
-    - cron: '30 16 * * 0'
+    - cron: "0 3 * * 0"  # 주 1회(UTC 03:00)
+
   workflow_dispatch:
 
 permissions:
   contents: read
   security-events: write
-
-concurrency:
-  group: codeql-${{ github.ref }}
-  cancel-in-progress: true
+  actions: read
 
 jobs:
   analyze:
     name: CodeQL (Python)
     runs-on: ubuntu-latest
+
     strategy:
       fail-fast: false
       matrix:
-        language: [ 'python' ]
+        language: [ "python" ]
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
-          fetch-depth: 1
+          fetch-depth: 0
 
-      # 변경 파일 분류: 코드 변경이 없는 PR이면 CodeQL 스킵(잡은 성공 처리)
-      - name: Detect changes
-        id: filter
-        uses: dorny/paths-filter@v3
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          filters: |
-            code:
-              - 'src/**'
-              - 'scripts/**'
-              - 'pyproject.toml'
-              - 'requirements*.txt'
-              - 'setup.cfg'
-              - 'setup.py'
-            docs:
-              - 'docs/**'
-              - '**/*.md'
-              - '.github/**'
-              - 'tests/**'
-
-      # PR에서는 가벼운 구성(보안 중심 + 경로 제한)
-      - name: Initialize CodeQL (PR - light)
-        if: github.event_name == 'pull_request' && steps.filter.outputs.code == 'true'
+      # Python 프로젝트는 빌드가 필요 없습니다(autobuild 생략).
+      - name: Initialize CodeQL
         uses: github/codeql-action/init@v3
         with:
           languages: ${{ matrix.language }}
-          config-file: .github/codeql/codeql-config-pr.yml
+          # config-file: .github/codeql/codeql-config.yml  # 별도 설정이 있으면 주석 해제
 
-      # push/schedule에서는 풀 스캔(품질 포함)
-      - name: Initialize CodeQL (push/schedule - full)
-        if: github.event_name != 'pull_request'
-        uses: github/codeql-action/init@v3
-        with:
-          languages: ${{ matrix.language }}
-          config-file: .github/codeql/codeql-config-weekly.yml
-
-      # Python은 빌드 불필요(interpret) → autobuild 생략
-      # 분석 및 업로드
       - name: Perform CodeQL Analysis
-        if: github.event_name != 'pull_request' || steps.filter.outputs.code == 'true'
         uses: github/codeql-action/analyze@v3
         with:
-          category: "/language:${{ matrix.language }}"
-
-      # 문서 전용 PR이면 빠르게 성공 처리(상태체크 누락 방지)
-      - name: Skip (docs-only PR)
-        if: github.event_name == 'pull_request' && steps.filter.outputs.code != 'true'
-        run: echo "Docs-only change: skipping CodeQL scan."
+          # category는 생략(콜론/따옴표로 YAML이 꼬이는 사례가 많음)
+          # category: "/language:${{ matrix.language }}"
+          upload: true
