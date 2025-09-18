@@ -4,39 +4,23 @@ on:
   workflow_call:
     inputs:
       filters:
-        description: "dorny/paths-filter filters YAML"
         required: true
         type: string
       base:
-        description: "Base ref or SHA (optional)"
         required: false
         type: string
       ref:
-        description: "Head ref or SHA (optional)"
         required: false
         type: string
     outputs:
-      python_changed:
-        description: "true if 'python' filter matched"
-        value: ${{ jobs.paths.outputs.python_changed }}
-      workflows_changed:
-        description: "true if 'workflows' filter matched"
-        value: ${{ jobs.paths.outputs.workflows_changed }}
-      prompts_changed:
-        description: "true if 'prompts' filter matched"
-        value: ${{ jobs.paths.outputs.prompts_changed }}
-      python_files:
-        description: "JSON array of files matched by 'python'"
-        value: ${{ jobs.paths.outputs.python_files }}
-      workflows_files:
-        description: "JSON array of files matched by 'workflows'"
-        value: ${{ jobs.paths.outputs.workflows_files }}
-      prompts_files:
-        description: "JSON array of files matched by 'prompts'"
-        value: ${{ jobs.paths.outputs.prompts_files }}
+      python_changed:   { value: ${{ jobs.paths.outputs.python_changed }} }
+      workflows_changed:{ value: ${{ jobs.paths.outputs.workflows_changed }} }
+      docs_changed:     { value: ${{ jobs.paths.outputs.docs_changed }} }
+      python_files:     { value: ${{ jobs.paths.outputs.python_files }} }
+      workflows_files:  { value: ${{ jobs.paths.outputs.workflows_files }} }
+      docs_files:       { value: ${{ jobs.paths.outputs.docs_files }} }
     secrets:
-      GITHUB_TOKEN:
-        required: true
+      GITHUB_TOKEN: { required: true }
 
 permissions:
   contents: read
@@ -45,22 +29,25 @@ jobs:
   paths:
     runs-on: ubuntu-latest
     outputs:
-      python_changed:   ${{ steps.filter.outputs.python }}
-      workflows_changed:${{ steps.filter.outputs.workflows }}
-      prompts_changed:  ${{ steps.filter.outputs.prompts }}
-      python_files:     ${{ steps.filter.outputs.python_files }}
-      workflows_files:  ${{ steps.filter.outputs.workflows_files }}
-      prompts_files:    ${{ steps.filter.outputs.prompts_files }}
+      python_changed:    ${{ steps.filter.outputs.python }}
+      workflows_changed: ${{ steps.filter.outputs.workflows }}
+      docs_changed:      ${{ steps.filter.outputs.docs }}
+      python_files:      ${{ steps.filter.outputs.python_files }}
+      workflows_files:   ${{ steps.filter.outputs.workflows_files }}
+      docs_files:        ${{ steps.filter.outputs.docs_files }}
     steps:
+      # 1) 루트에 .git 보장 + 전체 이력(비교/머지 검사용)
       - name: Checkout (root, full history)
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           clean: true
 
+      # 2) git 128 예방(dubious ownership 방지)
       - name: Mark repo as safe for git
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
+      # 3) dorny 실행(base/ref 명시)
       - name: Paths filter
         id: filter
         uses: dorny/paths-filter@v3
