@@ -87,7 +87,7 @@ class PromptsLoader:
         """requests.Session을 지연 생성한다(원격 접근시에만 필요)."""
         if self._session is None:
             try:
-                requests = importlib.import_module("requests")  # type: ignore[no-redef]
+                requests = importlib.import_module("requests")
             except Exception as exc:  # noqa: BLE001
                 raise PromptsLoadError(
                     "requests is required for remote loading (pip install requests)"
