@@ -10,6 +10,7 @@ import yaml
 ELLIPSIS_UC = "\u2026"
 
 
+# ===== [02] helpers — START =====
 def _sanitize_ellipsis(text: str) -> str:
     return text.replace(ELLIPSIS_UC, "...")
 
@@ -27,22 +28,30 @@ def _post_openai(api_key: str, model: str, messages: list[dict], temperature: fl
 
 
 def _build_prompt(grammar: str, sentence: str, passage: str) -> list[dict]:
-    # 규칙: 각 모드 입력은 "자연어 한 덩어리"이며, 모델이 이를
-    # (1) persona(역할/톤/스타일/대상)와 (2) system_instructions(절차/지시)로 자동 분해한다.
+    # 각 모드 입력은 "자연어 한 덩어리". 모델이 이를
+    # persona(역할/톤) + system_instructions(절차/지시)로 자동 분해한다.
     sys = (
-        "You are a prompt normalizer. Given one free-form Korean text for each mode, "
+        "You are a prompt normalizer. "
+        "Given one free-form Korean text for each mode, "
         "produce a YAML that strictly follows this schema:\n"
         "version: auto\n"
         "modes:\n"
-        "  grammar: {persona, system_instructions, guardrails, examples, citations_policy, routing_hints}\n"
-        "  sentence: {persona, system_instructions, guardrails, examples, citations_policy, routing_hints}\n"
-        "  passage: {persona, system_instructions, guardrails, examples, citations_policy, routing_hints}\n"
+        "  grammar: {persona, system_instructions, guardrails, examples, "
+        "citations_policy, routing_hints}\n"
+        "  sentence: {persona, system_instructions, guardrails, examples, "
+        "citations_policy, routing_hints}\n"
+        "  passage: {persona, system_instructions, guardrails, examples, "
+        "citations_policy, routing_hints}\n"
         "Rules:\n"
-        "- For each mode, split the single input into two: concise persona(1~3 lines) and actionable "
-        "system_instructions(≤5 bullet-like lines). Do not copy input verbatim; summarize clearly.\n"
-        "- Korean output only. No extra commentary, return YAML only.\n"
-        '- citations_policy MUST be \"[이유문법]/[문법서적]/[AI지식]\".\n"
-        "- routing_hints.model: grammar=gpt-5-pro, sentence=gemini-pro, passage=gpt-5-pro.\n"
+        "- For each mode, split the single input into two: "
+        "concise persona (1-3 lines) and actionable "
+        "system_instructions (≤5 bullet lines). "
+        "Do not copy input verbatim; summarize clearly.\n"
+        "- Korean output only. No extra commentary; return YAML only.\n"
+        "- citations_policy must be exactly: "
+        "\"[이유문법]/[문법서적]/[AI지식]\".\n"
+        "- routing_hints.model: grammar=gpt-5-pro, sentence=gemini-pro, "
+        "passage=gpt-5-pro.\n"
         "- guardrails: include pii:true. examples: keep short or empty.\n"
     )
     user = (
@@ -52,6 +61,8 @@ def _build_prompt(grammar: str, sentence: str, passage: str) -> list[dict]:
         "위 3개 입력을 분석해 스키마에 맞는 YAML을 생성해 주세요."
     )
     return [{"role": "system", "content": sys}, {"role": "user", "content": user}]
+# ===== [02] helpers — END =====
+
 
 
 def normalize_to_yaml(
