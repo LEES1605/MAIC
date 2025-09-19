@@ -14,11 +14,12 @@ def _safe_set_page_config(*, initial_sidebar_state: str) -> None:
     try:
         st.set_page_config(initial_sidebar_state=initial_sidebar_state)
     except Exception:
+        # set_page_config는 1회만 허용 → 후속 호출은 무시
         pass
 
 
 def show_sidebar() -> None:
-    """Show sidebar for admins."""
+    """관리자용: 사이드바 펼침."""
     st = _st()
     _safe_set_page_config(initial_sidebar_state="expanded")
     st.markdown(
@@ -28,7 +29,7 @@ def show_sidebar() -> None:
 
 
 def hide_sidebar() -> None:
-    """Hide sidebar for students (toggle too)."""
+    """학생용: 사이드바 및 토글 완전 숨김."""
     st = _st()
     _safe_set_page_config(initial_sidebar_state="collapsed")
     st.markdown(
@@ -41,7 +42,7 @@ def hide_sidebar() -> None:
 
 
 def ensure_admin_sidebar() -> None:
-    """학생은 숨김, 관리자는 펼침. _admin_ok or admin_mode."""
+    """학생은 숨김, 관리자는 펼침. (_admin_ok or admin_mode)"""
     st = _st()
     ss = getattr(st, "session_state", {})
     if bool(ss.get("_admin_ok")) or bool(ss.get("admin_mode")):
@@ -51,31 +52,42 @@ def ensure_admin_sidebar() -> None:
 
 
 def render_minimal_admin_sidebar(back_page: str = "app.py") -> None:
-    """관리자용 최소 사이드바: 어드민 프롬프트 / ← 이전."""
+    """관리자용 최소 사이드바(기본 네비 전부 숨김 + 2버튼만)."""
     st = _st()
-    # 기본 멀티페이지 네비 숨김
+    # 기본 네비 전부 숨김(여러 셀렉터 방어)
     st.markdown(
-        "<style>nav[data-testid='stSidebarNav']{display:none!important;}</style>",
+        "<style>"
+        "nav[data-testid='stSidebarNav']{display:none!important;}"
+        "div[data-testid='stSidebarNav']{display:none!important;}"
+        "section[data-testid='stSidebar'] [data-testid='stSidebarNav']{display:none!important;}"
+        "section[data-testid='stSidebar'] ul[role='list']{display:none!important;}"
+        "</style>",
         unsafe_allow_html=True,
     )
     with st.sidebar:
         st.write("### 관리자 메뉴")
-        # 어드민 프롬프트로 이동
         go_admin = st.button("🛠️ 어드민 프롬프트", use_container_width=True)
-        # 이전으로
         go_back = st.button("← 이전으로", use_container_width=True)
-    # 페이지 전환 (switch_page 지원 시)
+
+    # 전환: 가능하면 switch_page, 실패 시 쿼리파라미터로 폴백
     try:
         if go_admin:
             st.switch_page("src/ui/admin_prompts.py")
         if go_back:
             st.switch_page(back_page)
     except Exception:
-        # 폴백: 쿼리 파라미터로 힌트 주고 리런
         if go_admin:
-            st.experimental_set_query_params(admin="1", goto="admin")
+            try:
+                st.query_params["admin"] = "1"
+                st.query_params["goto"] = "admin"
+            except Exception:
+                pass
             st.rerun()
         if go_back:
-            st.experimental_set_query_params(admin="1", goto="back")
+            try:
+                st.query_params["admin"] = "1"
+                st.query_params["goto"] = "back"
+            except Exception:
+                pass
             st.rerun()
 # ===== [01] FILE: src/ui/utils/sider.py — END =====
