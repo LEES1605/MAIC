@@ -1,4 +1,4 @@
-# ======================= [01] FILE: src/ui/assist/prompt_normalizer.py — START =======================
+# ======== [01] FILE: src/ui/assist/prompt_normalizer.py — START ==========
 from __future__ import annotations
 
 import importlib
@@ -176,4 +176,4 @@ def normalize_to_yaml(
         }
     return yaml.safe_dump(obj, allow_unicode=True, sort_keys=False)
 # ===== [03] normalize_to_yaml — END =====
-# ======================== [01] FILE: src/ui/assist/prompt_normalizer.py — END =======================
+# ============= [01] FILE: src/ui/assist/prompt_normalizer.py — END ==============
