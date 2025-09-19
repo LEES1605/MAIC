@@ -1,4 +1,4 @@
-# ============================ [01] FILE: src/ui/admin_prompts.py — START ============================
+# ========== [01] FILE: src/ui/admin_prompts.py — START =============
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
@@ -45,7 +45,7 @@ st: Any = importlib.import_module("streamlit")
 req: Any = importlib.import_module("requests")
 # ===== [01.3] ext libs (runtime import) — END =====
 
-# ============================== [02] utilities — START =================================
+# ============ [02] utilities — START ===================
 
 ELLIPSIS_UC = "\u2026"
 
@@ -92,10 +92,10 @@ def _validate_yaml_text(yaml_text: str) -> Tuple[bool, list[str]]:
             msgs.append(f"{loc}: {verr.message}")
         return False, msgs
     return True, []
-# =============================== [02] utilities — END ==================================
+# ============== [02] utilities — END ================
 
 
-# ==================== [03] gh workflow dispatch helper — START ========================
+# ============ [03] gh workflow dispatch helper — START ==============
 def _gh_dispatch_workflow(
     *,
     owner: str,
@@ -216,10 +216,10 @@ def _build_yaml_from_simple_inputs(
         },
     }
     return yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
-# =============================== [04] yaml builders — END =============================
+# ======================== [04] yaml builders — END =======================
 
 
-# ================================= [05] UI — START ===================================
+# ====================== [05] UI — START =========================
 def _admin_gate() -> None:
     st.set_page_config(page_title="Prompts Admin", page_icon="🛠️", layout="wide")
     with st.sidebar:
@@ -437,4 +437,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-# ============================= [01] FILE: src/ui/admin_prompts.py — END ============================
+# ==================== [01] FILE: src/ui/admin_prompts.py — END ==================
