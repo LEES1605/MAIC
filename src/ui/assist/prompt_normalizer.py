@@ -1,4 +1,4 @@
-# ======================= [FILE: src/ui/assist/prompt_normalizer.py] — START =======================
+# ======================= [01] FILE: src/ui/assist/prompt_normalizer.py — START =======================
 from __future__ import annotations
 
 import importlib
@@ -104,7 +104,11 @@ def normalize_to_yaml(
                     "guardrails": {"pii": True},
                     "examples": [],
                     "citations_policy": "[이유문법]/[문법서적]/[AI지식]",
-                    "routing_hints": {"model": "gpt-5-pro", "max_tokens": 800, "temperature": 0.2},
+                    "routing_hints": {
+                        "model": "gpt-5-pro",
+                        "max_tokens": 800,
+                        "temperature": 0.2,
+                    },
                 },
                 "sentence": {
                     "persona": sentence_text,
@@ -112,7 +116,11 @@ def normalize_to_yaml(
                     "guardrails": {"pii": True},
                     "examples": [],
                     "citations_policy": "[이유문법]/[문법서적]/[AI지식]",
-                    "routing_hints": {"model": "gemini-pro", "max_tokens": 700, "temperature": 0.3},
+                    "routing_hints": {
+                        "model": "gemini-pro",
+                        "max_tokens": 700,
+                        "temperature": 0.3,
+                    },
                 },
                 "passage": {
                     "persona": passage_text,
@@ -120,7 +128,11 @@ def normalize_to_yaml(
                     "guardrails": {"pii": True},
                     "examples": [],
                     "citations_policy": "[이유문법]/[문법서적]/[AI지식]",
-                    "routing_hints": {"model": "gpt-5-pro", "max_tokens": 900, "temperature": 0.4},
+                    "routing_hints": {
+                        "model": "gpt-5-pro",
+                        "max_tokens": 900,
+                        "temperature": 0.4,
+                    },
                 },
             },
         }
@@ -164,4 +176,4 @@ def normalize_to_yaml(
         }
     return yaml.safe_dump(obj, allow_unicode=True, sort_keys=False)
 # ===== [03] normalize_to_yaml — END =====
-# ======================= [FILE: src/ui/assist/prompt_normalizer.py] — END =======================
+# ======================== [01] FILE: src/ui/assist/prompt_normalizer.py — END =======================
