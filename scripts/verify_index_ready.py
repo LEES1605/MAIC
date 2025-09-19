@@ -1,4 +1,4 @@
-# ============================ [01] FILE: scripts/verify_index_ready.py — START =======================
+# ========= [01] FILE: scripts/verify_index_ready.py — START ===========
 from __future__ import annotations
 
 import argparse
@@ -8,7 +8,7 @@ from typing import Optional, Tuple
 ASCII_READY = "ready"
 
 
-# ============================= [02] helpers — START ==================================
+# =================== [02] helpers — START ====================
 def _effective_persist_dir(cli_dir: Optional[str]) -> Path:
     """
     SSOT 우선: src.core.persist.effective_persist_dir()
@@ -64,10 +64,10 @@ def _check_ready(persist: Path) -> Tuple[bool, str]:
         return False, f"mismatch: .ready='{raw or '(empty)'}' (expected 'ready' or 'ok')"
     except Exception as e:
         return False, f"error: {e}"
-# ============================== [02] helpers — END ===================================
+# ========================== [02] helpers — END ==========================
 
 
-# ============================ [03] main — START =====================================
+# ======================= [03] main — START ==============================
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Verify index readiness in persist dir.")
     ap.add_argument("--persist", help="Persist dir (optional).")
@@ -83,4 +83,4 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())
-# ============================= [03] FILE: scripts/verify_index_ready.py — END =======================
+# ============= [03] FILE: scripts/verify_index_ready.py — END ======================
