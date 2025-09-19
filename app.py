@@ -103,13 +103,14 @@ def _bootstrap_env() -> None:
 
 _bootstrap_env()
 if st:
+    # 페이지 타이틀/레이아웃
     try:
         st.set_page_config(page_title="LEES AI Teacher",
                            layout="wide", initial_sidebar_state="collapsed")
     except Exception:
         pass
 
-    # (A) experimental_* 쿼리 파라미터 경고 제거(호환 셈)
+    # (A) experimental_* 경고 제거(호환)
     try:
         if hasattr(st, "experimental_get_query_params"):
             # 경고 없이 새 API로 동작시키는 얇은 래퍼
@@ -122,17 +123,45 @@ if st:
     except Exception:
         pass
 
-    # (B) admin=1 쿼리 파라미터 → 관리자 플래그 반영
+    # (B) admin/goto 쿼리 파라미터 → 관리자 플래그 ON/OFF (영구 수정)
     try:
         v = st.query_params.get("admin", None)
-        admin_q = False
-        if isinstance(v, list):
-            admin_q = any(str(x) == "1" for x in v)
-        elif v is not None:
-            admin_q = str(v) == "1"
-        if admin_q:
-            st.session_state["_admin_ok"] = True
-            st.session_state["admin_mode"] = True
+        goto = st.query_params.get("goto", None)
+
+        def _norm(x: object) -> str:
+            return str(x).strip().lower()
+
+        def _truthy(x: object) -> bool:
+            return _norm(x) in ("1", "true", "on", "yes", "y")
+
+        def _falsy(x: object) -> bool:
+            return _norm(x) in ("0", "false", "off", "no", "n")
+
+        def _has(param: object, pred) -> bool:
+            if isinstance(param, list):
+                return any(pred(x) for x in param)
+            return pred(param) if param is not None else False
+
+        prev = bool(st.session_state.get("admin_mode", False))
+        new_mode = prev
+
+        # 켜기: admin=1/true/on or goto=admin
+        if _has(v, _truthy) or _has(goto, lambda x: _norm(x) == "admin"):
+            new_mode = True
+
+        # 끄기: admin=0/false/off or goto=back|prompt|home (끄기가 우선)
+        if _has(v, _falsy) or _has(goto, lambda x: _norm(x) in ("back", "prompt", "home")):
+            new_mode = False
+
+        if new_mode != prev:
+            if new_mode:
+                st.session_state["_admin_ok"] = True
+            else:
+                st.session_state.pop("_admin_ok", None)
+            st.session_state["admin_mode"] = new_mode
+            # 즉시 UI 반영
+            st.session_state["_ADMIN_TOGGLE_TS"] = time.time()
+            st.rerun()
     except Exception:
         pass
 
@@ -145,6 +174,7 @@ if st:
     except Exception:
         pass
 # ===== [04] bootstrap env — END =====
+
 
 
 # ======================= [05] path & logger — START =======================
@@ -293,6 +323,7 @@ def _mount_background(**_kw) -> None:
 
 # =============================== [10] auto-restore — START ============================
 def _boot_auto_restore_index() -> None:
+    # 멱등 보호: 한 세션에서 한 번만 수행
     try:
         if "st" in globals() and st is not None:
             if st.session_state.get("_BOOT_RESTORE_DONE"):
@@ -302,8 +333,16 @@ def _boot_auto_restore_index() -> None:
 
     p = effective_persist_dir()
     cj = p / "chunks.jsonl"
-    ready = (p / ".ready").exists()
-    if cj.exists() and cj.stat().st_size > 0 and ready:
+    rf = p / ".ready"
+    ready_txt = ""
+    try:
+        if rf.exists():
+            ready_txt = rf.read_text(encoding="utf-8").strip().lower()
+    except Exception:
+        ready_txt = ""
+
+    # 이미 유효하면 종료
+    if cj.exists() and cj.stat().st_size > 0 and (ready_txt == "ready"):
         try:
             if "st" in globals() and st is not None:
                 st.session_state["_BOOT_RESTORE_DONE"] = True
@@ -311,68 +350,45 @@ def _boot_auto_restore_index() -> None:
             pass
         return
 
+    # GitHub repo/token 확보
+    repo_full = os.getenv("GITHUB_REPO", "")
+    token = os.getenv("GITHUB_TOKEN", None)
     try:
-        from src.core.secret import token as _gh_token, resolve_owner_repo as _resolve_owner_repo
-        token = _gh_token() or ""
-        owner, repo = _resolve_owner_repo()
+        if "st" in globals() and st is not None:
+            repo_full = st.secrets.get("GITHUB_REPO", repo_full)
+            token = st.secrets.get("GITHUB_TOKEN", token)
     except Exception:
-        token, owner, repo = "", "", ""
-
-    if not (token and owner and repo):
+        pass
+    if not repo_full or "/" not in str(repo_full):
         return
+    owner, repo = str(repo_full).split("/", 1)
 
-    from urllib import request as _rq
-    import zipfile as _zf
-    import json as _json
-
-    api_latest = f"https://api.github.com/repos/{owner}/{repo}/releases/latest"
+    # 후보: 태그/에셋 (동적 연도 포함)
     try:
-        req = _rq.Request(api_latest, headers={
-            "Authorization": f"token {token}",
-            "Accept": "application/vnd.github+json",
-        })
-        with _rq.urlopen(req, timeout=20) as resp:
-            data = _json.loads(resp.read().decode("utf-8", "ignore"))
+        import datetime as _dt
+        this_year = _dt.datetime.utcnow().year
+        dyn_tags = [f"index-{y}-latest" for y in range(this_year, this_year - 5, -1)]
     except Exception:
-        return
+        dyn_tags = []
+    tag_candidates = ["indices-latest", "index-latest"] + dyn_tags + ["latest"]
+    asset_candidates = ["indices.zip", "persist.zip", "hq_index.zip", "prepared.zip"]
 
-    asset = None
-    for a in data.get("assets") or []:
-        n = str(a.get("name") or "")
-        if n.startswith("index_") and n.endswith(".zip"):
-            asset = a
-            break
-    if not asset:
-        return
-    dl = asset.get("browser_download_url")
-    if not dl:
-        return
-
+    # GHReleases 로 통일
     try:
-        p.mkdir(parents=True, exist_ok=True)
-        tmp = p / f"__restore_{int(time.time())}.zip"
-        _rq.urlretrieve(dl, tmp)
-        with _zf.ZipFile(tmp, "r") as zf:
-            zf.extractall(p)
-        try:
-            tmp.unlink()
-        except Exception:
-            pass
+        from src.runtime.gh_release import GHConfig, GHReleases  # lazy import
+        gh = GHReleases(GHConfig(owner=owner, repo=repo, token=token))
+        gh.restore_latest_index(
+            tag_candidates=tag_candidates,
+            asset_candidates=asset_candidates,
+            dest=p,
+            clean_dest=True,
+        )
 
-        cj = p / "chunks.jsonl"
-        if not (cj.exists() and cj.stat().st_size > 0):
-            try:
-                cand = next(p.glob("**/chunks.jsonl"))
-                p = cand.parent
-                cj = cand
-            except StopIteration:
-                pass
-
+        # 복원 성공 → ready 표준화
         try:
-            core_mark_ready(p)
+            core_mark_ready(p)  # 표준: ".ready" 파일 내용은 "ready"
         except Exception:
             try:
-                # 통일: .ready 파일 내용은 "ready"
                 (p / ".ready").write_text("ready", encoding="utf-8")
             except Exception:
                 pass
@@ -384,6 +400,7 @@ def _boot_auto_restore_index() -> None:
         except Exception:
             pass
     except Exception:
+        # 조용히 실패 (UI에서 오류 토스트로 안내)
         return
 # ================================= [10] auto-restore — END ============================
 
@@ -543,6 +560,51 @@ def _render_index_orchestrator_header() -> None:
             else:
                 st.caption("복원 기록이 없습니다. 위의 복원 버튼 또는 검증 버튼을 사용해 보세요.")
 
+        # ──────────────────────────── NEW: Release 후보 디버그(최근 5개) ────────────────────────────
+        with st.expander("🐞 Release 후보 디버그 (최근 5개)", expanded=False):
+            import json as _json
+            from urllib import request as _rq
+
+            repo_full = os.getenv("GITHUB_REPO", "")
+            try:
+                repo_full = st.secrets.get("GITHUB_REPO", repo_full)
+            except Exception:
+                pass
+            token = os.getenv("GITHUB_TOKEN", None)
+            try:
+                token = st.secrets.get("GITHUB_TOKEN", token)
+            except Exception:
+                pass
+
+            st.caption(f"Repo: **{repo_full or '(미설정)'}**")
+            if repo_full and "/" in repo_full:
+                try:
+                    owner, repo = repo_full.split("/", 1)
+                    url = f"https://api.github.com/repos/{owner}/{repo}/releases?per_page=5"
+                    headers = {"Accept": "application/vnd.github+json"}
+                    if token:
+                        # GitHub API 토큰(ヘ더 스킴은 token/Bearer 어느 쪽이든 허용)
+                        headers["Authorization"] = f"token {token}"
+                    req = _rq.Request(url, headers=headers)
+                    with _rq.urlopen(req, timeout=20) as resp:
+                        items = _json.loads(resp.read().decode("utf-8", "ignore"))
+                    rows = []
+                    for r in items[:5]:
+                        rows.append({
+                            "tag": r.get("tag_name"),
+                            "name": r.get("name"),
+                            "assets": ", ".join(a.get("name", "") for a in (r.get("assets") or [])) or "(none)",
+                        })
+                    try:
+                        st.table(rows)
+                    except Exception:
+                        st.json(rows)
+                except Exception as e:
+                    st.warning(f"릴리스 목록 조회 실패: {e}")
+            else:
+                st.warning("GITHUB_REPO가 설정되어 있지 않습니다. (예: 'OWNER/REPO')")
+        # ───────────────────────────────────────────────────────────────────────────────────
+
     st.info(
         "강제 인덱싱(HQ, 느림)·백업과 인덱싱 파일 미리보기는 **관리자 인덱싱 패널**에서 합니다. "
         "관리자 모드 진입 후 아래 섹션으로 이동하세요.",
@@ -550,6 +612,7 @@ def _render_index_orchestrator_header() -> None:
     )
     st.markdown("<span id='idx-admin-panel'></span>", unsafe_allow_html=True)
 # ================================= [12] diag header — END =============================
+
 
 # =============================== [13] admin index — START =============================
 def _render_admin_index_panel() -> None:
