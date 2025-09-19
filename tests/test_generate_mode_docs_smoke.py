@@ -1,4 +1,4 @@
-# ============================ [05] FILE: tests/test_generate_mode_docs_smoke.py — START =============
+# === [05] FILE: tests/test_generate_mode_docs_smoke.py — START =======
 from __future__ import annotations
 
 import sys
@@ -30,4 +30,4 @@ def test_generate_mode_docs_smoke(tmp_path: Path, monkeypatch) -> None:
     assert "### 섹션 순서" in txt
     # 표준 섹션명 중 일부 샘플
     assert "근거/출처" in txt
-# ============================= [05] FILE: tests/test_generate_mode_docs_smoke.py — END =============
+# ======== [05] FILE: tests/test_generate_mode_docs_smoke.py — END ======
