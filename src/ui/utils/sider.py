@@ -1,4 +1,4 @@
-# =============================== [01] FILE: src/ui/utils/sider.py — START ============================
+# ================= [01] FILE: src/ui/utils/sider.py — START ================
 from __future__ import annotations
 
 from typing import Any
@@ -54,4 +54,4 @@ def ensure_admin_sidebar() -> None:
         show_sidebar()
     else:
         hide_sidebar()
-# ================================ [01] FILE: src/ui/utils/sider.py — END =============================
+# ========== [01] FILE: src/ui/utils/sider.py — END ==============
