@@ -157,7 +157,12 @@ def main() -> None:
             ok, msgs = _validate_yaml_text(y)
             st.success("검증 통과") if ok else st.error("\n".join(f"- {m}" for m in msgs))
     with c3:
-        if st.button("🚀 출판(Publish)", type="primary", use_container_width=True, key="publish_all"):
+        if st.button(
+            "🚀 출판(Publish)",
+            type="primary",
+            use_container_width=True,
+            key="publish_all",
+        ):
             y = st.session_state.get("_merged_yaml", "")
             ok, msgs = _validate_yaml_text(y)
             if not ok:
@@ -166,8 +171,14 @@ def main() -> None:
                     st.write("\n".join(f"- {m}" for m in msgs))
             else:
                 try:
-                    _gh_dispatch_workflow(owner=owner, repo=repo, workflow=workflow,
-                                          ref=ref, token=token, yaml_text=y)
+                    _gh_dispatch_workflow(
+                        owner=owner,
+                        repo=repo,
+                        workflow=workflow,
+                        ref=ref,
+                        token=token,
+                        yaml_text=y,
+                    )
                     st.success("출판 요청 전송 완료 — Actions에서 처리 중입니다.")
                     st.markdown(
                         f"[열기: Actions › {workflow}]"
@@ -180,7 +191,3 @@ def main() -> None:
         st.code(st.session_state["_merged_yaml"], language="yaml")
 # ===== [05] main — END =====
 
-
-if __name__ == "__main__":
-    main()
-# ===== [01] FILE: src/ui/admin_prompts.py — END =====
