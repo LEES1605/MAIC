@@ -32,7 +32,7 @@ except Exception:
     try:
         _sider = importlib.import_module("src.ui.utils.sidebar")
         ensure_admin_sidebar = getattr(_sider, "ensure_admin_sidebar")
-        def render_minimal_admin_sidebar(*_: Any, **__: Any) -> None:  # type: ignore
+        def render_minimal_admin_sidebar(*_: Any, **__: Any) -> None:
             return
     except Exception:
         def ensure_admin_sidebar() -> None:
@@ -127,7 +127,7 @@ def _effective_persist_dir(cli_dir: Optional[str] = None) -> Path:
         return Path(st.secrets["MAIC_PERSIST_DIR"]).expanduser().resolve()
     # 앱 헬퍼 시도
     try:
-        from src.core.persist import effective_persist_dir  # type: ignore
+        from src.core.persist import effective_persist_dir
         p = effective_persist_dir()
         return p if isinstance(p, Path) else Path(str(p)).expanduser().resolve()
     except Exception:
