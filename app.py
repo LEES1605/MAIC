@@ -109,28 +109,39 @@ if st:
     except Exception:
         pass
 
-    # 쿼리파라미터로 관리자 모드 강제(admin=1)
+    # (A) experimental_* 쿼리 파라미터 경고 제거(호환 셈)
     try:
-        qp = getattr(st, "query_params", st.experimental_get_query_params())
+        if hasattr(st, "experimental_get_query_params"):
+            # 경고 없이 새 API로 동작시키는 얇은 래퍼
+            st.experimental_get_query_params = lambda: st.query_params  # type: ignore
+        if hasattr(st, "experimental_set_query_params"):
+            def _set_qp(**kwargs: object) -> None:
+                for k, v in kwargs.items():
+                    st.query_params[k] = v  # type: ignore[index]
+            st.experimental_set_query_params = _set_qp  # type: ignore
+    except Exception:
+        pass
+
+    # (B) admin=1 쿼리 파라미터 → 관리자 플래그 반영
+    try:
+        v = st.query_params.get("admin", None)
         admin_q = False
-        try:
-            admin_q = (qp.get("admin") == "1") or (qp.get("admin", ["0"])[0] == "1")
-        except Exception:
-            admin_q = False
+        if isinstance(v, list):
+            admin_q = any(str(x) == "1" for x in v)
+        elif v is not None:
+            admin_q = str(v) == "1"
         if admin_q:
             st.session_state["_admin_ok"] = True
             st.session_state["admin_mode"] = True
     except Exception:
         pass
 
-    # 권한별 사이드바 정책 적용
+    # (C) 권한별 사이드바 정책 + 최소 사이드바(아이콘 2개)
     try:
-        _mod = None
-        try:
-            _mod = __import__("src.ui.utils.sider", fromlist=["ensure_admin_sidebar"])
-        except Exception:
-            _mod = __import__("src.ui.utils.sidebar", fromlist=["ensure_admin_sidebar"])
-        getattr(_mod, "ensure_admin_sidebar", lambda: None)()
+        _sider = __import__("src.ui.utils.sider", fromlist=["apply_admin_chrome"])
+        getattr(_sider, "apply_admin_chrome", lambda **_: None)(
+            back_page="app.py", icon_only=True
+        )
     except Exception:
         pass
 # ===== [04] bootstrap env — END =====
