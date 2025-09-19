@@ -79,21 +79,19 @@ def _load_prepared_api():
     return None, None, tried2
 # ================================ [03] helpers(persist) — END =========================
 
-# =============================== [04] bootstrap env — START ===========================
+# ===== [04] bootstrap env — START =====
 def _bootstrap_env() -> None:
     try:
-        _promote_env(
-            keys=[
-                "OPENAI_API_KEY", "OPENAI_MODEL",
-                "GEMINI_API_KEY", "GEMINI_MODEL",
-                "GH_TOKEN", "GITHUB_TOKEN",
-                "GH_OWNER", "GH_REPO", "GITHUB_OWNER", "GITHUB_REPO_NAME", "GITHUB_REPO",
-                "APP_MODE", "AUTO_START_MODE", "LOCK_MODE_FOR_STUDENTS",
-                "APP_ADMIN_PASSWORD", "DISABLE_BG",
-                "MAIC_PERSIST_DIR",
-                "GDRIVE_PREPARED_FOLDER_ID", "GDRIVE_BACKUP_FOLDER_ID",
-            ]
-        )
+        _promote_env(keys=[
+            "OPENAI_API_KEY", "OPENAI_MODEL",
+            "GEMINI_API_KEY", "GEMINI_MODEL",
+            "GH_TOKEN", "GITHUB_TOKEN",
+            "GH_OWNER", "GH_REPO", "GITHUB_OWNER", "GITHUB_REPO_NAME", "GITHUB_REPO",
+            "APP_MODE", "AUTO_START_MODE", "LOCK_MODE_FOR_STUDENTS",
+            "APP_ADMIN_PASSWORD", "DISABLE_BG",
+            "MAIC_PERSIST_DIR",
+            "GDRIVE_PREPARED_FOLDER_ID", "GDRIVE_BACKUP_FOLDER_ID",
+        ])
     except Exception:
         pass
 
@@ -106,37 +104,39 @@ def _bootstrap_env() -> None:
 _bootstrap_env()
 if st:
     try:
-        st.set_page_config(
-            page_title="LEES AI Teacher",
-            layout="wide",
-            initial_sidebar_state="collapsed",  # 기본: 접힘 (학생)
-        )
+        st.set_page_config(page_title="LEES AI Teacher",
+                           layout="wide", initial_sidebar_state="collapsed")
     except Exception:
-        # Streamlit은 set_page_config를 1회만 허용하므로, 중복 호출은 무시
         pass
 
-    # 권한에 따라 사이드바 정책 적용(관리자는 즉시 펼침)
+    # 쿼리파라미터로 관리자 모드 강제(admin=1)
+    try:
+        qp = getattr(st, "query_params", st.experimental_get_query_params())
+        admin_q = False
+        try:
+            admin_q = (qp.get("admin") == "1") or (qp.get("admin", ["0"])[0] == "1")
+        except Exception:
+            admin_q = False
+        if admin_q:
+            st.session_state["_admin_ok"] = True
+            st.session_state["admin_mode"] = True
+    except Exception:
+        pass
+
+    # 권한별 사이드바 정책 적용
     try:
         _mod = None
         try:
-            # 우선 시도: sider
             _mod = __import__("src.ui.utils.sider", fromlist=["ensure_admin_sidebar"])
         except Exception:
-            try:
-                # 폴백: sidebar (구버전 경로 호환)
-                _mod = __import__("src.ui.utils.sidebar", fromlist=["ensure_admin_sidebar"])
-            except Exception:
-                _mod = None
-        if _mod:
-            getattr(_mod, "ensure_admin_sidebar", lambda: None)()
+            _mod = __import__("src.ui.utils.sidebar", fromlist=["ensure_admin_sidebar"])
+        getattr(_mod, "ensure_admin_sidebar", lambda: None)()
     except Exception:
-        # 미존재/예외는 무시(학생 모드 기본값 유지)
         pass
-# ================================ [04] bootstrap env — END ============================
+# ===== [04] bootstrap env — END =====
 
 
-
-# =============================== [05] path & logger — START ===========================
+# ======================= [05] path & logger — START =======================
 PERSIST_DIR: Path = effective_persist_dir()
 try:
     PERSIST_DIR.mkdir(parents=True, exist_ok=True)
@@ -171,9 +171,9 @@ def _errlog(msg: str, where: str = "", exc: Exception | None = None) -> None:
             pass
     except Exception:
         pass
-# ================================= [05] path & logger — END ===========================
+# ===================== [05] path & logger — END ========================
 
-# =============================== [06] admin gate — START ==============================
+# ======================== [06] admin gate — START ========================
 def _is_admin_view() -> bool:
     if st is None:
         return False
@@ -188,9 +188,9 @@ def _is_admin_view() -> bool:
         return bool(ss.get("admin_mode"))
     except Exception:
         return False
-# ================================= [06] admin gate — END ==============================
+# ========================= [06] admin gate — END ==============================
 
-# =============================== [07] rerun guard — START =============================
+# ========================= [07] rerun guard — START =============================
 def _safe_rerun(tag: str, ttl: int = 1) -> None:
     s = globals().get("st", None)
     if s is None:
