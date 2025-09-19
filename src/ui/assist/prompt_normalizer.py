@@ -1,4 +1,4 @@
-# ======== [01] FILE: src/ui/assist/prompt_normalizer.py — START ==========
+# ===== [01] FILE: src/ui/assist/prompt_normalizer.py — START =====
 from __future__ import annotations
 
 import importlib
@@ -7,11 +7,9 @@ from typing import Any, Dict, Optional
 
 import yaml
 
-# ===== [01] imports — START =====
 ELLIPSIS_UC = "\u2026"
-# ===== [01] imports — END =====
 
-# ===== [02] helpers — START =====
+
 def _sanitize_ellipsis(text: str) -> str:
     return text.replace(ELLIPSIS_UC, "...")
 
@@ -19,54 +17,43 @@ def _sanitize_ellipsis(text: str) -> str:
 def _post_openai(api_key: str, model: str, messages: list[dict], temperature: float) -> str:
     req: Any = importlib.import_module("requests")
     url = "https://api.openai.com/v1/chat/completions"
-    payload = {
-        "model": model,
-        "messages": messages,
-        "temperature": temperature,
-    }
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
+    payload = {"model": model, "messages": messages, "temperature": temperature}
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     r = req.post(url, headers=headers, data=json.dumps(payload), timeout=30)
     r.raise_for_status()
     data = r.json()
-    content = (
-        data.get("choices", [{}])[0]
-        .get("message", {})
-        .get("content", "")
-    )
+    content = (data.get("choices", [{}])[0].get("message", {}).get("content", ""))
     return str(content or "")
 
 
 def _build_prompt(grammar: str, sentence: str, passage: str) -> list[dict]:
+    # 규칙: 각 모드 입력은 "자연어 한 덩어리"이며, 모델이 이를
+    # (1) persona(역할/톤/스타일/대상)와 (2) system_instructions(절차/지시)로 자동 분해한다.
     sys = (
-        "You are a prompt normalizer. Convert the user's free text into a YAML that "
-        "conforms to this schema:\n"
+        "You are a prompt normalizer. Given one free-form Korean text for each mode, "
+        "produce a YAML that strictly follows this schema:\n"
         "version: auto\n"
         "modes:\n"
-        "  grammar: {persona, system_instructions, guardrails, examples, "
-        "citations_policy, routing_hints}\n"
-        "  sentence: {...}\n"
-        "  passage: {...}\n"
+        "  grammar: {persona, system_instructions, guardrails, examples, citations_policy, routing_hints}\n"
+        "  sentence: {persona, system_instructions, guardrails, examples, citations_policy, routing_hints}\n"
+        "  passage: {persona, system_instructions, guardrails, examples, citations_policy, routing_hints}\n"
         "Rules:\n"
-        "- Korean output. Keep lines concise. No fancy markup.\n"
-        "- citations_policy must be exactly: \"[이유문법]/[문법서적]/[AI지식]\".\n"
+        "- For each mode, split the single input into two: concise persona(1~3 lines) and actionable "
+        "system_instructions(≤5 bullet-like lines). Do not copy input verbatim; summarize clearly.\n"
+        "- Korean output only. No extra commentary, return YAML only.\n"
+        '- citations_policy MUST be \"[이유문법]/[문법서적]/[AI지식]\".\n"
         "- routing_hints.model: grammar=gpt-5-pro, sentence=gemini-pro, passage=gpt-5-pro.\n"
-        "- guardrails: include pii:true.\n"
-        "- examples: short or empty list.\n"
-        "- Return only YAML. No explanations."
+        "- guardrails: include pii:true. examples: keep short or empty.\n"
     )
     user = (
-        "원문(문법):\n" + grammar.strip() + "\n\n"
-        "원문(문장):\n" + sentence.strip() + "\n\n"
-        "원문(지문):\n" + passage.strip() + "\n\n"
-        "위 내용을 기반으로 스키마에 맞는 YAML을 작성해 주세요."
+        "입력(문법 한 덩어리):\n" + grammar.strip() + "\n\n"
+        "입력(문장 한 덩어리):\n" + sentence.strip() + "\n\n"
+        "입력(지문 한 덩어리):\n" + passage.strip() + "\n\n"
+        "위 3개 입력을 분석해 스키마에 맞는 YAML을 생성해 주세요."
     )
     return [{"role": "system", "content": sys}, {"role": "user", "content": user}]
-# ===== [02] helpers — END =====
 
-# ===== [03] normalize_to_yaml — START =====
+
 def normalize_to_yaml(
     *,
     grammar_text: str,
@@ -76,9 +63,8 @@ def normalize_to_yaml(
     openai_model: str = "gpt-4o-mini",
 ) -> str:
     """
-    Free text(문법/문장/지문)를 스키마 기반 YAML로 정리.
-    - OpenAI 키가 있으면 Chat Completions로 생성.
-    - 실패 시 템플릿 기반 최소 YAML로 폴백.
+    세 모드 입력(각각 자연어 한 덩어리)을 받아 스키마 적합 YAML 생성.
+    OpenAI 실패 시 템플릿 폴백.
     """
     grammar_text = _sanitize_ellipsis(grammar_text)
     sentence_text = _sanitize_ellipsis(sentence_text)
@@ -94,7 +80,7 @@ def normalize_to_yaml(
             yaml_text = ""
 
     if not yaml_text:
-        # Fallback: 최소 스키마로 구성
+        # Fallback: 최소 스키마
         data: Dict[str, Any] = {
             "version": "auto",
             "modes": {
@@ -104,11 +90,7 @@ def normalize_to_yaml(
                     "guardrails": {"pii": True},
                     "examples": [],
                     "citations_policy": "[이유문법]/[문법서적]/[AI지식]",
-                    "routing_hints": {
-                        "model": "gpt-5-pro",
-                        "max_tokens": 800,
-                        "temperature": 0.2,
-                    },
+                    "routing_hints": {"model": "gpt-5-pro", "max_tokens": 800, "temperature": 0.2},
                 },
                 "sentence": {
                     "persona": sentence_text,
@@ -116,11 +98,7 @@ def normalize_to_yaml(
                     "guardrails": {"pii": True},
                     "examples": [],
                     "citations_policy": "[이유문법]/[문법서적]/[AI지식]",
-                    "routing_hints": {
-                        "model": "gemini-pro",
-                        "max_tokens": 700,
-                        "temperature": 0.3,
-                    },
+                    "routing_hints": {"model": "gemini-pro", "max_tokens": 700, "temperature": 0.3},
                 },
                 "passage": {
                     "persona": passage_text,
@@ -128,23 +106,18 @@ def normalize_to_yaml(
                     "guardrails": {"pii": True},
                     "examples": [],
                     "citations_policy": "[이유문법]/[문법서적]/[AI지식]",
-                    "routing_hints": {
-                        "model": "gpt-5-pro",
-                        "max_tokens": 900,
-                        "temperature": 0.4,
-                    },
+                    "routing_hints": {"model": "gpt-5-pro", "max_tokens": 900, "temperature": 0.4},
                 },
             },
         }
         yaml_text = yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
 
-    # 최종 YAML 검증 및 정리
+    # 최종 검증(파싱 실패 시 폴백)
     try:
         obj = yaml.safe_load(yaml_text)
         if not isinstance(obj, dict):
             raise ValueError("root must be mapping")
     except Exception:
-        # 폴백 YAML
         obj = {
             "version": "auto",
             "modes": {
@@ -175,5 +148,4 @@ def normalize_to_yaml(
             },
         }
     return yaml.safe_dump(obj, allow_unicode=True, sort_keys=False)
-# ===== [03] normalize_to_yaml — END =====
-# ============= [01] FILE: src/ui/assist/prompt_normalizer.py — END ==============
+# ===== [01] FILE: src/ui/assist/prompt_normalizer.py — END =====
