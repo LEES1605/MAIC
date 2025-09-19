@@ -106,26 +106,34 @@ def _bootstrap_env() -> None:
 _bootstrap_env()
 if st:
     try:
-        st.set_page_config(page_title="LEES AI Teacher", layout="wide", initial_sidebar_state="collapsed")
+        st.set_page_config(
+            page_title="LEES AI Teacher",
+            layout="wide",
+            initial_sidebar_state="collapsed",  # 기본: 접힘 (학생)
+        )
     except Exception:
+        # Streamlit은 set_page_config를 1회만 허용하므로, 중복 호출은 무시
         pass
+
     # 권한에 따라 사이드바 정책 적용(관리자는 즉시 펼침)
     try:
-        # (1) 과거 경로 호환: src.ui.utils.sidebar → (2) 현행 경로: src.ui.utils.sider
-        _sider_mod = None
+        _mod = None
         try:
-            _sider_mod = importlib.import_module("src.ui.utils.sidebar")
+            # 우선 시도: sider
+            _mod = __import__("src.ui.utils.sider", fromlist=["ensure_admin_sidebar"])
         except Exception:
             try:
-                _sider_mod = importlib.import_module("src.ui.utils.sider")
+                # 폴백: sidebar (구버전 경로 호환)
+                _mod = __import__("src.ui.utils.sidebar", fromlist=["ensure_admin_sidebar"])
             except Exception:
-                _sider_mod = None
-        if _sider_mod:
-            getattr(_sider_mod, "ensure_admin_sidebar", lambda: None)()
+                _mod = None
+        if _mod:
+            getattr(_mod, "ensure_admin_sidebar", lambda: None)()
     except Exception:
         # 미존재/예외는 무시(학생 모드 기본값 유지)
         pass
 # ================================ [04] bootstrap env — END ============================
+
 
 
 # =============================== [05] path & logger — START ===========================

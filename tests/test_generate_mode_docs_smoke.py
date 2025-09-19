@@ -1,4 +1,4 @@
-# [05] START: tests/test_generate_mode_docs_smoke.py
+# === [05] FILE: tests/test_generate_mode_docs_smoke.py — START =======
 from __future__ import annotations
 
 import sys
@@ -7,7 +7,7 @@ from pathlib import Path
 
 def test_generate_mode_docs_smoke(tmp_path: Path, monkeypatch) -> None:
     """
-    문서 생성기가 에러 없이 동작하고, 핵심 섹션 헤더/표준 섹션명이 포함되는지 확인.
+    문서 생성기가 에러 없이 동작하고, 핵심 섭션 헤더/표준 섹션명이 포함되는지 확인.
     - 레포 루트를 PYTHONPATH에 추가해 import 경로를 고정
     - 생성 결과: docs/_gpt/_generated/MODES.md
     """
@@ -30,4 +30,4 @@ def test_generate_mode_docs_smoke(tmp_path: Path, monkeypatch) -> None:
     assert "### 섹션 순서" in txt
     # 표준 섹션명 중 일부 샘플
     assert "근거/출처" in txt
-# [05] END: tests/test_generate_mode_docs_smoke.py
+# ======== [05] FILE: tests/test_generate_mode_docs_smoke.py — END ======

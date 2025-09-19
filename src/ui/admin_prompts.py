@@ -1,4 +1,4 @@
-# [FILE: src/ui/admin_prompts.py] START
+# ========== [01] FILE: src/ui/admin_prompts.py — START =============
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
@@ -13,6 +13,7 @@ Admin UI — Prompts SSOT (Publish to GitHub Releases)
 """
 from __future__ import annotations
 
+# ===== [01.1] imports — START =====
 import base64
 import importlib
 import json
@@ -20,12 +21,11 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Tuple
 
 import yaml
+from src.ui.assist.prompt_normalizer import normalize_to_yaml
+# ===== [01.1] imports — END =====
 
-# ---- 정적 import(파일 상단 유지: ruff E402 대응) ----
-from src.ui.assist.prompt_normalizer import normalize_to_yaml  # noqa: E402
-
-# ---- ensure_admin_sidebar: 동적 import 폴백 (mypy-safe) ----
-#   - 우선순위: src.ui.utils.sider → src.ui.utils.sidebar → no-op
+# ===== [01.2] ensure_admin_sidebar bind — START =====
+# ensure_admin_sidebar: 동적 import 폴백 (우선 sider → sidebar → no-op)
 ensure_admin_sidebar: Callable[[], None]
 try:
     _mod = importlib.import_module("src.ui.utils.sider")
@@ -38,12 +38,14 @@ except Exception:
         def _noop() -> None:
             return
         ensure_admin_sidebar = _noop
+# ===== [01.2] ensure_admin_sidebar bind — END =====
 
-# ---- 외부 라이브러리 동적 import ----
+# ===== [01.3] ext libs (runtime import) — START =====
 st: Any = importlib.import_module("streamlit")
 req: Any = importlib.import_module("requests")
+# ===== [01.3] ext libs (runtime import) — END =====
 
-# ----------------------------- Utilities -----------------------------
+# ============ [02] utilities — START ===================
 
 ELLIPSIS_UC = "\u2026"
 
@@ -90,8 +92,10 @@ def _validate_yaml_text(yaml_text: str) -> Tuple[bool, list[str]]:
             msgs.append(f"{loc}: {verr.message}")
         return False, msgs
     return True, []
+# ============== [02] utilities — END ================
 
 
+# ============ [03] gh workflow dispatch helper — START ==============
 def _gh_dispatch_workflow(
     *,
     owner: str,
@@ -108,7 +112,10 @@ def _gh_dispatch_workflow(
         st.info(f"U+2026(...) {replaced}개를 '...'로 치환했습니다.")
 
     yaml_b64 = base64.b64encode(sanitized.encode("utf-8")).decode("ascii")
-    url = f"https://api.github.com/repos/{owner}/{repo}/actions/workflows/{workflow}/dispatches"
+    url = (
+        "https://api.github.com/repos/"
+        f"{owner}/{repo}/actions/workflows/{workflow}/dispatches"
+    )
     payload = {
         "ref": ref,
         "inputs": {
@@ -124,8 +131,10 @@ def _gh_dispatch_workflow(
     r = req.post(url, headers=headers, json=payload, timeout=20)
     if r.status_code not in (201, 204):
         raise RuntimeError(f"workflow_dispatch failed: HTTP {r.status_code} — {r.text}")
+# ===================== [03] gh workflow dispatch helper — END =========================
 
 
+# ============================== [04] yaml builders — START ============================
 def _default_yaml() -> str:
     candidate = Path("docs/_gpt/prompts.sample.yaml")
     if candidate.exists():
@@ -207,10 +216,10 @@ def _build_yaml_from_simple_inputs(
         },
     }
     return yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
+# ======================== [04] yaml builders — END =======================
 
 
-# ----------------------------- UI -----------------------------
-
+# ====================== [05] UI — START =========================
 def _admin_gate() -> None:
     st.set_page_config(page_title="Prompts Admin", page_icon="🛠️", layout="wide")
     with st.sidebar:
@@ -428,4 +437,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-# [FILE: src/ui/admin_prompts.py] END
+# ==================== [01] FILE: src/ui/admin_prompts.py — END ==================
