@@ -42,6 +42,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
+          # --- BASE/REF 계산 ---
           if [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
             echo "BASE=${{ github.event.pull_request.base.sha }}" >> "$GITHUB_OUTPUT"
             echo "REF=${{ github.event.pull_request.head.sha }}" >> "$GITHUB_OUTPUT"
@@ -58,8 +60,15 @@ jobs:
             echo "BASE=origin/main" >> "$GITHUB_OUTPUT"
             echo "REF=${{ github.sha }}" >> "$GITHUB_OUTPUT"
           fi
-          # 원격 heads 및 PR refs 확보 (fork PR 포함)
-          git fetch --no-tags --prune --depth=0 origin \
+
+          # --- 얕은 클론이면 전체 이력으로 전환 ---
+          if [[ -f .git/shallow ]]; then
+            git fetch --prune --unshallow origin
+          fi
+
+          # --- 원격 heads 및 PR refs 확보 (fork PR 포함) ---
+          # (주의) --depth=0 은 일부 git 버전에서 오류 → 깊이 옵션 제거
+          git fetch --no-tags --prune origin \
             "+refs/heads/*:refs/remotes/origin/*" \
             "+refs/pull/*:refs/remotes/pull/*"
 
@@ -82,15 +91,6 @@ jobs:
               - 'docs/**'
             ci:
               - '.github/workflows/**'
-
-      # (선택) 디버그: 필요 시 주석 해제
-      # - name: Debug git state
-      #   if: always()
-      #   run: |
-      #     git log -1 --oneline
-      #     echo "BASE=${{ steps.refs.outputs.BASE }}"
-      #     echo "REF=${{ steps.refs.outputs.REF }}"
-      #     git merge-base ${{ steps.refs.outputs.BASE }} ${{ steps.refs.outputs.REF }}
 
   # 예시) 이후 잡에서 변경 영역에 따라 조건 실행
   # ruff:
