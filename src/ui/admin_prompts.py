@@ -24,9 +24,9 @@ try:
     ensure_admin_sidebar = getattr(_sider, "ensure_admin_sidebar")
     render_minimal_admin_sidebar = getattr(_sider, "render_minimal_admin_sidebar")
 except Exception:
-    def ensure_admin_sidebar() -> None:  # type: ignore
+    def ensure_admin_sidebar() -> None:
         return
-    def render_minimal_admin_sidebar(*_: Any, **__: Any) -> None:  # type: ignore
+    def render_minimal_admin_sidebar(*_: Any, **__: Any) -> None:
         return
 
 # ===== [02] yaml/schema helpers — START =====
@@ -109,7 +109,7 @@ def _init_admin_page() -> None:
     st.set_page_config(page_title="Prompts Admin", page_icon="🛠️", layout="wide")
     # 관리자: 바로 사이드바 펼침 + 최소 메뉴 렌더
     ensure_admin_sidebar()          # 관리자는 펼침, 학생이면 숨김(프로젝트 정책)
-    from src.ui.utils.sider import show_sidebar  # type: ignore
+    from src.ui.utils.sider import show_sidebar 
     try:
         show_sidebar()  # 이 페이지에선 무조건 보이도록 강제
     except Exception:
