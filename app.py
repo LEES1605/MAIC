@@ -643,165 +643,6 @@ def _render_index_orchestrator_header() -> None:
 
 
 # =============================== [13] admin index — START =============================
-def _render_admin_index_panel() -> None:
-    if "st" not in globals() or st is None or not _is_admin_view():
-        return
-
-    st.markdown("<h3>🧭 인덱싱(관리자: prepared 전용)</h3>", unsafe_allow_html=True)
-
-    def _stamp_persist(p: Path) -> None:
-        try:
-            st.session_state["_PERSIST_DIR"] = p.resolve()
-        except Exception:
-            pass
-
-    if "_IDX_PH_STEPS" not in st.session_state:
-        st.session_state["_IDX_PH_STEPS"] = st.empty()
-    if "_IDX_PH_STATUS" not in st.session_state:
-        st.session_state["_IDX_PH_STATUS"] = st.empty()
-    if "_IDX_PH_BAR" not in st.session_state:
-        st.session_state["_IDX_PH_BAR"] = st.empty()
-    if "_IDX_PH_LOG" not in st.session_state:
-        st.session_state["_IDX_PH_LOG"] = st.empty()
-    if "_IDX_PH_S6" not in st.session_state:
-        st.session_state["_IDX_PH_S6"] = st.empty()
-
-    step_names: List[str] = ["스캔", "Persist확정", "인덱싱", "prepared소비", "요약/배지", "ZIP/Release"]
-    stall_threshold_sec = 60
-
-    def _step_reset(names: List[str]) -> None:
-        st.session_state["_IDX_STEPS"] = [{"name": n, "state": "idle", "note": ""} for n in names]
-        st.session_state["_IDX_LOG"] = []
-        st.session_state["_IDX_PROG"] = 0.0
-        st.session_state["_IDX_START_TS"] = time.time()
-        st.session_state["_IDX_LAST_TS"] = time.time()
-        st.session_state["_IDX_PH_S6"].empty()
-        st.session_state["_IDX_S6_BAR"] = None
-
-    def _steps() -> List[Dict[str, str]]:
-        if "_IDX_STEPS" not in st.session_state:
-            _step_reset(step_names)
-        return list(st.session_state["_IDX_STEPS"])
-
-    def _icon(state: str) -> str:
-        return {"idle": "⚪", "run": "🔵", "ok": "🟢", "fail": "🔴", "skip": "⚪"}.get(state, "⚪")
-
-    def _render_stepper() -> None:
-        lines: List[str] = []
-        for i, s in enumerate(_steps(), start=1):
-            note = f" — {s.get('note','')}" if s.get("note") else ""
-            lines.append(f"{_icon(s['state'])} {i}. {s['name']}{note}")
-        st.session_state["_IDX_PH_STEPS"].markdown("\n".join(f"- {ln}" for ln in lines))
-
-    def _update_progress() -> None:
-        steps = _steps()
-        done = sum(1 for s in steps if s["state"] in ("ok", "skip"))
-        prog = done / len(steps)
-        bar = st.session_state.get("_IDX_BAR")
-        if bar is None:
-            st.session_state["_IDX_BAR"] = st.session_state["_IDX_PH_BAR"].progress(prog, text="진행률")
-        else:
-            try:
-                bar.progress(prog)
-            except Exception:
-                st.session_state["_IDX_BAR"] = st.session_state["_IDX_PH_BAR"].progress(prog, text="진행률")
-
-    def _render_status() -> None:
-        now = time.time()
-        last = float(st.session_state.get("_IDX_LAST_TS", now))
-        start = float(st.session_state.get("_IDX_START_TS", now))
-        since_last = int(now - last)
-        since_start = int(now - start)
-        running = any(s["state"] == "run" for s in _steps())
-        stalled = running and since_last >= stall_threshold_sec
-        if stalled:
-            text = f"🟥 STALLED · 마지막 업데이트 {since_last}s 전 · 총 경과 {since_start}s"
-        elif running:
-            text = f"🟦 RUNNING · 마지막 업데이트 {since_last}s 전 · 총 경과 {since_start}s"
-        else:
-            text = f"🟩 IDLE/COMPLETE · 총 경과 {since_start}s"
-        st.session_state["_IDX_PH_STATUS"].markdown(text)
-
-    def _step_set(idx: int, state: str, note: str = "") -> None:
-        steps = _steps()
-        if 0 <= idx < len(steps):
-            steps[idx]["state"] = state
-            if note:
-                steps[idx]["note"] = note
-            st.session_state["_IDX_STEPS"] = steps
-            st.session_state["_IDX_LAST_TS"] = time.time()
-            _render_stepper()
-            _update_progress()
-            _render_status()
-
-    def _log(msg: str, level: str = "info") -> None:
-        buf: List[str] = st.session_state.get("_IDX_LOG", [])
-        prefix = {"info": "•", "warn": "⚠", "err": "✖"}.get(level, "•")
-        ts = time.strftime("%H:%M:%S")
-        line = f"[{ts}] {prefix} {msg}"
-        buf.append(line)
-        if len(buf) > 200:
-            buf = buf[-200:]
-        st.session_state["_IDX_LOG"] = buf
-        st.session_state["_IDX_PH_LOG"].text("\n".join(buf))
-        st.session_state["_IDX_LAST_TS"] = time.time()
-        _render_status()
-
-    # prepared 목록
-    files_list: List[Dict[str, Any]] = []
-    lister, dbg1 = _load_prepared_lister()
-    if lister:
-        try:
-            files_list = lister() or []
-        except Exception as e:
-            _log(f"prepared list failed: {e}", "err")
-    else:
-        for m in dbg1:
-            _log("• " + m, "warn")
-    prepared_count = len(files_list)
-    _step_set(0, "ok", f"{prepared_count}건")
-
-    with st.expander("이번에 인덱싱할 prepared 파일(예상)", expanded=False):
-        st.write(f"총 {prepared_count}건 (표시는 최대 400건)")
-        if prepared_count:
-            rows = []
-            for rec in files_list[:400]:
-                name = str(rec.get("name") or rec.get("path") or rec.get("file") or "")
-                fid = str(rec.get("id") or rec.get("fileId") or "")
-                rows.append({"name": name, "id": fid})
-            st.dataframe(rows, hide_index=True, use_container_width=True)
-        else:
-            st.caption("일치하는 파일이 없습니다.")
-
-    with st.form("idx_actions_form", clear_on_submit=False):
-        c1, c2, c3, c4 = st.columns([1, 2, 2, 1])
-        submit_reindex = c1.form_submit_button("🔁 강제 재인덱싱(HQ, prepared)", use_container_width=True)
-        show_after = c2.toggle("인덱싱 결과 표시", key="IDX_SHOW_AFTER", value=True)
-        auto_up = c3.toggle(
-            "인덱싱 후 자동 ZIP 업로드",
-            key="IDX_AUTO_UP",
-            value=True,  # ← 기본값 ON
-            help="GH/GITHUB 시크릿이 모두 있으면 켜짐",
-        )
-        reset_view = c4.form_submit_button("🧹 화면 초기화")
-
-        if reset_view:
-            _step_reset(step_names)
-            st.session_state["_IDX_BAR"] = None
-            st.session_state["_IDX_PH_BAR"].empty()
-            st.session_state["_IDX_PH_LOG"].empty()
-            _log("화면 상태를 초기화했습니다.")
-
-        if submit_reindex:
-            st.session_state["_IDX_REQ"] = {
-                "ts": time.time(),
-                "auto_up": auto_up,
-                "show_after": show_after,
-            }
-            _log("인덱싱 요청 접수")
-            _safe_rerun("idx_submit", ttl=1)
-
-    req = st.session_state.pop("_IDX_REQ", None)
     if req:
         used_persist = _persist_dir_safe()
         _step_reset(step_names)
@@ -898,60 +739,7 @@ def _render_admin_index_panel() -> None:
                 tok = _secret("GH_TOKEN") or _secret("GITHUB_TOKEN")
                 ow, rp = _resolve_owner_repo()
                 if tok and ow and rp:
-                    from urllib import request as _rq, error as _er, parse as _ps
                     import zipfile
-
-                    def _gh_api(url: str, token_: str, data: Optional[bytes],
-                                method: str, ctype: str) -> Dict[str, Any]:
-                        req = _rq.Request(url, data=data, method=method)
-                        req.add_header("Authorization", f"token {token_}")
-                        req.add_header("Accept", "application/vnd.github+json")
-                        if ctype:
-                            req.add_header("Content-Type", ctype)
-                        try:
-                            with _rq.urlopen(req, timeout=30) as resp:
-                                txt = resp.read().decode("utf-8", "ignore")
-                                try:
-                                    return json.loads(txt)
-                                except Exception:
-                                    return {"_raw": txt}
-                        except _er.HTTPError as e:
-                            return {"_error": f"HTTP {e.code}", "detail": e.read().decode()}
-                        except Exception:
-                            return {"_error": "network_error"}
-
-                    def _upload_release_zip(owner: str, repo: str, token: str,
-                                            tag: str, zip_path: Path,
-                                            name: Optional[str] = None,
-                                            body: str = "") -> Dict[str, Any]:
-                        api = "https://api.github.com"
-                        get_url = f"{api}/repos/{owner}/{repo}/releases/tags/{_ps.quote(tag)}"
-                        rel = _gh_api(get_url, token, None, "GET", "")
-                        if "_error" in rel:
-                            payload = json.dumps({"tag_name": tag, "name": name or tag,
-                                                  "body": body}).encode("utf-8")
-                            rel = _gh_api(f"{api}/repos/{owner}/{repo}/releases",
-                                          token, payload, "POST", "application/json")
-                            if "_error" in rel:
-                                return rel
-                        rid = rel.get("id")
-                        if not rid:
-                            return {"_error": "no_release_id"}
-
-                        up_url = ("https://uploads.github.com/repos/"
-                                  f"{owner}/{repo}/releases/{rid}/assets"
-                                  f"?name={_ps.quote(zip_path.name)}")
-                        data = zip_path.read_bytes()
-                        req = _rq.Request(up_url, data=data, method="POST")
-                        req.add_header("Authorization", f"token {token}")
-                        req.add_header("Content-Type", "application/zip")
-                        req.add_header("Accept", "application/vnd.github+json")
-                        with _rq.urlopen(req, timeout=180) as resp:
-                            txt = resp.read().decode("utf-8", "ignore")
-                            try:
-                                return json.loads(txt)
-                            except Exception:
-                                return {"_raw": txt}
 
                     backup_dir = used_persist / "backups"
                     backup_dir.mkdir(parents=True, exist_ok=True)
@@ -963,11 +751,17 @@ def _render_admin_index_panel() -> None:
                                 zf.write(str(pth), arcname=str(pth.relative_to(used_persist)))
 
                     tag = f"index-{int(time.time())}"
-                    res = _upload_release_zip(ow, rp, tok, tag, z, name=tag, body="MAIC index")
-                    if "_error" in res:
-                        _step_set(5, "fail", res.get("_error", "error"))
-                    else:
+                    try:
+                        from src.runtime.gh_release import GHConfig, GHError, GHReleases
+
+                        client = GHReleases(GHConfig(owner=ow, repo=rp, token=tok))
+                        rel = client.ensure_release(tag, name=tag)
+                        client.upload_asset(rel, z)
                         _step_set(5, "ok", "업로드 완료")
+                    except GHError as e:
+                        _step_set(5, "fail", str(e))
+                    except Exception as e:
+                        _step_set(5, "fail", f"upload_error: {e}")
                 else:
                     _step_set(5, "skip", "시크릿 없음")
 
@@ -975,36 +769,6 @@ def _render_admin_index_panel() -> None:
         except Exception as e:
             _step_set(2, "fail", "인덱싱 실패")
             _log(f"인덱싱 실패: {e}", "err")
-
-    if bool(st.session_state.get("IDX_SHOW_AFTER", True)):
-        idx_persist = _persist_dir_safe()
-        glb_persist = _persist_dir_safe()
-        st.write(f"**Persist(Indexer):** `{str(idx_persist)}`")
-        st.write(f"**Persist(Global):** `{str(glb_persist)}`")
-        try:
-            from src.rag.index_status import get_index_summary
-            s = get_index_summary(idx_persist)
-            ready_txt = "Yes" if s.ready else "No"
-            st.caption(f"요약: ready={ready_txt} · files={s.total_files} · chunks={s.total_chunks}")
-            if s.sample_files:
-                with st.expander("샘플 파일(최대 3개)", expanded=False):
-                    rows = [{"path": x} for x in s.sample_files]
-                    st.dataframe(rows, hide_index=True, use_container_width=True)
-        except Exception:
-            cj = idx_persist / "chunks.jsonl"
-            if cj.exists():
-                st.caption("요약 모듈 없음: chunks.jsonl 존재")
-                if not (idx_persist / ".ready").exists():
-                    st.info(".ready 파일이 없어 준비 상태가 미완성입니다.")
-            else:
-                st.info("`chunks.jsonl`이 아직 없어 결과를 표시할 수 없습니다.")
-
-    with st.expander("실시간 로그 (최근 200줄)", expanded=False):
-        buf = st.session_state.get("_IDX_LOG", [])
-        if buf:
-            st.text("\n".join(buf))
-        else:
-            st.caption("표시할 로그가 없습니다.")
 # ================================= [13] admin index — END =============================
 
 # =============================== [14] admin legacy — START ============================
