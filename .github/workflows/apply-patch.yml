@@ -88,22 +88,22 @@ jobs:
           if [ -n "${{ inputs.patch_url }}" ]; then
             echo "Downloading patch from URL..."
             curl -sS -L --fail "${{ inputs.patch_url }}" -o codex.patch
-          elif [ -n "${{ inputs.patch }}" ]; then
-            echo "Writing inline patch to file..."
-            # Heredoc으로 줄바꿈/특수문자 안전하게 보존
-            cat > codex.patch <<'PATCH_EOF'
-            ${{ inputs.patch }}
-            PATCH_EOF
           else
-            echo "::error title=No patch provided::Either patch_url or patch must be provided."
-            exit 1
+            echo "Writing inline patch to file..."
+            # ⚠️ 주의: 아래 두 줄은 반드시 "줄 맨 앞(공백 0칸)"에 있어야 함.
+            #         (그렇지 않으면 'diff --git' 앞에 공백이 생겨 패치 적용이 실패 가능)
+cat > codex.patch <<'PATCH_EOF'
+${{ inputs.patch }}
+PATCH_EOF
           fi
+
           echo "----- Patch head (up to 40 lines) -----"
           head -n 40 codex.patch || true
           echo "---------------------------------------"
-          # 비어있는지 검사
+
+          # 비어있으면 오류 처리 (patch_url도 없고 patch도 비었을 때)
           if [ ! -s codex.patch ]; then
-            echo "::error title=Empty patch::The patch file is empty."
+            echo "::error title=Empty patch::Provide either patch_url or paste full diff text in the Patch field."
             exit 1
           fi
 
