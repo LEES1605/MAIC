@@ -6,12 +6,19 @@ import importlib
 from contextlib import suppress
 
 
-# ──────────────────────────────── streamlit loader ────────────────────────────────
+# ──────────────────────────────── constants ─────────────────────────────────────
+# 등록된 Streamlit 멀티페이지 엔트리 경로(오타 방지)
+ADMIN_PAGE: str = "pages/90_admin_prompt.py"
+DEFAULT_BACK_PAGE: str = "app.py"
+
+
+# ──────────────────────────────── streamlit loader ─────────────────────────────
 def _st() -> Any:
+    """Lazy import to avoid hard dependency during non-UI tests."""
     return importlib.import_module("streamlit")
 
 
-# ──────────────────────────────── page config helpers ─────────────────────────────
+# ──────────────────────────────── page config helpers ──────────────────────────
 def _safe_set_page_config(*, initial_sidebar_state: str) -> None:
     st = _st()
     try:
@@ -68,7 +75,7 @@ def ensure_admin_sidebar() -> None:
         hide_sidebar()
 
 
-# ──────────────────────────────── state & nav helpers ─────────────────────────────
+# ──────────────────────────────── state & nav helpers ──────────────────────────
 def _set_query_params(params: Dict[str, str]) -> None:
     """st.query_params 우선, 없으면 experimental_set_query_params로 폴백."""
     st = _st()
@@ -79,7 +86,7 @@ def _set_query_params(params: Dict[str, str]) -> None:
         elif hasattr(st, "experimental_set_query_params"):
             st.experimental_set_query_params(**params)  # type: ignore[attr-defined]
     except Exception:
-        # 쿼리파라미터 세팅 실패는 치명적이지 않으므로 무시(세션 토글이 더 중요)
+        # 쿼리 세팅 실패는 치명적이지 않으므로 무시(세션 토글이 더 중요)
         pass
 
 
@@ -104,9 +111,9 @@ def _nav_to_admin() -> None:
     st = _st()
     _set_admin_state(True)
     _set_query_params({"admin": "1", "goto": "admin"})
-    # 페이지 전환은 가능한 경우에만; 실패해도 세션/쿼리 토글로 모드가 유지됨
+    # 페이지 전환은 가능한 경우에만; 실패해도 토글로 모드가 유지됨
     with suppress(Exception):
-        st.switch_page("pages/90_admin_prompt.py")
+        st.switch_page(ADMIN_PAGE)
     # 항상 리런하여 토글을 즉시 반영
     st.rerun()
 
@@ -121,10 +128,10 @@ def _nav_to_back(back_page: str) -> None:
     st.rerun()
 
 
-# ──────────────────────────────── public: minimal admin sider ──────────────────────
+# ──────────────────────────────── public: minimal admin sider ─────────────────
 def render_minimal_admin_sidebar(
     *,
-    back_page: str = "app.py",
+    back_page: str = DEFAULT_BACK_PAGE,
     icon_only: bool = True,
 ) -> None:
     """관리자용 최소 사이드바(기본 네비 숨김 + 2버튼).
@@ -152,11 +159,11 @@ def render_minimal_admin_sidebar(
     # 버튼 클릭 처리: 토글 → 전환 → rerun (항상)
     if go_admin:
         _nav_to_admin()
-    if go_back:
+    elif go_back:
         _nav_to_back(back_page)
 
 
-def apply_admin_chrome(*, back_page: str = "app.py", icon_only: bool = True) -> None:
+def apply_admin_chrome(*, back_page: str = DEFAULT_BACK_PAGE, icon_only: bool = True) -> None:
     """관리자 화면에서 즉시 최소 사이드바를 보이도록 일괄 적용."""
     ensure_admin_sidebar()
     render_minimal_admin_sidebar(back_page=back_page, icon_only=icon_only)
