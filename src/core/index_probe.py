@@ -60,27 +60,16 @@ class IndexHealth:
 
     @property
     def ok(self) -> bool:
-        """True when persist dir has ready marker + valid chunks.
-        - 샘플 검증을 **실행했을 때만**(json_sample>0) 샘플 실패를 반영
-        - 샘플 **미수행**(json_sample==0)인 경우에는 .ready + chunks 기준만으로 합격
-        """
-        # 1) 기본 게이트: ready 파일 + chunks 파일(>0)
+        """True when persist dir has ready marker + valid chunks."""
         if not (self.ready_exists and self.chunks_exists and self.chunks_size > 0):
             return False
-
-        # 2) .ready 내용 역호환 포함해서 유효성 검사
+        if self.json_sample <= 0 or self.json_malformed > 0:
+            return False
         try:
             txt = (self.persist / ".ready").read_text(encoding="utf-8")
         except Exception:
             txt = ""
-        if not _is_ready_text(txt):
-            return False
-
-        # 3) 샘플 검증은 **실행된 경우에만** 판정에 반영
-        if self.json_sample > 0 and self.json_malformed > 0:
-            return False
-
-        return True
+        return _is_ready_text(txt)
 
 
 def probe_index_health(persist: Optional[Path] = None, sample_lines: int = 200) -> IndexHealth:
@@ -215,5 +204,3 @@ __all__ = [
     "get_brain_status",
 ]
 # ========================= [03] probe & status core — END ==========================
-
-
