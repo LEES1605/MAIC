@@ -1,33 +1,52 @@
+# ===== [01] FILE: .github/workflows/_paths_filter.yml — START =====
 name: _paths_filter
 
 on:
   workflow_call:
     inputs:
       filters:
-        required: true
+        description: "Optional: custom filters mapping or path to a YAML file"
+        required: false
         type: string
       base:
+        description: "Base ref to compare (default: PR base or origin/main)"
         required: false
         type: string
       ref:
+        description: "Ref/SHA to compare against (default: current SHA)"
         required: false
         type: string
     outputs:
-      python_changed:   { value: ${{ jobs.paths.outputs.python_changed }} }
-      workflows_changed:{ value: ${{ jobs.paths.outputs.workflows_changed }} }
-      docs_changed:     { value: ${{ jobs.paths.outputs.docs_changed }} }
-      python_files:     { value: ${{ jobs.paths.outputs.python_files }} }
-      workflows_files:  { value: ${{ jobs.paths.outputs.workflows_files }} }
-      docs_files:       { value: ${{ jobs.paths.outputs.docs_files }} }
+      python_changed:
+        description: "True if Python files changed"
+        value: ${{ jobs.paths.outputs.python_changed }}
+      workflows_changed:
+        description: "True if workflow files changed"
+        value: ${{ jobs.paths.outputs.workflows_changed }}
+      docs_changed:
+        description: "True if docs changed"
+        value: ${{ jobs.paths.outputs.docs_changed }}
+      python_files:
+        description: "List of changed Python files"
+        value: ${{ jobs.paths.outputs.python_files }}
+      workflows_files:
+        description: "List of changed workflow files"
+        value: ${{ jobs.paths.outputs.workflows_files }}
+      docs_files:
+        description: "List of changed docs files"
+        value: ${{ jobs.paths.outputs.docs_files }}
     secrets:
-      GITHUB_TOKEN: { required: true }
+      GITHUB_TOKEN:
+        required: true
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
   paths:
     runs-on: ubuntu-latest
+
     outputs:
       python_changed:    ${{ steps.filter.outputs.python }}
       workflows_changed: ${{ steps.filter.outputs.workflows }}
@@ -35,25 +54,34 @@ jobs:
       python_files:      ${{ steps.filter.outputs.python_files }}
       workflows_files:   ${{ steps.filter.outputs.workflows_files }}
       docs_files:        ${{ steps.filter.outputs.docs_files }}
+
     steps:
-      # 1) 루트에 .git 보장 + 전체 이력(비교/머지 검사용)
-      - name: Checkout (root, full history)
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          clean: true
 
-      # 2) git 128 예방(dubious ownership 방지)
-      - name: Mark repo as safe for git
-        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
-
-      # 3) dorny 실행(base/ref 명시)
       - name: Paths filter
         id: filter
         uses: dorny/paths-filter@v3
         with:
+          # 기본 비교 기준: PR이면 PR base, 그외엔 origin/main 대비
+          base: ${{ inputs.base || (github.event.pull_request.base.sha || 'origin/main') }}
+          ref:  ${{ inputs.ref  || github.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
-          base: ${{ inputs.base || (github.event_name == 'pull_request' && github.event.pull_request.base.sha) || 'refs/heads/main' }}
-          ref:  ${{ inputs.ref  || (github.event_name == 'pull_request' && github.event.pull_request.head.sha) || github.sha }}
-          list-files: json
+          # 호출 측에서 'filters'를 넘기면 그대로 사용(파일 경로나 YAML 문자열 모두 허용)
+          # 미지정 시 기본 필터 셋을 적용
           filters: ${{ inputs.filters }}
+          # 기본 필터 (inputs.filters 미지정일 때 동작)
+          # dorny/paths-filter는 inputs.filters 가 비어있으면 아래 'default'가 사용됨
+          # 참고: https://github.com/dorny/paths-filter
+          default: |
+            python:
+              - '**/*.py'
+            workflows:
+              - '.github/workflows/**/*.yml'
+              - '.github/workflows/**/*.yaml'
+            docs:
+              - 'docs/**'
+              - '**/*.md'
+# ===== [01] FILE: .github/workflows/_paths_filter.yml — END =====
