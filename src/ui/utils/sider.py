@@ -1,30 +1,20 @@
 # ===== [01] FILE: src/ui/utils/sider.py — START =====
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any
 import importlib
-from contextlib import suppress
 
 
-# ──────────────────────────────── constants ─────────────────────────────────────
-# 등록된 Streamlit 멀티페이지 엔트리 경로(오타 방지)
-ADMIN_PAGE: str = "pages/90_admin_prompt.py"
-DEFAULT_BACK_PAGE: str = "app.py"
-
-
-# ──────────────────────────────── streamlit loader ─────────────────────────────
 def _st() -> Any:
-    """Lazy import to avoid hard dependency during non-UI tests."""
     return importlib.import_module("streamlit")
 
 
-# ──────────────────────────────── page config helpers ──────────────────────────
 def _safe_set_page_config(*, initial_sidebar_state: str) -> None:
     st = _st()
     try:
         st.set_page_config(initial_sidebar_state=initial_sidebar_state)
     except Exception:
-        # set_page_config는 1회만 허용 → 후속 호출은 무시
+        # set_page_config는 1회만 허용 → 후속 호출 무시
         pass
 
 
@@ -35,8 +25,14 @@ def _hide_native_sidebar_nav() -> None:
         "<style>"
         "nav[data-testid='stSidebarNav']{display:none!important;}"
         "div[data-testid='stSidebarNav']{display:none!important;}"
+        "div[data-testid='stSidebarNavItems']{display:none!important;}"
+        "div[data-testid='stSidebarNavLink']{display:none!important;}"
+        "nav[aria-label='main navigation']{display:none!important;}"
+        "section[data-testid='stSidebar'] nav{display:none!important;}"
         "section[data-testid='stSidebar'] [data-testid='stSidebarNav']{display:none!important;}"
-        "section[data-testid='stSidebar'] ul[role='list']{display:none!important;}"
+        "section[data-testid='stSidebar'] [data-testid='stSidebarNavItems']{display:none!important;}"
+        "section[data-testid='stSidebar'] ul{display:none!important;}"
+        "section[data-testid='stSidebar'] li{display:none!important;}"
         "</style>",
         unsafe_allow_html=True,
     )
@@ -75,63 +71,9 @@ def ensure_admin_sidebar() -> None:
         hide_sidebar()
 
 
-# ──────────────────────────────── state & nav helpers ──────────────────────────
-def _set_query_params(params: Dict[str, str]) -> None:
-    """st.query_params 우선, 없으면 experimental_set_query_params로 폴백."""
-    st = _st()
-    try:
-        if hasattr(st, "query_params"):
-            for k, v in params.items():
-                st.query_params[k] = v  # type: ignore[index]
-        elif hasattr(st, "experimental_set_query_params"):
-            st.experimental_set_query_params(**params)  # type: ignore[attr-defined]
-    except Exception:
-        # 쿼리 세팅 실패는 치명적이지 않으므로 무시(세션 토글이 더 중요)
-        pass
-
-
-def _set_admin_state(enable: bool) -> None:
-    """세션 상태를 명시적으로 토글."""
-    st = _st()
-    ss = getattr(st, "session_state", {})
-    try:
-        if enable:
-            ss["admin_mode"] = True
-            ss["_admin_ok"] = True
-        else:
-            ss["admin_mode"] = False
-            ss.pop("_admin_ok", None)
-    except Exception:
-        # 세션 접근 실패 시에도 이어서 진행
-        pass
-
-
-def _nav_to_admin() -> None:
-    """관리자 프롬프트로 이동: 세션/쿼리 선반영 → (가능하면) 페이지 전환 → rerun."""
-    st = _st()
-    _set_admin_state(True)
-    _set_query_params({"admin": "1", "goto": "admin"})
-    # 페이지 전환은 가능한 경우에만; 실패해도 토글로 모드가 유지됨
-    with suppress(Exception):
-        st.switch_page(ADMIN_PAGE)
-    # 항상 리런하여 토글을 즉시 반영
-    st.rerun()
-
-
-def _nav_to_back(back_page: str) -> None:
-    """프롬프트(일반 화면)로 복귀: 세션/쿼리 선반영 → (가능하면) 페이지 전환 → rerun."""
-    st = _st()
-    _set_admin_state(False)
-    _set_query_params({"admin": "0", "goto": "back"})
-    with suppress(Exception):
-        st.switch_page(back_page)
-    st.rerun()
-
-
-# ──────────────────────────────── public: minimal admin sider ─────────────────
 def render_minimal_admin_sidebar(
     *,
-    back_page: str = DEFAULT_BACK_PAGE,
+    back_page: str = "app.py",
     icon_only: bool = True,
 ) -> None:
     """관리자용 최소 사이드바(기본 네비 숨김 + 2버튼)."""
@@ -153,7 +95,6 @@ def render_minimal_admin_sidebar(
 
     try:
         if go_admin:
-            st.switch_page("src/ui/admin_prompts.py")
             st.switch_page("pages/90_admin_prompt.py")
         if go_back:
             st.switch_page(back_page)
@@ -180,4 +121,5 @@ def render_minimal_admin_sidebar(
 def apply_admin_chrome(*, back_page: str = "app.py", icon_only: bool = True) -> None:
     """관리자 화면에서 즉시 최소 사이드바를 보이도록 일괄 적용."""
     ensure_admin_sidebar()
+    render_minimal_admin_sidebar(back_page=back_page, icon_only=icon_only)
 # ===== [01] FILE: src/ui/utils/sider.py — END =====
