@@ -80,6 +80,9 @@ def _load_prepared_api():
 # ================================ [03] helpers(persist) — END =========================
 
 # ===== [04] bootstrap env — START =====
+# (안전상 중복 import 허용)
+import os, time
+
 def _bootstrap_env() -> None:
     try:
         _promote_env(keys=[
@@ -110,10 +113,9 @@ if st:
     except Exception:
         pass
 
-    # (A) experimental_* 경고 제거(호환)
+    # (A) experimental_* 호환 래퍼(경고 제거)
     try:
         if hasattr(st, "experimental_get_query_params"):
-            # 경고 없이 새 API로 동작시키는 얇은 래퍼
             st.experimental_get_query_params = lambda: st.query_params  # type: ignore
         if hasattr(st, "experimental_set_query_params"):
             def _set_qp(**kwargs: object) -> None:
@@ -123,7 +125,21 @@ if st:
     except Exception:
         pass
 
-    # (B) admin/goto 쿼리 파라미터 → 관리자 플래그 ON/OFF (영구 수정)
+    # (B) 기본 멀티페이지 네비 전역 숨김(학생/관리자 공통) — 로그인 화면 잔재 제거
+    try:
+        st.markdown(
+            "<style>"
+            "nav[data-testid='stSidebarNav']{display:none!important;}"
+            "div[data-testid='stSidebarNav']{display:none!important;}"
+            "section[data-testid='stSidebar'] [data-testid='stSidebarNav']{display:none!important;}"
+            "section[data-testid='stSidebar'] ul[role='list']{display:none!important;}"
+            "</style>",
+            unsafe_allow_html=True,
+        )
+    except Exception:
+        pass
+
+    # (C) admin/goto 쿼리 파라미터 → 관리자 플래그 ON/OFF (영구 수정)
     try:
         v = st.query_params.get("admin", None)
         goto = st.query_params.get("goto", None)
@@ -149,7 +165,7 @@ if st:
         if _has(v, _truthy) or _has(goto, lambda x: _norm(x) == "admin"):
             new_mode = True
 
-        # 끄기: admin=0/false/off or goto=back|prompt|home (끄기가 우선)
+        # 끄기(우선): admin=0/false/off or goto=back|prompt|home
         if _has(v, _falsy) or _has(goto, lambda x: _norm(x) in ("back", "prompt", "home")):
             new_mode = False
 
@@ -159,13 +175,12 @@ if st:
             else:
                 st.session_state.pop("_admin_ok", None)
             st.session_state["admin_mode"] = new_mode
-            # 즉시 UI 반영
             st.session_state["_ADMIN_TOGGLE_TS"] = time.time()
             st.rerun()
     except Exception:
         pass
 
-    # (C) 권한별 사이드바 정책 + 최소 사이드바(아이콘 2개)
+    # (D) 관리자/학생 크롬 적용 — 학생은 숨김, 관리자는 최소 사이드바 즉시 렌더
     try:
         _sider = __import__("src.ui.utils.sider", fromlist=["apply_admin_chrome"])
         getattr(_sider, "apply_admin_chrome", lambda **_: None)(
@@ -174,6 +189,7 @@ if st:
     except Exception:
         pass
 # ===== [04] bootstrap env — END =====
+
 
 
 
