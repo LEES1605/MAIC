@@ -334,15 +334,38 @@ def _boot_auto_restore_index() -> None:
     p = effective_persist_dir()
     cj = p / "chunks.jsonl"
     rf = p / ".ready"
+
+    # --- 공용 판정기(역호환 허용) 로드 ---
+    try:
+        from src.core.readiness import is_ready_text, normalize_ready_file
+    except Exception:
+        # 폴백(동일 로직)
+        def _norm(x: str | bytes | None) -> str:
+            if x is None:
+                return ""
+            if isinstance(x, bytes):
+                x = x.decode("utf-8", "ignore")
+            return x.replace("\ufeff", "").strip().lower()
+
+        def is_ready_text(x):  # type: ignore
+            return _norm(x) in {"ready", "ok", "true", "1", "on", "yes", "y", "green"}
+
+        def normalize_ready_file(_):  # type: ignore
+            try:
+                (p / ".ready").write_text("ready", encoding="utf-8")
+                return True
+            except Exception:
+                return False
+
+    # --- 사전 스킵조건: chunks + .ready(역호환) ---
     ready_txt = ""
     try:
         if rf.exists():
-            ready_txt = rf.read_text(encoding="utf-8").strip().lower()
+            ready_txt = rf.read_text(encoding="utf-8")
     except Exception:
         ready_txt = ""
 
-    # 이미 유효하면 종료
-    if cj.exists() and cj.stat().st_size > 0 and (ready_txt == "ready"):
+    if cj.exists() and cj.stat().st_size > 0 and is_ready_text(ready_txt):
         try:
             if "st" in globals() and st is not None:
                 st.session_state["_BOOT_RESTORE_DONE"] = True
@@ -350,7 +373,7 @@ def _boot_auto_restore_index() -> None:
             pass
         return
 
-    # GitHub repo/token 확보
+    # --- GitHub Releases에서 복원(유연 후보) ---
     repo_full = os.getenv("GITHUB_REPO", "")
     token = os.getenv("GITHUB_TOKEN", None)
     try:
@@ -363,7 +386,7 @@ def _boot_auto_restore_index() -> None:
         return
     owner, repo = str(repo_full).split("/", 1)
 
-    # 후보: 태그/에셋 (동적 연도 포함)
+    # 태그 후보: 정적 + 동적(최근 5년)
     try:
         import datetime as _dt
         this_year = _dt.datetime.utcnow().year
@@ -373,9 +396,8 @@ def _boot_auto_restore_index() -> None:
     tag_candidates = ["indices-latest", "index-latest"] + dyn_tags + ["latest"]
     asset_candidates = ["indices.zip", "persist.zip", "hq_index.zip", "prepared.zip"]
 
-    # GHReleases 로 통일
     try:
-        from src.runtime.gh_release import GHConfig, GHReleases  # lazy import
+        from src.runtime.gh_release import GHConfig, GHReleases
         gh = GHReleases(GHConfig(owner=owner, repo=repo, token=token))
         gh.restore_latest_index(
             tag_candidates=tag_candidates,
@@ -384,14 +406,8 @@ def _boot_auto_restore_index() -> None:
             clean_dest=True,
         )
 
-        # 복원 성공 → ready 표준화
-        try:
-            core_mark_ready(p)  # 표준: ".ready" 파일 내용은 "ready"
-        except Exception:
-            try:
-                (p / ".ready").write_text("ready", encoding="utf-8")
-            except Exception:
-                pass
+        # ── 복원 성공 후: .ready 표준화(= 'ready')
+        normalize_ready_file(p)
 
         try:
             if "st" in globals() and st is not None:
@@ -400,9 +416,10 @@ def _boot_auto_restore_index() -> None:
         except Exception:
             pass
     except Exception:
-        # 조용히 실패 (UI에서 오류 토스트로 안내)
+        # 조용히 실패 (UI에서 버튼/토스트로 안내)
         return
 # ================================= [10] auto-restore — END ============================
+
 
 
 # =============================== [11] boot hooks — START ==============================
@@ -488,26 +505,41 @@ def _render_index_orchestrator_header() -> None:
     if "st" not in globals() or st is None:
         return
 
+    # 공용 판정기(역호환 허용)
+    try:
+        from src.core.readiness import is_ready_text, normalize_ready_file
+    except Exception:
+        def _norm(x: str | bytes | None) -> str:
+            if x is None:
+                return ""
+            if isinstance(x, bytes):
+                x = x.decode("utf-8", "ignore")
+            return x.replace("\ufeff", "").strip().lower()
+        def is_ready_text(x):  # type: ignore
+            return _norm(x) in {"ready", "ok", "true", "1", "on", "yes", "y", "green"}
+        def normalize_ready_file(_):  # type: ignore
+            return False
+
     st.markdown("### 🧪 인덱스 오케스트레이터")
     persist = _persist_dir_safe()
     with st.container():
         st.caption("Persist Dir")
         st.code(str(persist), language="text")
 
-    status_text = "MISSING"
+    # 상태 표시
+    cj = persist / "chunks.jsonl"
+    rf = persist / ".ready"
     try:
-        from src.rag.index_status import get_index_summary
-        s = get_index_summary(persist)
-        status_text = "READY" if getattr(s, "ready", False) else "MISSING"
+        ready_txt = rf.read_text(encoding="utf-8") if rf.exists() else ""
     except Exception:
-        status_text = "MISSING"
-
-    badge = "🟩 READY" if status_text == "READY" else "🟨 MISSING"
+        ready_txt = ""
+    status_ok = cj.exists() and cj.stat().st_size > 0 and is_ready_text(ready_txt)
+    badge = "🟩 READY" if status_ok else "🟨 MISSING"
     st.markdown(f"**상태**\n\n{badge}")
 
-    # 헤더 배지(준비중/READY)와 동기화
+    # 헤더 배지 동기화
     try:
-        if status_text == "READY":
+        if status_ok:
             _set_brain_status("READY", "인덱스 사용 가능", "index", attached=True)
         else:
             _set_brain_status("MISSING", "인덱스 없음", "index", attached=False)
@@ -525,20 +557,17 @@ def _render_index_orchestrator_header() -> None:
 
         if cols[1].button("✅ 복원 결과 검증", use_container_width=True):
             try:
-                cj = persist / "chunks.jsonl"
-                rf = persist / ".ready"
-                ready_txt = ""
-                if rf.exists():
-                    try:
-                        ready_txt = rf.read_text(encoding="utf-8").strip().lower()
-                    except Exception:
-                        ready_txt = ""
+                # 재계산(역호환)
+                try:
+                    ready_txt = rf.read_text(encoding="utf-8") if rf.exists() else ""
+                except Exception:
+                    ready_txt = ""
+                ok = cj.exists() and cj.stat().st_size > 0 and is_ready_text(ready_txt)
 
-                ok = cj.exists() and cj.stat().st_size > 0 and (ready_txt == "ready")
                 rec = {
                     "result": "성공" if ok else "실패",
                     "chunk": str(cj),
-                    "ready": ready_txt or "(없음)",
+                    "ready": ready_txt.strip() or "(없음)",
                     "persist": str(persist),
                     "ts": int(time.time()),
                 }
@@ -546,7 +575,7 @@ def _render_index_orchestrator_header() -> None:
 
                 if ok:
                     _set_brain_status("READY", "복원 완료", "release", attached=True)
-                    st.success("검증 성공: chunks.jsonl 존재 & .ready='ready'")
+                    st.success("검증 성공: chunks.jsonl 존재 & .ready 값이 유효합니다.")
                 else:
                     _set_brain_status("MISSING", "산출물/ready 불일치", "release", attached=False)
                     st.error("검증 실패: 산출물/ready 상태가 불일치합니다.")
@@ -558,9 +587,9 @@ def _render_index_orchestrator_header() -> None:
             if rec:
                 st.json(rec)
             else:
-                st.caption("복원 기록이 없습니다. 위의 복원 버튼 또는 검증 버튼을 사용해 보세요.")
+                st.caption("복원 기록이 없습니다. 위의 복원/검증 버튼을 사용해 보세요.")
 
-        # ──────────────────────────── NEW: Release 후보 디버그(최근 5개) ────────────────────────────
+        # ─ NEW: Release 후보 디버그(최근 5개) 그대로 유지 ─
         with st.expander("🐞 Release 후보 디버그 (최근 5개)", expanded=False):
             import json as _json
             from urllib import request as _rq
@@ -583,7 +612,6 @@ def _render_index_orchestrator_header() -> None:
                     url = f"https://api.github.com/repos/{owner}/{repo}/releases?per_page=5"
                     headers = {"Accept": "application/vnd.github+json"}
                     if token:
-                        # GitHub API 토큰(ヘ더 스킴은 token/Bearer 어느 쪽이든 허용)
                         headers["Authorization"] = f"token {token}"
                     req = _rq.Request(url, headers=headers)
                     with _rq.urlopen(req, timeout=20) as resp:
@@ -603,7 +631,6 @@ def _render_index_orchestrator_header() -> None:
                     st.warning(f"릴리스 목록 조회 실패: {e}")
             else:
                 st.warning("GITHUB_REPO가 설정되어 있지 않습니다. (예: 'OWNER/REPO')")
-        # ───────────────────────────────────────────────────────────────────────────────────
 
     st.info(
         "강제 인덱싱(HQ, 느림)·백업과 인덱싱 파일 미리보기는 **관리자 인덱싱 패널**에서 합니다. "
@@ -612,6 +639,7 @@ def _render_index_orchestrator_header() -> None:
     )
     st.markdown("<span id='idx-admin-panel'></span>", unsafe_allow_html=True)
 # ================================= [12] diag header — END =============================
+
 
 
 # =============================== [13] admin index — START =============================
