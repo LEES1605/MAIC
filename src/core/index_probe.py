@@ -21,7 +21,6 @@ def _ensure_dir(p: Path) -> Path:
 # ========================== [03] probe & status core — START =========================
 from enum import Enum
 from pathlib import Path
-from typing import Optional
 
 # ── 공용 헬퍼: 있으면 사용, 없으면 동일 동작의 폴백 제공 ────────────────
 try:
@@ -77,17 +76,25 @@ class IndexHealth(str, Enum):
     RED = "missing"
 
 
-def is_persist_ready(persist_dir: Path) -> bool:
+def is_persist_ready(persist_dir: Path | str) -> bool:
     """True if persist has non-empty chunks.jsonl and .ready is acceptable."""
     return _is_persist_ready(Path(persist_dir))
 
 
-def mark_ready(persist_dir: Path) -> None:
+def is_brain_ready(persist_dir: Path | str) -> bool:
+    """
+    Back-compat alias for historical API.
+    Delegates to is_persist_ready() with identical readiness semantics.
+    """
+    return is_persist_ready(persist_dir)
+
+
+def mark_ready(persist_dir: Path | str) -> None:
     """Write canonical 'ready' into .ready file."""
     _mark_ready(Path(persist_dir))
 
 
-def mark_ready_if_chunks_exist(persist_dir: Path) -> bool:
+def mark_ready_if_chunks_exist(persist_dir: Path | str) -> bool:
     """
     If chunks.jsonl exists and has content, mark '.ready' as 'ready'.
     Returns True if marking occurred.
@@ -95,12 +102,12 @@ def mark_ready_if_chunks_exist(persist_dir: Path) -> bool:
     return _mark_ready_if_chunks_exist(Path(persist_dir))
 
 
-def probe_index_health(persist_dir: Path) -> IndexHealth:
+def probe_index_health(persist_dir: Path | str) -> IndexHealth:
     """
     Inspect persist directory and return IndexHealth.
     - MISSING: chunks.jsonl absent or size==0
     - PARTIAL: chunks.jsonl present but .ready missing or invalid (legacy not accepted)
-    - READY  : chunks.jsonl present and .ready acceptable (ready/ok)
+    - READY  : chunks.jsonl present and .ready acceptable (ready/ok/…)
     """
     p = Path(persist_dir)
     cj = p / "chunks.jsonl"
@@ -122,6 +129,7 @@ def probe_index_health(persist_dir: Path) -> IndexHealth:
 __all__ = [
     "IndexHealth",
     "is_persist_ready",
+    "is_brain_ready",
     "mark_ready",
     "mark_ready_if_chunks_exist",
     "probe_index_health",
