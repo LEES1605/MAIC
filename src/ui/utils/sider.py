@@ -134,12 +134,7 @@ def render_minimal_admin_sidebar(
     back_page: str = DEFAULT_BACK_PAGE,
     icon_only: bool = True,
 ) -> None:
-    """관리자용 최소 사이드바(기본 네비 숨김 + 2버튼).
-    버튼 클릭 시:
-      - 항상 먼저 세션/쿼리를 토글 (admin=1/0, goto=admin/back)
-      - 가능한 경우 페이지 전환(switch_page)
-      - 마지막에 항상 st.rerun()으로 상태를 즉시 반영
-    """
+    """관리자용 최소 사이드바(기본 네비 숨김 + 2버튼)."""
     st = _st()
     ss = getattr(st, "session_state", {})
     if not (bool(ss.get("_admin_ok")) or bool(ss.get("admin_mode"))):
@@ -156,15 +151,33 @@ def render_minimal_admin_sidebar(
         with c2:
             go_back = st.button(label_back, use_container_width=True, key="nav_back")
 
-    # 버튼 클릭 처리: 토글 → 전환 → rerun (항상)
-    if go_admin:
-        _nav_to_admin()
-    elif go_back:
-        _nav_to_back(back_page)
+    try:
+        if go_admin:
+            st.switch_page("src/ui/admin_prompts.py")
+            st.switch_page("pages/90_admin_prompt.py")
+        if go_back:
+            st.switch_page(back_page)
+    except Exception:
+        # 폴백: 쿼리 파라미터 세팅 후 리런
+        try:
+            st.query_params["admin"] = "1"
+        except Exception:
+            pass
+        if go_admin:
+            try:
+                st.query_params["goto"] = "admin"
+            except Exception:
+                pass
+            st.rerun()
+        if go_back:
+            try:
+                st.query_params["goto"] = "back"
+            except Exception:
+                pass
+            st.rerun()
 
 
-def apply_admin_chrome(*, back_page: str = DEFAULT_BACK_PAGE, icon_only: bool = True) -> None:
+def apply_admin_chrome(*, back_page: str = "app.py", icon_only: bool = True) -> None:
     """관리자 화면에서 즉시 최소 사이드바를 보이도록 일괄 적용."""
     ensure_admin_sidebar()
-    render_minimal_admin_sidebar(back_page=back_page, icon_only=icon_only)
 # ===== [01] FILE: src/ui/utils/sider.py — END =====
