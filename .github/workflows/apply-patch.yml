@@ -92,8 +92,8 @@ jobs:
             echo "Writing inline patch to file..."
             # Heredoc으로 줄바꿈/특수문자 안전하게 보존
             cat > codex.patch <<'PATCH_EOF'
-${{ inputs.patch }}
-PATCH_EOF
+            ${{ inputs.patch }}
+            PATCH_EOF
           else
             echo "::error title=No patch provided::Either patch_url or patch must be provided."
             exit 1
