@@ -3,10 +3,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional
+from typing import ClassVar, Dict, Optional
 
 from src.core.persist import effective_persist_dir
 # =========================== [01] imports & types — END =============================
+
 
 # ===================== [02] helpers (no Streamlit deps) — START ====================
 def _ensure_dir(p: Path) -> Path:
@@ -17,122 +18,177 @@ def _ensure_dir(p: Path) -> Path:
         # Best-effort only; callers will handle write failures later
         pass
     return p
+
+
+# ─ Ready-text normalization & tolerant check ─
+def _norm_ready_text(raw: str | bytes | None) -> str:
+    """
+    Normalize text for readiness check:
+    - bytes -> utf-8 decode (ignore errors)
+    - strip whitespace
+    - remove BOM (\ufeff)
+    - lowercase
+    """
+    if raw is None:
+        return ""
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8", "ignore")
+    return raw.replace("\ufeff", "").strip().lower()
+
+
+def _is_ready_text(raw: str | bytes | None) -> bool:
+    """Return True if raw text indicates 'ready' (legacy values accepted)."""
+    return _norm_ready_text(raw) in {"ready", "ok", "true", "1", "on", "yes", "y", "green"}
 # ===================== [02] helpers (no Streamlit deps) — END ======================
-# ========================== [03] probe & status core — START =========================
-from enum import Enum
-from pathlib import Path
 
-# ── 공용 헬퍼: 있으면 사용, 없으면 동일 동작의 폴백 제공 ────────────────
-try:
-    from src.core.readiness import (
-        is_persist_ready as _is_persist_ready,
-        mark_ready as _mark_ready,
-        mark_ready_if_chunks_exist as _mark_ready_if_chunks_exist,
-        is_ready_text as _is_ready_text,
-    )
-except Exception:
-    def _norm_text(raw: str | bytes | None) -> str:
-        if raw is None:
-            return ""
-        if isinstance(raw, bytes):
-            raw = raw.decode("utf-8", "ignore")
-        return raw.replace("\ufeff", "").strip().lower()
+# ========================= [03] probe & status core — START ========================
+@dataclass(frozen=True)
+class IndexHealth:
+    """Lightweight snapshot of index condition (for services/tests/UI)."""
+    persist: Path
+    ready_exists: bool
+    chunks_exists: bool
+    chunks_size: int
+    json_sample: int
+    json_malformed: int
+    mtime: int
 
-    def _is_ready_text(raw: str | bytes | None) -> bool:
-        return _norm_text(raw) in {"ready", "ok", "true", "1", "on", "yes", "y", "green"}
+    # Pseudo-enum constants for compatibility (e.g., IndexHealth.MISSING)
+    READY: ClassVar[str] = "ready"
+    PARTIAL: ClassVar[str] = "partial"
+    MISSING: ClassVar[str] = "missing"
 
-    def _is_persist_ready(persist_dir: Path) -> bool:
-        p = Path(persist_dir)
-        cj = p / "chunks.jsonl"
-        rf = p / ".ready"
+
+def probe_index_health(persist: Optional[Path] = None, sample_lines: int = 200) -> IndexHealth:
+    """Lightweight health probe for a built index directory (SSOT-based).
+
+    Pure function (no Streamlit). Safe for services/tests/UI.
+
+    Args:
+        persist: Directory where `.ready` and `chunks.jsonl` are stored.
+                 If None, resolved by core.persist.effective_persist_dir().
+        sample_lines: How many lines to sample from `chunks.jsonl` to validate JSON.
+
+    Returns:
+        IndexHealth: flags/sizes/sample stats for quick readiness decision.
+    """
+    p = _ensure_dir(Path(persist) if isinstance(persist, Path) else effective_persist_dir())
+
+    chunks = p / "chunks.jsonl"
+    ready = p / ".ready"
+
+    chunks_exists = chunks.exists()
+    size = chunks.stat().st_size if chunks_exists else 0
+    ready_exists = ready.exists()
+    mtime = int(chunks.stat().st_mtime) if chunks_exists else 0
+
+    malformed = 0
+    sampled = 0
+    if chunks_exists and size > 0 and sample_lines > 0:
         try:
-            txt = rf.read_text(encoding="utf-8") if rf.exists() else ""
+            import json
+            with chunks.open("r", encoding="utf-8") as f:
+                for i, line in enumerate(f):
+                    if i >= sample_lines:
+                        break
+                    s = line.strip()
+                    if not s:
+                        continue
+                    sampled += 1
+                    try:
+                        json.loads(s)
+                    except Exception:
+                        malformed += 1
         except Exception:
-            txt = ""
-        return (cj.exists() and cj.stat().st_size > 0) and _is_ready_text(txt)
+            # If the file can't be read, treat as no valid sample
+            sampled = 0
+            malformed = sample_lines
 
-    def _mark_ready(persist_dir: Path) -> None:
-        (Path(persist_dir) / ".ready").write_text("ready", encoding="utf-8")
+    return IndexHealth(
+        persist=p,
+        ready_exists=ready_exists,
+        chunks_exists=chunks_exists,
+        chunks_size=size,
+        json_sample=sampled,
+        json_malformed=malformed,
+        mtime=mtime,
+    )
 
-    def _mark_ready_if_chunks_exist(persist_dir: Path) -> bool:
-        p = Path(persist_dir)
+
+def mark_ready(persist: Optional[Path] = None) -> None:
+    """Create/normalize the `.ready` sentinel file (best-effort, canonical 'ready')."""
+    p = _ensure_dir(Path(persist) if isinstance(persist, Path) else effective_persist_dir())
+    try:
+        (p / ".ready").write_text("ready", encoding="utf-8")  # canonical
+    except Exception:
+        # Best-effort; callers can re-check with is_brain_ready()
+        pass
+
+
+def mark_ready_if_chunks_exist(persist: Optional[Path] = None) -> bool:
+    """
+    If chunks.jsonl exists and has size>0, ensure '.ready' is 'ready'.
+    Returns True if marked or already 'ready', False if chunks missing or write failed.
+    """
+    p = _ensure_dir(Path(persist) if isinstance(persist, Path) else effective_persist_dir())
+    try:
         cj = p / "chunks.jsonl"
         if cj.exists() and cj.stat().st_size > 0:
-            _mark_ready(p)
+            mark_ready(p)
             return True
+        return False
+    except Exception:
         return False
 
 
-class IndexHealth(str, Enum):
-    """Index health status (string Enum for easy comparisons & JSON)."""
-    MISSING = "missing"     # no chunks.jsonl or size==0
-    PARTIAL = "partial"     # chunks present but .ready missing/invalid
-    READY = "ready"         # chunks present and .ready is acceptable
-    # ─ Aliases for broader compatibility ─
-    OK = "ready"
-    GREEN = "ready"
-    INCOMPLETE = "partial"
-    YELLOW = "partial"
-    RED = "missing"
-
-
-def is_persist_ready(persist_dir: Path | str) -> bool:
-    """True if persist has non-empty chunks.jsonl and .ready is acceptable."""
-    return _is_persist_ready(Path(persist_dir))
-
-
-def is_brain_ready(persist_dir: Path | str) -> bool:
+def is_persist_ready(persist: Optional[Path] = None) -> bool:
     """
-    Back-compat alias for historical API.
-    Delegates to is_persist_ready() with identical readiness semantics.
+    True iff `.ready` contains an acceptable value (ready/ok/…) AND `chunks.jsonl` size > 0.
     """
-    return is_persist_ready(persist_dir)
-
-
-def mark_ready(persist_dir: Path | str) -> None:
-    """Write canonical 'ready' into .ready file."""
-    _mark_ready(Path(persist_dir))
-
-
-def mark_ready_if_chunks_exist(persist_dir: Path | str) -> bool:
-    """
-    If chunks.jsonl exists and has content, mark '.ready' as 'ready'.
-    Returns True if marking occurred.
-    """
-    return _mark_ready_if_chunks_exist(Path(persist_dir))
-
-
-def probe_index_health(persist_dir: Path | str) -> IndexHealth:
-    """
-    Inspect persist directory and return IndexHealth.
-    - MISSING: chunks.jsonl absent or size==0
-    - PARTIAL: chunks.jsonl present but .ready missing or invalid (legacy not accepted)
-    - READY  : chunks.jsonl present and .ready acceptable (ready/ok/…)
-    """
-    p = Path(persist_dir)
-    cj = p / "chunks.jsonl"
-    rf = p / ".ready"
-
-    chunks_ok = cj.exists() and cj.stat().st_size > 0
-    if not chunks_ok:
-        return IndexHealth.MISSING
-
-    ready_txt = ""
     try:
-        ready_txt = rf.read_text(encoding="utf-8") if rf.exists() else ""
-    except Exception:
+        p = _ensure_dir(Path(persist) if isinstance(persist, Path) else effective_persist_dir())
+        if not p.exists():
+            return False
+        ready_path = p / ".ready"
+        chunks = p / "chunks.jsonl"
+        chunks_ok = chunks.exists() and chunks.stat().st_size > 0
         ready_txt = ""
+        if ready_path.exists():
+            try:
+                ready_txt = ready_path.read_text(encoding="utf-8")
+            except Exception:
+                ready_txt = ""
+        return bool(chunks_ok and _is_ready_text(ready_txt))
+    except Exception:
+        return False
 
-    return IndexHealth.READY if _is_ready_text(ready_txt) else IndexHealth.PARTIAL
+
+def is_brain_ready(persist: Optional[Path] = None) -> bool:
+    """Back-compat alias; same semantics as is_persist_ready()."""
+    return is_persist_ready(persist)
+
+
+def get_brain_status(persist: Optional[Path] = None) -> Dict[str, str]:
+    """Concise status for UI layers (pure/no-Streamlit)."""
+    try:
+        # 유지: READY/MISSING만 노출(내부 판정은 강화됨)
+        ok = is_persist_ready(persist)
+    except Exception:
+        return {"code": "MISSING", "msg": "상태 계산 실패"}
+
+    if ok:
+        return {"code": "READY", "msg": "로컬 인덱스 연결됨(SSOT)"}
+    return {"code": "MISSING", "msg": "인덱스 없음(관리자에서 '업데이트 점검' 필요)"}
 
 
 __all__ = [
     "IndexHealth",
-    "is_persist_ready",
-    "is_brain_ready",
+    "probe_index_health",
     "mark_ready",
     "mark_ready_if_chunks_exist",
-    "probe_index_health",
+    "is_persist_ready",
+    "is_brain_ready",
+    "get_brain_status",
 ]
-# =========================== [03] probe & status core — END ==========================
+# ========================= [03] probe & status core — END ==========================
 
