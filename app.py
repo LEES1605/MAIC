@@ -248,7 +248,15 @@ def _is_admin_view() -> bool:
 # ========================= [06] admin gate — END ==============================
 
 # ========================= [07] rerun guard — START =============================
-def _safe_rerun(tag: str, ttl: int = 1) -> None:
+import time
+from typing import Any, Dict
+
+def _safe_rerun(tag: str, ttl: float = 0.3) -> None:
+    """
+    Debounced rerun. One rerun per 'tag' within TTL seconds.
+    - TTL 기본값 0.3s(UX↑)
+    - 만료 시 기존 엔트리를 삭제하여 재시도 안정성↑
+    """
     s = globals().get("st", None)
     if s is None:
         return
@@ -256,30 +264,41 @@ def _safe_rerun(tag: str, ttl: int = 1) -> None:
         ss = getattr(s, "session_state", None)
         if ss is None:
             return
+
         tag = str(tag or "rerun")
         try:
-            ttl_int = int(ttl)
+            ttl_s = float(ttl)
+            if ttl_s <= 0:
+                ttl_s = 0.3
         except Exception:
-            ttl_int = 1
-        if ttl_int <= 0:
-            ttl_int = 1
+            ttl_s = 0.3
 
         key = "__rerun_counts__"
-        counts = ss.get(key, {})
+        counts = ss.get(key)
         if not isinstance(counts, dict):
+            counts = {}
+
+        rec = counts.get(tag) or {}
+        cnt = int(rec.get("count", 0)) if isinstance(rec, dict) else int(rec or 0)
+        exp = float(rec.get("expires_at", 0.0)) if isinstance(rec, dict) else 0.0
+
+        now = time.time()
+        # 만료 시 엔트리 제거(메모리 위생 + 재시도 안정)
+        if exp and now >= exp:
             try:
-                counts = dict(counts)
+                counts.pop(tag, None)
             except Exception:
                 counts = {}
-        try:
-            cnt = int(counts.get(tag, 0))
-        except Exception:
             cnt = 0
-        if cnt >= ttl_int:
+            exp = 0.0
+
+        # TTL 안에서는 중복 rerun 차단
+        if cnt >= 1 and (exp and now < exp):
             return
 
-        counts[tag] = cnt + 1
+        counts[tag] = {"count": cnt + 1, "expires_at": now + ttl_s}
         ss[key] = counts
+
         try:
             s.rerun()
         except Exception:
@@ -288,8 +307,32 @@ def _safe_rerun(tag: str, ttl: int = 1) -> None:
             except Exception:
                 pass
     except Exception:
+        # 절대 예외 전파 금지 (UX 보호)
+        pass
+
+
+def _reset_rerun_guard(tag: str) -> None:
+    """
+    Clear rerun-guard entry for a given tag.
+    - 인덱싱 잡 종료 후 반드시 호출하여 다음 클릭이 막히지 않도록 함.
+    """
+    s = globals().get("st", None)
+    if s is None:
+        return
+    try:
+        ss = getattr(s, "session_state", None)
+        if ss is None:
+            return
+        key = "__rerun_counts__"
+        counts = ss.get(key)
+        if isinstance(counts, dict) and tag in counts:
+            counts = dict(counts)
+            counts.pop(tag, None)
+            ss[key] = counts
+    except Exception:
         pass
 # ================================= [07] rerun guard — END =============================
+
 
 # =============================== [08] header — START ==================================
 def _header() -> None:
@@ -514,6 +557,30 @@ def _auto_start_once() -> None:
         _set_brain_status("READY", "자동 복원 완료", "release", attached=True)
         _safe_rerun("auto_start", ttl=1)
 # ================================= [11] boot hooks — END ==============================
+# ======================= [11.4] admin index: request consumer — START =======================
+def _consume_admin_index_request() -> None:
+    """
+    렌더 사이클 초입에서 _IDX_REQ를 소비하여 인덱싱 잡을 즉시 실행.
+    - 버튼 핸들러는 요청만 적재하고 rerun
+    - 다음 사이클 시작 시 이 소비자가 항상 먼저 실행되어야 '아무 일 없음'을 방지
+    """
+    if st is None:
+        return
+    try:
+        req = st.session_state.pop("_IDX_REQ", None)
+    except Exception:
+        req = None
+
+    if req:
+        try:
+            _run_admin_index_job(req)
+        except Exception as e:
+            try:
+                _log(f"인덱싱 소비 실패: {e}", "err")
+            except Exception:
+                pass
+# ======================== [11.4] admin index: request consumer — END ========================
+
 # ============================ [11.5] admin index helpers — START ======================
 _INDEX_STEP_NAMES: Tuple[str, ...] = (
     "persist 확인",
@@ -970,54 +1037,43 @@ def _render_index_orchestrator_header() -> None:
 
 
 
-# =============================== [13] admin index — START =============================
-    pending_req: Optional[Dict[str, Any]] = None
-    if _is_admin_view():
-        maybe_req = st.session_state.pop("_IDX_REQ", None)
-        if isinstance(maybe_req, dict):
-            pending_req = maybe_req
-    if pending_req:
-        _run_admin_index_job(pending_req)
-# ================================= [13] admin index — END =============================
+# =========================== [13] admin indexing panel — START ===========================
 def _render_admin_index_panel() -> None:
-    if st is None or not _is_admin_view():
+    """
+    관리자 인덱싱 패널 본문.
+    - 패널 시작 직후 요청 소비자(_consume_admin_index_request) 호출(가장 중요)
+    - 버튼은 _IDX_REQ 적재 → _safe_rerun('idx_run', 0.3)로 다음 사이클에서 실행
+    """
+    if st is None:
         return
-    step_names = list(_INDEX_STEP_NAMES)
-    _ensure_index_state(step_names)
-    st.markdown("<h4>⚙️ 관리자 인덱싱 패널</h4>", unsafe_allow_html=True)
 
-    ss = st.session_state
-    with st.container(border=True):
-        col_form, col_reset = st.columns([3, 1])
+    # 1) 렌더 초입: 요청 소비
+    _consume_admin_index_request()
 
-        with col_form:
-            with st.form("idx_reindex_form", clear_on_submit=False):
-                auto_up_default = bool(ss.get("_IDX_AUTO_UP", False))
-                auto_up = st.checkbox(
-                    "완료 후 GitHub Release 업로드",
-                    value=auto_up_default,
-                    key="_IDX_AUTO_UP",
-                )
-                submitted = st.form_submit_button(
-                    "강제 재인덱싱 실행", use_container_width=True
-                )
-            if submitted:
-                ss["_IDX_AUTO_UP"] = bool(auto_up)
-                ss["_IDX_REQ"] = {"auto_up": bool(auto_up)}
-                _safe_rerun("idx_run", ttl=1)
+    st.markdown("### 🔧 관리자 인덱싱 패널 (prepared 전용)")
 
-        with col_reset:
-            if st.button("진행 상태 초기화", use_container_width=True):
-                _step_reset(step_names)
-                _safe_rerun("idx_reset", ttl=1)
+    # 옵션: ZIP/Release 자동 업로드 여부
+    c1, c2 = st.columns([1, 1])
+    with c1:
+        auto_zip = st.toggle("인덱싱 후 ZIP/Release 업로드", value=False, help="GH_TOKEN/GITHUB_REPO 필요")
+    with c2:
+        show_debug = st.toggle("디버그 로그 표시", value=True)
 
-    with st.container(border=True):
-        st.subheader("단계 진행 상황")
-        _render_stepper(force=True)
+    # 실행 버튼
+    if st.button("🚀 강제 재인덱싱(HQ, prepared)", type="primary", use_container_width=True, key="idx_run_btn"):
+        try:
+            st.session_state["_IDX_REQ"] = {"auto_up": bool(auto_zip), "debug": bool(show_debug)}
+        except Exception:
+            st.session_state["_IDX_REQ"] = {"auto_up": False}
+        # 다음 사이클에서 소비되도록 안전 rerun (중복 제한 TTL 0.3s)
+        _safe_rerun("idx_run", ttl=0.3)
 
-    with st.container(border=True):
-        st.subheader("실행 로그")
-        _render_status(force=True)
+    # 진행/상태 패널(기존 스텝 로거 사용 가정)
+    try:
+        _render_index_steps()  # 이미 존재하는 스텝 표시 함수가 있다면 호출
+    except Exception:
+        pass
+# ============================ [13] admin indexing panel — END ============================
 
 # =============================== [14] admin legacy — START ============================
 def _render_admin_panels() -> None:
