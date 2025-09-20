@@ -143,7 +143,7 @@ def mark_ready_if_chunks_exist(persist: Optional[Path] = None) -> bool:
 
 def is_persist_ready(persist: Optional[Path] = None) -> bool:
     """
-    True iff `.ready` contains an acceptable value (ready/ok/…) AND `chunks.jsonl` size > 0.
+    True iff `.ready` contains an acceptable value (ready/ok/...) AND `chunks.jsonl` size > 0.
     """
     try:
         p = _ensure_dir(Path(persist) if isinstance(persist, Path) else effective_persist_dir())
