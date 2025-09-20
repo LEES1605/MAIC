@@ -12,43 +12,28 @@ import os
 # ============== [01] imports & notes — END ==============
 
 
-# ============== [02] persist helpers (SSOT) — START ==============
-def _persist_dir() -> Path:
-    """SSOT: core.persist.effective_persist_dir(); 실패 시 ~/.maic/persist."""
-    try:
-        from src.core.persist import effective_persist_dir as _ssot
-        p = _ssot()
-        return p if isinstance(p, Path) else Path(str(p)).expanduser()
-    except Exception:
-        return Path.home() / ".maic" / "persist"
+# ============================ [02] persist helpers — START ===========================
+from __future__ import annotations
+from pathlib import Path
 
-
-def _chunks(p: Path) -> Path:
-    return p / "chunks.jsonl"
-
-
-def _ready(p: Path) -> Path:
-    return p / ".ready"
-
-
-def _local_ready(p: Optional[Path] = None) -> bool:
-    base = p or _persist_dir()
-    try:
-        cj = _chunks(base)
-        return _ready(base).exists() and cj.exists() and cj.stat().st_size > 0
-    except Exception:
+try:
+    from src.core.readiness import mark_ready_if_chunks_exist
+except Exception:
+    def mark_ready_if_chunks_exist(p: Path) -> bool:  # type: ignore
+        cj = p / "chunks.jsonl"
+        if cj.exists() and cj.stat().st_size > 0:
+            (p / ".ready").write_text("ready", encoding="utf-8")
+            return True
         return False
 
 
-def _ensure_ready(base: Path) -> None:
-    try:
-        cj = _chunks(base)
-        r = _ready(base)
-        if cj.exists() and cj.stat().st_size > 0 and not r.exists():
-            r.write_text("ok", encoding="utf-8")
-    except Exception:
-        pass
-# ============== [02] persist helpers (SSOT) — END ==============
+def ensure_index_ready(persist_dir: Path) -> bool:
+    """
+    보조 유틸: chunks.jsonl이 있으면 '.ready'를 'ready'로 표준화.
+    Returns True if successfully marked.
+    """
+    return mark_ready_if_chunks_exist(persist_dir)
+# ============================= [02] persist helpers — END ============================
 
 
 # ============== [03] index_status — START ==============

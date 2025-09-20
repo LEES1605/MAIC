@@ -66,18 +66,32 @@ def _effective_persist() -> Path:
     return (Path.home() / ".maic" / "persist").resolve()
 
 
-def _is_ready(persist: Path) -> tuple[bool, str]:
-    chunks = persist / "chunks.jsonl"
-    ready = persist / ".ready"
-    if not chunks.exists() or chunks.stat().st_size <= 0:
-        return False, "chunks.jsonl missing or empty"
+# ===== replace: scripts/build_and_publish.py::_is_ready — START =====
+from pathlib import Path
+
+def _is_ready(persist_dir: Path) -> bool:
+    """
+    Return True if persist_dir has non-empty chunks.jsonl and '.ready' indicates ready.
+    Accepts legacy values ('ok', etc.), case-insensitive, whitespace/BOM tolerant.
+    """
     try:
-        txt = ready.read_text(encoding="utf-8").strip().lower()
+        try:
+            from src.core.readiness import is_persist_ready
+            return is_persist_ready(persist_dir)
+        except Exception:
+            pass
+
+        cj = persist_dir / "chunks.jsonl"
+        rf = persist_dir / ".ready"
+        if not (cj.exists() and cj.stat().st_size > 0 and rf.exists()):
+            return False
+        txt = rf.read_text(encoding="utf-8")
+        txt = txt.replace("\ufeff", "").strip().lower()
+        return txt in {"ready", "ok", "true", "1", "on", "yes", "y", "green"}
     except Exception:
-        txt = ""
-    if txt != ASCII_READY:
-        return False, f".ready != '{ASCII_READY}' (got: '{txt or 'EMPTY'}')"
-    return True, "READY"
+        return False
+# ===== replace: scripts/build_and_publish.py::_is_ready — END =====
+
 # ============================= [02] core logic — END ===============================
 
 

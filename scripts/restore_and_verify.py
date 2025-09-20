@@ -8,35 +8,40 @@ ASCII_READY = "ready"
 # ============================= [01] imports & cfg — END =============================
 
 
-# ============================ [02] logic — START ====================================
-def restore_and_verify(dest: Path, repo: str | None) -> int:
+# ================================ [02] logic — START =================================
+from __future__ import annotations
+from pathlib import Path
+
+try:
+    from src.core.readiness import is_persist_ready, normalize_ready_file
+except Exception:
+    def is_persist_ready(p: Path) -> bool:  # type: ignore
+        cj = p / "chunks.jsonl"
+        rf = p / ".ready"
+        if not (cj.exists() and cj.stat().st_size > 0 and rf.exists()):
+            return False
+        txt = rf.read_text(encoding="utf-8")
+        txt = txt.replace("\ufeff", "").strip().lower()
+        return txt in {"ready", "ok", "true", "1", "on", "yes", "y", "green"}
+
+    def normalize_ready_file(_: Path) -> bool:  # type: ignore
+        try:
+            (_ / ".ready").write_text("ready", encoding="utf-8")
+            return True
+        except Exception:
+            return False
+
+
+def restore_and_verify(persist_dir: Path) -> bool:
     """
-    GitHub Release에서 최신 인덱스를 복원하고, READY 여부를 점검한다.
+    Restore was performed prior to this call. Here we only verify and normalize.
     """
-    from src.backup.github_release import restore_latest  # (ignore 제거)
-
-    dest.mkdir(parents=True, exist_ok=True)
-    ok = restore_latest(dest, repo=repo)
-    if not ok:
-        print("[restore] restore_latest returned False")
-        return 1
-
-    chunks = dest / "chunks.jsonl"
-    ready = dest / ".ready"
-    if not chunks.exists() or chunks.stat().st_size <= 0:
-        print("[verify] chunks.jsonl missing or empty")
-        return 2
-    try:
-        txt = ready.read_text(encoding="utf-8").strip().lower()
-    except Exception:
-        txt = ""
-    if txt != ASCII_READY:
-        print(f"[verify] .ready != '{ASCII_READY}' (got: '{txt or 'EMPTY'}')")
-        return 3
-
-    print(f"[ok] restored to {dest} and READY")
-    return 0
-# ============================= [02] logic — END =====================================
+    ok = is_persist_ready(persist_dir)
+    if ok:
+        # 표준화 보장
+        normalize_ready_file(persist_dir)
+    return ok
+# ================================= [02] logic — END ==================================
 
 # ============================ [03] main — START =====================================
 def main(argv: list[str] | None = None) -> int:
