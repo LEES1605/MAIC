@@ -20,16 +20,13 @@ def _ensure_dir(p: Path) -> Path:
 # ===================== [02] helpers (no Streamlit deps) — END ======================
 
 # ========================== [03] probe & status core — START =========================
-from __future__ import annotations
-
 from pathlib import Path
-from typing import Optional
 
 try:
-    # 공용 헬퍼(신규)
+    # 공용 헬퍼(신규 파일 src/core/readiness.py 사용)
     from src.core.readiness import mark_ready, is_persist_ready
 except Exception:
-    # 폴백(동일 로직)
+    # 폴백(동일 로직) — 헬퍼를 못 불러올 때만 사용
     def mark_ready(persist_dir: Path) -> None:  # type: ignore
         (persist_dir / ".ready").write_text("ready", encoding="utf-8")
 
@@ -41,11 +38,14 @@ except Exception:
         except Exception:
             txt = ""
         txt = txt.replace("\ufeff", "").strip().lower()
-        return (cj.exists() and cj.stat().st_size > 0) and (txt in {"ready", "ok", "true", "1", "on", "yes", "y", "green"})
+        return (
+            cj.exists() and cj.stat().st_size > 0
+            and txt in {"ready", "ok", "true", "1", "on", "yes", "y", "green"}
+        )
 
 
 def mark_ready_if_chunks_exist(persist_dir: Path) -> bool:
-    """chunks.jsonl 존재 시, 표준 'ready' 기록."""
+    """chunks.jsonl 존재 시, persist를 표준 'ready' 상태로 표시."""
     cj = persist_dir / "chunks.jsonl"
     if cj.exists() and cj.stat().st_size > 0:
         mark_ready(persist_dir)
