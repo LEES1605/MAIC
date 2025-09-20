@@ -61,15 +61,12 @@ class IndexHealth:
     @property
     def ok(self) -> bool:
         """True when persist dir has ready marker + valid chunks."""
-        if not (self.ready_exists and self.chunks_exists and self.chunks_size > 0):
-            return False
         if self.json_sample <= 0 or self.json_malformed > 0:
             return False
         try:
-            txt = (self.persist / ".ready").read_text(encoding="utf-8")
+            return bool(is_persist_ready(self.persist))
         except Exception:
-            txt = ""
-        return _is_ready_text(txt)
+            return False
 
 
 def probe_index_health(persist: Optional[Path] = None, sample_lines: int = 200) -> IndexHealth:
