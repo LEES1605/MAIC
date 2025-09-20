@@ -1,4 +1,4 @@
-===== START [01] .github/workflows/apply-patch.yml =====
+===== START [01] .github/workflows/apply-patch.yml ====
 name: Apply Patch ➜ Create PR
 
 on:
