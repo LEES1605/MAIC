@@ -1,4 +1,4 @@
-===== START [01] .github/workflows/apply-patch.yml ====
+# ===== START [01] .github/workflows/apply-patch.yml =====
 name: Apply Patch ➜ Create PR
 
 on:
@@ -185,4 +185,4 @@ PATCH_EOF
           path: |
             codex.patch
             apply_check_*.log
-===== END [01] .github/workflows/apply-patch.yml =====
+# ===== END [01] .github/workflows/apply-patch.yml =====
