@@ -68,7 +68,6 @@ class IndexHealth:
         except Exception:
             return False
 
-
 def probe_index_health(persist: Optional[Path] = None, sample_lines: int = 200) -> IndexHealth:
     """Lightweight health probe for a built index directory (SSOT-based).
 

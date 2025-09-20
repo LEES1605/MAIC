@@ -121,5 +121,4 @@ def render_minimal_admin_sidebar(
 def apply_admin_chrome(*, back_page: str = "app.py", icon_only: bool = True) -> None:
     """관리자 화면에서 즉시 최소 사이드바를 보이도록 일괄 적용."""
     ensure_admin_sidebar()
-    render_minimal_admin_sidebar(back_page=back_page, icon_only=icon_only)
 # ===== [01] FILE: src/ui/utils/sider.py — END =====
