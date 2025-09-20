@@ -1,5 +1,5 @@
 # 협의규약 (CONVENTIONS)
-**Source-of-Truth**: 이 문서는 MAIC의 개발/리뷰/릴리스 표준 규약입니다.  
+**Source-of-Truth**: 이 문서는 MAIC의 개발/리뷰/릴리스 표준 규약입니다.
 원칙: **보안 · 정확성 · 일관성 · 가독성 · 유지보수성**.  
 모든 변경은 “숫자구획 전체 교체([NN] START/END)” 원칙을 따른다. :contentReference[oaicite:2]{index=2}
 
