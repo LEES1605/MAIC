@@ -1550,7 +1550,7 @@ def _render_body() -> None:
     # 3) 헤더
     _header()
 
-    # 4) 관리자 패널 (호출부 외부화: ui_admin.indexing_panel)
+    # 4) 관리자 패널 (외부 모듈 호출: ui_admin.indexing_panel)
     if _is_admin_view():
         # 지연 import로 순환 참조 방지 및 불필요한 오버헤드 최소화
         try:
