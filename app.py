@@ -781,7 +781,7 @@ def _run_admin_index_job(req: Dict[str, Any]) -> None:
         return
 
     # 진행 표시에 사용할 펄스 + 바(대략적 비율)
-    status = st.status("⚙️ 인덱싱 준비 중…", expanded=True)
+    status = st.status("⚙️ 인덱싱 준비 중", expanded=True)
     prog = st.progress(0)
 
     step_names = list(_INDEX_STEP_NAMES)
@@ -805,14 +805,14 @@ def _run_admin_index_job(req: Dict[str, Any]) -> None:
 
     try:
         # 1) persist 확인
-        status.update(label="📁 persist 확인 중…", state="running")
+        status.update(label="📁 persist 확인 중", state="running")
         _step_set(1, "run", "persist 확인 중")
         _step_set(1, "ok", str(used_persist))
         _log(f"persist={used_persist}")
         prog.progress(10)
 
         # 2) HQ 인덱싱
-        status.update(label="⚙️ HQ 인덱싱 중… (prepared 전용)", state="running")
+        status.update(label="⚙️ HQ 인덱싱 중 (prepared 전용)", state="running")
         _step_set(2, "run", "HQ 인덱싱 중")
         os.environ["MAIC_INDEX_MODE"] = "HQ"
         os.environ["MAIC_USE_PREPARED_ONLY"] = "1"
@@ -839,7 +839,7 @@ def _run_admin_index_job(req: Dict[str, Any]) -> None:
             _stamp_persist(used_persist)
 
         # 3) prepared 소비(seen 마킹)
-        status.update(label="🧾 prepared 소비(seen) 마킹…", state="running")
+        status.update(label="🧾 prepared 소비(seen) 마킹", state="running")
         _step_set(3, "run", "prepared 소비 중")
         try:
             chk, mark, dbg2 = _load_prepared_api()
@@ -867,7 +867,7 @@ def _run_admin_index_job(req: Dict[str, Any]) -> None:
         prog.progress(75)
 
         # 4) 요약 계산
-        status.update(label="📊 요약 계산…", state="running")
+        status.update(label="📊 요약 계산", state="running")
         _step_set(4, "run", "요약 계산")
         try:
             from src.rag.index_status import get_index_summary
@@ -882,7 +882,7 @@ def _run_admin_index_job(req: Dict[str, Any]) -> None:
         # 5) ZIP/Release 업로드(선택)
         auto_up = bool(req.get("auto_up"))
         if auto_up:
-            status.update(label="⏫ ZIP 생성 및 Release 업로드…", state="running")
+            status.update(label="⏫ ZIP 생성 및 Release 업로드...", state="running")
             _step_set(5, "run", "ZIP/Release 업로드")
             try:
                 z = _make_index_backup_zip(used_persist)
