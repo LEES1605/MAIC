@@ -366,19 +366,7 @@ def _header() -> None:
         st.code(str(p), language="text")
 # ================================== [08] header — END =================================
 
-# =============================== [09] background — START ===============================
-def _inject_modern_bg_lib() -> None:
-    try:
-        s = globals().get("st", None)
-        if s is not None and hasattr(s, "session_state"):
-            s.session_state["__bg_lib_injected__"] = False
-    except Exception:
-        pass
 
-
-def _mount_background(**_kw) -> None:
-    return
-# ================================= [09] background — END ===============================
 
 # =============================== [10] auto-restore — START ============================
 def _boot_auto_restore_index() -> None:
@@ -1128,15 +1116,6 @@ def _render_admin_index_panel() -> None:
         pass
 # ============================ [13] admin indexing panel — END ============================
 
-
-
-# =============================== [14] admin legacy — START ============================
-def _render_admin_panels() -> None:
-    # legacy 자리표시자(문법 안정 목적). 현재는 사용하지 않습니다.
-    return None
-# ================================= [14] admin legacy — END ============================
-
-
 # =============================== [15] prepared scan — START ===========================
 def _render_admin_prepared_scan_panel() -> None:
     if st is None or not _is_admin_view():
@@ -1570,7 +1549,6 @@ def _render_body() -> None:
         _errlog(f"auto_start_once failed: {e}", where="[render_body.autostart]", exc=e)
 
     # 3) 배경/헤더
-    _mount_background()
     _header()
 
     # 4) 관리자 패널
