@@ -1,108 +1,61 @@
-# ===== FILE: src/core/readiness.py ============================================
-# [01] imports & constants — START
+# ===== [01] FILE: src/core/readiness.py — START =====
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Iterable, Union
+from typing import Optional
 
-# 허용 값(정규화 후)
-_READY_VALUES = {"ready", "ok", "true", "1", "on", "yes", "y", "green"}
-# [01] imports & constants — END
-# -----------------------------------------------------------------------------
+# 통일된 허용 토큰(SSOT): 값은 소문자/공백제거/UTF-8 BOM 제거 후 비교
+_TRUE_TOKENS = {"ready", "ok", "true", "1", "on", "yes", "y", "green"}
 
-# [02] text normalization & checks — START
-def _norm_text(raw: str | bytes | None) -> str:
+
+def norm_ready_text(raw: str | bytes | None) -> str:
     """
-    Normalize text for readiness check:
-    - bytes -> utf-8 decode (ignore errors)
+    Normalize ready text for tolerant comparison:
+    - bytes → utf-8 decode(ignore errors)
     - strip whitespace
-    - remove BOM
+    - remove BOM(\ufeff)
     - lowercase
     """
     if raw is None:
         return ""
     if isinstance(raw, bytes):
         raw = raw.decode("utf-8", "ignore")
-    raw = raw.replace("\ufeff", "")  # BOM 제거
-    return raw.strip().lower()
+    return raw.replace("\ufeff", "").strip().lower()
 
 
 def is_ready_text(raw: str | bytes | None) -> bool:
-    """Return True if raw text indicates 'ready' state (including legacy values)."""
-    return _norm_text(raw) in _READY_VALUES
-# [02] text normalization & checks — END
-# -----------------------------------------------------------------------------
-
-# [03] file helpers — START
-PathLike = Union[str, Path]
-
-
-def _ensure_path_to_file(p: Path) -> None:
-    """Ensure parent dir exists for a file path."""
-    p.parent.mkdir(parents=True, exist_ok=True)
-
-
-def ready_file_of(path_or_dir: PathLike) -> Path:
-    """Map a dir-or-file input to the canonical '.ready' file path."""
-    p = Path(path_or_dir)
-    return p / ".ready" if p.is_dir() else p
-
-
-def read_ready_file(path_or_dir: PathLike) -> str:
     """
-    Read and normalize the content of '.ready'.
-    Returns normalized lowercase string (BOM trimmed), or '' if missing/failed.
+    Return True if 'raw' represents a valid 'ready' value under our tolerant rules.
     """
-    p = ready_file_of(path_or_dir)
+    return norm_ready_text(raw) in _TRUE_TOKENS
+
+
+def read_ready_text(persist_dir: Path) -> str:
+    """
+    Read the '.ready' file text (utf-8) if present; return empty string on any failure.
+    """
     try:
-        return _norm_text(p.read_text(encoding="utf-8"))
+        return (persist_dir / ".ready").read_text(encoding="utf-8")
     except Exception:
         return ""
 
 
-def normalize_ready_file(path_or_dir: PathLike) -> bool:
+def normalize_ready_file(persist_dir: Path, *, value: str = "ready") -> bool:
     """
-    Write canonical 'ready' into '.ready'. Returns True on success.
+    Ensure '.ready' file exists and contains the canonical token (default: 'ready').
+    Returns True on success, False on failure.
     """
-    p = ready_file_of(path_or_dir)
     try:
-        _ensure_path_to_file(p)
-        p.write_text("ready", encoding="utf-8")
+        (persist_dir / ".ready").write_text(value, encoding="utf-8")
         return True
     except Exception:
         return False
-# [03] file helpers — END
-# -----------------------------------------------------------------------------
-
-# [04] persist-level helpers — START
-def is_persist_ready(persist_dir: PathLike) -> bool:
-    """
-    Persist is 'ready' if:
-      - chunks.jsonl exists and size > 0
-      - .ready contains a value accepted by is_ready_text()
-    """
-    p = Path(persist_dir)
-    cj = p / "chunks.jsonl"
-    if not (cj.exists() and cj.stat().st_size > 0):
-        return False
-    return is_ready_text(read_ready_file(p / ".ready"))
 
 
-def mark_ready(persist_dir: PathLike) -> None:
-    """Mark persist as 'ready' (canonical)."""
-    normalize_ready_file(persist_dir)
-
-
-def mark_ready_if_chunks_exist(persist_dir: PathLike) -> bool:
-    """
-    If chunks.jsonl exists with size>0, ensure '.ready' is 'ready'.
-    Returns True if marked, False if chunks missing or write failed.
-    """
-    p = Path(persist_dir)
-    cj = p / "chunks.jsonl"
-    if cj.exists() and cj.stat().st_size > 0:
-        return normalize_ready_file(p)
-    return False
-# [04] persist-level helpers — END
-# ============================================================================
-
+__all__ = [
+    "norm_ready_text",
+    "is_ready_text",
+    "read_ready_text",
+    "normalize_ready_file",
+]
+# ===== [01] FILE: src/core/readiness.py — END =====

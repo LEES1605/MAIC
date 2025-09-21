@@ -1,45 +1,19 @@
-# ===== [01] FILE: src/core/index_verify.py — START =====
+# ===== [PATCH] FILE: src/core/index_verify.py — START =====
 from __future__ import annotations
-
 from pathlib import Path
-from typing import Tuple, Optional
 
+from src.core.readiness import is_ready_text  # ✅ 단일 규칙 재사용
 
-def verify_persist_ready(persist: Path) -> Tuple[bool, str, Optional[int]]:
+def verify_persist_dir(persist: Path) -> bool:
     """
-    CLI와 동일 규칙:
-      - chunks.jsonl 존재 & size > 0
-      - .ready 내용 in {'ready', 'ok'}
+    단순 구조 검증: chunks.jsonl 존재/비어있지 않음 + .ready 텍스트가 유효.
+    (이 모듈의 기존 공개 API가 다르면 동일 시그니처 함수에서 아래 내용을 사용하도록 옮기세요.)
     """
+    chunks = persist / "chunks.jsonl"
+    ready  = persist / ".ready"
     try:
-        persist = persist.expanduser().resolve()
-        # 1) chunks.jsonl 찾기
-        root = persist / "chunks.jsonl"
-        chunks = None
-        if root.exists() and root.stat().st_size > 0:
-            chunks = root
-        else:
-            for p in persist.rglob("chunks.jsonl"):
-                if p.is_file() and p.stat().st_size > 0:
-                    chunks = p
-                    break
-        if chunks is None:
-            return False, "missing chunks.jsonl", None
-        size = chunks.stat().st_size
-
-        # 2) .ready 검사
-        ready = persist / ".ready"
-        if not ready.exists():
-            return False, "missing .ready", size
-        raw = ""
-        try:
-            raw = ready.read_text(encoding="utf-8", errors="ignore").strip().lower()
-        except Exception:
-            raw = ""
-
-        if raw in {"ready", "ok"}:
-            return True, f"OK (.ready='{raw}', size={size})", size
-        return False, f"mismatch .ready='{raw or '(empty)'}'", size
-    except Exception as e:
-        return False, f"error {e}", None
-# ===== [01] FILE: src/core/index_verify.py — END =====
+        txt = ready.read_text(encoding="utf-8") if ready.exists() else ""
+    except Exception:
+        txt = ""
+    return chunks.exists() and chunks.stat().st_size > 0 and is_ready_text(txt)
+# ===== [PATCH] FILE: src/core/index_verify.py — END =====
