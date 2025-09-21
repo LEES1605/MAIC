@@ -3,9 +3,12 @@ from __future__ import annotations
 
 import importlib
 import io
+import os
+import time
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Optional
+from typing import Any, Iterable, Optional, Callable
 
 @dataclass(frozen=True)
 class GHConfig:
@@ -13,6 +16,9 @@ class GHConfig:
     repo: str
     token: Optional[str] = None
     timeout: int = 20
+    max_retries: int = 3         # 네트워크 재시도 횟수
+    backoff_base: float = 0.4    # 지수 백오프 시작(초)
+    chunk_size: int = 2 << 20    # 2 MiB 스트리밍 청크
 
 
 class GHError(RuntimeError):
@@ -29,7 +35,7 @@ class RestoreLog:
 
 
 class GHReleases:
-    """Minimal GitHub Releases client (SSOT)."""
+    """GitHub Releases client (SSOT). Requests 기반, 스트리밍 다운로드/업로드, 재시도 내장."""
 
     def __init__(self, cfg: GHConfig) -> None:
         self.cfg = cfg
@@ -54,27 +60,41 @@ class GHReleases:
             self._session = s
         return self._session
 
+    def _with_retry(self, fn: Callable[[], Any]) -> Any:
+        n = max(1, int(self.cfg.max_retries))
+        base = max(0.1, float(self.cfg.backoff_base))
+        last = None
+        for i in range(n):
+            try:
+                return fn()
+            except Exception as e:
+                last = e
+                # 지수 백오프 + 소량 지터
+                time.sleep(base * (2 ** i) + (os.getpid() % 13) * 0.007)
+        raise GHError(str(last) if last else "request failed")
+
     def _get(self, url: str):
-        r = self._sess().get(url, timeout=self.cfg.timeout)
-        if r.status_code == 404:
-            raise GHError("resource not found")
-        r.raise_for_status()
-        return r
+        def _do():
+            r = self._sess().get(url, timeout=self.cfg.timeout)
+            if r.status_code == 404:
+                raise GHError("resource not found")
+            r.raise_for_status()
+            return r
+        return self._with_retry(_do)
 
     def _post(self, url: str, **kw: Any):
-        r = self._sess().post(url, timeout=self.cfg.timeout, **kw)
-        r.raise_for_status()
-        return r
-
-    def _patch(self, url: str, **kw: Any):
-        r = self._sess().patch(url, timeout=self.cfg.timeout, **kw)
-        r.raise_for_status()
-        return r
+        def _do():
+            r = self._sess().post(url, timeout=self.cfg.timeout, **kw)
+            r.raise_for_status()
+            return r
+        return self._with_retry(_do)
 
     def _delete(self, url: str) -> None:
-        r = self._sess().delete(url, timeout=self.cfg.timeout)
-        if r.status_code not in (200, 201, 202, 204, 404):
-            r.raise_for_status()
+        def _do():
+            r = self._sess().delete(url, timeout=self.cfg.timeout)
+            if r.status_code not in (200, 201, 202, 204, 404):
+                r.raise_for_status()
+        self._with_retry(_do)
 
     # ------------------------- release ops -------------------------
     def get_release_by_tag(self, tag: str) -> dict:
@@ -114,19 +134,48 @@ class GHReleases:
         label_q = f"&label={label}" if label else ""
         url = f"{base}?name={fname}{label_q}"
 
-        headers = {"Content-Type": "application/zip"}
-        with file_path.open("rb") as f:
-            data = f.read()
-        r = self._sess().post(url, headers=headers, data=data, timeout=self.cfg.timeout)
-        r.raise_for_status()
+        size = file_path.stat().st_size
+        headers = {
+            "Content-Type": "application/zip",
+            "Content-Length": str(size),
+        }
+        def _do():
+            with file_path.open("rb") as fp:
+                r = self._sess().post(url, headers=headers, data=fp, timeout=self.cfg.timeout)
+                r.raise_for_status()
+        self._with_retry(_do)
 
     # ------------------------- download/restore -------------------------
+    def _download_to_temp(self, url: str) -> Path:
+        """
+        Stream download to a temp file (memory-safe).
+        Returns local temp file path.
+        """
+        tmp = Path(tempfile.mkstemp(prefix="maic_", suffix=".zip")[1])
+        try:
+            def _do():
+                with self._sess().get(
+                    url, headers={"Accept": "application/octet-stream"},
+                    timeout=self.cfg.timeout, stream=True
+                ) as r:
+                    r.raise_for_status()
+                    with tmp.open("wb") as out:
+                        for chunk in r.iter_content(chunk_size=self.cfg.chunk_size):
+                            if chunk:
+                                out.write(chunk)
+                return tmp
+            return self._with_retry(_do)
+        except Exception:
+            try: tmp.unlink(missing_ok=True)
+            except Exception: pass
+            raise
+
     @staticmethod
-    def _safe_extract_zip(zip_bytes: bytes, dest: Path) -> None:
-        """Extract zip safely (prevent path traversal)."""
+    def _safe_extract_zip_file(zip_path: Path, dest: Path) -> None:
+        """Extract zip safely from file path (prevent path traversal)."""
         import zipfile
         dest.mkdir(parents=True, exist_ok=True)
-        with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+        with zipfile.ZipFile(zip_path, "r") as zf:
             for info in zf.infolist():
                 rel = Path(info.filename)
                 if rel.is_absolute() or ".." in rel.parts:
@@ -158,18 +207,16 @@ class GHReleases:
     ) -> RestoreLog:
         """
         Try tags and asset names in order, then fall back to /releases/latest.
-        Always returns RestoreLog (tag/release_id/asset_name/detail/used_latest_endpoint).
+        Always returns RestoreLog(tag/release_id/asset_name/detail/...).
         """
         tried: list[str] = []
         last_err: Optional[str] = None
 
         def _pick_zip(assets: list[dict]) -> Optional[dict]:
-            # exact match first
             for name in asset_candidates:
                 for a in assets:
                     if a.get("name") == name:
                         return a
-            # then any *.zip
             for a in assets:
                 if str(a.get("name", "")).lower().endswith(".zip"):
                     return a
@@ -189,15 +236,15 @@ class GHReleases:
                 tried.append(f"tag:{tag}=no-zip")
                 continue
 
-            content = self._sess().get(
-                picked.get("browser_download_url"),
-                headers={"Accept": "application/octet-stream"},
-                timeout=self.cfg.timeout,
-            )
-            content.raise_for_status()
-            if clean_dest:
-                self._clean_destination(dest)
-            self._safe_extract_zip(content.content, dest)
+            tmp = self._download_to_temp(picked.get("browser_download_url"))
+            try:
+                if clean_dest:
+                    self._clean_destination(dest)
+                self._safe_extract_zip_file(tmp, dest)
+            finally:
+                try: tmp.unlink(missing_ok=True)
+                except Exception: pass
+
             name = picked.get("name", "unknown.zip")
             tag_name = str(rel.get("tag_name") or tag or "").strip() or None
             release_id = rel.get("id")
@@ -214,15 +261,15 @@ class GHReleases:
             rel = self.get_latest_release()
             picked = _pick_zip(rel.get("assets") or [])
             if picked:
-                content = self._sess().get(
-                    picked.get("browser_download_url"),
-                    headers={"Accept": "application/octet-stream"},
-                    timeout=self.cfg.timeout,
-                )
-                content.raise_for_status()
-                if clean_dest:
-                    self._clean_destination(dest)
-                self._safe_extract_zip(content.content, dest)
+                tmp = self._download_to_temp(picked.get("browser_download_url"))
+                try:
+                    if clean_dest:
+                        self._clean_destination(dest)
+                    self._safe_extract_zip_file(tmp, dest)
+                finally:
+                    try: tmp.unlink(missing_ok=True)
+                    except Exception: pass
+
                 name = picked.get("name", "unknown.zip")
                 tag_name = str(rel.get("tag_name") or "latest").strip() or None
                 release_id = rel.get("id")
