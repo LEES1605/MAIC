@@ -383,9 +383,12 @@ def _mount_background(**_kw) -> None:
 # =============================== [10] auto-restore — START ============================
 def _boot_auto_restore_index() -> None:
     """
-    최신 릴리스 복원 훅.
-    - 로컬 인덱스가 있어도 '이번 세션에서 최신 복원에 성공'했을 때만 _RESTORE_LATEST_DONE=True
-    - 로컬 준비 상태(_INDEX_LOCAL_READY)는 별도 기록(칩 계산에는 사용하지 않음)
+    최신 릴리스 자동 복원 훅.
+    규칙:
+      - 로컬 준비 상태(.ready + chunks.jsonl)는 별도 기록(_INDEX_LOCAL_READY)
+      - 원격 최신 태그와 로컬 저장 메타가 '일치'면 복원 생략(최신으로 간주)
+      - '불일치'면 복원 강제
+      - 복원 성공 시에만 세션에 _INDEX_IS_LATEST=True 로 기록(헤더는 이 값으로만 초록 표시)
     """
     # 멱등 보호: 한 세션에서 한 번만 수행
     try:
@@ -421,7 +424,7 @@ def _boot_auto_restore_index() -> None:
             except Exception:
                 return False
 
-    # --- 로컬 준비 상태 계산 & 기록(_INDEX_LOCAL_READY) ---
+    # --- 로컬 준비 상태 계산 & 기록 ---
     ready_txt = ""
     try:
         if rf.exists():
@@ -429,11 +432,12 @@ def _boot_auto_restore_index() -> None:
     except Exception:
         ready_txt = ""
     local_ready = cj.exists() and cj.stat().st_size > 0 and is_ready_text(ready_txt)
+
     try:
         if "st" in globals() and st is not None:
             st.session_state["_INDEX_LOCAL_READY"] = bool(local_ready)
-            # 부팅 직후에는 '이번 세션 복원 성공' 플래그를 명시적으로 False로 초기화
-            st.session_state.setdefault("_RESTORE_LATEST_DONE", False)
+            # 헤더가 사용할 최신 여부 플래그는 기본 False로 초기화(부팅 직후 초록 금지)
+            st.session_state.setdefault("_INDEX_IS_LATEST", False)
     except Exception:
         pass
 
@@ -458,7 +462,7 @@ def _boot_auto_restore_index() -> None:
 
     stored_meta = _safe_load_meta(p)
 
-    # --- GitHub Releases 메타 파악(가능하면) ---
+    # --- GitHub Releases 최신 메타 취득 ---
     repo_full = os.getenv("GITHUB_REPO", "")
     token = os.getenv("GITHUB_TOKEN", None)
     try:
@@ -469,12 +473,11 @@ def _boot_auto_restore_index() -> None:
         pass
 
     if not repo_full or "/" not in str(repo_full):
-        # 원격 확인 불가: 최신 복원 여부를 확정할 수 없으므로 초록 칩은 금지
+        # 원격 확인 불가: 최신 여부 판단 불가 → 초록 금지(_INDEX_IS_LATEST=False 유지)
         try:
             if "st" in globals() and st is not None:
                 st.session_state["_BOOT_RESTORE_DONE"] = True
                 st.session_state.setdefault("_PERSIST_DIR", p.resolve())
-                # _RESTORE_LATEST_DONE 은 기본 False 유지
         except Exception:
             pass
         return
@@ -484,7 +487,7 @@ def _boot_auto_restore_index() -> None:
     try:
         from src.runtime.gh_release import GHConfig, GHReleases
     except Exception:
-        # 런타임에서 GH API를 쓸 수 없으면 여기서 종료(초록 칩은 켜지지 않음)
+        # GH API 사용 불가: 초록 금지 유지
         try:
             if "st" in globals() and st is not None:
                 st.session_state["_BOOT_RESTORE_DONE"] = True
@@ -499,11 +502,7 @@ def _boot_auto_restore_index() -> None:
     remote_release_id: Optional[int] = None
     try:
         latest_rel = gh.get_latest_release()
-        remote_tag = str(
-            latest_rel.get("tag_name")
-            or latest_rel.get("name")
-            or ""
-        ).strip() or None
+        remote_tag = str(latest_rel.get("tag_name") or latest_rel.get("name") or "").strip() or None
         raw_id = latest_rel.get("id")
         try:
             remote_release_id = int(raw_id)
@@ -522,29 +521,19 @@ def _boot_auto_restore_index() -> None:
         except Exception:
             pass
 
-    # ── 조기 종료 조건(초록 칩은 절대 켜지지 않음) ───────────────────────────────
-    # 1) 로컬 준비 + 원격 태그를 알 수 없음 → 초록 금지
-    if local_ready and remote_tag is None:
+    # --- 일치/불일치 판정 ---
+    if local_ready and remote_tag and _safe_meta_matches(stored_meta, remote_tag):
+        # 이미 최신(메타 일치) → 복원 생략, 최신으로 간주
         try:
             if "st" in globals() and st is not None:
                 st.session_state["_BOOT_RESTORE_DONE"] = True
                 st.session_state.setdefault("_PERSIST_DIR", p.resolve())
+                st.session_state["_INDEX_IS_LATEST"] = True  # 최신으로 표기
         except Exception:
             pass
         return
 
-    # 2) 로컬 준비 + 저장 메타가 원격 최신 태그와 일치(이미 최신) → 초록 금지(이번 세션에서 복원하지 않았으므로)
-    if local_ready and remote_tag is not None and _safe_meta_matches(stored_meta, remote_tag):
-        try:
-            if "st" in globals() and st is not None:
-                st.session_state["_BOOT_RESTORE_DONE"] = True
-                st.session_state.setdefault("_PERSIST_DIR", p.resolve())
-                # _RESTORE_LATEST_DONE 은 False 유지
-        except Exception:
-            pass
-        return
-
-    # ── 실제 최신 릴리스 복원 시도 ────────────────────────────────────────────────
+    # 이외(불일치 또는 로컬 미준비): 최신 복원 강제
     # 태그 후보: 정적 + 동적(최근 5년)
     try:
         import datetime as _dt
@@ -563,7 +552,7 @@ def _boot_auto_restore_index() -> None:
             clean_dest=True,
         )
 
-        # 복원 성공 → .ready 표준화 & 메타 저장
+        # 복원 성공 → .ready 표준화 & 메타 저장 & 최신으로 표기
         normalize_ready_file(p)
         saved_meta = _safe_save_meta(
             p,
@@ -575,17 +564,23 @@ def _boot_auto_restore_index() -> None:
             if "st" in globals() and st is not None:
                 st.session_state["_PERSIST_DIR"] = p.resolve()
                 st.session_state["_BOOT_RESTORE_DONE"] = True
-                st.session_state["_RESTORE_LATEST_DONE"] = True   # ★ 이번 세션에서 최신 복원 성공
-                st.session_state["_INDEX_LOCAL_READY"] = True      # 로컬도 준비됨
+                st.session_state["_INDEX_IS_LATEST"] = True   # 최신 복원 성공 → 초록 근거
+                st.session_state["_INDEX_LOCAL_READY"] = True  # 로컬도 준비됨
                 if saved_meta is not None:
                     st.session_state["_LAST_RESTORE_META"] = getattr(saved_meta, "to_dict", lambda: {})()
         except Exception:
             pass
     except Exception:
-        # 조용히 실패 (UI에서 버튼/토스트로 안내). 초록 칩은 켜지지 않음.
+        # 복원 실패 → 최신 아님(초록 금지), 로컬 준비여부에 따라 헤더에서 노랑/오렌지 표기
+        try:
+            if "st" in globals() and st is not None:
+                st.session_state["_BOOT_RESTORE_DONE"] = True
+                st.session_state.setdefault("_PERSIST_DIR", p.resolve())
+                st.session_state["_INDEX_IS_LATEST"] = False
+        except Exception:
+            pass
         return
 # ================================= [10] auto-restore — END ============================
-
 
 
 
@@ -1037,21 +1032,19 @@ def _render_index_orchestrator_header() -> None:
     local_ready = cj.exists() and cj.stat().st_size > 0 and is_ready_text(ready_txt)
     st.session_state["_INDEX_LOCAL_READY"] = bool(local_ready)
 
-    # 이번 세션 '최신 복원 성공' 플래그
-    restored_now = bool(st.session_state.get("_RESTORE_LATEST_DONE", False))
+    # 최신 여부(헤더 칩 결정용)
+    is_latest = bool(st.session_state.get("_INDEX_IS_LATEST", False))
+    latest_tag = st.session_state.get("_LATEST_RELEASE_TAG")
 
-    # 배지 계산 규칙
-    # - 🟩 READY(준비완료)    : 이번 세션에서 '최신 릴리스 복원' 성공(_RESTORE_LATEST_DONE=True)
-    # - 🟨 준비중(로컬 감지) : 로컬에 인덱스는 있으나 최신 복원 여부는 미확정/미실행
-    # - 🟧 없음              : 로컬 인덱스도 없음
-    if restored_now:
+    # 칩 계산
+    if is_latest:
         badge = "🟩 준비완료"
         badge_code = "READY"
-        badge_desc = "최신 릴리스 복원 완료(이 세션)"
+        badge_desc = f"최신 릴리스 적용됨 (tag={latest_tag})" if latest_tag else "최신 릴리스 적용됨"
     elif local_ready:
         badge = "🟨 준비중(로컬 인덱스 감지)"
-        badge_code = "MISSING"  # 기존 헬퍼에 맞춰 'MISSING'으로 표기하되 설명으로 보강
-        badge_desc = "로컬 인덱스는 있음(최신 여부 확인 필요)"
+        badge_code = "MISSING"  # 글로벌 상단용 코드 체계 유지
+        badge_desc = "로컬 인덱스는 있으나 최신 릴리스와 불일치 또는 미확인"
     else:
         badge = "🟧 없음"
         badge_code = "MISSING"
@@ -1059,7 +1052,7 @@ def _render_index_orchestrator_header() -> None:
 
     st.markdown(f"**상태**\n\n{badge}")
 
-    # 헤더 배지(상단 글로벌 상태) 동기화
+    # 상단 글로벌 배지 동기화
     try:
         _set_brain_status(badge_code, badge_desc, "index", attached=(badge_code == "READY"))
     except Exception:
@@ -1069,52 +1062,48 @@ def _render_index_orchestrator_header() -> None:
         cols = st.columns([1, 1, 2])
         if cols[0].button("⬇️ Release에서 최신 인덱스 복원", use_container_width=True):
             try:
-                # 복원 성공 시 _RESTORE_LATEST_DONE=True 로 세팅됨
                 _boot_auto_restore_index()
                 st.success("Release 복원을 시도했습니다. 상태를 확인하세요.")
             except Exception as e:
                 st.error(f"복원 실행 실패: {e}")
 
-        if cols[1].button("✅ 복원 결과 검증", use_container_width=True):
+        if cols[1].button("✅ 로컬 구조 검증", use_container_width=True):
             try:
-                # (검증은 로컬 구조 확인용 — 칩 색상은 최신 복원 성공 여부에 좌우됨)
                 ok = local_ready
                 rec = {
                     "result": "성공" if ok else "실패",
                     "chunk": str(cj),
                     "ready": ready_txt.strip() or "(없음)",
                     "persist": str(persist),
+                    "latest_tag": latest_tag,
+                    "is_latest": is_latest,
                     "ts": int(time.time()),
                 }
                 st.session_state["_LAST_RESTORE_CHECK"] = rec
 
                 if ok:
-                    st.success("검증 성공: chunks.jsonl 존재 & .ready 값이 유효합니다.")
+                    st.success("검증 성공: chunks.jsonl 존재 & .ready 유효")
                 else:
-                    st.error("검증 실패: 산출물/ready 상태가 불일치합니다.")
+                    st.error("검증 실패: 산출물/ready 상태가 불일치")
             except Exception as e:
                 st.error(f"검증 실행 실패: {e}")
 
-        with st.expander("최근 복원 결과(Release)", expanded=False):
+        with st.expander("최근 검증/복원 기록", expanded=False):
             rec = st.session_state.get("_LAST_RESTORE_CHECK")
-            if rec:
-                st.json(rec)
-            else:
-                st.caption("복원 기록이 없습니다. 위의 복원/검증 버튼을 사용해 보세요.")
+            st.json(rec or {"hint": "위의 복원/검증 버튼을 사용해 기록을 남길 수 있습니다."})
 
-        # ─ 참고: 최신 릴리스 정보 / 마지막 복원 메타 ─
         with st.expander("ℹ️ 최신 릴리스/메타 정보", expanded=False):
             st.write({
-                "latest_release_tag": st.session_state.get("_LATEST_RELEASE_TAG"),
+                "latest_release_tag": latest_tag,
                 "latest_release_id": st.session_state.get("_LATEST_RELEASE_ID"),
                 "last_restore_meta": st.session_state.get("_LAST_RESTORE_META"),
-                "restored_this_session": restored_now,
+                "is_latest": is_latest,
                 "local_ready": local_ready,
             })
 
-        # (선택) Release 후보 디버그(최근 5개)는 기존 코드가 있다면 그대로 유지
+        # (선택) 기존 Release 후보 디버그 존재 시 호출
         try:
-            _render_release_candidates_debug()  # 존재 시 디버그 섹션 호출
+            _render_release_candidates_debug()
         except Exception:
             pass
 
@@ -1125,6 +1114,7 @@ def _render_index_orchestrator_header() -> None:
     )
     st.markdown("<span id='idx-admin-panel'></span>", unsafe_allow_html=True)
 # ================================= [12] diag header — END =============================
+
 
 # =========================== [13] admin indexing panel — START ===========================
 def _render_admin_index_panel() -> None:
