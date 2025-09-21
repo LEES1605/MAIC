@@ -1,13 +1,20 @@
 # =============================== [01] module header =============================
 """
 상단 헤더(학생: 상태칩+펄스점만, 관리자: + 로그인/아웃)
-- SSOT만 사용: src.core.index_probe.probe_index_health
-- 시크릿 접근도 SSOT: src.core.secret.get
-- ruff/mypy 친화: 불필요한 type: ignore 제거, 긴 CSS 속성 개행
+
+변경 사항(세션 우선 로직):
+- 헤더 배지는 세션 상태를 우선 반영한다.
+  * HIGH(초록): `_INDEX_IS_LATEST`가 True 이거나
+                (`brain_status_code` == "READY" and `brain_attached` == True)
+  * LOW(주황):  세션 코드가 "MISSING" 등 실패/미연결 상태
+  * MID(노랑):  위 두 조건을 만족하지 않는 나머지(준비/부착 불완전)
+- 세션 키가 전혀 없을 때만 로컬 probe(SSOT)로 폴백한다.
 """
+
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Dict, Optional
+import importlib
 import os
 
 try:
@@ -22,29 +29,61 @@ if TYPE_CHECKING:
 
 
 # =============================== [02] ready level — START ==================
+def _compute_ready_level_from_session(
+    ss: Dict[str, object] | None,
+    *,
+    fallback_local_ok: Optional[bool] = None,
+) -> str:
+    """
+    순수 판정 함수(테스트 용이). 세션 상태로만 등급을 정하고,
+    세션 키가 전혀 없을 때에만 fallback_local_ok로 폴백한다.
+
+    규칙:
+      - HIGH:   _INDEX_IS_LATEST == True  OR (brain_status_code=="READY" and brain_attached==True)
+      - LOW:    brain_status_code == "MISSING" (명시적 결손/미연결)
+      - MID:    그 외 (준비/부착 불완전 등)
+      - Fallback: 세션키 없음 → fallback_local_ok True면 MID, 아니면 LOW
+    """
+    ss = ss or {}
+    has_any = any(k in ss for k in ("_INDEX_IS_LATEST", "brain_status_code", "brain_attached"))
+    if not has_any:
+        return "MID" if fallback_local_ok else "LOW"
+
+    is_latest = bool(ss.get("_INDEX_IS_LATEST"))
+    brain_code = ss.get("brain_status_code")
+    if isinstance(brain_code, str):
+        brain_code = brain_code.strip().upper()
+    attached = bool(ss.get("brain_attached"))
+
+    if is_latest or (brain_code == "READY" and attached):
+        return "HIGH"
+    if brain_code == "MISSING":
+        return "LOW"
+    return "MID"
+
+
 def _ready_level() -> str:
-    """인덱스 상태를 HIGH/MID/LOW로 환산 (SSOT 기반)."""
-    try:
-        # lazy import: 타입 힌트는 문자열 리터럴로만 사용
-        from src.core.index_probe import probe_index_health
-    except Exception:
-        return "LOW"
+    """인덱스 상태를 HIGH/MID/LOW로 환산 (세션 우선, 필요 시 SSOT probe 폴백)."""
+    # 1) 세션 상태 확인
+    if st is not None:
+        ss = getattr(st, "session_state", {})
+    else:
+        ss = {}
 
-    try:
-        info = probe_index_health()
-        ok = bool(getattr(info, "ok", False))
-        if ok:
-            return "HIGH"
-        size_ok = int(getattr(info, "chunks_size", 0) or 0) > 0
-        json_ok = bool(
-            (int(getattr(info, "json_sample", 0) or 0) > 0)
-            and int(getattr(info, "json_malformed", 0) or 0) == 0
-        )
-        return "MID" if (size_ok and json_ok) else "LOW"
-    except Exception:
-        return "LOW"
+    has_any = any(k in ss for k in ("_INDEX_IS_LATEST", "brain_status_code", "brain_attached"))
+    if not has_any:
+        # 2) 세션키가 전혀 없으면 로컬 probe로 폴백 (비용 최소화를 위해 필요한 순간에만)
+        try:
+            # lazy import: 타입 힌트는 문자열 리터럴로만 사용
+            from src.core.index_probe import probe_index_health
+            local_ok = bool(getattr(probe_index_health(sample_lines=0), "ok", False))
+        except Exception:
+            local_ok = False
+        return _compute_ready_level_from_session({}, fallback_local_ok=local_ok)
+
+    # 3) 세션이 있으면 오직 세션 기준으로만 결정
+    return _compute_ready_level_from_session(ss, fallback_local_ok=None)
 # =============================== [02] ready level — END ====================
-
 
 
 # =============================== [03] UI: header render ==========================
