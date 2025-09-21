@@ -1,15 +1,13 @@
 # ===== [PATCH] FILE: scripts/build_and_publish.py — readiness probe — START =====
 from __future__ import annotations
-
 from pathlib import Path
 from typing import Tuple
-
 from src.core.readiness import is_ready_text
 
 def _is_ready(persist_dir: Path) -> Tuple[bool, str]:
     """
     Return (ok, why). 'ok' is True if chunks.jsonl exists & non-empty and .ready text is valid.
-    'why' describes the first failure reason for logging/diagnostics.
+    'why' explains first failure reason. (Contract restored for callers: ok, why = _is_ready(...))
     """
     chunks = persist_dir / "chunks.jsonl"
     ready  = persist_dir / ".ready"
