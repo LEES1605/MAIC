@@ -1,141 +1,34 @@
-# ============================ [01] imports & cfg — START ============================
+# ===== [PATCH] FILE: scripts/build_and_publish.py — readiness probe — START =====
 from __future__ import annotations
 
-import argparse
-import os
 from pathlib import Path
-from typing import Optional
+from typing import Tuple
 
-ASCII_READY = "ready"
-# ============================= [01] imports & cfg — END =============================
+from src.core.readiness import is_ready_text
 
-
-# ============================ [02] core logic — START ==============================
-def _build_index(mode: str | None) -> int:
+def _is_ready(persist_dir: Path) -> Tuple[bool, str]:
     """
-    인덱스를 빌드한다.
-    - mode: 'HQ' 또는 'STD' (None은 환경변수 유지)
-    - 성공 시 생성된 chunks 수를 반환, 실패/0개면 0
+    Return (ok, why). 'ok' is True if chunks.jsonl exists & non-empty and .ready text is valid.
+    'why' describes the first failure reason for logging/diagnostics.
     """
-    if mode:
-        os.environ["MAIC_INDEX_MODE"] = mode
+    chunks = persist_dir / "chunks.jsonl"
+    ready  = persist_dir / ".ready"
+
+    if not chunks.exists():
+        return False, "chunks.jsonl not found"
     try:
-        from src.rag.index_build import rebuild_index  # uses SSOT persist
+        if chunks.stat().st_size <= 0:
+            return False, "chunks.jsonl is empty"
     except Exception as e:
-        print(f"[build] import failed: {e}")
-        return 0
+        return False, f"stat(chunks) failed: {e}"
 
     try:
-        result = rebuild_index(output_dir=None)
-        cnt = int(result.get("chunks") or 0)
-        print(f"[build] chunks: {cnt}")
-        return cnt
+        txt = ready.read_text(encoding="utf-8") if ready.exists() else ""
     except Exception as e:
-        print(f"[build] rebuild_index error: {e}")
-        return 0
+        return False, f"read(.ready) failed: {e}"
 
+    if not is_ready_text(txt):
+        return False, "invalid .ready content"
 
-def _publish_release(persist: Path, repo: Optional[str]) -> bool:
-    """
-    퍼시스트 디렉토리를 zip으로 묶어 GitHub Release로 업로드한다.
-    """
-    try:
-        from src.backup.github_release import publish_backup  # uses urllib
-    except Exception as e:
-        print(f"[release] import failed: {e}")
-        return False
-
-    try:
-        ok = publish_backup(persist_dir=persist, repo=repo)
-        return bool(ok)
-    except Exception as e:
-        print(f"[release] publish_backup error: {e}")
-        return False
-
-
-def _effective_persist() -> Path:
-    """
-    SSOT 우선: src.core.persist.effective_persist_dir() → 전역/폴백
-    """
-    try:
-        from src.core.persist import effective_persist_dir
-        p = effective_persist_dir()
-        return p if isinstance(p, Path) else Path(str(p)).expanduser().resolve()
-    except Exception:
-        pass
-    return (Path.home() / ".maic" / "persist").resolve()
-
-
-# ===== replace: scripts/build_and_publish.py::_is_ready — START =====
-from pathlib import Path
-
-def _is_ready(persist_dir: Path) -> bool:
-    """
-    Return True if persist_dir has non-empty chunks.jsonl and '.ready' indicates ready.
-    Accepts legacy values ('ok', etc.), case-insensitive, whitespace/BOM tolerant.
-    """
-    try:
-        try:
-            from src.core.readiness import is_persist_ready
-            return is_persist_ready(persist_dir)
-        except Exception:
-            pass
-
-        cj = persist_dir / "chunks.jsonl"
-        rf = persist_dir / ".ready"
-        if not (cj.exists() and cj.stat().st_size > 0 and rf.exists()):
-            return False
-        txt = rf.read_text(encoding="utf-8")
-        txt = txt.replace("\ufeff", "").strip().lower()
-        return txt in {"ready", "ok", "true", "1", "on", "yes", "y", "green"}
-    except Exception:
-        return False
-# ===== replace: scripts/build_and_publish.py::_is_ready — END =====
-
-# ============================= [02] core logic — END ===============================
-
-
-# ============================ [03] main — START =====================================
-def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(
-        description="Build local RAG index and publish as GitHub Release."
-    )
-    ap.add_argument("--mode", choices=["STD", "HQ"], help="Indexing mode.")
-    ap.add_argument("--repo", help="owner/repo (default: env autodetect).")
-    ap.add_argument(
-        "--skip-publish",
-        action="store_true",
-        help="Build only, do not publish a release.",
-    )
-    args = ap.parse_args(argv)
-
-    persist = _effective_persist()
-    cnt = _build_index(args.mode)
-    if cnt <= 0:
-        print("[build] no chunks produced")
-        return 1
-
-    # mark ready if missing
-    ok, why = _is_ready(persist)
-    if not ok:
-        try:
-            (persist / ".ready").write_text(ASCII_READY, encoding="utf-8")
-            print("[build] wrote .ready=ready")
-        except Exception:
-            print("[build] failed to write .ready")
-
-    if args.skip_publish:
-        print("[ok] build-only finished")
-        return 0
-
-    repo = args.repo or None
-    if not _publish_release(persist, repo):
-        return 2
-
-    print("[ok] build and publish finished")
-    return 0
-
-
-if __name__ == "__main__":  # pragma: no cover
-    raise SystemExit(main())
-# ============================= [03] main — END ======================================
+    return True, "ok"
+# ===== [PATCH] FILE: scripts/build_and_publish.py — readiness probe — END =====
