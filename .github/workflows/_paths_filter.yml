@@ -5,7 +5,7 @@ on:
   workflow_call:
     inputs:
       filters:
-        description: "Optional: custom filters mapping or path to a YAML file"
+        description: "Optional: custom filters (YAML text or path). If omitted, uses defaults below."
         required: false
         type: string
       base:
@@ -16,6 +16,8 @@ on:
         description: "Ref/SHA to compare against (default: current SHA)"
         required: false
         type: string
+    # NOTE: Do NOT declare 'GITHUB_TOKEN' here. It's a system-reserved secret automatically provided.
+
     outputs:
       python_changed:
         description: "True if Python files changed"
@@ -35,9 +37,6 @@ on:
       docs_files:
         description: "List of changed docs files"
         value: ${{ jobs.paths.outputs.docs_files }}
-    secrets:
-      GITHUB_TOKEN:
-        required: true
 
 permissions:
   contents: read
@@ -65,16 +64,12 @@ jobs:
         id: filter
         uses: dorny/paths-filter@v3
         with:
-          # 기본 비교 기준: PR이면 PR base, 그외엔 origin/main 대비
+          # If caller doesn't set 'base' or 'ref', use sensible defaults
           base: ${{ inputs.base || (github.event.pull_request.base.sha || 'origin/main') }}
           ref:  ${{ inputs.ref  || github.sha }}
-          token: ${{ secrets.GITHUB_TOKEN }}
-          # 호출 측에서 'filters'를 넘기면 그대로 사용(파일 경로나 YAML 문자열 모두 허용)
-          # 미지정 시 기본 필터 셋을 적용
+          token: ${{ secrets.GITHUB_TOKEN }} # <-- use built-in reserved token; DO NOT redeclare in workflow_call
+          # If caller passes a custom 'filters' (YAML string or a file path), use it; otherwise, use defaults.
           filters: ${{ inputs.filters }}
-          # 기본 필터 (inputs.filters 미지정일 때 동작)
-          # dorny/paths-filter는 inputs.filters 가 비어있으면 아래 'default'가 사용됨
-          # 참고: https://github.com/dorny/paths-filter
           default: |
             python:
               - '**/*.py'
