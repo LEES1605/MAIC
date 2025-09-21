@@ -707,11 +707,59 @@ def _render_status(force: bool = False) -> None:
             st.write(f"{icon} {message}")
 
 
+def _render_stepper_safe(force: bool = False) -> None:
+    """
+    _render_stepper(force=...) 가 없는 환경에서도 패널이 죽지 않도록 보호 래퍼.
+    존재하면 실제 함수를 호출하고, 없으면 간단한 플레이스홀더를 만든다.
+    """
+    if st is None:
+        return
+    try:
+        # 실제 구현이 있으면 그대로 사용
+        _render_stepper(force=force)  # type: ignore[name-defined]
+        return
+    except Exception:
+        pass
+    # 폴백: 간단한 상자 자리표시자 생성
+    ph = st.session_state.get("_IDX_STEPPER_PH")
+    if ph is None and force:
+        ph = st.empty()
+        st.session_state["_IDX_STEPPER_PH"] = ph
+    if ph is not None:
+        with ph.container():
+            st.caption("인덱싱 단계 표시기(간이 모드)")
+            # 간이 모드에서는 별도 진행 표시 없이 상태/로그 섹션에 의존
+
+
 def _render_index_steps() -> None:
     if st is None:
         return
-    _render_stepper(force=True)  # 스텝 막대(대기→실행→성공/실패)
-    _render_status(force=True)   # 로그 영역
+    _render_stepper_safe(force=True)  # ← 예외 안전
+    _render_status(force=True)
+
+
+def _step_reset(step_names: Sequence[str] | None = None) -> None:
+    if st is None:
+        return
+    names = list(step_names or _INDEX_STEP_NAMES)
+    _ensure_index_state(names)
+    st.session_state["_IDX_STEPS"] = [
+        {"name": name, "status": "wait", "detail": ""} for name in names
+    ]
+    st.session_state["_IDX_LOGS"] = []
+    placeholder = st.session_state.get("_IDX_STEPPER_PH")
+    if placeholder is not None:
+        try:
+            placeholder.empty()
+        except Exception:
+            pass
+    placeholder2 = st.session_state.get("_IDX_STATUS_PH")
+    if placeholder2 is not None:
+        try:
+            placeholder2.empty()
+        except Exception:
+            pass
+    _render_index_steps()
 # ====================== [11.45] index steps render helpers — END =====================
 
 # ============================= [11.5] admin index helpers — START ==================
@@ -1028,8 +1076,8 @@ def _render_admin_index_panel() -> None:
     """
     관리자 인덱싱 패널 본문.
     - 패널 시작 직후 요청 소비자 호출(버튼 클릭 후 다음 사이클에서 즉시 작업 시작)
-    - 진행 표시: 스텝/로그 플레이스홀더를 강제 생성
-    - 수동 업로드 버튼 제공
+    - 진행 표시: 스텝/로그 플레이스홀더를 '먼저' 강제 생성(예외 안전)
+    - 수동 업로드 버튼 복구(📤)
     """
     if st is None:
         return
@@ -1038,16 +1086,23 @@ def _render_admin_index_panel() -> None:
     _consume_admin_index_request()
 
     st.markdown("### 🔧 관리자 인덱싱 패널 (prepared 전용)")
-    _render_index_steps()  # 플레이스홀더 강제 생성
 
-    # 옵션/버튼
+    # 2) 진행/상태 패널을 '먼저' 강제 생성(여기서 예외가 나도 아래 버튼은 계속 렌더)
+    try:
+        _render_index_steps()
+    except Exception:
+        # 안전: 진행 패널 실패해도 버튼들이 사라지지 않도록 예외 흡수
+        pass
+
+    # 3) 옵션/버튼 영역
     colA, colB, colC = st.columns([1, 1, 1])
     with colA:
-        auto_zip = st.toggle("인덱싱 후 ZIP/Release 업로드", value=False, help="GH_TOKEN/GITHUB_REPO 필요")
+        auto_zip = st.toggle("인덱싱 후 ZIP/Release 업로드", value=False, key="idx_auto_zip",
+                             help="GH_TOKEN/GITHUB_REPO 필요")
     with colB:
-        show_debug = st.toggle("디버그 로그 표시", value=True)
+        show_debug = st.toggle("디버그 로그 표시", value=True, key="idx_show_debug")
     with colC:
-        # 수동 업로드 버튼
+        # 수동 업로드 버튼(복구)
         if st.button("📤 인덱싱 산출물 업로드(Release)", use_container_width=True, key="idx_manual_upload"):
             try:
                 used_persist = _persist_dir_safe()
@@ -1057,20 +1112,22 @@ def _render_admin_index_panel() -> None:
             except Exception as e:
                 st.error(f"업로드 실패: {e}")
 
-    # 실행 버튼
-    if st.button("🚀 강제 재인덱싱(HQ, prepared)", type="primary", use_container_width=True, key="idx_run_btn"):
+    # 4) 강제 인덱싱 실행 버튼(항상 보이도록 최하단에 둠)
+    if st.button("🚀 강제 재인덱싱(HQ, prepared)", type="primary",
+                 use_container_width=True, key="idx_run_btn"):
         try:
             st.session_state["_IDX_REQ"] = {"auto_up": bool(auto_zip), "debug": bool(show_debug)}
         except Exception:
             st.session_state["_IDX_REQ"] = {"auto_up": False}
         _safe_rerun("idx_run", ttl=0.3)  # 다음 사이클에서 소비
 
-    # 진행/상태 패널(한 번 더 렌더로 보강)
+    # 5) 마지막으로 한 번 더 진행/상태 렌더(있으면 갱신)
     try:
         _render_index_steps()
     except Exception:
         pass
 # ============================ [13] admin indexing panel — END ============================
+
 
 
 # =============================== [14] admin legacy — START ============================
