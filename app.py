@@ -382,6 +382,14 @@ def _mount_background(**_kw) -> None:
 
 # =============================== [10] auto-restore — START ============================
 def _boot_auto_restore_index() -> None:
+    """
+    최신 릴리스 자동 복원 훅.
+    규칙:
+      - 로컬 준비 상태(.ready + chunks.jsonl)는 별도 기록(_INDEX_LOCAL_READY)
+      - 원격 최신 태그와 로컬 저장 메타가 '일치'면 복원 생략(최신으로 간주)
+      - '불일치'면 복원 강제
+      - 복원 성공 시에만 세션에 _INDEX_IS_LATEST=True 로 기록(헤더는 이 값으로만 초록 표시)
+    """
     # 멱등 보호: 한 세션에서 한 번만 수행
     try:
         if "st" in globals() and st is not None:
@@ -416,23 +424,45 @@ def _boot_auto_restore_index() -> None:
             except Exception:
                 return False
 
-    # --- 사전 스킵조건: chunks + .ready(역호환) ---
+    # --- 로컬 준비 상태 계산 & 기록 ---
     ready_txt = ""
     try:
         if rf.exists():
             ready_txt = rf.read_text(encoding="utf-8")
     except Exception:
         ready_txt = ""
+    local_ready = cj.exists() and cj.stat().st_size > 0 and is_ready_text(ready_txt)
 
-    if cj.exists() and cj.stat().st_size > 0 and is_ready_text(ready_txt):
+    try:
+        if "st" in globals() and st is not None:
+            st.session_state["_INDEX_LOCAL_READY"] = bool(local_ready)
+            # 헤더가 사용할 최신 여부 플래그는 기본 False로 초기화(부팅 직후 초록 금지)
+            st.session_state.setdefault("_INDEX_IS_LATEST", False)
+    except Exception:
+        pass
+
+    # --- 복원 메타 유틸(있으면 사용) ---
+    def _safe_load_meta(path):
         try:
-            if "st" in globals() and st is not None:
-                st.session_state["_BOOT_RESTORE_DONE"] = True
+            return load_restore_meta(path)  # type: ignore[name-defined]
         except Exception:
-            pass
-        return
+            return None
 
-    # --- GitHub Releases에서 복원(유연 후보) ---
+    def _safe_meta_matches(meta, tag: str) -> bool:
+        try:
+            return bool(meta_matches_tag(meta, tag))  # type: ignore[name-defined]
+        except Exception:
+            return False
+
+    def _safe_save_meta(path, tag: str | None, release_id: int | None):
+        try:
+            return save_restore_meta(path, tag=tag, release_id=release_id)  # type: ignore[name-defined]
+        except Exception:
+            return None
+
+    stored_meta = _safe_load_meta(p)
+
+    # --- GitHub Releases 최신 메타 취득 ---
     repo_full = os.getenv("GITHUB_REPO", "")
     token = os.getenv("GITHUB_TOKEN", None)
     try:
@@ -441,10 +471,69 @@ def _boot_auto_restore_index() -> None:
             token = st.secrets.get("GITHUB_TOKEN", token)
     except Exception:
         pass
+
     if not repo_full or "/" not in str(repo_full):
+        # 원격 확인 불가: 최신 여부 판단 불가 → 초록 금지(_INDEX_IS_LATEST=False 유지)
+        try:
+            if "st" in globals() and st is not None:
+                st.session_state["_BOOT_RESTORE_DONE"] = True
+                st.session_state.setdefault("_PERSIST_DIR", p.resolve())
+        except Exception:
+            pass
         return
+
     owner, repo = str(repo_full).split("/", 1)
 
+    try:
+        from src.runtime.gh_release import GHConfig, GHReleases
+    except Exception:
+        # GH API 사용 불가: 초록 금지 유지
+        try:
+            if "st" in globals() and st is not None:
+                st.session_state["_BOOT_RESTORE_DONE"] = True
+                st.session_state.setdefault("_PERSIST_DIR", p.resolve())
+        except Exception:
+            pass
+        return
+
+    gh = GHReleases(GHConfig(owner=owner, repo=repo, token=token))
+
+    remote_tag: Optional[str] = None
+    remote_release_id: Optional[int] = None
+    try:
+        latest_rel = gh.get_latest_release()
+        remote_tag = str(latest_rel.get("tag_name") or latest_rel.get("name") or "").strip() or None
+        raw_id = latest_rel.get("id")
+        try:
+            remote_release_id = int(raw_id)
+        except (TypeError, ValueError):
+            remote_release_id = None
+    except Exception:
+        remote_tag = None
+        remote_release_id = None
+    finally:
+        try:
+            if "st" in globals() and st is not None:
+                st.session_state["_LATEST_RELEASE_TAG"] = remote_tag
+                st.session_state["_LATEST_RELEASE_ID"] = remote_release_id
+                if stored_meta is not None:
+                    st.session_state["_LAST_RESTORE_META"] = getattr(stored_meta, "to_dict", lambda: {})()
+        except Exception:
+            pass
+
+    # --- 일치/불일치 판정 ---
+    if local_ready and remote_tag and _safe_meta_matches(stored_meta, remote_tag):
+        # 이미 최신(메타 일치) → 복원 생략, 최신으로 간주
+        try:
+            if "st" in globals() and st is not None:
+                st.session_state["_BOOT_RESTORE_DONE"] = True
+                st.session_state.setdefault("_PERSIST_DIR", p.resolve())
+                st.session_state["_INDEX_IS_LATEST"] = True  # 최신으로 표기
+        except Exception:
+            pass
+        return
+
+    # 이외(불일치 또는 로컬 미준비): 최신 복원 강제
     # 태그 후보: 정적 + 동적(최근 5년)
     try:
         import datetime as _dt
@@ -456,26 +545,40 @@ def _boot_auto_restore_index() -> None:
     asset_candidates = ["indices.zip", "persist.zip", "hq_index.zip", "prepared.zip"]
 
     try:
-        from src.runtime.gh_release import GHConfig, GHReleases
-        gh = GHReleases(GHConfig(owner=owner, repo=repo, token=token))
-        gh.restore_latest_index(
+        result = gh.restore_latest_index(
             tag_candidates=tag_candidates,
             asset_candidates=asset_candidates,
             dest=p,
             clean_dest=True,
         )
 
-        # ── 복원 성공 후: .ready 표준화(= 'ready')
+        # 복원 성공 → .ready 표준화 & 메타 저장 & 최신으로 표기
         normalize_ready_file(p)
+        saved_meta = _safe_save_meta(
+            p,
+            tag=(getattr(result, "tag", None) or remote_tag),
+            release_id=(getattr(result, "release_id", None) or remote_release_id),
+        )
 
         try:
             if "st" in globals() and st is not None:
                 st.session_state["_PERSIST_DIR"] = p.resolve()
                 st.session_state["_BOOT_RESTORE_DONE"] = True
+                st.session_state["_INDEX_IS_LATEST"] = True   # 최신 복원 성공 → 초록 근거
+                st.session_state["_INDEX_LOCAL_READY"] = True  # 로컬도 준비됨
+                if saved_meta is not None:
+                    st.session_state["_LAST_RESTORE_META"] = getattr(saved_meta, "to_dict", lambda: {})()
         except Exception:
             pass
     except Exception:
-        # 조용히 실패 (UI에서 버튼/토스트로 안내)
+        # 복원 실패 → 최신 아님(초록 금지), 로컬 준비여부에 따라 헤더에서 노랑/오렌지 표기
+        try:
+            if "st" in globals() and st is not None:
+                st.session_state["_BOOT_RESTORE_DONE"] = True
+                st.session_state.setdefault("_PERSIST_DIR", p.resolve())
+                st.session_state["_INDEX_IS_LATEST"] = False
+        except Exception:
+            pass
         return
 # ================================= [10] auto-restore — END ============================
 
@@ -895,14 +998,14 @@ def _run_admin_index_job(req: Dict[str, Any]) -> None:
         _log(f"인덱싱 실패: {e}", "err")
 # ============================= [11.5] admin index helpers — END ==================
 
-# =============================== [12] diag header — START ========================
+# =============================== [12] diag header — START =============================
 def _render_index_orchestrator_header() -> None:
     if "st" not in globals() or st is None:
         return
 
     # 공용 판정기(역호환 허용)
     try:
-        from src.core.readiness import is_ready_text, normalize_ready_file
+        from src.core.readiness import is_ready_text
     except Exception:
         def _norm(x: str | bytes | None) -> str:
             if x is None:
@@ -912,8 +1015,6 @@ def _render_index_orchestrator_header() -> None:
             return x.replace("\ufeff", "").strip().lower()
         def is_ready_text(x):  # type: ignore
             return _norm(x) in {"ready", "ok", "true", "1", "on", "yes", "y", "green"}
-        def normalize_ready_file(_):  # type: ignore
-            return False
 
     st.markdown("### 🧪 인덱스 오케스트레이터")
     persist = _persist_dir_safe()
@@ -921,23 +1022,39 @@ def _render_index_orchestrator_header() -> None:
         st.caption("Persist Dir")
         st.code(str(persist), language="text")
 
-    # 상태 표시
+    # 로컬 준비 상태 재계산(세션 키 보정)
     cj = persist / "chunks.jsonl"
     rf = persist / ".ready"
     try:
         ready_txt = rf.read_text(encoding="utf-8") if rf.exists() else ""
     except Exception:
         ready_txt = ""
-    status_ok = cj.exists() and cj.stat().st_size > 0 and is_ready_text(ready_txt)
-    badge = "🟩 READY" if status_ok else "🟨 MISSING"
+    local_ready = cj.exists() and cj.stat().st_size > 0 and is_ready_text(ready_txt)
+    st.session_state["_INDEX_LOCAL_READY"] = bool(local_ready)
+
+    # 최신 여부(헤더 칩 결정용)
+    is_latest = bool(st.session_state.get("_INDEX_IS_LATEST", False))
+    latest_tag = st.session_state.get("_LATEST_RELEASE_TAG")
+
+    # 칩 계산
+    if is_latest:
+        badge = "🟩 준비완료"
+        badge_code = "READY"
+        badge_desc = f"최신 릴리스 적용됨 (tag={latest_tag})" if latest_tag else "최신 릴리스 적용됨"
+    elif local_ready:
+        badge = "🟨 준비중(로컬 인덱스 감지)"
+        badge_code = "MISSING"  # 글로벌 상단용 코드 체계 유지
+        badge_desc = "로컬 인덱스는 있으나 최신 릴리스와 불일치 또는 미확인"
+    else:
+        badge = "🟧 없음"
+        badge_code = "MISSING"
+        badge_desc = "인덱스 없음"
+
     st.markdown(f"**상태**\n\n{badge}")
 
-    # 헤더 배지 동기화
+    # 상단 글로벌 배지 동기화
     try:
-        if status_ok:
-            _set_brain_status("READY", "인덱스 사용 가능", "index", attached=True)
-        else:
-            _set_brain_status("MISSING", "인덱스 없음", "index", attached=False)
+        _set_brain_status(badge_code, badge_desc, "index", attached=(badge_code == "READY"))
     except Exception:
         pass
 
@@ -950,82 +1067,45 @@ def _render_index_orchestrator_header() -> None:
             except Exception as e:
                 st.error(f"복원 실행 실패: {e}")
 
-        if cols[1].button("✅ 복원 결과 검증", use_container_width=True):
+        if cols[1].button("✅ 로컬 구조 검증", use_container_width=True):
             try:
-                # 재계산(역호환)
-                try:
-                    ready_txt = rf.read_text(encoding="utf-8") if rf.exists() else ""
-                except Exception:
-                    ready_txt = ""
-                ok = cj.exists() and cj.stat().st_size > 0 and is_ready_text(ready_txt)
-
+                ok = local_ready
                 rec = {
                     "result": "성공" if ok else "실패",
                     "chunk": str(cj),
                     "ready": ready_txt.strip() or "(없음)",
                     "persist": str(persist),
+                    "latest_tag": latest_tag,
+                    "is_latest": is_latest,
                     "ts": int(time.time()),
                 }
                 st.session_state["_LAST_RESTORE_CHECK"] = rec
 
                 if ok:
-                    _set_brain_status("READY", "복원 완료", "release", attached=True)
-                    st.success("검증 성공: chunks.jsonl 존재 & .ready 값이 유효합니다.")
+                    st.success("검증 성공: chunks.jsonl 존재 & .ready 유효")
                 else:
-                    _set_brain_status("MISSING", "산출물/ready 불일치", "release", attached=False)
-                    st.error("검증 실패: 산출물/ready 상태가 불일치합니다.")
+                    st.error("검증 실패: 산출물/ready 상태가 불일치")
             except Exception as e:
                 st.error(f"검증 실행 실패: {e}")
 
-        with st.expander("최근 복원 결과(Release)", expanded=False):
+        with st.expander("최근 검증/복원 기록", expanded=False):
             rec = st.session_state.get("_LAST_RESTORE_CHECK")
-            if rec:
-                st.json(rec)
-            else:
-                st.caption("복원 기록이 없습니다. 위의 복원/검증 버튼을 사용해 보세요.")
+            st.json(rec or {"hint": "위의 복원/검증 버튼을 사용해 기록을 남길 수 있습니다."})
 
-        # ─ NEW: Release 후보 디버그(최근 5개) 그대로 유지 ─
-        with st.expander("🐞 Release 후보 디버그 (최근 5개)", expanded=False):
-            import json as _json
-            from urllib import request as _rq
+        with st.expander("ℹ️ 최신 릴리스/메타 정보", expanded=False):
+            st.write({
+                "latest_release_tag": latest_tag,
+                "latest_release_id": st.session_state.get("_LATEST_RELEASE_ID"),
+                "last_restore_meta": st.session_state.get("_LAST_RESTORE_META"),
+                "is_latest": is_latest,
+                "local_ready": local_ready,
+            })
 
-            repo_full = os.getenv("GITHUB_REPO", "")
-            try:
-                repo_full = st.secrets.get("GITHUB_REPO", repo_full)
-            except Exception:
-                pass
-            token = os.getenv("GITHUB_TOKEN", None)
-            try:
-                token = st.secrets.get("GITHUB_TOKEN", token)
-            except Exception:
-                pass
-
-            st.caption(f"Repo: **{repo_full or '(미설정)'}**")
-            if repo_full and "/" in repo_full:
-                try:
-                    owner, repo = repo_full.split("/", 1)
-                    url = f"https://api.github.com/repos/{owner}/{repo}/releases?per_page=5"
-                    headers = {"Accept": "application/vnd.github+json"}
-                    if token:
-                        headers["Authorization"] = f"token {token}"
-                    api_request = _rq.Request(url, headers=headers)
-                    with _rq.urlopen(api_request, timeout=20) as resp:                   
-                        items = _json.loads(resp.read().decode("utf-8", "ignore"))
-                    rows = []
-                    for r in items[:5]:
-                        rows.append({
-                            "tag": r.get("tag_name"),
-                            "name": r.get("name"),
-                            "assets": ", ".join(a.get("name", "") for a in (r.get("assets") or [])) or "(none)",
-                        })
-                    try:
-                        st.table(rows)
-                    except Exception:
-                        st.json(rows)
-                except Exception as e:
-                    st.warning(f"릴리스 목록 조회 실패: {e}")
-            else:
-                st.warning("GITHUB_REPO가 설정되어 있지 않습니다. (예: 'OWNER/REPO')")
+        # (선택) 기존 Release 후보 디버그 존재 시 호출
+        try:
+            _render_release_candidates_debug()
+        except Exception:
+            pass
 
     st.info(
         "강제 인덱싱(HQ, 느림)·백업과 인덱싱 파일 미리보기는 **관리자 인덱싱 패널**에서 합니다. "
@@ -1034,7 +1114,6 @@ def _render_index_orchestrator_header() -> None:
     )
     st.markdown("<span id='idx-admin-panel'></span>", unsafe_allow_html=True)
 # ================================= [12] diag header — END =============================
-
 
 
 # =========================== [13] admin indexing panel — START ===========================
