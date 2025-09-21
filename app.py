@@ -946,19 +946,36 @@ def _render_body() -> None:
     # 3) 헤더
     _header()
 
-    # 4) 관리자 패널 (내부 렌더 함수 직접 호출)
+    # 4) 관리자 패널 (외부 모듈 호출: src.ui.ops.indexing_panel)
     if _is_admin_view():
-        _render_index_orchestrator_header()
+        # 지연 import로 순환 참조 방지 및 오버헤드 최소화
         try:
-            _render_admin_prepared_scan_panel()
+            from src.ui.ops.indexing_panel import (
+                render_orchestrator_header,
+                render_prepared_scan_panel,
+                render_index_panel,
+                render_indexed_sources_panel,
+            )
+        except Exception as e:
+            _errlog(f"admin panel import failed: {e}", where="[render_body.admin.import]", exc=e)
+            render_orchestrator_header = render_prepared_scan_panel = None  # type: ignore
+            render_index_panel = render_indexed_sources_panel = None        # type: ignore
+
+        if callable(render_orchestrator_header):
+            render_orchestrator_header()
+        try:
+            if callable(render_prepared_scan_panel):
+                render_prepared_scan_panel()
         except Exception:
             pass
         try:
-            _render_admin_index_panel()
+            if callable(render_index_panel):
+                render_index_panel()
         except Exception:
             pass
         try:
-            _render_admin_indexed_sources_panel()
+            if callable(render_indexed_sources_panel):
+                render_indexed_sources_panel()
         except Exception:
             pass
 

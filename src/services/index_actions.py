@@ -151,7 +151,7 @@ def upload_index_zip_to_release(zip_path: Path, *, tag: str | None = None) -> st
     """ZIP을 GitHub Release에 업로드(태그 없으면 index-<ts>). 실패시 예외."""
     owner, repo, tok = _resolve_owner_repo_and_token()
     if not (owner and repo and tok):
-        raise RuntimeError("시크릿/리포 정보가 부족합니다(GITHUB_REPO/GITHUB_TOKEN 등).")
+        raise RuntimeError("시크릿/리포 정보가 부족합니다(GITHUB_REPO/GITHUB_TOKEN 등)." )
     try:
         from src.runtime.gh_release import GHConfig, GHReleases
     except Exception as exc:
@@ -203,7 +203,6 @@ def run_admin_index_job(req: Dict[str, Any]) -> None:
         _log(f"인덱싱 모듈 로드 실패: {exc}", "err")
         _step_set(2, "fail", "모듈 로드 실패")
         try:
-            # 앱의 가드가 있으면 리셋
             app_mod = sys.modules.get("__main__")
             _reset = getattr(app_mod, "_reset_rerun_guard", None)
             if callable(_reset):

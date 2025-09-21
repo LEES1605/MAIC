@@ -99,10 +99,7 @@ def render_status(force: bool = False) -> None:
 
 
 def render_stepper_safe(force: bool = False) -> None:
-    """
-    _render_stepper(force=...) 가 앱쪽에 있으면 그걸 사용하고,
-    없으면 간단한 자리표시자를 만든다.
-    """
+    """_render_stepper(force=...) 가 앱쪽에 있으면 그걸 사용하고, 없으면 간단한 자리표시자."""
     if st is None:
         return
     try:
