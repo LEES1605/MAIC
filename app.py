@@ -683,77 +683,7 @@ def _consume_admin_index_request() -> None:
             except Exception:
                 pass
 # ======================== [11.4] admin index: request consumer — END ========================
-
-# ============================ [11.5] admin index helpers — START ======================
-_INDEX_STEP_NAMES: Tuple[str, ...] = (
-    "persist 확인",
-    "HQ 인덱싱",
-    "prepared 소비",
-    "요약 계산",
-    "ZIP/Release 업로드",
-)
-
-
-def _ensure_index_state(step_names: Sequence[str] | None = None) -> None:
-    if st is None:
-        return
-    names = list(step_names or _INDEX_STEP_NAMES)
-    steps = st.session_state.get("_IDX_STEPS")
-    if not isinstance(steps, list) or len(steps) != len(names):
-        st.session_state["_IDX_STEPS"] = [
-            {"name": name, "status": "wait", "detail": ""} for name in names
-        ]
-    st.session_state.setdefault("_IDX_LOGS", [])
-    st.session_state.setdefault("_IDX_STEPPER_PH", None)
-    st.session_state.setdefault("_IDX_STATUS_PH", None)
-
-
-def _steps() -> List[Dict[str, Any]]:
-    if st is None:
-        return []
-    _ensure_index_state()
-    raw = st.session_state.get("_IDX_STEPS", [])
-    if isinstance(raw, list):
-        return raw
-    steps = [{"name": name, "status": "wait", "detail": ""} for name in _INDEX_STEP_NAMES]
-    st.session_state["_IDX_STEPS"] = steps
-    return steps
-
-
-def _render_stepper(force: bool = False) -> None:
-    if st is None:
-        return
-    _ensure_index_state()
-    placeholder = st.session_state.get("_IDX_STEPPER_PH")
-    if placeholder is None:
-        if not force:
-            return
-        placeholder = st.empty()
-        st.session_state["_IDX_STEPPER_PH"] = placeholder
-    steps = _steps()
-    icon_map = {"wait": "⏸", "run": "⏳", "ok": "✅", "fail": "❌", "skip": "⏭"}
-    with placeholder.container():
-        if not steps:
-            st.caption("표시할 단계가 없습니다.")
-            return
-        total = len(steps)
-        done = sum(1 for step in steps if step.get("status") in {"ok", "skip"})
-        if total:
-            st.progress(int(done / total * 100))
-            st.caption(f"{done}/{total} 단계 완료")
-        else:
-            st.progress(0)
-        for idx, step in enumerate(steps, start=1):
-            name = str(step.get("name") or "")
-            status = str(step.get("status") or "wait")
-            detail = str(step.get("detail") or "")
-            icon = icon_map.get(status, "•")
-            if detail:
-                st.write(f"{idx}. {icon} **{name}** — {detail}")
-            else:
-                st.write(f"{idx}. {icon} **{name}**")
-
-
+# ===================== [11.45] index steps render helpers — START ====================
 def _render_status(force: bool = False) -> None:
     if st is None:
         return
@@ -777,87 +707,82 @@ def _render_status(force: bool = False) -> None:
             st.write(f"{icon} {message}")
 
 
-def _step_reset(step_names: Sequence[str] | None = None) -> None:
+def _render_index_steps() -> None:
     if st is None:
         return
-    names = list(step_names or _INDEX_STEP_NAMES)
-    _ensure_index_state(names)
-    st.session_state["_IDX_STEPS"] = [
-        {"name": name, "status": "wait", "detail": ""} for name in names
-    ]
-    st.session_state["_IDX_LOGS"] = []
-    placeholder = st.session_state.get("_IDX_STEPPER_PH")
-    if placeholder is not None:
+    _render_stepper(force=True)  # 스텝 막대(대기→실행→성공/실패)
+    _render_status(force=True)   # 로그 영역
+# ====================== [11.45] index steps render helpers — END =====================
+
+# ============================= [11.5] admin index helpers — START ==================
+from typing import Any, Dict, List, Tuple
+import os, time, zipfile
+from pathlib import Path
+
+def _resolve_owner_repo_and_token() -> Tuple[str, str, str]:
+    """시크릿/환경변수에서 GitHub owner/repo/token을 해석."""
+    if st is None:
+        return "", "", ""
+    def _secret(name: str, default: str = "") -> str:
         try:
-            placeholder.empty()
+            v = st.secrets.get(name)
+            if isinstance(v, str) and v:
+                return v
         except Exception:
             pass
-    placeholder2 = st.session_state.get("_IDX_STATUS_PH")
-    if placeholder2 is not None:
-        try:
-            placeholder2.empty()
-        except Exception:
-            pass
-    _render_stepper()
-    _render_status()
+        return os.getenv(name, default)
+
+    tok = _secret("GH_TOKEN") or _secret("GITHUB_TOKEN")
+    owner = _secret("GH_OWNER") or _secret("GITHUB_OWNER")
+    repo = _secret("GH_REPO") or _secret("GITHUB_REPO_NAME")
+    combo = _secret("GITHUB_REPO")
+    if combo and "/" in combo:
+        o, r = combo.split("/", 1)
+        owner, repo = o.strip(), r.strip()
+    return owner or "", repo or "", tok or ""
 
 
-def _step_set(step_index: int, status: str, detail: str) -> None:
-    if st is None:
-        return
-    steps = _steps()
-    if not steps:
-        return
-    idx = max(0, min(step_index - 1, len(steps) - 1))
-    steps[idx]["status"] = status
-    steps[idx]["detail"] = detail
-    st.session_state["_IDX_STEPS"] = steps
-    if st.session_state.get("_IDX_STEPPER_PH") is not None:
-        _render_stepper()
+def _make_index_backup_zip(persist_dir: Path) -> Path:
+    """persist 내용을 backups/index_<ts>.zip으로 압축."""
+    backup_dir = persist_dir / "backups"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    zpath = backup_dir / f"index_{int(time.time())}.zip"
+    with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as zf:
+        for root, _d, files in os.walk(str(persist_dir)):
+            for fn in files:
+                pth = Path(root) / fn
+                # backups/ 내부의 오래된 zip은 제외(자기 자신 포함)
+                if pth.is_file() and pth.suffix != ".zip":
+                    zf.write(str(pth), arcname=str(pth.relative_to(persist_dir)))
+    return zpath
 
 
-def _render_logs_if_ready() -> None:
-    if st is None:
-        return
-    if st.session_state.get("_IDX_STATUS_PH") is not None:
-        _render_status()
-
-
-def _log(message: str, level: str = "info") -> None:
-    ts = int(time.time())
-    if st is None:
-        print(f"[IDX][{level}] {message}")
-        return
-    _ensure_index_state()
-    logs = st.session_state.setdefault("_IDX_LOGS", [])
-    logs.append({"ts": ts, "level": level, "message": message})
-    st.session_state["_IDX_LOGS"] = logs[-200:]
-    _render_logs_if_ready()
-
-
-def _stamp_persist(path: Path) -> None:
+def _upload_index_zip_to_release(zip_path: Path, *, tag: str | None = None) -> str:
+    """ZIP을 GitHub Release에 업로드(태그 없으면 index-<ts>). 실패시 예외."""
+    owner, repo, tok = _resolve_owner_repo_and_token()
+    if not (owner and repo and tok):
+        raise RuntimeError("시크릿/리포 정보가 부족합니다(GITHUB_REPO/GITHUB_TOKEN 등).")
     try:
-        stamp_path = path / ".last_index_ts"
-        stamp_path.write_text(str(int(time.time())), encoding="utf-8")
-    except Exception:
-        pass
+        from src.runtime.gh_release import GHConfig, GHReleases
+    except Exception as exc:
+        raise RuntimeError(f"릴리스 클라이언트 로드 실패: {exc}") from exc
 
-
-def _collect_prepared_files() -> Tuple[List[Dict[str, Any]], List[str]]:
-    files_list: List[Dict[str, Any]] = []
-    lister, debug_msgs = _load_prepared_lister()
-    dbg: List[str] = list(debug_msgs or [])
-    if callable(lister):
-        try:
-            files_list = lister() or []
-        except Exception as exc:
-            dbg.append(f"list_prepared_files 실패: {exc}")
-    return files_list, dbg
+    if tag is None:
+        tag = f"index-{int(time.time())}"
+    client = GHReleases(GHConfig(owner=owner, repo=repo, token=tok))
+    rel = client.ensure_release(tag, name=tag)
+    client.upload_asset(rel, zip_path)
+    return f"OK: {zip_path.name} → {owner}/{repo} tag={tag}"
 
 
 def _run_admin_index_job(req: Dict[str, Any]) -> None:
+    """관리자 강제 인덱싱(동기). 상태 펄스+바, 스텝/로그 갱신."""
     if st is None:
         return
+
+    # 진행 표시에 사용할 펄스 + 바(대략적 비율)
+    status = st.status("⚙️ 인덱싱 준비 중", expanded=True)
+    prog = st.progress(0)
 
     step_names = list(_INDEX_STEP_NAMES)
     _ensure_index_state(step_names)
@@ -872,22 +797,31 @@ def _run_admin_index_job(req: Dict[str, Any]) -> None:
     try:
         from src.rag import index_build as _idx
     except Exception as exc:
+        status.update(label=f"❌ 인덱싱 모듈 로드 실패: {exc}", state="error")
         _log(f"인덱싱 모듈 로드 실패: {exc}", "err")
         _step_set(2, "fail", "모듈 로드 실패")
+        _reset_rerun_guard("idx_run")
         return
 
     try:
+        # 1) persist 확인
+        status.update(label="📁 persist 확인 중", state="running")
         _step_set(1, "run", "persist 확인 중")
         _step_set(1, "ok", str(used_persist))
         _log(f"persist={used_persist}")
+        prog.progress(10)
 
+        # 2) HQ 인덱싱
+        status.update(label="⚙️ HQ 인덱싱 중 (prepared 전용)", state="running")
         _step_set(2, "run", "HQ 인덱싱 중")
         os.environ["MAIC_INDEX_MODE"] = "HQ"
         os.environ["MAIC_USE_PREPARED_ONLY"] = "1"
-        _idx.rebuild_index()
+        _idx.rebuild_index()  # 시간이 걸릴 수 있음
         _step_set(2, "ok", "완료")
         _log("인덱싱 완료")
+        prog.progress(60)
 
+        # 산출물 위치 보정 + ready 표준화
         cj = used_persist / "chunks.jsonl"
         if not (cj.exists() and cj.stat().st_size > 0):
             try:
@@ -904,6 +838,8 @@ def _run_admin_index_job(req: Dict[str, Any]) -> None:
                 pass
             _stamp_persist(used_persist)
 
+        # 3) prepared 소비(seen 마킹)
+        status.update(label="🧾 prepared 소비(seen) 마킹", state="running")
         _step_set(3, "run", "prepared 소비 중")
         try:
             chk, mark, dbg2 = _load_prepared_api()
@@ -928,75 +864,47 @@ def _run_admin_index_job(req: Dict[str, Any]) -> None:
         except Exception as e:
             _step_set(3, "fail", "소비 실패")
             _log(f"prepared 소비 실패: {e}", "err")
+        prog.progress(75)
 
+        # 4) 요약 계산
+        status.update(label="📊 요약 계산", state="running")
         _step_set(4, "run", "요약 계산")
         try:
             from src.rag.index_status import get_index_summary
-
             s2 = get_index_summary(used_persist)
             _step_set(4, "ok", f"files={s2.total_files}, chunks={s2.total_chunks}")
             _log(f"요약 files={s2.total_files}, chunks={s2.total_chunks}")
         except Exception:
             _step_set(4, "ok", "요약 모듈 없음")
             _log("요약 모듈 없음", "warn")
+        prog.progress(85)
 
-        if req.get("auto_up"):
+        # 5) ZIP/Release 업로드(선택)
+        auto_up = bool(req.get("auto_up"))
+        if auto_up:
+            status.update(label="⏫ ZIP 생성 및 Release 업로드...", state="running")
             _step_set(5, "run", "ZIP/Release 업로드")
-
-            def _secret(name: str, default: str = "") -> str:
-                try:
-                    v = st.secrets.get(name)
-                    if isinstance(v, str) and v:
-                        return v
-                except Exception:
-                    pass
-                return os.getenv(name, default)
-
-            def _resolve_owner_repo() -> Tuple[str, str]:
-                owner = _secret("GH_OWNER") or _secret("GITHUB_OWNER")
-                repo = _secret("GH_REPO") or _secret("GITHUB_REPO_NAME")
-                combo = _secret("GITHUB_REPO")
-                if combo and "/" in combo:
-                    o, r = combo.split("/", 1)
-                    owner, repo = o.strip(), r.strip()
-                return owner or "", repo or ""
-
-            tok = _secret("GH_TOKEN") or _secret("GITHUB_TOKEN")
-            ow, rp = _resolve_owner_repo()
-            if tok and ow and rp:
-                import zipfile
-
-                backup_dir = used_persist / "backups"
-                backup_dir.mkdir(parents=True, exist_ok=True)
-                z = backup_dir / f"index_{int(time.time())}.zip"
-                with zipfile.ZipFile(z, "w", zipfile.ZIP_DEFLATED) as zf:
-                    for root, _d, _f in os.walk(str(used_persist)):
-                        for fn in _f:
-                            pth = Path(root) / fn
-                            zf.write(str(pth), arcname=str(pth.relative_to(used_persist)))
-
-                tag = f"index-{int(time.time())}"
-                try:
-                    from src.runtime.gh_release import GHConfig, GHError, GHReleases
-
-                    client = GHReleases(GHConfig(owner=ow, repo=rp, token=tok))
-                    rel = client.ensure_release(tag, name=tag)
-                    client.upload_asset(rel, z)
-                    _step_set(5, "ok", "업로드 완료")
-                except GHError as e:
-                    _step_set(5, "fail", str(e))
-                except Exception as e:
-                    _step_set(5, "fail", f"upload_error: {e}")
-            else:
-                _step_set(5, "skip", "시크릿 없음")
+            try:
+                z = _make_index_backup_zip(used_persist)
+                msg = _upload_index_zip_to_release(z, tag=f"index-{int(time.time())}")
+                _step_set(5, "ok", "업로드 완료")
+                _log(msg)
+            except Exception as e:
+                _step_set(5, "fail", f"upload_error: {e}")
+                _log(f"업로드 실패: {e}", "err")
         else:
-            _step_set(5, "skip", "건너뜀")
+            _step_set(5, "skip", "건너뜀(자동 업로드 OFF)")
+        prog.progress(100)
 
+        status.update(label="✅ 강제 재인덱싱 완료", state="complete")
         st.success("강제 재인덱싱 완료 (prepared 전용)")
     except Exception as e:
+        status.update(label=f"❌ 인덱싱 실패: {e}", state="error")
         _step_set(2, "fail", "인덱싱 실패")
         _log(f"인덱싱 실패: {e}", "err")
-# ============================= [11.5] admin index helpers — END ==================
+    finally:
+        _reset_rerun_guard("idx_run")
+# ============================== [11.5] admin index helpers — END ===================
 
 # =============================== [12] diag header — START =============================
 def _render_index_orchestrator_header() -> None:
@@ -1115,13 +1023,13 @@ def _render_index_orchestrator_header() -> None:
     st.markdown("<span id='idx-admin-panel'></span>", unsafe_allow_html=True)
 # ================================= [12] diag header — END =============================
 
-
 # =========================== [13] admin indexing panel — START ===========================
 def _render_admin_index_panel() -> None:
     """
     관리자 인덱싱 패널 본문.
-    - 패널 시작 직후 요청 소비자(_consume_admin_index_request) 호출(가장 중요)
-    - 버튼은 _IDX_REQ 적재 → _safe_rerun('idx_run', 0.3)로 다음 사이클에서 실행
+    - 패널 시작 직후 요청 소비자 호출(버튼 클릭 후 다음 사이클에서 즉시 작업 시작)
+    - 진행 표시: 스텝/로그 플레이스홀더를 강제 생성
+    - 수동 업로드 버튼 제공
     """
     if st is None:
         return
@@ -1130,13 +1038,24 @@ def _render_admin_index_panel() -> None:
     _consume_admin_index_request()
 
     st.markdown("### 🔧 관리자 인덱싱 패널 (prepared 전용)")
+    _render_index_steps()  # 플레이스홀더 강제 생성
 
-    # 옵션: ZIP/Release 자동 업로드 여부
-    c1, c2 = st.columns([1, 1])
-    with c1:
+    # 옵션/버튼
+    colA, colB, colC = st.columns([1, 1, 1])
+    with colA:
         auto_zip = st.toggle("인덱싱 후 ZIP/Release 업로드", value=False, help="GH_TOKEN/GITHUB_REPO 필요")
-    with c2:
+    with colB:
         show_debug = st.toggle("디버그 로그 표시", value=True)
+    with colC:
+        # 수동 업로드 버튼
+        if st.button("📤 인덱싱 산출물 업로드(Release)", use_container_width=True, key="idx_manual_upload"):
+            try:
+                used_persist = _persist_dir_safe()
+                z = _make_index_backup_zip(used_persist)
+                msg = _upload_index_zip_to_release(z, tag=f"index-{int(time.time())}")
+                st.success(f"업로드 완료: {msg}")
+            except Exception as e:
+                st.error(f"업로드 실패: {e}")
 
     # 실행 버튼
     if st.button("🚀 강제 재인덱싱(HQ, prepared)", type="primary", use_container_width=True, key="idx_run_btn"):
@@ -1144,15 +1063,15 @@ def _render_admin_index_panel() -> None:
             st.session_state["_IDX_REQ"] = {"auto_up": bool(auto_zip), "debug": bool(show_debug)}
         except Exception:
             st.session_state["_IDX_REQ"] = {"auto_up": False}
-        # 다음 사이클에서 소비되도록 안전 rerun (중복 제한 TTL 0.3s)
-        _safe_rerun("idx_run", ttl=0.3)
+        _safe_rerun("idx_run", ttl=0.3)  # 다음 사이클에서 소비
 
-    # 진행/상태 패널(기존 스텝 로거 사용 가정)
+    # 진행/상태 패널(한 번 더 렌더로 보강)
     try:
-        _render_index_steps()  # 이미 존재하는 스텝 표시 함수가 있다면 호출
+        _render_index_steps()
     except Exception:
         pass
 # ============================ [13] admin indexing panel — END ============================
+
 
 # =============================== [14] admin legacy — START ============================
 def _render_admin_panels() -> None:
