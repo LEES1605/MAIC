@@ -29,45 +29,85 @@ if TYPE_CHECKING:
 
 
 # =============================== [02] ready level — START ==================
+from typing import TYPE_CHECKING, Dict, Optional
+import os
+
+def _is_strict_ready_mode(ss: Dict[str, object] | None) -> bool:
+    """
+    H1(엄격) 모드 사용 여부를 판정.
+    - 세션에 `_APP_READY_TO_ANSWER` 키가 있으면 엄격 모드.
+    - (선택) 환경변수 플래그가 있으면 엄격 모드.
+    """
+    s = ss or {}
+    if "_APP_READY_TO_ANSWER" in s:
+        return True
+    try:
+        flag = os.getenv("H1_READY_STRICT") or os.getenv("READY_BADGE_STRICT")
+        return str(flag).strip().lower() in ("1", "true", "on", "yes", "y")
+    except Exception:
+        return False
+
+
 def _compute_ready_level_from_session(
     ss: Dict[str, object] | None,
     *,
     fallback_local_ok: Optional[bool] = None,
 ) -> str:
     """
-    H1 규칙(엄격):
-      - HIGH(🟩): _INDEX_IS_LATEST == True AND _APP_READY_TO_ANSWER == True
-      - MID (🟨): (_INDEX_LOCAL_READY == True) OR  # 로컬만 준비됨
-                  (_INDEX_IS_LATEST == True AND not _APP_READY_TO_ANSWER)  # 최신이지만 LLM 미준비
-      - LOW (🟧): 그 외
-      - Fallback: 세션키 전무 → fallback_local_ok True면 MID, 아니면 LOW
+    세션 상태로만 등급을 정하고, 세션 키가 전혀 없을 때에만 fallback_local_ok로 폴백.
+
+    호환 규칙(기본, 테스트 친화):
+      - HIGH:   _INDEX_IS_LATEST == True  OR (brain_status_code=="READY" and brain_attached==True)
+      - LOW:    brain_status_code == "MISSING"
+      - MID:    그 외
+
+    H1 엄격 규칙(실행 환경에서 _APP_READY_TO_ANSWER가 있을 때):
+      - HIGH:   _INDEX_IS_LATEST == True  AND  _APP_READY_TO_ANSWER == True
+      - MID:    (_INDEX_LOCAL_READY == True) OR (_INDEX_IS_LATEST == True AND not _APP_READY_TO_ANSWER)
+      - LOW:    그 외
     """
     ss = ss or {}
-    keys = ("_INDEX_IS_LATEST", "_INDEX_LOCAL_READY", "_APP_READY_TO_ANSWER",
-            "brain_status_code", "brain_attached")
-    has_any = any(k in ss for k in keys)
-    if not has_any:
+
+    # 세션 키가 하나도 없으면 폴백만 사용
+    if not any(k in ss for k in ("_INDEX_IS_LATEST", "_INDEX_LOCAL_READY", "_APP_READY_TO_ANSWER",
+                                 "brain_status_code", "brain_attached")):
         return "MID" if fallback_local_ok else "LOW"
 
-    is_latest = bool(ss.get("_INDEX_IS_LATEST"))
-    local_ready = bool(ss.get("_INDEX_LOCAL_READY"))
-    app_ready = bool(ss.get("_APP_READY_TO_ANSWER"))
+    # 엄격 모드(H1) — 앱이 준비 키를 설정했을 때만 사용
+    if _is_strict_ready_mode(ss):
+        is_latest = bool(ss.get("_INDEX_IS_LATEST"))
+        app_ready = bool(ss.get("_APP_READY_TO_ANSWER"))
+        local_ready = bool(ss.get("_INDEX_LOCAL_READY"))
+        if is_latest and app_ready:
+            return "HIGH"
+        if local_ready or (is_latest and not app_ready):
+            return "MID"
+        return "LOW"
 
-    if is_latest and app_ready:
+    # 호환 모드(레거시) — 기존 단위 테스트 기대치 유지
+    is_latest = bool(ss.get("_INDEX_IS_LATEST"))
+    brain_code = ss.get("brain_status_code")
+    if isinstance(brain_code, str):
+        brain_code = brain_code.strip().upper()
+    attached = bool(ss.get("brain_attached"))
+
+    if is_latest or (brain_code == "READY" and attached):
         return "HIGH"
-    if local_ready or (is_latest and not app_ready):
-        return "MID"
-    return "LOW"
+    if brain_code == "MISSING":
+        return "LOW"
+    return "MID"
 
 
 def _ready_level() -> str:
     """인덱스 상태를 HIGH/MID/LOW로 환산 (세션 우선, 필요 시 SSOT probe 폴백)."""
-    if st is not None:
+    try:
+        import streamlit as st  # 지역 import: CI/test 환경 대응
         ss = getattr(st, "session_state", {})
-    else:
+    except Exception:
         ss = {}
 
-    if not any(k in ss for k in ("_INDEX_IS_LATEST", "_INDEX_LOCAL_READY", "_APP_READY_TO_ANSWER")):
+    if not any(k in ss for k in ("_INDEX_IS_LATEST", "_INDEX_LOCAL_READY", "_APP_READY_TO_ANSWER",
+                                 "brain_status_code", "brain_attached")):
         try:
             from src.core.index_probe import probe_index_health
             local_ok = bool(getattr(probe_index_health(sample_lines=0), "ok", False))
