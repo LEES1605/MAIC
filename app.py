@@ -599,7 +599,6 @@ def _boot_auto_restore_index() -> None:
             return None
 
     stored_meta = _safe_load_meta(p)
-
     remote_tag: Optional[str] = None
     remote_release_id: Optional[int] = None
     try:
@@ -1151,7 +1150,7 @@ def _render_body() -> None:
             mod = importlib.import_module("src.services.index_state")
             getattr(mod, "step_reset", lambda *_a, **_k: None)()
             getattr(mod, "log", lambda *_a, **_k: None)("릴리스 확인 중...")
-            
+
             if _is_admin_view():
                 getattr(mod, "render_index_steps", lambda *_a, **_k: None)()
             else:
