@@ -444,15 +444,8 @@ def _render_stepper(force: bool = False) -> None:
 
 # =============================== [10] auto-restore — START ============================
 def _resolve_repo_conf() -> tuple[Optional[str], Optional[str], Optional[str]]:
-    """
-    GitHub 저장소/토큰 해석:
-    1) GITHUB_REPO="owner/repo"
-    2) GH_OWNER+GH_REPO  또는  GITHUB_OWNER+GITHUB_REPO_NAME
-    (Streamlit secrets와 env를 모두 시도)
-    """
     repo_full = os.getenv("GITHUB_REPO", "") or ""
     token = os.getenv("GITHUB_TOKEN", None)
-
     try:
         if "st" in globals() and st is not None:
             repo_full = st.secrets.get("GITHUB_REPO", repo_full)
@@ -464,7 +457,7 @@ def _resolve_repo_conf() -> tuple[Optional[str], Optional[str], Optional[str]]:
     if repo_full and "/" in str(repo_full):
         owner, repo = str(repo_full).split("/", 1)
     else:
-        # pair fallbacks
+        # 페어형도 허용
         def _sget(k: str, default: Optional[str] = None) -> Optional[str]:
             try:
                 if "st" in globals() and st is not None:
@@ -481,6 +474,7 @@ def _resolve_repo_conf() -> tuple[Optional[str], Optional[str], Optional[str]]:
             owner, repo = str(gh_owner), str(gh_repo)
 
     return owner, repo, token
+
 
 
 def _boot_auto_restore_index() -> None:
