@@ -970,6 +970,7 @@ def _render_body() -> None:
 
     ss = st.session_state
 
+
     # 1) 부팅 2-Phase: (A) 헤더/스켈레톤 선렌더 → (B) 복원 → 재실행 1회
     boot_pending = not bool(ss.get("_boot_checked"))
     if boot_pending:
