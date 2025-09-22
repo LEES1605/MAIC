@@ -932,17 +932,46 @@ def _render_body() -> None:
     if st is None:
         return
 
-    # 1) 부팅 훅
-    if not st.session_state.get("_boot_checked"):
+    ss = st.session_state
+
+    # 1) 부팅 2-Phase: (A) 헤더 우선 렌더 → (B) 복원 → 재실행
+    boot_pending = not bool(ss.get("_boot_checked"))
+    if boot_pending:
+        # (A) 헤더 우선: 스테일 초록 방지 위해 세션키를 명시 초기화
         try:
-            _boot_auto_restore_index()
+            # 로컬 준비여부(노랑 판단) — 가능한 빠른 경로로 계산
+            try:
+                local_ok = core_is_ready(effective_persist_dir())
+            except Exception:
+                local_ok = False
+
+            ss["_INDEX_LOCAL_READY"] = bool(local_ok)   # 노랑(준비중) 판단용
+            ss["_INDEX_IS_LATEST"] = False              # 복전 초록 금지
+            ss["_RESTORE_IN_PROGRESS"] = True           # 진단/로그용 신호
+        except Exception:
+            pass
+
+        # 헤더 먼저 렌더(노랑/주황을 사용자에게 즉시 노출)
+        _header()
+
+        # (B) 릴리스 복원 실행(동기) → 완료 후 1회 재실행
+        try:
+            _boot_auto_restore_index()  # 복원 성공 시 세션에 최신(True) 표기됨
             _boot_autoflow_hook()
         except Exception as e:
             _errlog(f"boot check failed: {e}", where="[render_body.boot]", exc=e)
         finally:
-            st.session_state["_boot_checked"] = True
+            ss["_RESTORE_IN_PROGRESS"] = False
+            ss["_boot_checked"] = True
 
-    # 2) ✅ 상태 확정(자동 복원/READY 반영)을 헤더보다 먼저 수행
+        # 헤더 상태 업데이트를 위해 정확히 1회만 재실행
+        try:
+            _safe_rerun("boot_init", ttl=0.5)
+        except Exception:
+            pass
+        return
+
+    # 2) ✅ (포스트-부팅) 자동 시작 훅 — 필요 시만 동작
     try:
         _auto_start_once()
     except Exception as e:
@@ -1021,4 +1050,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-# ================================= [19] body & main — END =============================
+# =============================== [19] body & main — END ===============================
