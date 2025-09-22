@@ -599,7 +599,6 @@ def _boot_auto_restore_index() -> None:
             return None
 
     stored_meta = _safe_load_meta(p)
-
     remote_tag: Optional[str] = None
     remote_release_id: Optional[int] = None
     try:
@@ -1070,8 +1069,75 @@ def _render_chat_panel() -> None:
     ss["last_q"] = question
     ss["inpane_q"] = ""
 # =============================== [18] chat panel — END ==============================
+# app.py — add this helper near [17] chat styles or just above [19]
+
+def _render_stepper(*, force: bool = False) -> None:
+    """제목 아래에 들어갈 '3점' 미니 스텝퍼 (학생 전용 기본)."""
+    if st is None:
+        return
+    try:
+        mod = importlib.import_module("src.services.index_state")
+        getattr(mod, "ensure_index_state", lambda *_a, **_k: None)()
+    except Exception:
+        pass
+
+    ss = st.session_state
+    steps = ss.get("_IDX_STEPS") or []
+    def _status(i: int) -> str:
+        try:
+            return str(steps[i - 1].get("status") or "wait")
+        except Exception:
+            return "wait"
+
+    # 세션 신호 기반 폴백(부팅 초기엔 아직 _IDX_STEPS가 없을 수 있음)
+    s = [_status(1), _status(2), _status(3)]
+    if all(x == "wait" for x in s):
+        inprog = bool(ss.get("_RESTORE_IN_PROGRESS"))
+        latest = bool(ss.get("_INDEX_IS_LATEST"))
+        local  = bool(ss.get("_INDEX_LOCAL_READY"))
+        s = [
+            "run" if inprog or not local else "ok",
+            "run" if inprog else ("ok" if latest else "wait"),
+            "ok"  if latest else "wait",
+        ]
+
+    colors = {"ok": "#16a34a", "run": "#f59e0b", "wait": "#93c5fd", "err": "#ef4444"}
+    def _dot(i: int) -> str:
+        c = colors.get(s[i], "#93c5fd")
+        pulse = "animation:pulseDot 1.8s infinite;" if s[i] in ("run", "ok") else ""
+        return f'<span class="stp-dot" style="background:{c};{pulse}"></span>'
+
+    css = """
+    <style>
+      .stp{display:flex;gap:10px;align-items:center;margin:6px 0 2px 0}
+      .stp-dot{width:8px;height:8px;border-radius:50%;display:inline-block;
+               box-shadow:0 0 0 0 rgba(0,0,0,.18)}
+      @keyframes pulseDot{
+         0%{box-shadow:0 0 0 0 rgba(0,0,0,0.18)}
+        70%{box-shadow:0 0 0 12px rgba(0,0,0,0)}
+       100%{box-shadow:0 0 0 0 rgba(0,0,0,0)}
+      }
+      .stp-label{font-weight:800;font-size:14px}
+      .stp-sep{width:26px;height:2px;background:#dbeafe;border-radius:2px}
+    </style>
+    """
+    html = (
+        f'<div class="stp">{_dot(0)}<span class="stp-label">릴리스 확인</span>'
+        f'<span class="stp-sep"></span>{_dot(1)}<span class="stp-label">복원</span>'
+        f'<span class="stp-sep"></span>{_dot(2)}<span class="stp-label">완료</span></div>'
+    )
+
+    ph = ss.get("_IDX_STEPPER_PH")
+    if ph is None and force:
+        ph = st.empty()
+        ss["_IDX_STEPPER_PH"] = ph
+    if ph is not None:
+        ph.markdown(css + html, unsafe_allow_html=True)
+    else:
+        st.markdown(css + html, unsafe_allow_html=True)
 
 # =============================== [19] body & main — START =============================
+
 def _render_body() -> None:
     if st is None:
         return
@@ -1082,6 +1148,9 @@ def _render_body() -> None:
     def _render_progress_area(force: bool = False) -> None:
         try:
             mod = importlib.import_module("src.services.index_state")
+            getattr(mod, "step_reset", lambda *_a, **_k: None)()
+            getattr(mod, "log", lambda *_a, **_k: None)("릴리스 확인 중...")
+
             if _is_admin_view():
                 getattr(mod, "render_index_steps", lambda *_a, **_k: None)()
             else:
