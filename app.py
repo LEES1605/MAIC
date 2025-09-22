@@ -1082,6 +1082,9 @@ def _render_body() -> None:
     def _render_progress_area(force: bool = False) -> None:
         try:
             mod = importlib.import_module("src.services.index_state")
+            getattr(mod, "step_reset", lambda *_a, **_k: None)()
+            getattr(mod, "log", lambda *_a, **_k: None)("릴리스 확인 중...")
+            
             if _is_admin_view():
                 getattr(mod, "render_index_steps", lambda *_a, **_k: None)()
             else:
