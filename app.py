@@ -455,6 +455,7 @@ def _boot_auto_restore_index() -> None:
     _idx("log", f"릴리스 복원 시도: {owner}/{repo} tags={tag_candidates} assets={asset_candidates}")
 
     # ---- 최신 조회 + 복원 --------------------------------------------------------------
+
     remote_tag: Optional[str] = None
     remote_release_id: Optional[int] = None
     try:
@@ -914,10 +915,11 @@ def _render_chat_panel() -> None:
 
     ss["last_q"] = question
     ss["inpane_q"] = ""
+
 # ================================= [18] chat panel — END ==============================
 
-
 # =============================== [19] body & main — START =============================
+
 def _render_body() -> None:
     if st is None:
         return
