@@ -660,44 +660,49 @@ def _inject_chat_styles_once() -> None:
     st.markdown(
         """
 <style>
-  .chatpane{
+  /* ▶ 메시지 영역 전용 컨테이너 */
+  .chatpane-messages{
     position:relative; background:#EDF4FF; border:1px solid #D5E6FF; border-radius:18px;
     padding:10px; margin-top:12px;
   }
-  .chatpane .messages{ max-height:60vh; overflow-y:auto; padding:8px; }
-  .chatpane div[data-testid="stRadio"]{ background:#EDF4FF; padding:8px 10px 0 10px; margin:0; }
-  .chatpane div[data-testid="stRadio"] > div[role="radiogroup"]{ display:flex; gap:10px; flex-wrap:wrap; }
-  .chatpane div[data-testid="stRadio"] [role="radio"]{
+  .chatpane-messages .messages{ max-height:60vh; overflow-y:auto; padding:8px; }
+
+  /* ▶ 입력 영역 전용 컨테이너 */
+  .chatpane-input{
+    position:relative; background:#EDF4FF; border:1px solid #D5E6FF; border-radius:18px;
+    padding:8px 10px 10px 10px; margin-top:12px;
+  }
+  .chatpane-input div[data-testid="stRadio"]{ background:#EDF4FF; padding:8px 10px 0 10px; margin:0; }
+  .chatpane-input div[data-testid="stRadio"] > div[role="radiogroup"]{ display:flex; gap:10px; flex-wrap:wrap; }
+  .chatpane-input div[data-testid="stRadio"] [role="radio"]{
     border:2px solid #bcdcff; border-radius:12px; padding:6px 12px; background:#fff; color:#0a2540;
     font-weight:700; font-size:14px; line-height:1;
   }
-  .chatpane div[data-testid="stRadio"] [role="radio"][aria-checked="true"]{
+  .chatpane-input div[data-testid="stRadio"] [role="radio"][aria-checked="true"]{
     background:#eaf6ff; border-color:#9fd1ff; color:#0a2540;
   }
-  .chatpane div[data-testid="stRadio"] svg{ display:none!important }
+  .chatpane-input div[data-testid="stRadio"] svg{ display:none!important }
 
-  form[data-testid="stForm"]:has(input[placeholder='질문을 입력하세요...']) {
-    position:relative; background:#EDF4FF; padding:8px 10px 10px 10px; margin:0;
-  }
-  form[data-testid="stForm"]:has(input[placeholder='질문을 입력하세요...'])
-  [data-testid="stTextInput"] input{
+  /* 입력 폼/버튼은 입력 컨테이너 하위로만 적용 */
+  .chatpane-input form[data-testid="stForm"] { position:relative; margin:0; }
+  .chatpane-input form[data-testid="stForm"] [data-testid="stTextInput"] input{
     background:#FFF8CC !important; border:1px solid #F2E4A2 !important;
     border-radius:999px !important; color:#333 !important; height:46px; padding-right:56px;
   }
-  form[data-testid="stForm"]:has(input[placeholder='질문을 입력하세요...']) ::placeholder{ color:#8A7F4A !important; }
-
-  form[data-testid="stForm"]:has(input[placeholder='질문을 입력하세요...']) .stButton,
-  form[data-testid="stForm"]:has(input[placeholder='질문을 입력하세요...']) .row-widget.stButton{
+  .chatpane-input form[data-testid="stForm"] ::placeholder{ color:#8A7F4A !important; }
+  .chatpane-input form[data-testid="stForm"] .stButton,
+  .chatpane-input form[data-testid="stForm"] .row-widget.stButton{
     position:absolute; right:14px; top:50%; transform:translateY(-50%);
     z-index:2; margin:0!important; padding:0!important;
   }
-  form[data-testid="stForm"]:has(input[placeholder='질문을 입력하세요...']) .stButton > button,
-  form[data-testid="stForm"]:has(input[placeholder='질문을 입력하세요...']) .row-widget.stButton > button{
+  .chatpane-input form[data-testid="stForm"] .stButton > button,
+  .chatpane-input form[data-testid="stForm"] .row-widget.stButton > button{
     width:38px; height:38px; border-radius:50%; border:0; background:#0a2540; color:#fff;
     font-size:18px; line-height:1; cursor:pointer; box-shadow:0 2px 6px rgba(0,0,0,.15);
     padding:0; min-height:0;
   }
 
+  /* ▶ 버블/칩 (글로벌) */
   .msg-row{ display:flex; margin:8px 0; }
   .msg-row.left{ justify-content:flex-start; }
   .msg-row.right{ justify-content:flex-end; }
@@ -979,19 +984,19 @@ def _render_body() -> None:
         except Exception:
             pass
 
-    # 5) 채팅 메시지 영역
+    # 5) 채팅 메시지 영역 (컨테이너 클래스 분리)
     _inject_chat_styles_once()
-    with st.container():
-        st.markdown('<div class="chatpane"><div class="messages">', unsafe_allow_html=True)
+    with st.container(key="chat_messages_container"):
+        st.markdown('<div class="chatpane-messages" data-testid="chat-messages"><div class="messages">', unsafe_allow_html=True)
         try:
             _render_chat_panel()
         except Exception as e:
             _errlog(f"chat panel failed: {e}", where="[render_body.chat]", exc=e)
         st.markdown("</div></div>", unsafe_allow_html=True)
 
-    # 6) 채팅 입력 폼
-    with st.container(border=True, key="chatpane_container"):
-        st.markdown('<div class="chatpane">', unsafe_allow_html=True)
+    # 6) 채팅 입력 폼 (컨테이너 클래스 분리 + key 안정화)
+    with st.container(border=True, key="chat_input_container"):
+        st.markdown('<div class="chatpane-input" data-testid="chat-input">', unsafe_allow_html=True)
         st.session_state["__mode"] = _render_mode_controls_pills() or st.session_state.get("__mode", "")
         submitted: bool = False
         with st.form("chat_form", clear_on_submit=False):
