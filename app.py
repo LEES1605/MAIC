@@ -49,9 +49,9 @@ def _load_prepared_lister():
             return None, tried
 
     for name in ("src.integrations.gdrive", "gdrive"):
-        fn, tried = _try(name)
+        fn, dbg = _try(name)
         if fn:
-            return fn, tried
+            return fn, dbg
     return None, tried
 
 
@@ -73,9 +73,9 @@ def _load_prepared_api():
             return None, None, tried2
 
     for name in ("prepared", "gdrive", "src.prepared", "src.drive.prepared", "src.integrations.gdrive"):
-        chk, mark, tried2 = _try(name)
+        chk, mark, dbg = _try(name)
         if chk and mark:
-            return chk, mark, tried2
+            return chk, mark, dbg
     return None, None, tried2
 # ================================ [03] helpers(persist) — END =========================
 
@@ -110,7 +110,7 @@ if st:
     except Exception:
         pass
 
-    # experimental_* 호환 래퍼
+    # (A) experimental_* 호환 래퍼
     try:
         if hasattr(st, "experimental_get_query_params"):
             st.experimental_get_query_params = lambda: st.query_params  # type: ignore
@@ -122,7 +122,7 @@ if st:
     except Exception:
         pass
 
-    # 기본 네비 숨김(학생/관리자 공통)
+    # (B) 기본 네비 숨김(학생/관리자 공통)
     try:
         st.markdown(
             "<style>"
@@ -136,7 +136,7 @@ if st:
     except Exception:
         pass
 
-    # admin 토글 쿼리 파라미터 → 세션 반영
+    # (C) 쿼리파라미터로 관리자 모드 토글
     try:
         v = st.query_params.get("admin", None)
         goto = st.query_params.get("goto", None)
@@ -174,7 +174,7 @@ if st:
     except Exception:
         pass
 
-    # 관리자/학생 크롬 적용
+    # (D) 관리자 크롬 최소 적용
     try:
         _sider = __import__("src.ui.utils.sider", fromlist=["apply_admin_chrome"])
         getattr(_sider, "apply_admin_chrome", lambda **_: None)(
@@ -183,6 +183,9 @@ if st:
     except Exception:
         pass
 # ===== [04] bootstrap env — END =====
+
+
+
 
 # ======================= [05] path & logger — START =======================
 PERSIST_DIR: Path = effective_persist_dir()
@@ -309,11 +312,12 @@ def _reset_rerun_guard(tag: str) -> None:
         pass
 # ================================= [07] rerun guard — END =============================
 
+
 # =============================== [08] header — START ==================================
 def _header() -> None:
     """
-    외부 헤더가 있으면 우선 사용, 없으면 파일시스템 READY 기준으로 폴백 렌더.
-    (PR‑H1 기준: 최종 초록은 세션 플래그에 의해 결정됨)
+    외부 헤더가 있으면 우선 사용, 없으면 파일시스템 READY 기준 폴백.
+    (정식 헤더는 src.ui.header.render의 3단계 규칙을 사용)  # H1
     """
     try:
         from src.ui.header import render as _render_header
@@ -338,12 +342,23 @@ def _header() -> None:
         st.code(str(p), language="text")
 # ================================== [08] header — END =================================
 
+
 # =============================== [10] auto-restore — START ============================
+def _llm_quick_ready() -> bool:
+    """간이 LLM 준비 상태: 키가 하나라도 있으면 True."""
+    try:
+        return bool(_secret_get("OPENAI_API_KEY") or _secret_get("GEMINI_API_KEY")
+                    or os.getenv("OPENAI_API_KEY") or os.getenv("GEMINI_API_KEY"))
+    except Exception:
+        return False
+
+
 def _boot_auto_restore_index() -> None:
     """
     최신 릴리스 자동 복원 훅(미니멀 진행표시 연동).
     - 학생: 스텝퍼만 표시
     - 관리자: 스텝퍼+로그 표시
+    - 성공 시에만 `_INDEX_IS_LATEST=True` (헤더 초록 근거)
     """
     try:
         if "st" in globals() and st is not None and st.session_state.get("_BOOT_RESTORE_DONE"):
@@ -351,7 +366,7 @@ def _boot_auto_restore_index() -> None:
     except Exception:
         pass
 
-    # 진행표시 안전 호출자
+    # ---- 진행표시 안전 호출자 ---------------------------------------------------------
     def _idx(name: str, *args, **kwargs):
         try:
             mod = importlib.import_module("src.services.index_state")
@@ -369,196 +384,183 @@ def _boot_auto_restore_index() -> None:
         _idx("render_stepper_safe", True)     # 학생: 스텝퍼만
     _idx("log", "부팅: 인덱스 복원 준비 중...")
 
+    # 부팅 시 LLM 준비 상태(헤더 H1 보조축)
+    try:
+        if "st" in globals() and st is not None:
+            st.session_state["_APP_READY_TO_ANSWER"] = _llm_quick_ready()
+    except Exception:
+        pass
+
     p = effective_persist_dir()
     cj = p / "chunks.jsonl"
     rf = p / ".ready"
 
-    # readiness helpers
     try:
-        from src.core.readiness import is_ready_text, normalize_ready_file
+        local_ready = core_is_ready(p)
     except Exception:
-        def _norm(x: str | bytes | None) -> str:
-            if x is None:
-                return ""
-            if isinstance(x, bytes):
-                x = x.decode("utf-8", "ignore")
-            return x.replace("\ufeff", "").strip().lower()
-        def is_ready_text(x):  # type: ignore
-            return _norm(x) in {"ready", "ok", "true", "1", "on", "yes", "y", "green"}
-        def normalize_ready_file(_):  # type: ignore
-            try:
-                (p / ".ready").write_text("ready", encoding="utf-8")
-                return True
-            except Exception:
-                return False
+        local_ready = False
 
-    # 로컬 준비 상태 계산 & 기록
-    _idx("step_set", 1, "run", "로컬 준비 상태 확인")
-    ready_txt = ""
-    try:
-        if rf.exists():
-            ready_txt = rf.read_text(encoding="utf-8")
-    except Exception:
-        ready_txt = ""
-    local_ready = cj.exists() and cj.stat().st_size > 0 and is_ready_text(ready_txt)
-    _idx("log", f"로컬 준비: {'OK' if local_ready else '미검출'}")
-
-    try:
-        if "st" in globals() and st is not None:
-            st.session_state["_INDEX_LOCAL_READY"] = bool(local_ready)
-            st.session_state.setdefault("_INDEX_IS_LATEST", False)
-    except Exception:
-        pass
-    _idx("step_set", 1, "ok" if local_ready else "wait", "로컬 준비 기록")
-
-    # 복원 메타 유틸
-    def _safe_load_meta(path):
+    ss = None
+    if "st" in globals() and st is not None:
         try:
-            return load_restore_meta(path)  # type: ignore[name-defined]
+            ss = st.session_state
         except Exception:
-            return None
-    def _safe_meta_matches(meta, tag: str) -> bool:
+            ss = None
+    if ss is not None:
         try:
-            return bool(meta_matches_tag(meta, tag))  # type: ignore[name-defined]
-        except Exception:
-            return False
-    def _safe_save_meta(path, tag: str | None, release_id: int | None):
-        try:
-            return save_restore_meta(path, tag=tag, release_id=release_id)  # type: ignore[name-defined]
-        except Exception:
-            return None
-    stored_meta = _safe_load_meta(p)
-
-    # GitHub Releases 최신 메타 취득
-    _idx("step_set", 2, "run", "원격 릴리스 조회")
-    repo_full = os.getenv("GITHUB_REPO", "")
-    token = os.getenv("GITHUB_TOKEN", None)
-    try:
-        if "st" in globals() and st is not None:
-            repo_full = st.secrets.get("GITHUB_REPO", repo_full)
-            token = st.secrets.get("GITHUB_TOKEN", token)
-    except Exception:
-        pass
-    if not repo_full or "/" not in str(repo_full):
-        _idx("log", "GITHUB_REPO 미설정 → 원격 확인 불가", "warn")
-        _idx("step_set", 2, "wait", "원격 확인 불가")
-        try:
-            if "st" in globals() and st is not None:
-                st.session_state["_BOOT_RESTORE_DONE"] = True
-                st.session_state.setdefault("_PERSIST_DIR", p.resolve())
+            ss["_INDEX_LOCAL_READY"] = bool(local_ready)
+            ss.setdefault("_INDEX_IS_LATEST", False)   # 부팅 직후 초록 금지
         except Exception:
             pass
+
+    # ---- GH Releases 클라이언트 구성 ---------------------------------------------------
+    def _pick(name: str, *fallback_keys: str) -> str:
+        keys = (name,) + fallback_keys
+        for key in keys:
+            try:
+                val = _secret_get(key)
+            except Exception:
+                val = None
+            if not val:
+                val = os.getenv(key)
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+        return ""
+
+    repo_combo = _pick("GITHUB_REPO")
+    owner = _pick("GH_OWNER", "GITHUB_OWNER")
+    repo = _pick("GH_REPO", "GITHUB_REPO_NAME")
+    if repo_combo and "/" in repo_combo:
+        combo_owner, combo_repo = repo_combo.split("/", 1)
+        owner = owner or combo_owner.strip()
+        repo = repo or combo_repo.strip()
+    token = _pick("GH_TOKEN", "GITHUB_TOKEN")
+
+    if not (owner and repo):
+        _idx("log", "GitHub 리포 정보가 없어 자동 복원을 건너뜁니다.", "warn")
         return
 
-    owner, repo = str(repo_full).split("/", 1)
     try:
         from src.runtime.gh_release import GHConfig, GHReleases
     except Exception:
         _idx("log", "GH 릴리스 모듈 불가 → 최신 판정 보류", "warn")
-        _idx("step_set", 2, "wait", "원격 확인 불가")
-        try:
-            if "st" in globals() and st is not None:
-                st.session_state["_BOOT_RESTORE_DONE"] = True
-                st.session_state.setdefault("_PERSIST_DIR", p.resolve())
-        except Exception:
-            pass
         return
 
-    gh = GHReleases(GHConfig(owner=owner, repo=repo, token=token))
+    client = GHReleases(GHConfig(owner=owner, repo=repo, token=token or None))
 
+    tag_candidates = ["indices-latest", "index-latest", "latest"]
+    asset_candidates = ["indices.zip", "persist.zip", "hq_index.zip", "prepared.zip"]
+
+    _idx("step_set", 1, "run", "릴리스 복원 준비")
+    _idx("log", f"릴리스 복원 시도: {owner}/{repo} tags={tag_candidates} assets={asset_candidates}")
+
+    # ---- 최신 조회 + 복원 --------------------------------------------------------------
     remote_tag: Optional[str] = None
     remote_release_id: Optional[int] = None
     try:
-        latest_rel = gh.get_latest_release()
+        latest_rel = client.get_latest_release()
         remote_tag = str(latest_rel.get("tag_name") or latest_rel.get("name") or "").strip() or None
         raw_id = latest_rel.get("id")
         try:
             remote_release_id = int(raw_id)
         except (TypeError, ValueError):
             remote_release_id = None
-        _idx("log", f"원격 최신 릴리스 태그: {remote_tag or '없음'}")
-    except Exception:
-        remote_tag = None
-        remote_release_id = None
-        _idx("log", "원격 최신 릴리스 조회 실패", "warn")
-    finally:
-        try:
-            if "st" in globals() and st is not None:
-                st.session_state["_LATEST_RELEASE_TAG"] = remote_tag
-                st.session_state["_LATEST_RELEASE_ID"] = remote_release_id
-                if stored_meta is not None:
-                    st.session_state["_LAST_RESTORE_META"] = getattr(stored_meta, "to_dict", lambda: {})()
-        except Exception:
-            pass
-
-    # 일치/불일치 판정
-    if local_ready and remote_tag and _safe_meta_matches(stored_meta, remote_tag):
-        _idx("log", "메타 일치: 복원 생략 (이미 최신)")
-        _idx("step_set", 2, "ok", "메타 일치")
-        try:
-            if "st" in globals() and st is not None:
-                st.session_state["_BOOT_RESTORE_DONE"] = True
-                st.session_state.setdefault("_PERSIST_DIR", p.resolve())
-                st.session_state["_INDEX_IS_LATEST"] = True
-        except Exception:
-            pass
+    except Exception as exc:
+        _idx("step_set", 1, "err", f"최신 릴리스 조회 실패: {exc}")
+        _idx("log", f"최신 릴리스 조회 실패: {exc}", "err")
         return
 
-    # 최신 복원 강제
     try:
-        import datetime as _dt
-        this_year = _dt.datetime.utcnow().year
-        dyn_tags = [f"index-{y}-latest" for y in range(this_year, this_year - 5, -1)]
-    except Exception:
-        dyn_tags = []
-    tag_candidates = ["indices-latest", "index-latest"] + dyn_tags + ["latest"]
-    asset_candidates = ["indices.zip", "persist.zip", "hq_index.zip", "prepared.zip"]
-
-    _idx("step_set", 2, "run", "최신 인덱스 복원 중...")
-    _idx("log", "릴리스 자산 다운로드/복원 시작...")
-    try:
-        result = gh.restore_latest_index(
+        restore_log = client.restore_latest_index(
             tag_candidates=tag_candidates,
             asset_candidates=asset_candidates,
             dest=p,
             clean_dest=True,
         )
-
-        _idx("step_set", 3, "run", "메타 저장/정리...")
-        normalize_ready_file(p)
-        saved_meta = _safe_save_meta(
-            p,
-            tag=(getattr(result, "tag", None) or remote_tag),
-            release_id=(getattr(result, "release_id", None) or remote_release_id),
-        )
-
-        try:
-            if "st" in globals() and st is not None:
-                st.session_state["_PERSIST_DIR"] = p.resolve()
-                st.session_state["_BOOT_RESTORE_DONE"] = True
-                st.session_state["_INDEX_IS_LATEST"] = True
-                st.session_state["_INDEX_LOCAL_READY"] = True
-                if saved_meta is not None:
-                    st.session_state["_LAST_RESTORE_META"] = getattr(saved_meta, "to_dict", lambda: {})()
-        except Exception:
-            pass
-
-        _idx("step_set", 2, "ok", "복원 완료")
-        _idx("step_set", 3, "ok", "메타 저장 완료")
-        _idx("step_set", 4, "ok", "마무리 정리")
-        _idx("log", "✅ 최신 인덱스 복원 완료")
-    except Exception:
-        _idx("step_set", 2, "err", "복원 실패")
-        _idx("log", "❌ 최신 인덱스 복원 실패", "err")
-        try:
-            if "st" in globals() and st is not None:
-                st.session_state["_BOOT_RESTORE_DONE"] = True
-                st.session_state.setdefault("_PERSIST_DIR", p.resolve())
-                st.session_state["_INDEX_IS_LATEST"] = False
-        except Exception:
-            pass
+    except Exception as exc:
+        _idx("step_set", 1, "err", f"릴리스 복원 실패: {exc}")
+        _idx("log", f"릴리스 복원 실패: {exc}", "err")
+        if ss is not None:
+            for key in ("_BOOT_RESTORE_DONE", "_LATEST_RELEASE_TAG", "_LATEST_RELEASE_ID", "_INDEX_IS_LATEST"):
+                try:
+                    ss.pop(key, None)
+                except Exception:
+                    pass
+            try:
+                ss["_INDEX_LOCAL_READY"] = bool(local_ready)
+            except Exception:
+                pass
+        if "st" in globals() and st is not None:
+            try:
+                st.error(f"릴리스 복원 실패: {exc}")
+            except Exception:
+                pass
         return
+
+    tag = getattr(restore_log, "tag", None) or remote_tag
+    release_id = getattr(restore_log, "release_id", None) or remote_release_id
+    asset_name = getattr(restore_log, "asset_name", None)
+    detail = getattr(restore_log, "detail", "")
+    used_latest = bool(getattr(restore_log, "used_latest_endpoint", False))
+
+    _idx("step_set", 1, "ok", f"릴리스 복원 완료: tag={tag or 'latest'} asset={asset_name or 'n/a'}")
+    if detail:
+        _idx("log", detail)
+
+    # ---- .ready 표준화 + 메타 저장 -----------------------------------------------------
+    try:
+        from src.core.readiness import normalize_ready_file
+    except Exception:
+        def normalize_ready_file(_p: Path) -> bool:  # type: ignore
+            try:
+                (_p / ".ready").write_text("ready", encoding="utf-8")
+                return True
+            except Exception:
+                return False
+
+    ready_ok = normalize_ready_file(p)
+    if ready_ok:
+        _idx("log", ".ready 파일을 표준화했습니다.")
+    else:
+        _idx("log", ".ready 파일 표준화 실패", "warn")
+
+    saved_meta = None
+    try:
+        from src.core.restore_meta import save_restore_meta
+        saved_meta = save_restore_meta(
+            p, tag=tag, release_id=release_id, asset_name=asset_name,
+            detail=detail, used_latest_endpoint=used_latest,
+        )
+        _idx("log", "restore_meta 저장 완료")
+    except Exception as exc:
+        _idx("log", f"restore_meta 저장 실패: {exc}", "warn")
+
+    try:
+        core_mark_ready(p)
+    except Exception:
+        pass
+
+    if ss is not None:
+        try:
+            ss["_BOOT_RESTORE_DONE"] = True
+            ss["_LATEST_RELEASE_TAG"] = tag
+            ss["_LATEST_RELEASE_ID"] = release_id
+            ss["_INDEX_IS_LATEST"] = True
+            ss["_INDEX_LOCAL_READY"] = True
+            ss["_RESTORE_LATEST_DONE"] = True
+            if saved_meta is not None:
+                ss["_LAST_RESTORE_META"] = saved_meta.to_dict()
+        except Exception:
+            pass
+
+    _idx("log", "부팅: 최신 릴리스 복원을 완료했습니다.")
+    if "st" in globals() and st is not None:
+        try:
+            st.rerun()
+        except Exception:
+            pass
 # ================================= [10] auto-restore — END ============================
+
 
 # =============================== [11] boot hooks — START ==============================
 def _boot_autoflow_hook() -> None:
@@ -626,7 +628,7 @@ def _auto_start_once() -> None:
 
     if ok:
         try:
-            core_mark_ready(used_persist)
+            core_mark_ready(used_persist)  # 표준화: "ready"
         except Exception:
             pass
         if hasattr(st, "toast"):
@@ -636,6 +638,7 @@ def _auto_start_once() -> None:
         _set_brain_status("READY", "자동 복원 완료", "release", attached=True)
         _safe_rerun("auto_start", ttl=1)
 # ================================= [11] boot hooks — END ==============================
+
 
 # =============================== [17] chat styles & mode — START ======================
 def _inject_chat_styles_once() -> None:
@@ -653,6 +656,7 @@ def _inject_chat_styles_once() -> None:
     padding:10px; margin-top:12px;
   }
   .chatpane-messages .messages{ max-height:60vh; overflow-y:auto; padding:8px; }
+
   .chatpane-input{
     position:relative; background:#EDF4FF; border:1px solid #D5E6FF; border-radius:18px;
     padding:8px 10px 10px 10px; margin-top:12px;
@@ -667,6 +671,25 @@ def _inject_chat_styles_once() -> None:
     background:#eaf6ff; border-color:#9fd1ff; color:#0a2540;
   }
   .chatpane-input div[data-testid="stRadio"] svg{ display:none!important }
+
+  .chatpane-input form[data-testid="stForm"] { position:relative; margin:0; }
+  .chatpane-input form[data-testid="stForm"] [data-testid="stTextInput"] input{
+    background:#FFF8CC !important; border:1px solid #F2E4A2 !important;
+    border-radius:999px !important; color:#333 !important; height:46px; padding-right:56px;
+  }
+  .chatpane-input form[data-testid="stForm"] ::placeholder{ color:#8A7F4A !important; }
+  .chatpane-input form[data-testid="stForm"] .stButton,
+  .chatpane-input form[data-testid="stForm"] .row-widget.stButton{
+    position:absolute; right:14px; top:50%; transform:translateY(-50%);
+    z-index:2; margin:0!important; padding:0!important;
+  }
+  .chatpane-input form[data-testid="stForm"] .stButton > button,
+  .chatpane-input form[data-testid="stForm"] .row-widget.stButton > button{
+    width:38px; height:38px; border-radius:50%; border:0; background:#0a2540; color:#fff;
+    font-size:18px; line-height:1; cursor:pointer; box-shadow:0 2px 6px rgba(0,0,0,.15);
+    padding:0; min-height:0;
+  }
+
   .msg-row{ display:flex; margin:8px 0; }
   .msg-row.left{ justify-content:flex-start; }
   .msg-row.right{ justify-content:flex-end; }
@@ -676,6 +699,7 @@ def _inject_chat_styles_once() -> None:
   }
   .bubble.user{ border-top-right-radius:8px; border:1px solid #F2E4A2; background:#FFF8CC; color:#333; }
   .bubble.ai  { border-top-left-radius:8px;  border:1px solid #BEE3FF; background:#EAF6FF; color:#0a2540; }
+
   .chip{
     display:inline-block; margin:-2px 0 6px 0; padding:2px 10px; border-radius:999px;
     font-size:12px; font-weight:700; color:#fff; line-height:1;
@@ -689,6 +713,7 @@ def _inject_chat_styles_once() -> None:
     border:1px solid #c7d2fe; max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
     vertical-align:middle;
   }
+
   @media (max-width:480px){
     .bubble{ max-width:96%; }
     .chip-src{ max-width:160px; }
@@ -743,6 +768,7 @@ def _render_mode_controls_pills() -> str:
     ss["__mode"] = cur_key
     return cur_key
 # =============================== [17] chat styles & mode — END ========================
+
 
 # =============================== [18] chat panel — START ==============================
 def _render_chat_panel() -> None:
@@ -890,6 +916,7 @@ def _render_chat_panel() -> None:
     ss["inpane_q"] = ""
 # ================================= [18] chat panel — END ==============================
 
+
 # =============================== [19] body & main — START =============================
 def _render_body() -> None:
     if st is None:
@@ -913,7 +940,7 @@ def _render_body() -> None:
 
         _header()
 
-        # 진행표시(스텝/로그) 자리표시자 즉시 렌더
+        # 진행표시 placeholder
         try:
             mod = importlib.import_module("src.services.index_state")
             getattr(mod, "step_reset", lambda *_a, **_k: None)()
@@ -946,7 +973,7 @@ def _render_body() -> None:
     # 3) 헤더
     _header()
 
-    # 4) 관리자 패널
+    # 4) 관리자 패널 (ops 경로만 정본)
     if _is_admin_view():
         try:
             from src.ui.ops.indexing_panel import (
