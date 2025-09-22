@@ -401,7 +401,7 @@ def _boot_auto_restore_index() -> None:
     # placeholder/컨테이너 보장 + 첫 로그
     _idx("ensure_index_state")
     _idx("render_index_steps")
-    _idx("log", "부팅: 인덱스 복원 준비 중…")
+    _idx("log", "부팅: 인덱스 복원 준비 중...")
 
     p = effective_persist_dir()
     cj = p / "chunks.jsonl"
@@ -559,8 +559,8 @@ def _boot_auto_restore_index() -> None:
     tag_candidates = ["indices-latest", "index-latest"] + dyn_tags + ["latest"]
     asset_candidates = ["indices.zip", "persist.zip", "hq_index.zip", "prepared.zip"]
 
-    _idx("step_set", 2, "run", "최신 인덱스 복원 중…")
-    _idx("log", "릴리스 자산 다운로드/복원 시작…")
+    _idx("step_set", 2, "run", "최신 인덱스 복원 중...")
+    _idx("log", "릴리스 자산 다운로드/복원 시작...")
     try:
         result = gh.restore_latest_index(
             tag_candidates=tag_candidates,
@@ -570,7 +570,7 @@ def _boot_auto_restore_index() -> None:
         )
 
         # 복원 성공 → .ready 표준화 & 메타 저장 & 최신으로 표기
-        _idx("step_set", 3, "run", "메타 저장/정리…")
+        _idx("step_set", 3, "run", "메타 저장/정리...")
         normalize_ready_file(p)
         saved_meta = _safe_save_meta(
             p,
@@ -993,7 +993,7 @@ def _render_body() -> None:
         try:
             mod = importlib.import_module("src.services.index_state")
             getattr(mod, "step_reset", lambda *_a, **_k: None)()
-            getattr(mod, "log", lambda *_a, **_k: None)("🔎 릴리스 확인 중…")
+            getattr(mod, "log", lambda *_a, **_k: None)("🔎 릴리스 확인 중...")
             getattr(mod, "render_index_steps", lambda *_a, **_k: None)()
         except Exception:
             pass
