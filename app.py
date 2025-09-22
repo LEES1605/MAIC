@@ -885,37 +885,39 @@ def _render_body() -> None:
 
     ss = st.session_state
 
-    # 1) 부팅 2-Phase: (A) 헤더/스텝퍼 선렌더 → (B) 복원 → 재실행 1회
+    # 진행표시(학생=스텝퍼만, 관리자=스텝퍼+로그) 결합 헬퍼
+    def _render_progress_area(force: bool = False) -> None:
+        try:
+            mod = importlib.import_module("src.services.index_state")
+            if _is_admin_view():
+                getattr(mod, "render_index_steps", lambda *_a, **_k: None)()
+            else:
+                getattr(mod, "render_stepper_safe", lambda *_a, **_k: None)(bool(force))
+        except Exception:
+            # 진행표시 실패는 치명적이지 않으니 조용히 무시
+            pass
+
+    # 1) 부팅 2-Phase: (A) 헤더/스켈레톤 선렌더 → (B) 복원 → 재실행 1회
     boot_pending = not bool(ss.get("_boot_checked"))
     if boot_pending:
-        # (A) 헤더 우선 + 세션키 초기화
+        # (A) 헤더 우선: 스테일 초록 방지 위해 세션키를 명시 초기화
         try:
             try:
                 local_ok = core_is_ready(effective_persist_dir())
             except Exception:
                 local_ok = False
-            ss["_INDEX_LOCAL_READY"] = bool(local_ok)
-            ss["_INDEX_IS_LATEST"] = False
-            ss["_APP_READY_TO_ANSWER"] = _llm_quick_ready()
-            ss["_RESTORE_IN_PROGRESS"] = True
+
+            ss["_INDEX_LOCAL_READY"] = bool(local_ok)   # 노랑(준비중) 판단용
+            ss["_INDEX_IS_LATEST"] = False              # 복원 전 초록 금지
+            ss["_RESTORE_IN_PROGRESS"] = True           # 진단 신호
         except Exception:
             pass
 
         _header()
+        # 로그인 직후/부팅 직후에도 반드시 뭔가 보이게(워치독)
+        _render_progress_area(force=True)
 
-        # 진행표시: 학생=스텝퍼만, 관리자=스텝퍼+로그
-        try:
-            mod = importlib.import_module("src.services.index_state")
-            getattr(mod, "step_reset", lambda *_a, **_k: None)()
-            if _is_admin_view():
-                getattr(mod, "log", lambda *_a, **_k: None)("🔎 릴리스 확인 중...")
-                getattr(mod, "render_index_steps", lambda *_a, **_k: None)()
-            else:
-                getattr(mod, "render_stepper_safe", lambda *_a, **_k: None)(True)
-        except Exception:
-            pass
-
-        # (B) 복원 실행 → 1회 rerun
+        # (B) 릴리스 복원 실행(동기) → 완료 후 1회 재실행
         try:
             _boot_auto_restore_index()
             _boot_autoflow_hook()
@@ -940,9 +942,84 @@ def _render_body() -> None:
     # 3) 헤더
     _header()
 
-    # 4) 관리자 패널(생략: 기존 코드 동일)
+    # ▶ 워치독: 복원 중이거나(또는 끝났더라도) 최소 스텝퍼는 항상 결합
+    #   - 학생: 1줄 스텝퍼만
+    #   - 관리자: 스텝퍼+로그
+    try:
+        in_progress = bool(ss.get("_RESTORE_IN_PROGRESS"))
+        not_done = not bool(ss.get("_BOOT_RESTORE_DONE"))
+        if in_progress or not_done:
+            _render_progress_area(force=True)
+        else:
+            _render_progress_area(force=False)  # 이미 끝났으면 조용히 유지
+    except Exception:
+        _render_progress_area(force=False)
 
-    # 5) 채팅/입력(생략: 기존 코드 동일)
+    # 4) 관리자 패널 (외부 모듈 호출: src.ui.ops.indexing_panel)
+    if _is_admin_view():
+        try:
+            from src.ui.ops.indexing_panel import (
+                render_orchestrator_header,
+                render_prepared_scan_panel,
+                render_index_panel,
+                render_indexed_sources_panel,
+            )
+        except Exception as e:
+            _errlog(f"admin panel import failed: {e}", where="[render_body.admin.import]", exc=e)
+            render_orchestrator_header = render_prepared_scan_panel = None  # type: ignore
+            render_index_panel = render_indexed_sources_panel = None        # type: ignore
+
+        if callable(render_orchestrator_header):
+            render_orchestrator_header()
+        try:
+            if callable(render_prepared_scan_panel):
+                render_prepared_scan_panel()
+        except Exception:
+            pass
+        try:
+            if callable(render_index_panel):
+                render_index_panel()
+        except Exception:
+            pass
+        try:
+            if callable(render_indexed_sources_panel):
+                render_indexed_sources_panel()
+        except Exception:
+            pass
+
+    # 5) 채팅 메시지 영역 (컨테이너 클래스 분리)
+    _inject_chat_styles_once()
+    with st.container(key="chat_messages_container"):
+        st.markdown(
+            '<div class="chatpane-messages" data-testid="chat-messages"><div class="messages">',
+            unsafe_allow_html=True,
+        )
+        try:
+            _render_chat_panel()
+        except Exception as e:
+            _errlog(f"chat panel failed: {e}", where="[render_body.chat]", exc=e)
+        st.markdown("</div></div>", unsafe_allow_html=True)
+
+    # 6) 채팅 입력 폼 (컨테이너 클래스 분리 + key 안정화)
+    with st.container(border=True, key="chat_input_container"):
+        st.markdown('<div class="chatpane-input" data-testid="chat-input">', unsafe_allow_html=True)
+        try:
+            st.session_state["__mode"] = _render_mode_controls_pills() or st.session_state.get("__mode", "")
+        except Exception:
+            st.session_state.setdefault("__mode", "grammar")
+        submitted: bool = False
+        with st.form("chat_form", clear_on_submit=False):
+            q: str = st.text_input("질문", placeholder="질문을 입력하세요...", key="q_text")
+            submitted = st.form_submit_button("➤")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    # 7) 전송 처리
+    if submitted and isinstance(q, str) and q.strip():
+        st.session_state["inpane_q"] = q.strip()
+        _safe_rerun("chat_submit", ttl=1)
+    else:
+        st.session_state.setdefault("inpane_q", "")
+
 
 def main() -> None:
     if st is None:
