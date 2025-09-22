@@ -35,56 +35,48 @@ def _compute_ready_level_from_session(
     fallback_local_ok: Optional[bool] = None,
 ) -> str:
     """
-    순수 판정 함수(테스트 용이). 세션 상태로만 등급을 정하고,
-    세션 키가 전혀 없을 때에만 fallback_local_ok로 폴백한다.
-
-    규칙:
-      - HIGH:   _INDEX_IS_LATEST == True  OR (brain_status_code=="READY" and brain_attached==True)
-      - LOW:    brain_status_code == "MISSING" (명시적 결손/미연결)
-      - MID:    그 외 (준비/부착 불완전 등)
-      - Fallback: 세션키 없음 → fallback_local_ok True면 MID, 아니면 LOW
+    H1 규칙(엄격):
+      - HIGH(🟩): _INDEX_IS_LATEST == True AND _APP_READY_TO_ANSWER == True
+      - MID (🟨): (_INDEX_LOCAL_READY == True) OR  # 로컬만 준비됨
+                  (_INDEX_IS_LATEST == True AND not _APP_READY_TO_ANSWER)  # 최신이지만 LLM 미준비
+      - LOW (🟧): 그 외
+      - Fallback: 세션키 전무 → fallback_local_ok True면 MID, 아니면 LOW
     """
     ss = ss or {}
-    has_any = any(k in ss for k in ("_INDEX_IS_LATEST", "brain_status_code", "brain_attached"))
+    keys = ("_INDEX_IS_LATEST", "_INDEX_LOCAL_READY", "_APP_READY_TO_ANSWER",
+            "brain_status_code", "brain_attached")
+    has_any = any(k in ss for k in keys)
     if not has_any:
         return "MID" if fallback_local_ok else "LOW"
 
     is_latest = bool(ss.get("_INDEX_IS_LATEST"))
-    brain_code = ss.get("brain_status_code")
-    if isinstance(brain_code, str):
-        brain_code = brain_code.strip().upper()
-    attached = bool(ss.get("brain_attached"))
+    local_ready = bool(ss.get("_INDEX_LOCAL_READY"))
+    app_ready = bool(ss.get("_APP_READY_TO_ANSWER"))
 
-    if is_latest or (brain_code == "READY" and attached):
+    if is_latest and app_ready:
         return "HIGH"
-    if brain_code == "MISSING":
-        return "LOW"
-    return "MID"
+    if local_ready or (is_latest and not app_ready):
+        return "MID"
+    return "LOW"
 
 
 def _ready_level() -> str:
     """인덱스 상태를 HIGH/MID/LOW로 환산 (세션 우선, 필요 시 SSOT probe 폴백)."""
-    # 1) 세션 상태 확인
     if st is not None:
         ss = getattr(st, "session_state", {})
     else:
         ss = {}
 
-    has_any = any(k in ss for k in ("_INDEX_IS_LATEST", "brain_status_code", "brain_attached"))
-    if not has_any:
-        # 2) 세션키가 전혀 없으면 로컬 probe로 폴백 (비용 최소화를 위해 필요한 순간에만)
+    if not any(k in ss for k in ("_INDEX_IS_LATEST", "_INDEX_LOCAL_READY", "_APP_READY_TO_ANSWER")):
         try:
-            # lazy import: 타입 힌트는 문자열 리터럴로만 사용
             from src.core.index_probe import probe_index_health
             local_ok = bool(getattr(probe_index_health(sample_lines=0), "ok", False))
         except Exception:
             local_ok = False
         return _compute_ready_level_from_session({}, fallback_local_ok=local_ok)
 
-    # 3) 세션이 있으면 오직 세션 기준으로만 결정
     return _compute_ready_level_from_session(ss, fallback_local_ok=None)
 # =============================== [02] ready level — END ====================
-
 
 # =============================== [03] UI: header render ==========================
 def render() -> None:
