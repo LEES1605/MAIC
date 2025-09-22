@@ -366,8 +366,6 @@ def _header() -> None:
         st.code(str(p), language="text")
 # ================================== [08] header — END =================================
 
-
-
 # =============================== [10] auto-restore — START ============================
 def _boot_auto_restore_index() -> None:
     """
@@ -377,6 +375,10 @@ def _boot_auto_restore_index() -> None:
       - 원격 최신 태그와 로컬 저장 메타가 '일치'면 복원 생략(최신으로 간주)
       - '불일치'면 복원 강제
       - 복원 성공 시에만 세션에 _INDEX_IS_LATEST=True 로 기록(헤더는 이 값으로만 초록 표시)
+
+    UI 연동(진행표시 훅):
+      - src.services.index_state 의 step/log/stepper 를 안전 호출한다.
+      - 렌더 차수 내에서 placeholder 를 먼저 만들어두고, 로그는 누적한다.
     """
     # 멱등 보호: 한 세션에서 한 번만 수행
     try:
@@ -385,6 +387,21 @@ def _boot_auto_restore_index() -> None:
                 return
     except Exception:
         pass
+
+    # ---- 진행표시 안전 호출자 ---------------------------------------------------------
+    def _idx(name: str, *args, **kwargs):
+        try:
+            mod = importlib.import_module("src.services.index_state")
+            fn = getattr(mod, name, None)
+            if callable(fn):
+                return fn(*args, **kwargs)
+        except Exception:
+            return None
+
+    # placeholder/컨테이너 보장 + 첫 로그
+    _idx("ensure_index_state")
+    _idx("render_index_steps")
+    _idx("log", "부팅: 인덱스 복원 준비 중…")
 
     p = effective_persist_dir()
     cj = p / "chunks.jsonl"
@@ -413,6 +430,7 @@ def _boot_auto_restore_index() -> None:
                 return False
 
     # --- 로컬 준비 상태 계산 & 기록 ---
+    _idx("step_set", 1, "run", "로컬 준비 상태 확인")
     ready_txt = ""
     try:
         if rf.exists():
@@ -420,6 +438,7 @@ def _boot_auto_restore_index() -> None:
     except Exception:
         ready_txt = ""
     local_ready = cj.exists() and cj.stat().st_size > 0 and is_ready_text(ready_txt)
+    _idx("log", f"로컬 준비: {'OK' if local_ready else '미검출'}")
 
     try:
         if "st" in globals() and st is not None:
@@ -428,6 +447,7 @@ def _boot_auto_restore_index() -> None:
             st.session_state.setdefault("_INDEX_IS_LATEST", False)
     except Exception:
         pass
+    _idx("step_set", 1, "ok" if local_ready else "wait", "로컬 준비 기록")
 
     # --- 복원 메타 유틸(있으면 사용) ---
     def _safe_load_meta(path):
@@ -451,6 +471,7 @@ def _boot_auto_restore_index() -> None:
     stored_meta = _safe_load_meta(p)
 
     # --- GitHub Releases 최신 메타 취득 ---
+    _idx("step_set", 2, "run", "원격 릴리스 조회")
     repo_full = os.getenv("GITHUB_REPO", "")
     token = os.getenv("GITHUB_TOKEN", None)
     try:
@@ -461,7 +482,8 @@ def _boot_auto_restore_index() -> None:
         pass
 
     if not repo_full or "/" not in str(repo_full):
-        # 원격 확인 불가: 최신 여부 판단 불가 → 초록 금지(_INDEX_IS_LATEST=False 유지)
+        _idx("log", "GITHUB_REPO 미설정 → 원격 확인 불가", "warn")
+        _idx("step_set", 2, "wait", "원격 확인 불가")
         try:
             if "st" in globals() and st is not None:
                 st.session_state["_BOOT_RESTORE_DONE"] = True
@@ -475,7 +497,8 @@ def _boot_auto_restore_index() -> None:
     try:
         from src.runtime.gh_release import GHConfig, GHReleases
     except Exception:
-        # GH API 사용 불가: 초록 금지 유지
+        _idx("log", "GH 릴리스 모듈 불가 → 최신 판정 보류", "warn")
+        _idx("step_set", 2, "wait", "원격 확인 불가")
         try:
             if "st" in globals() and st is not None:
                 st.session_state["_BOOT_RESTORE_DONE"] = True
@@ -496,9 +519,11 @@ def _boot_auto_restore_index() -> None:
             remote_release_id = int(raw_id)
         except (TypeError, ValueError):
             remote_release_id = None
+        _idx("log", f"원격 최신 릴리스 태그: {remote_tag or '없음'}")
     except Exception:
         remote_tag = None
         remote_release_id = None
+        _idx("log", "원격 최신 릴리스 조회 실패", "warn")
     finally:
         try:
             if "st" in globals() and st is not None:
@@ -512,6 +537,8 @@ def _boot_auto_restore_index() -> None:
     # --- 일치/불일치 판정 ---
     if local_ready and remote_tag and _safe_meta_matches(stored_meta, remote_tag):
         # 이미 최신(메타 일치) → 복원 생략, 최신으로 간주
+        _idx("log", "메타 일치: 복원 생략 (이미 최신)")
+        _idx("step_set", 2, "ok", "메타 일치")
         try:
             if "st" in globals() and st is not None:
                 st.session_state["_BOOT_RESTORE_DONE"] = True
@@ -532,6 +559,8 @@ def _boot_auto_restore_index() -> None:
     tag_candidates = ["indices-latest", "index-latest"] + dyn_tags + ["latest"]
     asset_candidates = ["indices.zip", "persist.zip", "hq_index.zip", "prepared.zip"]
 
+    _idx("step_set", 2, "run", "최신 인덱스 복원 중…")
+    _idx("log", "릴리스 자산 다운로드/복원 시작…")
     try:
         result = gh.restore_latest_index(
             tag_candidates=tag_candidates,
@@ -541,6 +570,7 @@ def _boot_auto_restore_index() -> None:
         )
 
         # 복원 성공 → .ready 표준화 & 메타 저장 & 최신으로 표기
+        _idx("step_set", 3, "run", "메타 저장/정리…")
         normalize_ready_file(p)
         saved_meta = _safe_save_meta(
             p,
@@ -558,8 +588,15 @@ def _boot_auto_restore_index() -> None:
                     st.session_state["_LAST_RESTORE_META"] = getattr(saved_meta, "to_dict", lambda: {})()
         except Exception:
             pass
+
+        _idx("step_set", 2, "ok", "복원 완료")
+        _idx("step_set", 3, "ok", "메타 저장 완료")
+        _idx("step_set", 4, "ok", "마무리 정리")
+        _idx("log", "✅ 최신 인덱스 복원 완료")
     except Exception:
         # 복원 실패 → 최신 아님(초록 금지), 로컬 준비여부에 따라 헤더에서 노랑/오렌지 표기
+        _idx("step_set", 2, "err", "복원 실패")
+        _idx("log", "❌ 최신 인덱스 복원 실패", "err")
         try:
             if "st" in globals() and st is not None:
                 st.session_state["_BOOT_RESTORE_DONE"] = True
@@ -569,7 +606,6 @@ def _boot_auto_restore_index() -> None:
             pass
         return
 # ================================= [10] auto-restore — END ============================
-
 
 
 # =============================== [11] boot hooks — START ==============================
@@ -932,17 +968,54 @@ def _render_body() -> None:
     if st is None:
         return
 
-    # 1) 부팅 훅
-    if not st.session_state.get("_boot_checked"):
+    ss = st.session_state
+
+    # 1) 부팅 2-Phase: (A) 헤더/스켈레톤 선렌더 → (B) 복원 → 재실행 1회
+    boot_pending = not bool(ss.get("_boot_checked"))
+    if boot_pending:
+        # (A) 헤더 우선: 스테일 초록 방지 위해 세션키를 명시 초기화
         try:
-            _boot_auto_restore_index()
+            try:
+                local_ok = core_is_ready(effective_persist_dir())
+            except Exception:
+                local_ok = False
+
+            ss["_INDEX_LOCAL_READY"] = bool(local_ok)   # 노랑(준비중) 판단용
+            ss["_INDEX_IS_LATEST"] = False              # 복전 초록 금지
+            ss["_RESTORE_IN_PROGRESS"] = True           # 진단/로그용 신호
+        except Exception:
+            pass
+
+        # 헤더 먼저 렌더(노랑/주황을 즉시 노출)
+        _header()
+
+        # 진행표시(스텝/로그) 자리표시자 즉시 렌더
+        try:
+            mod = importlib.import_module("src.services.index_state")
+            getattr(mod, "step_reset", lambda *_a, **_k: None)()
+            getattr(mod, "log", lambda *_a, **_k: None)("🔎 릴리스 확인 중…")
+            getattr(mod, "render_index_steps", lambda *_a, **_k: None)()
+        except Exception:
+            pass
+
+        # (B) 릴리스 복원 실행(동기) → 완료 후 1회 재실행
+        try:
+            _boot_auto_restore_index()  # 내부에서 step/log 갱신
             _boot_autoflow_hook()
         except Exception as e:
             _errlog(f"boot check failed: {e}", where="[render_body.boot]", exc=e)
         finally:
-            st.session_state["_boot_checked"] = True
+            ss["_RESTORE_IN_PROGRESS"] = False
+            ss["_boot_checked"] = True
 
-    # 2) ✅ 상태 확정(자동 복원/READY 반영)을 헤더보다 먼저 수행
+        # 헤더/진행표시 상태 업데이트를 위해 정확히 1회만 재실행
+        try:
+            _safe_rerun("boot_init", ttl=0.5)
+        except Exception:
+            pass
+        return
+
+    # 2) ✅ (포스트-부팅) 자동 시작 훅 — 필요 시만 동작
     try:
         _auto_start_once()
     except Exception as e:
@@ -1021,4 +1094,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-# ================================= [19] body & main — END =============================
+# =============================== [19] body & main — END =============================
