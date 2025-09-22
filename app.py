@@ -365,6 +365,98 @@ def _header() -> None:
         st.caption("Persist Dir")
         st.code(str(p), language="text")
 # ================================== [08] header — END =================================
+# =================== [09] index stepper (minimal UI) — START ===================
+def _render_stepper(force: bool = False) -> None:
+    """
+    인덱싱 단계 표시기(미니멀 1줄).
+    - index_state.render_stepper_safe(force=...) 가 이 함수를 먼저 탐색/호출.
+    - 상태소스: st.session_state["_IDX_STEPS"] (name/status/detail)
+      status: wait|run|ok|err
+    - 텍스트는 툴팁(title)로만 노출해 화면을 깔끔하게 유지.
+    """
+    if st is None:
+        return
+    try:
+        from src.services.index_state import ensure_index_state  # 안전 가드
+    except Exception:
+        return
+
+    ensure_index_state()
+    ss = st.session_state
+
+    ph = ss.get("_IDX_STEPPER_PH")
+    if ph is None:
+        if not force:
+            return
+        ph = st.empty()
+        ss["_IDX_STEPPER_PH"] = ph
+
+    steps = list(ss.get("_IDX_STEPS", []))
+    if not steps:
+        with ph.container():
+            st.caption("인덱싱 단계 표시기")
+        return
+
+    # 이름 매핑(짧고 익숙하게)
+    name_map = {
+        "persist": "저장",
+        "index": "인덱싱",
+        "consume": "적용",
+        "summary": "요약",
+        "upload": "업로드",
+    }
+
+    # CSS — 라이트한 점/선, run 상태만 미세 펄스
+    st.markdown(
+        """
+<style>
+  .idx-stepper{ display:flex; align-items:center; gap:8px; padding:4px 2px; }
+  .idx-dot{ width:10px; height:10px; border-radius:50%; position:relative; }
+  .idx-bar{ height:2px; width:38px; border-radius:2px; }
+  .idx-wait{ background:#d1d5db; }      /* gray-300 */
+  .idx-run { background:#f59e0b; }      /* amber-500 */
+  .idx-ok  { background:#10b981; }      /* emerald-500 */
+  .idx-err { background:#ef4444; }      /* red-500   */
+  .idx-bar-wait{ background:#e5e7eb; }  /* gray-200  */
+  .idx-bar-ok{ background:#bbf7d0; }    /* green-200 */
+  .idx-dot.idx-run::after{
+    content:""; position:absolute; inset:-4px;
+    border-radius:50%; box-shadow:0 0 0 0 rgba(245,158,11,.45);
+    animation: idxPulse 1.6s infinite;
+  }
+  @keyframes idxPulse{
+    0%{ box-shadow:0 0 0 0 rgba(245,158,11,.45); }
+    70%{ box-shadow:0 0 0 10px rgba(245,158,11,0); }
+    100%{ box-shadow:0 0 0 0 rgba(245,158,11,0); }
+  }
+</style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # HTML 구성: ●──●──●──●──●  (각 점에 title 툴팁)
+    parts: list[str] = ['<div class="idx-stepper">']
+    n = len(steps)
+
+    def _cls(s: str) -> str:
+        s = (s or "wait").lower()
+        return "idx-ok" if s == "ok" else "idx-run" if s == "run" else "idx-err" if s == "err" else "idx-wait"
+
+    # 바(선)는 "이전 점"의 상태에 따라 초록/회색으로
+    for i, step in enumerate(steps):
+        nm = name_map.get(step.get("name", ""), str(step.get("name", "")).strip() or f"s{i+1}")
+        stt = _cls(step.get("status", "wait"))
+        tip = (step.get("detail") or nm or "").strip()
+        parts.append(f'<div class="idx-dot {stt}" title="{tip}"></div>')
+        if i < n - 1:
+            prev = stt
+            bar = "idx-bar-ok" if prev in ("idx-ok", "idx-run") else "idx-bar-wait"
+            parts.append(f'<div class="idx-bar {bar}"></div>')
+
+    parts.append("</div>")
+    html = "".join(parts)
+    ph.markdown(html, unsafe_allow_html=True)
+# ==================== [09] index stepper (minimal UI) — END ====================
 
 # =============================== [10] auto-restore — START ============================
 def _boot_auto_restore_index() -> None:
@@ -893,6 +985,7 @@ def _render_chat_panel() -> None:
     if not question:
         return
 
+    # 1) 검색 Top‑K 및 라벨 결정
     src_label = "[AI지식]"
     hits = []
     if callable(_search_hits):
@@ -916,8 +1009,22 @@ def _render_chat_panel() -> None:
         except Exception:
             chip_text = src_label
 
+    # 2) 사용자 버블
     ph_user = st.empty()
     _emit_bubble(ph_user, "나", question, source=None, align_right=True)
+
+    # 3) 답변 스트리밍(문맥 주입)
+    #    ctx.docs: title/snippet/path/score 의 경량 목록
+    ctx_docs = []
+    for h in (hits or [])[:5]:
+        ctx_docs.append(
+            {
+                "title": str(h.get("title") or ""),
+                "snippet": str(h.get("snippet") or "")[:360],
+                "path": str(h.get("path") or ""),
+                "score": float(h.get("score") or 0.0),
+            }
+        )
 
     ph_ans = st.empty()
     acc_ans = ""
@@ -934,11 +1041,16 @@ def _render_chat_panel() -> None:
             flush_on_strong_punct=True, flush_on_newline=True,
         ),
     )
-    for piece in answer_stream(question=question, mode=ss.get("__mode", "")):
+    for piece in answer_stream(
+        question=question,
+        mode=ss.get("__mode", ""),
+        ctx={"docs": ctx_docs, "strict": True, "source_label": src_label},
+    ):
         emit_chunk_ans(str(piece or ""))
     close_stream_ans()
     full_answer = acc_ans.strip()
 
+    # 4) 평가 스트리밍(출처 라벨 컨텍스트)
     ph_eval = st.empty()
     acc_eval = ""
 
@@ -955,14 +1067,18 @@ def _render_chat_panel() -> None:
         ),
     )
     for piece in evaluate_stream(
-        question=question, mode=ss.get("__mode", ""), answer=full_answer, ctx={"answer": full_answer}
+        question=question,
+        mode=ss.get("__mode", ""),
+        answer=full_answer,
+        ctx={"answer": full_answer, "source_label": src_label},
     ):
         emit_chunk_eval(str(piece or ""))
     close_stream_eval()
 
     ss["last_q"] = question
     ss["inpane_q"] = ""
-# ================================= [18] chat panel — END ==============================
+# =============================== [18] chat panel — END ==============================
+
 # =============================== [19] body & main — START =============================
 def _render_body() -> None:
     if st is None:
