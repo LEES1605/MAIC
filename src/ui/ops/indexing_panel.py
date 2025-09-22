@@ -1,4 +1,4 @@
-src/ui/ops/indexing_panel.py
+# src/ui/ops/indexing_panel.py
 # =============================== [01] future import — START ===========================
 from __future__ import annotations
 # ================================ [01] future import — END ============================
