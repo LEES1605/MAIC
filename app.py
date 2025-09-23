@@ -25,12 +25,57 @@ from src.core.index_probe import (
 # ================================ [02] module imports — END ===========================
 
 # =============================== [03] helpers(persist) — START ========================
+from pathlib import Path
+import importlib
+from typing import List, Tuple
+
 def _persist_dir_safe() -> Path:
+    """프로세스-전역 persist 경로(SSOT: core.persist.effective_persist_dir)"""
+    from src.core.persist import effective_persist_dir as _eff
     try:
-        return Path(str(effective_persist_dir())).expanduser()
+        return Path(str(_eff())).expanduser()
     except Exception:
         return Path.home() / ".maic" / "persist"
+
+
+def _load_prepared_lister() -> Tuple[object | None, List[str]]:
+    """
+    prepared 파일 나열기 로더.
+    반환: (list_prepared_files | None, debug_trails[list[str]])
+    - 구현 본체는 src.services.index_actions에 있으며, 여기서는 '재노출(위임)'만 담당.
+    """
+    tried: List[str] = []
+    try:
+        mod = importlib.import_module("src.services.index_actions")
+        fn = getattr(mod, "_load_prepared_lister", None)
+        if callable(fn):
+            # 위임 호출: (callable|None, list[str])
+            return fn()
+        tried.append("miss: src.services.index_actions._load_prepared_lister")
+    except Exception as e:
+        tried.append(f"fail: import index_actions ({e})")
+    return None, tried
+
+
+def _load_prepared_api() -> Tuple[object | None, object | None, List[str]]:
+    """
+    prepared 변화 감지/소비 API 로더.
+    반환: (check_prepared_updates|None, mark_prepared_consumed|None, debug_trails[list[str]])
+    - 구현 본체는 src.services.index_actions에 있으며, 여기서는 '재노출(위임)'만 담당.
+    """
+    tried: List[str] = []
+    try:
+        mod = importlib.import_module("src.services.index_actions")
+        fn = getattr(mod, "_load_prepared_api", None)
+        if callable(fn):
+            # 위임 호출: (callable|None, callable|None, list[str])
+            return fn()
+        tried.append("miss: src.services.index_actions._load_prepared_api")
+    except Exception as e:
+        tried.append(f"fail: import index_actions ({e})")
+    return None, None, tried
 # ================================ [03] helpers(persist) — END =========================
+
 
 # ===== [04] bootstrap env — START =====
 def _bootstrap_env() -> None:
