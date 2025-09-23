@@ -74,53 +74,24 @@ def log(message: str, level: str = "info") -> None:
 # ============================== [04] helpers — END ====================================
 
 # ======================= [05] render helpers (UI) — START =============================
-def _progress_crossver(pct: int, *, text: str = "") -> None:
+def render_progress_with_fallback(pct: int, *, text: str = "") -> None:
     """
-    Streamlit 버전 무관 안전 진행바 렌더러.
-    - 신버전: st.progress(value, text=...)
-    - 구버전: st.progress(value) + 별도 캡션
-    - 어떤 예외도 UI를 깨뜨리지 않도록 삼킴(로그는 상위에서 처리)
+    Streamlit 버전별로 st.progress 시그니처(text 인자 유무)가 달라도
+    항상 진행바가 보이도록 안전하게 렌더한다.
     """
     if st is None:
         return
     try:
-        # 신 시그니처(>=1.25 근방) 지원 시
-        st.progress(int(max(0, min(100, pct))), text=text)
-        return
+        # 신 시그니처 (>= 1.22): st.progress(value, text="...")
+        st.progress(int(pct), text=str(text or ""))
     except TypeError:
-        # 구 시그니처 호환
-        st.progress(int(max(0, min(100, pct))))
+        # 구 시그니처: text 인자를 받지 못함
+        st.progress(int(pct))
         if text:
-            st.caption(text)
+            st.caption(str(text))
     except Exception:
-        # 진행바가 전혀 생성되지 못한 경우라도 텍스트는 남긴다.
-        if text:
-            st.caption(text)
-
-
-def render_progress_with_fallback(pct: int, *, text: str = "") -> None:
-    """
-    외부(학생 스텝퍼)가 호출하는 공용 진행바 API.
-    내부에서 _progress_crossver로 신/구 스트림릿을 모두 처리한다.
-    """
-    if st is None:
-        return
-    ensure_index_state()
-    _progress_crossver(pct, text=text)
-
-
-def render_progress_compact(pct: int, *, text: str = "") -> None:
-    """
-    압축형(공간 절약) 진행바. 표 형태로 %와 바를 나란히 배치.
-    """
-    if st is None:
-        return
-    ensure_index_state()
-    cols = st.columns([1, 8])
-    with cols[0]:
-        st.write(f"{int(max(0, min(100, pct)))}%")
-    with cols[1]:
-        _progress_crossver(pct, text=text)
+        # 최후 폴백: 퍼센트+텍스트만
+        st.caption(f"{int(pct)}% {text}")
 
 
 def render_status(force: bool = False) -> None:
@@ -148,7 +119,10 @@ def render_status(force: bool = False) -> None:
 
 
 def render_stepper_safe(force: bool = False) -> None:
-    """_render_stepper(force=...) 가 앱쪽에 있으면 그걸 사용하고, 없으면 간단한 자리표시자."""
+    """
+    앱(app.py)에 학생용 진행바 구현(_render_stepper)이 있으면 그걸 호출하고,
+    없으면 간단한 캡션만 표시한다.
+    """
     if st is None:
         return
     try:
@@ -196,6 +170,47 @@ def step_reset(step_names: Sequence[str] | None = None) -> None:
             st.session_state[key] = None
     render_index_steps()
 # ======================== [05] render helpers (UI) — END ==============================
+
+# (아래는 기존 helpers에 있던 함수들)
+def step_set(i: int, status: str, detail: str = "") -> None:
+    """i(1-base)번째 스텝의 상태를 갱신한다."""
+    if st is None:
+        return
+    ensure_index_state()
+    try:
+        steps: List[Dict[str, Any]] = st.session_state["_IDX_STEPS"]  # type: ignore[assignment]
+        idx = max(1, min(int(i), len(steps))) - 1
+        steps[idx] = {"name": steps[idx]["name"], "status": status, "detail": detail}
+        st.session_state["_IDX_STEPS"] = steps
+    finally:
+        # 변경 즉시 학생 진행바/로그를 갱신(관리자 여부에 상관없이 안전 호출)
+        try:
+            render_stepper_safe(force=True)
+            # 로그 패널은 강제 생성까지는 하지 않음(학생 화면은 미니멀)
+            render_status(force=False)
+        except Exception:
+            pass
+
+
+def log(message: str, level: str = "info") -> None:
+    """진행 로그를 세션에 기록한다. level: info|warn|err"""
+    if st is None:
+        return
+    ensure_index_state()
+    try:
+        logs: List[Dict[str, Any]] = st.session_state["_IDX_LOGS"]  # type: ignore[assignment]
+        logs.append({"level": str(level or "info"), "message": str(message or ""), "ts": int(time.time())})
+        if len(logs) > 2000:
+            del logs[:-2000]
+        st.session_state["_IDX_LOGS"] = logs
+    finally:
+        try:
+            # 학생 화면에도 최소 캡션은 유지, 관리자면 전체 로그 영역 생성
+            render_stepper_safe(force=True)
+            render_status(force=bool(st.session_state.get("admin_mode")))
+        except Exception:
+            pass
+
 
 # ======================= [06] student compact progress — START =======================
 from typing import Tuple
@@ -249,3 +264,34 @@ def progress_tick() -> None:
         render_progress_compact(force=False)
 # ======================= [06] student compact progress — END =========================
 
+# ======================== [06] progress wrappers — START ===========================
+def render_progress_with_fallback(pct: int, *, text: str = "") -> None:
+    """
+    Streamlit 버전 호환 진행바:
+    - 신형: st.progress(pct, text="...") 지원
+    - 구형: st.progress(pct)만 지원 → 캡션으로 텍스트 보완
+    - 예외 시에도 UX를 깨지 않도록 안전 폴백
+    """
+    if st is None:
+        return
+    try:
+        val = int(max(0, min(100, int(pct))))
+    except Exception:
+        val = 0
+
+    try:
+        # 신형 시그니처
+        st.progress(val, text=text)
+        return
+    except TypeError:
+        # 구형 시그니처
+        st.progress(val)
+        if text:
+            st.caption(text)
+    except Exception:
+        # 마지막 폴백(텍스트만)
+        try:
+            st.caption(f"{text} ({val}%)" if text else f"{val}%")
+        except Exception:
+            pass
+# ========================= [06] progress wrappers — END ============================
