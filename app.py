@@ -376,6 +376,7 @@ def _render_stepper(*, force: bool = False) -> None:
     - src.services.index_state.render_stepper_safe()가 이 함수를 찾아 호출한다.
     - 진행률: ok=1.0, run=0.6, wait/err=0.0 가중 합을 총 스텝수로 나눠 환산.
     - 라벨: '진행 중' 스텝의 detail 또는 name.
+
     """
     if st is None:
         return
@@ -414,6 +415,7 @@ def _render_stepper(*, force: bool = False) -> None:
         st.caption("인덱싱 단계 표시기(간이 모드)")
         st.progress(pct, text=text)
 # ============================== [09] student progress stepper — END =====================
+
 
 # =============================== [10] auto-restore — START ============================
 def _boot_auto_restore_index() -> None:
@@ -1069,9 +1071,9 @@ def _render_body() -> None:
         except Exception:
             pass
 
-        # (B) 릴리스 복원 실행(동기) → 완료 후 1회 재실행
+        # (B) 릴리스 복원 실행 → 완료 후 1회 재실행
         try:
-            _boot_auto_restore_index()  # 내부에서 step/log 갱신
+            _boot_auto_restore_index()
             _boot_autoflow_hook()
         except Exception as e:
             _errlog(f"boot check failed: {e}", where="[render_body.boot]", exc=e)
@@ -1087,7 +1089,8 @@ def _render_body() -> None:
             pass
         return
 
-    # 2) ✅ (포스트-부팅) 자동 시작 훅 — 필요 시만 동작
+    # 2) 포스트-부팅 자동 시작 훅
+
     try:
         _auto_start_once()
     except Exception as e:
