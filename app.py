@@ -415,7 +415,7 @@ def _render_stepper(*, force: bool = False) -> None:
             running_label = str(s.get("detail") or s.get("name") or "")
 
     pct = int(min(100, max(0, round(acc / total * 100))))
-    text = running_label or "인덱스 준비 중…"
+    text = running_label or "인덱스 준비 중•••"
 
     # 미니 UI 렌더
     with ph.container():
@@ -1068,7 +1068,7 @@ def _render_body() -> None:
         try:
             from src.services.index_state import step_reset, log, render_stepper_safe
             step_reset()
-            log("🔎 릴리스 확인 중...")
+            log("🔎 릴리스 확인 중•••")
             render_stepper_safe(force=True)
         except Exception:
             pass
@@ -1156,7 +1156,7 @@ def _render_body() -> None:
         st.session_state["__mode"] = _render_mode_controls_pills() or st.session_state.get("__mode", "")
         submitted: bool = False
         with st.form("chat_form", clear_on_submit=False):
-            q: str = st.text_input("질문", placeholder="질문을 입력하세요...", key="q_text")
+            q: str = st.text_input("질문", placeholder="질문을 입력하세요•••", key="q_text")
             submitted = st.form_submit_button("➤")
         st.markdown("</div>", unsafe_allow_html=True)
 
