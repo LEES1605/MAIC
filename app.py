@@ -408,7 +408,7 @@ def _render_stepper(*, force: bool = False) -> None:
             running_label = str(s.get("detail") or s.get("name") or "")
 
     pct = int(min(100, max(0, round(acc / total * 100))))
-    text = running_label or "인덱스 준비 중…"
+    text = running_label or "인덱스 준비 중•••"
 
     with ph.container():
         st.caption("인덱싱 단계 표시기(간이 모드)")
@@ -448,7 +448,7 @@ def _boot_auto_restore_index() -> None:
         _idx("render_index_steps")   # 관리자: 스텝퍼+로그
     else:
         _idx("render_stepper_safe", True)  # 학생: 스텝퍼만
-    _idx("log", "부팅: 인덱스 복원 준비 중...")  # 로그는 기록만(학생 화면엔 표시 안 됨)
+    _idx("log", "부팅: 인덱스 복원 준비 중•••")  # 로그는 기록만(학생 화면엔 표시 안 됨)
 
     p = effective_persist_dir()
     cj = p / "chunks.jsonl"
@@ -602,8 +602,8 @@ def _boot_auto_restore_index() -> None:
     tag_candidates = ["indices-latest", "index-latest"] + dyn_tags + ["latest"]
     asset_candidates = ["indices.zip", "persist.zip", "hq_index.zip", "prepared.zip"]
 
-    _idx("step_set", 2, "run", "최신 인덱스 복원 중...")
-    _idx("log", "릴리스 자산 다운로드/복원 시작...")
+    _idx("step_set", 2, "run", "최신 인덱스 복원 중•••")
+    _idx("log", "릴리스 자산 다운로드/복원 시작•••")
     try:
         result = gh.restore_latest_index(
             tag_candidates=tag_candidates,
@@ -612,7 +612,7 @@ def _boot_auto_restore_index() -> None:
             clean_dest=True,
         )
 
-        _idx("step_set", 3, "run", "메타 저장/정리...")
+        _idx("step_set", 3, "run", "메타 저장/정리•••")
         normalize_ready_file(p)
         saved_meta = _safe_save_meta(
             p,
@@ -1059,7 +1059,7 @@ def _render_body() -> None:
         try:
             mod = importlib.import_module("src.services.index_state")
             getattr(mod, "step_reset", lambda *_a, **_k: None)()
-            getattr(mod, "log", lambda *_a, **_k: None)("🔎 릴리스 확인 중...")
+            getattr(mod, "log", lambda *_a, **_k: None)("🔎 릴리스 확인 중•••")
             if _is_admin_view():
                 # 관리자: 스텝 + 로그
                 getattr(mod, "render_index_steps", lambda *_a, **_k: None)()
@@ -1163,7 +1163,7 @@ def _render_body() -> None:
         st.session_state["__mode"] = _render_mode_controls_pills() or st.session_state.get("__mode", "")
         submitted: bool = False
         with st.form("chat_form", clear_on_submit=False):
-            q: str = st.text_input("질문", placeholder="질문을 입력하세요...", key="q_text")
+            q: str = st.text_input("질문", placeholder="질문을 입력하세요•••", key="q_text")
             submitted = st.form_submit_button("➤")
         st.markdown("</div>", unsafe_allow_html=True)
 
