@@ -3,10 +3,14 @@ from __future__ import annotations
 
 import importlib
 import json
-from typing import Any, Dict, Optional
+import re
+from typing import Any, Dict, Optional, Tuple
 
 import yaml
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 상수/유틸
+# ─────────────────────────────────────────────────────────────────────────────
 ELLIPSIS_UC = "\u2026"
 
 # ===== [02] low-level helpers — START =====
@@ -108,6 +112,7 @@ def _ensure_modes(obj: Dict[str, Any]) -> Dict[str, Any]:
 
 # ===== [03] LLM call — START =====
 def _post_openai(api_key: str, model: str, messages: list[dict], temperature: float) -> str:
+    """단순 REST 호출(요청/의존도를 낮춤). 실패 시 예외 발생."""
     req: Any = importlib.import_module("requests")
     url = "https://api.openai.com/v1/chat/completions"
     payload = {"model": model, "messages": messages, "temperature": temperature}
@@ -132,6 +137,7 @@ def _build_prompt(grammar: str, sentence: str, passage: str) -> list[dict]:
         "- Field synonyms allowed: system_instructions ≈ system.instructions ≈ system.\n"
         "- If unsure, output a **minimal skeleton** with empty strings and defaults.\n"
         "- Korean output only."
+
     )
     user = (
         "입력(문법 한 덩어리):\n" + grammar.strip() + "\n\n"
@@ -141,6 +147,24 @@ def _build_prompt(grammar: str, sentence: str, passage: str) -> list[dict]:
     )
     return [{"role": "system", "content": sys}, {"role": "user", "content": user}]
 # ===== [03] LLM call — END =====
+    m = _CODEBLOCK_RE.search(text)
+    cand = text
+    flavor = None
+    if m:
+        flavor = (m.group(1) or "").strip().lower()
+        cand = m.group(2) or ""
+
+    # 1) flavor 힌트 우선
+    if flavor in ("json",):
+        try:
+            return json.loads(cand)
+        except Exception:
+            pass
+    if flavor in ("yaml", "yml"):
+        try:
+            return yaml.safe_load(cand)
+        except Exception:
+            pass
 
 
 # ===== [04] public API — START =====
@@ -162,7 +186,8 @@ def normalize_to_yaml(
     sentence_text = _sanitize_ellipsis(sentence_text)
     passage_text = _sanitize_ellipsis(passage_text)
 
-    yaml_text = ""
+    # 1) LLM 시도(있으면)
+    obj: Optional[Dict[str, Any]] = None
     if openai_key:
         try:
             msgs = _build_prompt(grammar_text, sentence_text, passage_text)
@@ -228,4 +253,5 @@ def normalize_to_yaml(
 
     return yaml.safe_dump(obj, allow_unicode=True, sort_keys=False)
 # ===== [04] public API — END =====
+
 # ===== [01] FILE: src/ui/assist/prompt_normalizer.py — END =====
