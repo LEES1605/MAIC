@@ -74,6 +74,55 @@ def log(message: str, level: str = "info") -> None:
 # ============================== [04] helpers — END ====================================
 
 # ======================= [05] render helpers (UI) — START =============================
+def _progress_crossver(pct: int, *, text: str = "") -> None:
+    """
+    Streamlit 버전 무관 안전 진행바 렌더러.
+    - 신버전: st.progress(value, text=...)
+    - 구버전: st.progress(value) + 별도 캡션
+    - 어떤 예외도 UI를 깨뜨리지 않도록 삼킴(로그는 상위에서 처리)
+    """
+    if st is None:
+        return
+    try:
+        # 신 시그니처(>=1.25 근방) 지원 시
+        st.progress(int(max(0, min(100, pct))), text=text)
+        return
+    except TypeError:
+        # 구 시그니처 호환
+        st.progress(int(max(0, min(100, pct))))
+        if text:
+            st.caption(text)
+    except Exception:
+        # 진행바가 전혀 생성되지 못한 경우라도 텍스트는 남긴다.
+        if text:
+            st.caption(text)
+
+
+def render_progress_with_fallback(pct: int, *, text: str = "") -> None:
+    """
+    외부(학생 스텝퍼)가 호출하는 공용 진행바 API.
+    내부에서 _progress_crossver로 신/구 스트림릿을 모두 처리한다.
+    """
+    if st is None:
+        return
+    ensure_index_state()
+    _progress_crossver(pct, text=text)
+
+
+def render_progress_compact(pct: int, *, text: str = "") -> None:
+    """
+    압축형(공간 절약) 진행바. 표 형태로 %와 바를 나란히 배치.
+    """
+    if st is None:
+        return
+    ensure_index_state()
+    cols = st.columns([1, 8])
+    with cols[0]:
+        st.write(f"{int(max(0, min(100, pct)))}%")
+    with cols[1]:
+        _progress_crossver(pct, text=text)
+
+
 def render_status(force: bool = False) -> None:
     """상태(로그) 영역을 렌더한다. force=True면 placeholder를 강제로 만든다."""
     if st is None:
@@ -147,6 +196,7 @@ def step_reset(step_names: Sequence[str] | None = None) -> None:
             st.session_state[key] = None
     render_index_steps()
 # ======================== [05] render helpers (UI) — END ==============================
+
 # ======================= [06] student compact progress — START =======================
 from typing import Tuple
 
