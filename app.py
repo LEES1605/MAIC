@@ -968,6 +968,20 @@ def _render_chat_panel() -> None:
     if not question:
         return
 
+    # ── 상단 툴바: 평가 토글(기본 켜짐) ───────────────────────────────
+    top_c1, top_c2 = st.columns([1, 1])
+    with top_c1:
+        ss["_show_evaluator"] = st.toggle("미나쌤 평가 보기", value=bool(ss.get("_show_evaluator", True)))
+
+    # 사용자 버블 즉시 렌더
+    ph_user = st.empty()
+    _emit_bubble(ph_user, "나", question, source=None, align_right=True)
+
+    # 타이핑 핸드셰이크(피티쌤) — 첫 토막 전까지 표시
+    ph_typing = st.empty()
+    _emit_bubble(ph_typing, "피티쌤", "입력 중...", source="[검색중...]", align_right=False)
+
+    # 출처 탐색
     src_label = "[AI지식]"
     hits = []
     if callable(_search_hits):
@@ -991,15 +1005,21 @@ def _render_chat_panel() -> None:
         except Exception:
             chip_text = src_label
 
-    ph_user = st.empty()
-    _emit_bubble(ph_user, "나", question, source=None, align_right=True)
-
+    # 주답변 스트리밍
     ph_ans = st.empty()
     acc_ans = ""
+    started = False
 
     def _on_emit_ans(chunk: str) -> None:
-        nonlocal acc_ans
+        nonlocal acc_ans, started
         acc_ans += str(chunk or "")
+        # 첫 방출 시 타이핑 버블 제거
+        if not started and acc_ans:
+            try:
+                ph_typing.empty()
+            except Exception:
+                pass
+            started = True
         _emit_bubble(ph_ans, "피티쌤", acc_ans, source=chip_text, align_right=False)
 
     emit_chunk_ans, close_stream_ans = make_stream_handler(
@@ -1009,35 +1029,45 @@ def _render_chat_panel() -> None:
             flush_on_strong_punct=True, flush_on_newline=True,
         ),
     )
-    for piece in answer_stream(question=question, mode=ss.get("__mode", "")):
+    for piece in answer_stream(
+        question=question,
+        mode=ss.get("__mode", ""),
+        ctx={"hits": hits, "source_label": src_label},
+    ):
         emit_chunk_ans(str(piece or ""))
     close_stream_ans()
     full_answer = acc_ans.strip()
 
-    ph_eval = st.empty()
-    acc_eval = ""
+    # 평가(옵션)
+    if bool(ss.get("_show_evaluator", True)):
+        ph_eval = st.empty()
+        acc_eval = ""
 
-    def _on_emit_eval(chunk: str) -> None:
-        nonlocal acc_eval
-        acc_eval += str(chunk or "")
-        _emit_bubble(ph_eval, "미나쌤", acc_eval, source=chip_text, align_right=False)
+        def _on_emit_eval(chunk: str) -> None:
+            nonlocal acc_eval
+            acc_eval += str(chunk or "")
+            _emit_bubble(ph_eval, "미나쌤", acc_eval, source=chip_text, align_right=False)
 
-    emit_chunk_eval, close_stream_eval = make_stream_handler(
-        on_emit=_on_emit_eval,
-        opts=BufferOptions(
-            min_emit_chars=8, soft_emit_chars=24, max_latency_ms=150,
-            flush_on_strong_punct=True, flush_on_newline=True,
-        ),
-    )
-    for piece in evaluate_stream(
-        question=question, mode=ss.get("__mode", ""), answer=full_answer, ctx={"answer": full_answer}
-    ):
-        emit_chunk_eval(str(piece or ""))
-    close_stream_eval()
+        emit_chunk_eval, close_stream_eval = make_stream_handler(
+            on_emit=_on_emit_eval,
+            opts=BufferOptions(
+                min_emit_chars=8, soft_emit_chars=24, max_latency_ms=150,
+                flush_on_strong_punct=True, flush_on_newline=True,
+            ),
+        )
+        for piece in evaluate_stream(
+            question=question,
+            mode=ss.get("__mode", ""),
+            answer=full_answer,
+            ctx={"answer": full_answer, "source_label": src_label},
+        ):
+            emit_chunk_eval(str(piece or ""))
+        close_stream_eval()
 
     ss["last_q"] = question
     ss["inpane_q"] = ""
 # ================================= [18] chat panel — END ==============================
+
 
 # =============================== [19] body & main — START =============================
 def _render_body() -> None:
