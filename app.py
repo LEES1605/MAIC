@@ -369,25 +369,28 @@ def _header() -> None:
         st.code(str(p), language="text")
 # ================================== [08] header — END =================================
 
-# ============================== [09] student progress stepper — START ==================
+# ============================== [09] student progress stepper — START =====================
 def _render_stepper(*, force: bool = False) -> None:
     """
     학생 화면에서 보여줄 '미니 진행바'.
     - src.services.index_state.render_stepper_safe()가 이 함수를 찾아 호출한다.
     - 진행률: ok=1.0, run=0.6, wait/err=0.0 가중 합을 총 스텝수로 나눠 환산.
     - 라벨: '진행 중' 스텝의 detail 또는 name.
+    - Streamlit 구/신 시그니처 모두 대응(내부 호환 래퍼 사용).
     """
     if st is None:
         return
+
     try:
         from src.services.index_state import (
-            ensure_index_state,           # 세션 컨테이너 보장
-            render_progress_with_fallback # 버전-독립 progress
+            ensure_index_state,         # 세션 컨테이너 보장
+            render_progress_with_fallback,  # 진행바 호환 래퍼
         )
         ensure_index_state()
     except Exception:
         return
 
+    # 진행바를 그릴 자리(placeholder)
     ph = st.session_state.get("_IDX_STEPPER_PH")
     if ph is None:
         if not force:
@@ -395,6 +398,7 @@ def _render_stepper(*, force: bool = False) -> None:
         ph = st.empty()
         st.session_state["_IDX_STEPPER_PH"] = ph
 
+    # 진행률 계산
     steps: list[dict[str, object]] = st.session_state.get("_IDX_STEPS") or []
     if not isinstance(steps, list):
         steps = []
@@ -411,12 +415,13 @@ def _render_stepper(*, force: bool = False) -> None:
             running_label = str(s.get("detail") or s.get("name") or "")
 
     pct = int(min(100, max(0, round(acc / total * 100))))
-    text = running_label or "인덱스 준비 중..."
+    text = running_label or "인덱스 준비 중…"
 
+    # 미니 UI 렌더
     with ph.container():
         st.caption("인덱싱 단계 표시기(간이 모드)")
         render_progress_with_fallback(pct, text=text)
-# =============================== [09] student progress stepper — END ===================
+# =============================== [09] student progress stepper — END ======================
 
 
 # =============================== [10] auto-restore — START ============================
@@ -1052,37 +1057,31 @@ def _render_body() -> None:
                 local_ok = False
             ss["_INDEX_LOCAL_READY"] = bool(local_ok)   # 노랑(준비중) 판단용
             ss["_INDEX_IS_LATEST"] = False              # 복전 초록 금지
-            ss["_SHOW_STEPPER"] = True                  # 학생용 진행표시 유지 신호
+            ss["_RESTORE_IN_PROGRESS"] = True           # 진행 중 신호
         except Exception:
             pass
 
         # 헤더 먼저 렌더(노랑/주황을 즉시 노출)
         _header()
 
-        # 진행표시(학생/관리자 분기)
+        # ▶ 학생 미니 진행바(로그 없이) — 1회차에도 바로 표시
         try:
-            mod = importlib.import_module("src.services.index_state")
-            getattr(mod, "step_reset", lambda *_a, **_k: None)()
-            getattr(mod, "log", lambda *_a, **_k: None)("🔎 릴리스 확인 중•••")
-            if _is_admin_view():
-                # 관리자: 스텝 + 로그
-                getattr(mod, "render_index_steps", lambda *_a, **_k: None)()
-            else:
-                # 학생: 미니 스텝퍼만 (진행바 포함)
-                getattr(mod, "render_stepper_safe", lambda *_a, **_k: None)(True)
+            from src.services.index_state import step_reset, log, render_stepper_safe
+            step_reset()
+            log("🔎 릴리스 확인 중...")
+            render_stepper_safe(force=True)
         except Exception:
             pass
 
-        # (B) 릴리스 복원 실행 → 완료 후 1회 재실행
+        # (B) 릴리스 복원 실행(동기) → 완료 후 1회 재실행
         try:
-            _boot_auto_restore_index()
+            _boot_auto_restore_index()  # 내부에서 step/log 갱신
             _boot_autoflow_hook()
         except Exception as e:
             _errlog(f"boot check failed: {e}", where="[render_body.boot]", exc=e)
         finally:
+            ss["_RESTORE_IN_PROGRESS"] = False
             ss["_boot_checked"] = True
-            # 최신이 되면 다음 런에서 스텝퍼 숨김, 아니면 계속 노출
-            ss["_SHOW_STEPPER"] = not bool(ss.get("_INDEX_IS_LATEST"))
 
         # 헤더/진행표시 상태 업데이트를 위해 정확히 1회만 재실행
         try:
@@ -1091,8 +1090,7 @@ def _render_body() -> None:
             pass
         return
 
-    # 2) 포스트-부팅 자동 시작 훅
-
+    # 2) ✅ (포스트-부팅) 자동 시작 훅 — 필요 시만 동작
     try:
         _auto_start_once()
     except Exception as e:
@@ -1101,27 +1099,17 @@ def _render_body() -> None:
     # 3) 헤더
     _header()
 
-    # 3.5) 학생 뷰에서 최신 전까지 미니 스텝퍼 계속 노출
+    # 3.5) ▶ 학생 화면: 최신 복원 전이면 미니 진행바 유지 렌더
     try:
-        if not _is_admin_view():
+        if not bool(ss.get("_INDEX_IS_LATEST")):
             from src.services.index_state import render_stepper_safe
-            if bool(ss.get("_SHOW_STEPPER")) and not bool(ss.get("_INDEX_IS_LATEST")):
-                render_stepper_safe(True)   # 진행바 유지
-            else:
-                # 최신이면 정리(한 번만)
-                ph = ss.get("_IDX_STEPPER_PH")
-                if ph is not None:
-                    try:
-                        ph.empty()
-                    except Exception:
-                        pass
-                    ss["_IDX_STEPPER_PH"] = None
-                ss["_SHOW_STEPPER"] = False
+            render_stepper_safe(force=True)
     except Exception:
         pass
 
     # 4) 관리자 패널 (외부 모듈 호출: src.ui.ops.indexing_panel)
     if _is_admin_view():
+        # 지연 import로 순환 참조 방지 및 오버헤드 최소화
         try:
             from src.ui.ops.indexing_panel import (
                 render_orchestrator_header,
@@ -1152,7 +1140,7 @@ def _render_body() -> None:
         except Exception:
             pass
 
-    # 5) 채팅 메시지 영역
+    # 5) 채팅 메시지 영역 (컨테이너 클래스 분리)
     _inject_chat_styles_once()
     with st.container(key="chat_messages_container"):
         st.markdown('<div class="chatpane-messages" data-testid="chat-messages"><div class="messages">', unsafe_allow_html=True)
@@ -1162,13 +1150,13 @@ def _render_body() -> None:
             _errlog(f"chat panel failed: {e}", where="[render_body.chat]", exc=e)
         st.markdown("</div></div>", unsafe_allow_html=True)
 
-    # 6) 채팅 입력 폼
+    # 6) 채팅 입력 폼 (컨테이너 클래스 분리 + key 안정화)
     with st.container(border=True, key="chat_input_container"):
         st.markdown('<div class="chatpane-input" data-testid="chat-input">', unsafe_allow_html=True)
         st.session_state["__mode"] = _render_mode_controls_pills() or st.session_state.get("__mode", "")
         submitted: bool = False
         with st.form("chat_form", clear_on_submit=False):
-            q: str = st.text_input("질문", placeholder="질문을 입력하세요•••", key="q_text")
+            q: str = st.text_input("질문", placeholder="질문을 입력하세요...", key="q_text")
             submitted = st.form_submit_button("➤")
         st.markdown("</div>", unsafe_allow_html=True)
 
@@ -1190,3 +1178,4 @@ def main() -> None:
 if __name__ == "__main__":
     main()
 # =============================== [19] body & main — END =============================
+
