@@ -369,7 +369,7 @@ def _header() -> None:
         st.code(str(p), language="text")
 # ================================== [08] header — END =================================
 
-# ============================== [09] student progress stepper — START =====================
+# ============================== [09] student progress stepper — START ==================
 def _render_stepper(*, force: bool = False) -> None:
     """
     학생 화면에서 보여줄 '미니 진행바'.
@@ -381,8 +381,8 @@ def _render_stepper(*, force: bool = False) -> None:
         return
     try:
         from src.services.index_state import (
-            ensure_index_state,          # 세션 컨테이너 보장
-            render_progress_with_fallback,  # 신/구 스트림릿 모두 호환
+            ensure_index_state,           # 세션 컨테이너 보장
+            render_progress_with_fallback # 버전-독립 progress
         )
         ensure_index_state()
     except Exception:
@@ -416,7 +416,8 @@ def _render_stepper(*, force: bool = False) -> None:
     with ph.container():
         st.caption("인덱싱 단계 표시기(간이 모드)")
         render_progress_with_fallback(pct, text=text)
-# =============================== [09] student progress stepper — END ======================
+# =============================== [09] student progress stepper — END ===================
+
 
 # =============================== [10] auto-restore — START ============================
 def _boot_auto_restore_index() -> None:
