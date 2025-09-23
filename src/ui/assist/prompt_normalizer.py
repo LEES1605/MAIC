@@ -13,25 +13,104 @@ import yaml
 # ─────────────────────────────────────────────────────────────────────────────
 ELLIPSIS_UC = "\u2026"
 
+# ===== [02] low-level helpers — START =====
 def _sanitize_ellipsis(text: str) -> str:
-    """U+2026 → '...' 로 교체(빌드/CI 경고 회피)."""
+    # U+2026 → "..." 로 치환(검증/툴링 일관성)
     return (text or "").replace(ELLIPSIS_UC, "...")
 
-def _as_str(x: Any) -> str:
+def _strip_code_fences(s: str) -> str:
+    """```yaml ... ``` 같은 코드펜스를 관대하게 제거."""
+    if not s:
+        return ""
+    t = s.strip()
+    if t.startswith("```"):
+        # 첫 줄 셀렉터(예: ```yaml) 제거
+        t = t.split("\n", 1)[-1]
+    if t.endswith("```"):
+        t = t.rsplit("```", 1)[0]
+    return t.strip()
+
+def _coerce_str(x: Any) -> str:
+    """list→문장, dict→JSON compact, 그 외→str."""
     if x is None:
         return ""
-    if isinstance(x, (list, tuple)):
-        return "\n".join(str(t) for t in x if t is not None)
-    if isinstance(x, (dict,)):
+    if isinstance(x, str):
+        return x.strip()
+    if isinstance(x, list):
+        return "\n".join([_coerce_str(i) for i in x if i is not None]).strip()
+    if isinstance(x, dict):
         try:
-            return yaml.safe_dump(x, allow_unicode=True, sort_keys=False)
+            return json.dumps(x, ensure_ascii=False, separators=(",", ":"))
         except Exception:
-            return json.dumps(x, ensure_ascii=False)
+            return str(x)
     return str(x)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# LLM 호출 (필요 시)
-# ─────────────────────────────────────────────────────────────────────────────
+def _get_syn(d: Dict[str, Any], *names: str, default=None):
+    """여러 동의어 중 존재하는 첫 키 반환."""
+    for n in names:
+        if n in d:
+            return d[n]
+    return default
+
+def _ensure_map(x: Any) -> Dict[str, Any]:
+    return x if isinstance(x, dict) else {}
+
+def _ensure_modes(obj: Dict[str, Any]) -> Dict[str, Any]:
+    """루트에 modes가 없거나 1~2개만 있어도 세 모드가 채워지도록 관대하게 보정."""
+    obj = _ensure_map(obj)
+    modes = _ensure_map(obj.get("modes", {}))
+
+    # 단일 블록만 넘어온 경우(문자열/맵) → grammar에 우선 배치
+    if not modes:
+        blob = { "persona": _coerce_str(obj.get("persona") or ""),
+                 "system_instructions": _coerce_str(_get_syn(obj, "system_instructions", "system.instructions", "system", default="")) }
+        modes = {"grammar": blob}
+
+    # 각 모드 보정 함수
+    def _norm_mode(key: str, block: Any, *, default_persona: str, default_sys: str) -> Dict[str, Any]:
+        b = _ensure_map(block)
+        persona = _coerce_str(_get_syn(b, "persona", "tone", default=default_persona))
+        sysi = _coerce_str(_get_syn(b, "system_instructions", "system.instructions", "system", "instructions", default=default_sys))
+        guard = _ensure_map(_get_syn(b, "guardrails", "guard", default={"pii": True}))
+        cites = _coerce_str(_get_syn(b, "citations_policy", "citations.policy", "citationsPolicy",
+                                     default="[이유문법]/[문법서적]/[AI지식]"))
+        rh = _ensure_map(_get_syn(b, "routing_hints", "routing.hints", default={}))
+        # 모델 기본값(합의안): grammar=gpt-5-pro, sentence=gemini-pro, passage=gpt-5-pro
+        default_model = {"grammar":"gpt-5-pro", "sentence":"gemini-pro", "passage":"gpt-5-pro"}.get(key, "gpt-5-pro")
+        rh.setdefault("model", _coerce_str(_get_syn(rh, "model", "llm", default=default_model)))
+        rh.setdefault("max_tokens", 800 if key=="grammar" else (700 if key=="sentence" else 900))
+        rh.setdefault("temperature", 0.2 if key=="grammar" else (0.3 if key=="sentence" else 0.4))
+        return {
+            "persona": persona,
+            "system_instructions": sysi,
+            "guardrails": guard or {"pii": True},
+            "examples": _get_syn(b, "examples", "few_shots", default=[]) or [],
+            "citations_policy": cites or "[이유문법]/[문법서적]/[AI지식]",
+            "routing_hints": rh,
+        }
+
+    # 부족한 모드는 가장 가까운 것을 복제
+    g_src = modes.get("grammar", {})
+    s_src = modes.get("sentence", g_src)
+    p_src = modes.get("passage", s_src)
+
+    modes["grammar"]  = _norm_mode("grammar",  g_src,
+                                   default_persona=_coerce_str(_get_syn(g_src, "persona", default="")),
+                                   default_sys="규칙→근거→예문→요약")
+    modes["sentence"] = _norm_mode("sentence", s_src,
+                                   default_persona=_coerce_str(_get_syn(s_src, "persona", default="")),
+                                   default_sys="토큰화→구문(괄호규칙)→어감/의미분석")
+    modes["passage"]  = _norm_mode("passage",  p_src,
+                                   default_persona=_coerce_str(_get_syn(p_src, "persona", default="")),
+                                   default_sys="요지→예시/비유→주제→제목")
+
+    obj["version"] = obj.get("version") or "auto"
+    obj["modes"] = modes
+    return obj
+# ===== [02] low-level helpers — END =====
+
+
+# ===== [03] LLM call — START =====
 def _post_openai(api_key: str, model: str, messages: list[dict], temperature: float) -> str:
     """단순 REST 호출(요청/의존도를 낮춤). 실패 시 예외 발생."""
     req: Any = importlib.import_module("requests")
@@ -45,46 +124,29 @@ def _post_openai(api_key: str, model: str, messages: list[dict], temperature: fl
     return str(content or "")
 
 def _build_prompt(grammar: str, sentence: str, passage: str) -> list[dict]:
-    """
-    느슨한 출력 요구:
-      - YAML 또는 JSON 반환 허용
-      - 불필요한 추가 텍스트 금지(코드블록 선호)
-      - 일부 키가 빠져도 됨(우리가 보정)
-    """
+    # “엄격” 대신 “권장 스키마 + 실패 시 최소형”으로 완화
     sys = (
-        "당신은 한국어 프롬프트 정규화 도우미입니다.\n"
-        "- 한 모드당 '자연어 텍스트 한 덩어리'가 주어집니다.\n"
-        "- YAML 또는 JSON 중 하나로만 간단히 응답하세요. (코드블록 권장)\n"
-        "- 가능한 키: persona, system_instructions, guardrails, examples,\n"
-        "  citations_policy, routing_hints\n"
-        "- 키가 일부 빠져도 됩니다(소박하게). 길게 늘어놓지 마세요.\n"
-        "- 한국어 출력만 허용합니다.\n"
+        "You are a Korean prompt normalizer.\n"
+        "- Return **YAML only** (no commentary). If you include fences, still keep valid YAML inside.\n"
+        "- Target schema (lenient):\n"
+        "  version: auto\n"
+        "  modes:\n"
+        "    grammar: { persona, system_instructions, guardrails, examples, citations_policy, routing_hints }\n"
+        "    sentence: {...}\n"
+        "    passage:  {...}\n"
+        "- Field synonyms allowed: system_instructions ≈ system.instructions ≈ system.\n"
+        "- If unsure, output a **minimal skeleton** with empty strings and defaults.\n"
+        "- Korean output only."
+
     )
     user = (
         "입력(문법 한 덩어리):\n" + grammar.strip() + "\n\n"
         "입력(문장 한 덩어리):\n" + sentence.strip() + "\n\n"
         "입력(지문 한 덩어리):\n" + passage.strip() + "\n\n"
-        "모드 키 이름은 grammar/sentence/passage로 사용해 주세요."
+        "위 3개 입력을 분석해 위 스키마(관대) 형태의 YAML을 생성해 주세요."
     )
     return [{"role": "system", "content": sys}, {"role": "user", "content": user}]
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 파싱/자동보정 (Lenient Parse + Coerce)
-# ─────────────────────────────────────────────────────────────────────────────
-_CODEBLOCK_RE = re.compile(
-    r"```(?:\s*(yaml|yml|json))?\s*\n(.*?)\n```",
-    re.IGNORECASE | re.DOTALL,
-)
-
-def _extract_struct(text: str) -> Optional[Dict[str, Any]]:
-    """
-    텍스트에서 YAML/JSON 구조를 '느슨하게' 추출:
-    1) 코드블록 우선 탐색 → 형식 감안해 파싱
-    2) 실패 시 전체 텍스트를 YAML → JSON 순으로 시도
-    """
-    if not text:
-        return None
-
+# ===== [03] LLM call — END =====
     m = _CODEBLOCK_RE.search(text)
     cand = text
     flavor = None
@@ -104,171 +166,8 @@ def _extract_struct(text: str) -> Optional[Dict[str, Any]]:
         except Exception:
             pass
 
-    # 2) 힌트 없으면 YAML → JSON 순서
-    for parser in (lambda s: yaml.safe_load(s), lambda s: json.loads(s)):
-        try:
-            obj = parser(cand)
-            if isinstance(obj, dict):
-                return obj
-        except Exception:
-            continue
 
-    # 3) 마지막으로 전체 텍스트 파싱
-    for parser in (lambda s: yaml.safe_load(s), lambda s: json.loads(s)):
-        try:
-            obj = parser(text)
-            if isinstance(obj, dict):
-                return obj
-        except Exception:
-            continue
-    return None
-
-def _norm_mode_key(k: str) -> str:
-    """모드 키 동의어를 표준키로 변환."""
-    s = (k or "").strip().lower()
-    mapping = {
-        "문법": "grammar",
-        "문장": "sentence",
-        "지문": "passage",
-        "grammar": "grammar",
-        "sentence": "sentence",
-        "passage": "passage",
-    }
-    return mapping.get(s, s)
-
-def _pick_first(obj: Dict[str, Any], *keys: str) -> Any:
-    for k in keys:
-        if k in obj and obj[k] not in (None, ""):
-            return obj[k]
-    return None
-
-def _coerce_mode_block(raw: Any, *, default_text: str, mode: str) -> Dict[str, Any]:
-    """
-    모드 블록을 표준 형태로 보정.
-    - raw가 str/list이면 persona 또는 instructions로 승격
-    - dict면 동의어 필드 매핑
-    """
-    base_persona = _sanitize_ellipsis(_as_str(default_text)).strip()
-    base_instr = {
-        "grammar": "규칙→근거→예문→요약",
-        "sentence": "토큰화→구문(괄호규칙)→어감/의미분석",
-        "passage": "요지→예시/비유→주제→제목",
-    }.get(mode, "")
-
-    if raw is None:
-        raw = {}
-
-    if isinstance(raw, (str, list, tuple)):
-        # 사람이 통으로 써 넣은 한 덩어리 → persona에 담고, instructions는 기본값
-        persona = _sanitize_ellipsis(_as_str(raw)).strip() or base_persona
-        return {
-            "persona": persona,
-            "system_instructions": base_instr,
-            "guardrails": {"pii": True},
-            "examples": [],
-            "citations_policy": "[이유문법]/[문법서적]/[AI지식]",
-            "routing_hints": _default_routing(mode),
-        }
-
-    if not isinstance(raw, dict):
-        raw = {}
-
-    # 동의어 매핑
-    persona = _pick_first(raw, "persona", "tone", "style", "role")
-    instr = _pick_first(raw, "system_instructions", "system", "instructions", "rules", "steps", "guidelines")
-    guard = _pick_first(raw, "guardrails", "guard", "safety")
-    examples = _pick_first(raw, "examples", "shots", "few_shots")
-    routes = _pick_first(raw, "routing_hints", "routing")
-    citations = _pick_first(raw, "citations_policy", "citations", "sources", "출처정책")
-
-    # 타입 보정
-    persona = _sanitize_ellipsis(_as_str(persona or base_persona)).strip()
-    instr = _sanitize_ellipsis(_as_str(instr or base_instr)).strip()
-
-    if isinstance(guard, bool):
-        guard = {"pii": bool(guard)}
-    elif not isinstance(guard, dict):
-        guard = {"pii": True}
-
-    if not isinstance(examples, list):
-        examples = []
-
-    if not isinstance(routes, dict):
-        routes = {}
-    routes = _merge_routing_defaults(routes, mode)
-
-    citations = str(citations or "[이유문법]/[문법서적]/[AI지식]")
-
-    return {
-        "persona": persona,
-        "system_instructions": instr,
-        "guardrails": guard,
-        "examples": examples,
-        "citations_policy": citations,
-        "routing_hints": routes,
-    }
-
-def _default_routing(mode: str) -> Dict[str, Any]:
-    defaults = {
-        "grammar": {"model": "gpt-5-pro", "max_tokens": 800, "temperature": 0.2},
-        "sentence": {"model": "gemini-pro", "max_tokens": 700, "temperature": 0.3},
-        "passage": {"model": "gpt-5-pro", "max_tokens": 900, "temperature": 0.4},
-    }
-    return dict(defaults.get(mode, {"model": "gpt-5-pro"}))
-
-def _merge_routing_defaults(routes: Dict[str, Any], mode: str) -> Dict[str, Any]:
-    out = _default_routing(mode)
-    # 허용 키만 반영
-    for k in ("model", "temperature", "max_tokens", "provider"):
-        if k in routes:
-            out[k] = routes[k]
-    # 흔한 약칭/동의어
-    if "mdl" in routes and "model" not in out:
-        out["model"] = routes["mdl"]
-    if "temp" in routes and "temperature" not in out:
-        out["temperature"] = routes["temp"]
-    return out
-
-def _coerce_all(
-    raw: Dict[str, Any] | None,
-    *,
-    grammar_text: str,
-    sentence_text: str,
-    passage_text: str,
-) -> Dict[str, Any]:
-    """루트 객체 보정: modes 유무/키 동의어/모드별 보정."""
-    raw = raw or {}
-    # root가 바로 modes일 수도 있음
-    modes = raw.get("modes") if isinstance(raw, dict) else None
-    if not isinstance(modes, dict):
-        # 루트에 문법/문장/지문 키가 있을 수도
-        modes = {}
-        for k, v in (raw.items() if isinstance(raw, dict) else []):
-            nk = _norm_mode_key(k)
-            if nk in ("grammar", "sentence", "passage"):
-                modes[nk] = v
-
-    # 최종 데이터 골격
-    out: Dict[str, Any] = {"version": "auto", "modes": {}}
-
-    # 각 모드 채우기(없으면 기본+자연어 입력)
-    out["modes"]["grammar"] = _coerce_mode_block(
-        modes.get("grammar") if isinstance(modes, dict) else None,
-        default_text=grammar_text, mode="grammar",
-    )
-    out["modes"]["sentence"] = _coerce_mode_block(
-        modes.get("sentence") if isinstance(modes, dict) else None,
-        default_text=sentence_text, mode="sentence",
-    )
-    out["modes"]["passage"] = _coerce_mode_block(
-        modes.get("passage") if isinstance(modes, dict) else None,
-        default_text=passage_text, mode="passage",
-    )
-    return out
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 공개 API
-# ─────────────────────────────────────────────────────────────────────────────
+# ===== [04] public API — START =====
 def normalize_to_yaml(
     *,
     grammar_text: str,
@@ -278,9 +177,10 @@ def normalize_to_yaml(
     openai_model: str = "gpt-4o-mini",
 ) -> str:
     """
-    세 모드 입력(각각 자연어 한 덩어리)을 받아 '느슨한 스키마'를 생성.
-    - LLM이 내놓은 YAML/JSON이 다소 틀려도 보정(coerce)하여 완전한 YAML을 반환
-    - LLM 호출 실패/이상 출력 시에는 기본 템플릿으로 폴백
+    자연어 3종(문법/문장/지문)을 받아 관대한 스키마로 정규화된 YAML을 반환.
+    - 1) LLM 시도(관대 프롬프트) → 2) 코드펜스 제거 → 3) YAML/JSON 파싱
+    - 4) 동의어/타입/누락 필드 보정(Repair) → 5) 덤프
+    - 실패 시 최소 스켈레톤으로 폴백
     """
     grammar_text = _sanitize_ellipsis(grammar_text)
     sentence_text = _sanitize_ellipsis(sentence_text)
@@ -291,19 +191,67 @@ def normalize_to_yaml(
     if openai_key:
         try:
             msgs = _build_prompt(grammar_text, sentence_text, passage_text)
-            raw_out = _post_openai(openai_key, openai_model, msgs, temperature=0.2)
-            obj = _extract_struct(raw_out.strip())
+            out = _post_openai(openai_key, openai_model, msgs, temperature=0.2)
+            yaml_text = _strip_code_fences(out).strip()
         except Exception:
-            obj = None  # 그냥 폴백으로
+            yaml_text = ""
 
-    # 2) 보정/완성
-    data = _coerce_all(
-        obj,
-        grammar_text=grammar_text,
-        sentence_text=sentence_text,
-        passage_text=passage_text,
-    )
+    def _minimal_obj() -> Dict[str, Any]:
+        return {
+            "version": "auto",
+            "modes": {
+                "grammar": {
+                    "persona": grammar_text,
+                    "system_instructions": "규칙→근거→예문→요약",
+                    "guardrails": {"pii": True},
+                    "examples": [],
+                    "citations_policy": "[이유문법]/[문법서적]/[AI지식]",
+                    "routing_hints": {"model": "gpt-5-pro", "max_tokens": 800, "temperature": 0.2},
+                },
+                "sentence": {
+                    "persona": sentence_text,
+                    "system_instructions": "토큰화→구문(괄호규칙)→어감/의미분석",
+                    "guardrails": {"pii": True},
+                    "examples": [],
+                    "citations_policy": "[이유문법]/[문법서적]/[AI지식]",
+                    "routing_hints": {"model": "gemini-pro", "max_tokens": 700, "temperature": 0.3},
+                },
+                "passage": {
+                    "persona": passage_text,
+                    "system_instructions": "요지→예시/비유→주제→제목",
+                    "guardrails": {"pii": True},
+                    "examples": [],
+                    "citations_policy": "[이유문법]/[문법서적]/[AI지식]",
+                    "routing_hints": {"model": "gpt-5-pro", "max_tokens": 900, "temperature": 0.4},
+                },
+            },
+        }
 
-    # 3) 최종 YAML
-    return yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
+    # 1차 파싱 시도 (YAML 우선, 실패 시 JSON도 수용)
+    obj: Dict[str, Any] | None = None
+    if yaml_text:
+        try:
+            obj_raw = yaml.safe_load(yaml_text)
+            obj = obj_raw if isinstance(obj_raw, dict) else None
+        except Exception:
+            obj = None
+        if obj is None:
+            try:
+                obj_raw = json.loads(yaml_text)
+                obj = obj_raw if isinstance(obj_raw, dict) else None
+            except Exception:
+                obj = None
+
+    if obj is None:
+        obj = _minimal_obj()
+
+    # 관대한 Repair: 동의어/타입 보정 + 누락 채우기
+    try:
+        obj = _ensure_modes(obj)
+    except Exception:
+        obj = _ensure_modes(_minimal_obj())
+
+    return yaml.safe_dump(obj, allow_unicode=True, sort_keys=False)
+# ===== [04] public API — END =====
+
 # ===== [01] FILE: src/ui/assist/prompt_normalizer.py — END =====
