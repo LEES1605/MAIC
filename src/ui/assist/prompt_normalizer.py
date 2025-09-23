@@ -15,7 +15,7 @@ def _sanitize_ellipsis(text: str) -> str:
     return (text or "").replace(ELLIPSIS_UC, "...")
 
 def _strip_code_fences(s: str) -> str:
-    """```yaml … ``` 같은 코드펜스를 관대하게 제거."""
+    """```yaml ... ``` 같은 코드펜스를 관대하게 제거."""
     if not s:
         return ""
     t = s.strip()
