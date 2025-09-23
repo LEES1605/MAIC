@@ -285,12 +285,32 @@ def decide_label(
 
 
 # =============================================================================
-# [08] Presentation helper
+# [08] Presentation helper (chip)
 # =============================================================================
+def _shorten_title(name: str, max_len: int = 22) -> str:
+    base = (Path(name).stem if name else "").strip() or name.strip()
+    if len(base) <= max_len:
+        return base
+    return base[: max_len - 3] + "..."  # ASCII ellipsis only
+
+
 def make_source_chip(hits: Iterable[Dict[str, Any]] | None, label: str) -> str:
     """
-    UI chip text: keep concise → return only the canonicalized label.
-    (Extension: append a representative title if needed.)
+    UI chip text:
+      - Canonical label + 대표 출처 제목(최상위 1개, 짧게)
+      - 히트가 없으면 라벨만 반환
     """
-    return canonicalize_label(label)
-# [01] END: src/rag/label.py
+    c = canonicalize_label(label)
+    it = None
+    try:
+        it = next(iter(hits)) if hits else None
+    except Exception:
+        it = None
+
+    if not it:
+        return c
+
+    title = str(it.get("title") or "") or str(Path(str(it.get("path") or "")).name)
+    t = _shorten_title(title)
+    return f"{c} · {t}" if t else c
+# [01] END: src/rag/label.py (FULL REPLACEMENT)
