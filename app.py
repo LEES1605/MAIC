@@ -891,10 +891,6 @@ def _render_mode_controls_pills() -> str:
 
 # =============================== [18] chat panel — START ==============================
 def _render_chat_panel() -> None:
-    """
-    질문→피티쌤 답변 스트리밍→미나쌤 평가 스트리밍.
-    라벨칩은 RAG 히트 기반, sanitize 후 표시.
-    """
     import importlib as _imp
     import html
     import re
@@ -932,7 +928,7 @@ def _render_chat_panel() -> None:
         def _fallback(label: Optional[str] = None) -> str:
             return "[AI지식]"
 
-          return _fallback
+        return _fallback
 
     sanitize_source_label = _resolve_sanitizer()
 
