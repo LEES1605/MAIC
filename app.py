@@ -82,8 +82,8 @@ def _load_prepared_api():
 # ===== [04] bootstrap env — START =====
 # (안전상 중복 import 허용)
 import os as _os_dup, time as _time_dup
-
 def _bootstrap_env() -> None:
+    """환경변수/Streamlit 설정 초기화."""
     try:
         _promote_env(keys=[
             "OPENAI_API_KEY", "OPENAI_MODEL",
@@ -201,6 +201,7 @@ except Exception:
 
 
 def _errlog(msg: str, where: str = "", exc: Exception | None = None) -> None:
+    """에러 로그 + 필요 시 Streamlit에 자세한 스택 표시."""
     try:
         prefix = f"{where} " if where else ""
         print(f"[ERR] {prefix}{msg}")
@@ -226,6 +227,7 @@ def _errlog(msg: str, where: str = "", exc: Exception | None = None) -> None:
 
 # ======================== [06] admin gate — START ========================
 def _is_admin_view() -> bool:
+    """관리자 모드 여부(세션 키 보정 포함)."""
     if st is None:
         return False
     try:
@@ -272,6 +274,7 @@ def _safe_rerun(tag: str, ttl: float = 0.3) -> None:
         exp = float(rec.get("expires_at", 0.0)) if isinstance(rec, dict) else 0.0
 
         now = time.time()
+        # 만료 시 엔트리 제거
         if exp and now >= exp:
             try:
                 counts.pop(tag, None)
@@ -280,6 +283,7 @@ def _safe_rerun(tag: str, ttl: float = 0.3) -> None:
             cnt = 0
             exp = 0.0
 
+        # TTL 안에서는 중복 rerun 차단
         if cnt >= 1 and (exp and now < exp):
             return
 
@@ -293,6 +297,26 @@ def _safe_rerun(tag: str, ttl: float = 0.3) -> None:
                 s.experimental_rerun()
             except Exception:
                 pass
+    except Exception:
+        # 절대 예외 전파 금지 (UX 보호)
+        pass
+
+
+def _reset_rerun_guard(tag: str) -> None:
+    """rerun guard 엔트리 제거(다음 액션을 위해)."""
+    s = globals().get("st", None)
+    if s is None:
+        return
+    try:
+        ss = getattr(s, "session_state", None)
+        if ss is None:
+            return
+        key = "__rerun_counts__"
+        counts = ss.get(key)
+        if isinstance(counts, dict) and tag in counts:
+            counts = dict(counts)
+            counts.pop(tag, None)
+            ss[key] = counts
     except Exception:
         pass
 
@@ -321,6 +345,7 @@ def _header() -> None:
     헤더 배지는 외부 헤더가 있으면 그대로 사용,
     없으면 파일시스템 READY 기준(SSOT)으로 폴백 렌더.
     """
+    # 1) 외부 헤더가 있으면 먼저 사용
     try:
         from src.ui.header import render as _render_header
         _render_header()
@@ -423,6 +448,7 @@ def _boot_auto_restore_index() -> None:
 
     # placeholder/컨테이너 보장
     _idx("ensure_index_state")
+    # 학생은 스텝퍼만(진행바), 관리자는 스텝+로그
     if _is_admin_view():
         _idx("render_index_steps")   # 관리자: 스텝퍼+로그
     else:
@@ -437,14 +463,17 @@ def _boot_auto_restore_index() -> None:
     try:
         from src.core.readiness import is_ready_text, normalize_ready_file
     except Exception:
+        # 폴백(동일 로직)
         def _norm(x: str | bytes | None) -> str:
             if x is None:
                 return ""
             if isinstance(x, bytes):
                 x = x.decode("utf-8", "ignore")
             return x.replace("\ufeff", "").strip().lower()
+
         def is_ready_text(x):  # type: ignore
             return _norm(x) in {"ready", "ok", "true", "1", "on", "yes", "y", "green"}
+
         def normalize_ready_file(_):  # type: ignore
             try:
                 (p / ".ready").write_text("ready", encoding="utf-8")
@@ -452,7 +481,7 @@ def _boot_auto_restore_index() -> None:
             except Exception:
                 return False
 
-    # 로컬 준비 기록
+    # --- 로컬 준비 상태 계산 & 기록 ---
     _idx("step_set", 1, "run", "로컬 준비 상태 확인")
     ready_txt = ""
     try:
@@ -466,6 +495,7 @@ def _boot_auto_restore_index() -> None:
     try:
         if "st" in globals() and st is not None:
             st.session_state["_INDEX_LOCAL_READY"] = bool(local_ready)
+            # 헤더가 사용할 최신 여부 플래그는 기본 False(부팅 직후 초록 금지)
             st.session_state.setdefault("_INDEX_IS_LATEST", False)
     except Exception:
         pass
@@ -700,8 +730,30 @@ def _auto_start_once() -> None:
         _safe_rerun("auto_start", ttl=1)
 # ================================= [11] boot hooks — END ==============================
 
+
+# ============================ [12] reserved — START (no-op) ===========================
+# 향후: telemetry/hooks 자리
+# ============================= [12] reserved — END =====================================
+
+# ============================ [13] reserved — START (no-op) ===========================
+# 향후: feature flags 자리
+# ============================= [13] reserved — END =====================================
+
+# ============================ [14] reserved — START (no-op) ===========================
+# 향후: prompt orchestrator glue 자리
+# ============================= [14] reserved — END =====================================
+
+# ============================ [15] reserved — START (no-op) ===========================
+# 향후: admin index quick-actions 자리
+# ============================= [15] reserved — END =====================================
+
+# ============================ [16] reserved — START (no-op) ===========================
+# 향후: plugin mount 자리
+# ============================= [16] reserved — END =====================================
+
 # =============================== [17] chat styles & mode — START ======================
 def _inject_chat_styles_once() -> None:
+    """채팅판 CSS/토큰 주입(1회)."""
     if st is None:
         return
     if st.session_state.get("_chat_styles_injected_v2"):
@@ -711,11 +763,15 @@ def _inject_chat_styles_once() -> None:
     st.markdown(
         """
 <style>
+  /* ▶ 메시지 영역 전용 컨테이너 */
   .chatpane-messages{
     position:relative; background:#EDF4FF; border:1px solid #D5E6FF; border-radius:18px;
     padding:10px; margin-top:12px;
   }
   .chatpane-messages .messages{ max-height:60vh; overflow-y:auto; padding:8px; }
+
+  /* ▶ 입력 영역 전용 컨테이너 */
+
   .chatpane-input{
     position:relative; background:#EDF4FF; border:1px solid #D5E6FF; border-radius:18px;
     padding:8px 10px 10px 10px; margin-top:12px;
@@ -730,6 +786,9 @@ def _inject_chat_styles_once() -> None:
     background:#eaf6ff; border-color:#9fd1ff; color:#0a2540;
   }
   .chatpane-input div[data-testid="stRadio"] svg{ display:none!important }
+
+  /* 입력 폼/버튼은 입력 컨테이너 하위로만 적용 */
+
   .chatpane-input form[data-testid="stForm"] { position:relative; margin:0; }
   .chatpane-input form[data-testid="stForm"] [data-testid="stTextInput"] input{
     background:#FFF8CC !important; border:1px solid #F2E4A2 !important;
@@ -747,6 +806,9 @@ def _inject_chat_styles_once() -> None:
     font-size:18px; line-height:1; cursor:pointer; box-shadow:0 2px 6px rgba(0,0,0,.15);
     padding:0; min-height:0;
   }
+
+  /* ▶ 버블/칩 (글로벌) */
+
   .msg-row{ display:flex; margin:8px 0; }
   .msg-row.left{ justify-content:flex-start; }
   .msg-row.right{ justify-content:flex-end; }
@@ -756,6 +818,7 @@ def _inject_chat_styles_once() -> None:
   }
   .bubble.user{ border-top-right-radius:8px; border:1px solid #F2E4A2; background:#FFF8CC; color:#333; }
   .bubble.ai  { border-top-left-radius:8px;  border:1px solid #BEE3FF; background:#EAF6FF; color:#0a2540; }
+
   .chip{
     display:inline-block; margin:-2px 0 6px 0; padding:2px 10px; border-radius:999px;
     font-size:12px; font-weight:700; color:#fff; line-height:1;
@@ -769,7 +832,8 @@ def _inject_chat_styles_once() -> None:
     border:1px solid #c7d2fe; max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
     vertical-align:middle;
   }
-  @media (max-width:480px){
+
+@media (max-width:480px){
     .bubble{ max-width:96%; }
     .chip-src{ max-width:160px; }
   }
@@ -780,6 +844,7 @@ def _inject_chat_styles_once() -> None:
 
 
 def _render_mode_controls_pills() -> str:
+    """문법/문장/지문 모드 선택 라디오."""
     _inject_chat_styles_once()
     if st is None:
         return "grammar"
@@ -826,6 +891,10 @@ def _render_mode_controls_pills() -> str:
 
 # =============================== [18] chat panel — START ==============================
 def _render_chat_panel() -> None:
+    """
+    질문→피티쌤 답변 스트리밍→미나쌤 평가 스트리밍.
+    라벨칩은 RAG 히트 기반, sanitize 후 표시.
+    """
     import importlib as _imp
     import html
     import re
@@ -862,7 +931,8 @@ def _render_chat_panel() -> None:
 
         def _fallback(label: Optional[str] = None) -> str:
             return "[AI지식]"
-        return _fallback
+
+          return _fallback
 
     sanitize_source_label = _resolve_sanitizer()
 
@@ -979,7 +1049,9 @@ def _render_body() -> None:
     # 1) 부팅 2-Phase: (A) 헤더/스켈레톤 선렌더 → (B) 복원 → 재실행 1회
     boot_pending = not bool(ss.get("_boot_checked"))
     if boot_pending:
+
         # (A) 헤더 우선: 세션키 명시 초기화
+
         try:
             try:
                 local_ok = core_is_ready(effective_persist_dir())
@@ -992,7 +1064,6 @@ def _render_body() -> None:
             pass
 
         _header()
-
         # 진행표시: 학생/관리자 분리
         try:
             mod = importlib.import_module("src.services.index_state")
@@ -1015,6 +1086,7 @@ def _render_body() -> None:
             ss["_RESTORE_IN_PROGRESS"] = False
             ss["_boot_checked"] = True
 
+        # 헤더/진행표시 상태 업데이트를 위해 정확히 1회만 재실행
         try:
             _safe_rerun("boot_init", ttl=0.5)
         except Exception:
@@ -1022,6 +1094,7 @@ def _render_body() -> None:
         return
 
     # 2) 포스트-부팅 자동 시작 훅
+
     try:
         _auto_start_once()
     except Exception as e:
@@ -1031,7 +1104,9 @@ def _render_body() -> None:
     _header()
 
     # 4) 관리자 패널
+
     if _is_admin_view():
+        # 지연 import로 순환 참조 방지 및 오버헤드 최소화
         try:
             from src.ui.ops.indexing_panel import (
                 render_orchestrator_header,
@@ -1063,6 +1138,7 @@ def _render_body() -> None:
             pass
 
     # 5) 채팅 메시지 영역
+
     _inject_chat_styles_once()
     with st.container(key="chat_messages_container"):
         st.markdown('<div class="chatpane-messages" data-testid="chat-messages"><div class="messages">', unsafe_allow_html=True)
@@ -1073,6 +1149,7 @@ def _render_body() -> None:
         st.markdown("</div></div>", unsafe_allow_html=True)
 
     # 6) 채팅 입력 폼
+
     with st.container(border=True, key="chat_input_container"):
         st.markdown('<div class="chatpane-input" data-testid="chat-input">', unsafe_allow_html=True)
         st.session_state["__mode"] = _render_mode_controls_pills() or st.session_state.get("__mode", "")
