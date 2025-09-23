@@ -118,6 +118,7 @@ def _is_admin_view() -> bool:
 
 # ========================= [07] rerun guard — START =============================
 def _safe_rerun(tag: str, ttl: float = 0.3) -> None:
+
     """
     Debounced rerun. One rerun per 'tag' within TTL seconds.
     """
@@ -145,6 +146,7 @@ def _safe_rerun(tag: str, ttl: float = 0.3) -> None:
                 counts = {}
             cnt = 0
             exp = 0.0
+
         if cnt >= 1 and (exp and now < exp):
             return
         counts[tag] = {"count": cnt + 1, "expires_at": now + ttl_s}
@@ -219,6 +221,7 @@ def _boot_auto_restore_index() -> None:
         _idx("render_index_steps")
     else:
         _idx("render_stepper_safe", True)   # 학생: 미니멀
+
     _idx("log", "부팅: 인덱스 복원 준비 중...")
 
     p = effective_persist_dir()
@@ -282,7 +285,8 @@ def _boot_auto_restore_index() -> None:
 
     owner, repo = str(repo_full).split("/", 1)
     try:
-        from src.runtime.gh_release import GHConfig, GHReleases
+        from src.runtime.gh_release import GHConfig as _GHConfig, GHReleases as _GHReleases  # primary
+        GHConfig, GHReleases = _GHConfig, _GHReleases
     except Exception:
         _idx("log", "GH 모듈 불가 → 최신 판정 보류", "warn")
         _idx("step_set", 2, "wait", "원격 확인 불가")
@@ -369,6 +373,7 @@ def _boot_auto_restore_index() -> None:
             tag=(getattr(result, "tag", None) or remote_tag),
             release_id=(getattr(result, "release_id", None) or remote_release_id),
         )
+
         try:
             if st is not None:
                 st.session_state["_PERSIST_DIR"] = p.resolve()
@@ -456,6 +461,7 @@ def _render_stepper(*, force: bool = False) -> None:
                     unsafe_allow_html=True)
 # =============================== [12] progress stepper — END ===========================
 
+
 # =============================== [17] chat styles & mode — START ======================
 def _inject_chat_styles_once() -> None:
     if st is None:
@@ -534,6 +540,7 @@ def _render_mode_controls_pills() -> str:
     ss["__mode"] = cur_key
     return cur_key
 # =============================== [17] chat styles & mode — END ========================
+
 
 # =============================== [18] chat panel — START ==============================
 def _render_chat_panel() -> None:
