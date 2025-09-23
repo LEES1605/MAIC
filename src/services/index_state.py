@@ -147,3 +147,55 @@ def step_reset(step_names: Sequence[str] | None = None) -> None:
             st.session_state[key] = None
     render_index_steps()
 # ======================== [05] render helpers (UI) — END ==============================
+# ======================= [06] student compact progress — START =======================
+from typing import Tuple
+
+def _calc_progress() -> Tuple[int, str]:
+    """
+    세션의 _IDX_STEPS를 바탕으로 대략적인 퍼센트를 계산.
+    - ok 1단계 = 1.0, run 1단계 = 0.5 로 가중
+    """
+    if st is None:
+        return 0, "준비중"
+    steps = st.session_state.get("_IDX_STEPS") or []
+    if not isinstance(steps, list) or not steps:
+        return 0, "준비중"
+    total = max(1, len(steps))
+    done = sum(1 for s in steps if str(s.get("status")) == "ok")
+    running = any(str(s.get("status")) == "run" for s in steps)
+    frac = (done + (0.5 if running else 0.0)) / float(total)
+    pct = int(max(1, min(100, round(frac * 100))))
+    # 진행중 단계의 메시지(디테일 > 이름)
+    current = None
+    for s in steps:
+        if str(s.get("status")) in ("run", "wait"):
+            current = s
+            break
+    label = (current or {}).get("detail") or (current or {}).get("name") or "준비중"
+    return pct, str(label)
+
+def render_progress_compact(force: bool = False) -> None:
+    """
+    학생 화면용 진행 바(퍼센티지). force=True면 플레이스홀더를 보장 생성.
+    """
+    if st is None:
+        return
+    ensure_index_state()
+    ph = st.session_state.get("_IDX_PROGRESS_PH")
+    if ph is None and force:
+        ph = st.empty()
+        st.session_state["_IDX_PROGRESS_PH"] = ph
+    if ph is None:
+        return
+    pct, label = _calc_progress()
+    with ph.container():
+        st.progress(pct, text=f"{label} ({pct}%)")
+
+def progress_tick() -> None:
+    """상태 변화 시 부담 없이 호출(존재하면 업데이트)."""
+    if st is None:
+        return
+    if st.session_state.get("_IDX_PROGRESS_PH"):
+        render_progress_compact(force=False)
+# ======================= [06] student compact progress — END =========================
+
