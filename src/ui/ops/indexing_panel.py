@@ -1,4 +1,3 @@
-
 # =============================== [01] future import — START ===========================
 from __future__ import annotations
 # ================================ [01] future import — END ============================
@@ -90,7 +89,7 @@ def render_orchestrator_header() -> None:
         badge_desc = f"최신 릴리스 적용됨 (tag={latest_tag})" if latest_tag else "최신 릴리스 적용됨"
     elif local_ready:
         badge = "🟨 준비중(로컬 인덱스 감지)"
-        badge_code = "MISSING"  # 글로벌 상단용 코드 체계 유지
+        badge_code = "MISSING"
         badge_desc = "로컬 인덱스는 있으나 최신 릴리스와 불일치 또는 미확인"
     else:
         badge = "🟧 없음"
@@ -152,7 +151,6 @@ def render_orchestrator_header() -> None:
                 "local_ready": local_ready,
             })
 
-        # (선택) 기존 Release 후보 디버그 존재 시 앱 함수 호출
         try:
             _dbg = _resolve_app_attr("_render_release_candidates_debug")
             if callable(_dbg):
