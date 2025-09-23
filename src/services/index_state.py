@@ -264,3 +264,34 @@ def progress_tick() -> None:
         render_progress_compact(force=False)
 # ======================= [06] student compact progress — END =========================
 
+# ======================== [06] progress wrappers — START ===========================
+def render_progress_with_fallback(pct: int, *, text: str = "") -> None:
+    """
+    Streamlit 버전 호환 진행바:
+    - 신형: st.progress(pct, text="...") 지원
+    - 구형: st.progress(pct)만 지원 → 캡션으로 텍스트 보완
+    - 예외 시에도 UX를 깨지 않도록 안전 폴백
+    """
+    if st is None:
+        return
+    try:
+        val = int(max(0, min(100, int(pct))))
+    except Exception:
+        val = 0
+
+    try:
+        # 신형 시그니처
+        st.progress(val, text=text)
+        return
+    except TypeError:
+        # 구형 시그니처
+        st.progress(val)
+        if text:
+            st.caption(text)
+    except Exception:
+        # 마지막 폴백(텍스트만)
+        try:
+            st.caption(f"{text} ({val}%)" if text else f"{val}%")
+        except Exception:
+            pass
+# ========================= [06] progress wrappers — END ============================
