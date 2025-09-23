@@ -219,7 +219,7 @@ def _boot_auto_restore_index() -> None:
         _idx("render_index_steps")
     else:
         _idx("render_stepper_safe", True)   # 학생: 미니멀
-    _idx("log", "부팅: 인덱스 복원 준비 중…")
+    _idx("log", "부팅: 인덱스 복원 준비 중...")
 
     p = effective_persist_dir()
     cj = p / "chunks.jsonl"
@@ -353,7 +353,7 @@ def _boot_auto_restore_index() -> None:
     tag_candidates = ["indices-latest", "index-latest"] + dyn_tags + ["latest"]
     asset_candidates = ["indices.zip", "persist.zip", "hq_index.zip", "prepared.zip"]
 
-    _idx("step_set", 2, "run", "최신 인덱스 복원 중…")
+    _idx("step_set", 2, "run", "최신 인덱스 복원 중...")
     try:
         result = gh.restore_latest_index(
             tag_candidates=tag_candidates,
@@ -362,7 +362,7 @@ def _boot_auto_restore_index() -> None:
             clean_dest=True,
         )
         _idx("step_set", 2, "ok", "복원 완료")
-        _idx("step_set", 3, "run", "메타 저장/정리…")
+        _idx("step_set", 3, "run", "메타 저장/정리...")
         normalize_ready_file(p)
         saved_meta = _safe_save_meta(
             p,
@@ -423,7 +423,7 @@ def _render_stepper(*, force: bool = False) -> None:
             last_msg = d
             break
     if not last_msg:
-        last_msg = "릴리스 확인 중…"
+        last_msg = "릴리스 확인 중..."
 
     # 스타일
     st.markdown(
@@ -614,7 +614,7 @@ def _render_chat_panel() -> None:
 
     # 1) 타이핑 버블(즉시)
     ph_typing = st.empty()
-    _emit_bubble(ph_typing, "피티쌤", "…", source=chip_text, align_right=False)
+    _emit_bubble(ph_typing, "피티쌤", "...", source=chip_text, align_right=False)
 
     # 2) 답변 스트리밍
     ph_ans = st.empty()
@@ -690,7 +690,7 @@ def _render_body() -> None:
         try:
             mod = importlib.import_module("src.services.index_state")
             getattr(mod, "step_reset", lambda *_a, **_k: None)()
-            getattr(mod, "log", lambda *_a, **_k: None)("🔎 릴리스 확인 중…")
+            getattr(mod, "log", lambda *_a, **_k: None)("🔎 릴리스 확인 중...")
             getattr(mod, "render_index_steps", lambda *_a, **_k: None)()
         except Exception:
             pass
