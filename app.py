@@ -81,9 +81,9 @@ def _load_prepared_api():
 
 # ===== [04] bootstrap env — START =====
 # (안전상 중복 import 허용)
-import os as _os_dup, time as _time_dup
+import os, time
+
 def _bootstrap_env() -> None:
-    """환경변수/Streamlit 설정 초기화."""
     try:
         _promote_env(keys=[
             "OPENAI_API_KEY", "OPENAI_MODEL",
@@ -139,7 +139,7 @@ if st:
     except Exception:
         pass
 
-    # (C) admin/goto 쿼리 파라미터 → 관리자 플래그 ON/OFF
+    # (C) admin/goto 쿼리 파라미터 → 관리자 플래그 ON/OFF (영구 수정)
     try:
         v = st.query_params.get("admin", None)
         goto = st.query_params.get("goto", None)
@@ -161,9 +161,13 @@ if st:
         prev = bool(st.session_state.get("admin_mode", False))
         new_mode = prev
 
+        # 켜기: admin=1/true/on or goto=admin
         if _has(v, _truthy) or _has(goto, lambda x: _norm(x) == "admin"):
             new_mode = True
-        if _has(v, _falsy) or _has(goto, lambda x: _norm(x) in ("back", "prompt", "home")):
+
+        # 끄기(우선): admin=0/false/off or goto=back|home
+        # ❗️기존의 'prompt'는 여기서 제외 → 프롬프트 페이지 진입 시 관리자 모드 유지
+        if _has(v, _falsy) or _has(goto, lambda x: _norm(x) in ("back", "home")):
             new_mode = False
 
         if new_mode != prev:
@@ -177,7 +181,7 @@ if st:
     except Exception:
         pass
 
-    # (D) 관리자/학생 크롬
+    # (D) 관리자/학생 크롬 적용 — 학생은 숨김, 관리자는 최소 사이드바 즉시 렌더
     try:
         _sider = __import__("src.ui.utils.sider", fromlist=["apply_admin_chrome"])
         getattr(_sider, "apply_admin_chrome", lambda **_: None)(
@@ -186,6 +190,7 @@ if st:
     except Exception:
         pass
 # ===== [04] bootstrap env — END =====
+
 
 # ======================= [05] path & logger — START =======================
 PERSIST_DIR: Path = effective_persist_dir()
@@ -433,9 +438,9 @@ def _boot_auto_restore_index() -> None:
       - '불일치'면 복원 강제
       - 복원 성공 시에만 세션에 _INDEX_IS_LATEST=True 로 기록(헤더는 이 값으로만 초록 표시)
 
-    UI 연동:
-      - 이 함수가 '단 한 번만' 학생용 진행 UI(스텝퍼+로그)를 초기화한다.
-        세션키: _IDX_UI_INIT
+    UI 연동(진행표시 훅):
+      - 이 함수 내부에서는 **플레이스홀더 생성/렌더를 하지 않는다.**
+        (중복 렌더 방지: [19]에서 스켈레톤을 1회 그린 뒤, 여기서는 데이터만 갱신)
     """
     # 멱등 보호: 한 세션에서 한 번만 수행
     try:
@@ -455,18 +460,8 @@ def _boot_auto_restore_index() -> None:
         except Exception:
             return None
 
-    # UI 초기화는 정확히 1회만
-    try:
-        if "st" in globals() and st is not None:
-            if not st.session_state.get("_IDX_UI_INIT"):
-                _idx("ensure_index_state")
-                _idx("render_stepper_safe", True)  # 진행바 자리표시자
-                _idx("render_status", True)        # 로그 자리표시자
-                st.session_state["_IDX_UI_INIT"] = True
-    except Exception:
-        pass
-
-    # 첫 로그
+    # 플레이스홀더 생성/렌더는 [19]에서 수행. 여기서는 로그만 누적.
+    _idx("ensure_index_state")
     _idx("log", "부팅: 인덱스 복원 준비 중...")
 
     p = effective_persist_dir()
@@ -505,6 +500,7 @@ def _boot_auto_restore_index() -> None:
         ready_txt = ""
     local_ready = cj.exists() and cj.stat().st_size > 0 and is_ready_text(ready_txt)
     _idx("log", f"로컬 준비: {'OK' if local_ready else '미검출'}")
+
     try:
         if "st" in globals() and st is not None:
             st.session_state["_INDEX_LOCAL_READY"] = bool(local_ready)
@@ -611,7 +607,7 @@ def _boot_auto_restore_index() -> None:
             pass
         return
 
-    # 이외(불일치 또는 로컬 미준비): 최신 복원 강제
+    # 이외: 최신 복원 강제
     try:
         import datetime as _dt
         this_year = _dt.datetime.utcnow().year
@@ -666,7 +662,6 @@ def _boot_auto_restore_index() -> None:
             pass
         return
 # ================================= [10] auto-restore — END ============================
-
 
 # =============================== [11] boot hooks — START ==============================
 def _boot_autoflow_hook() -> None:
@@ -1059,54 +1054,17 @@ def _render_body() -> None:
     if st is None:
         return
 
-    ss = st.session_state
-
-    # 1) 부팅 2-Phase: (A) 헤더/스켈레톤 선렌더 → (B) 복원 → 재실행 1회
-    boot_pending = not bool(ss.get("_boot_checked"))
-    if boot_pending:
-        # (A) 헤더 우선: 스테일 초록 방지 위해 세션키를 명시 초기화
+    # 1) 부팅 훅
+    if not st.session_state.get("_boot_checked"):
         try:
-            try:
-                local_ok = core_is_ready(effective_persist_dir())
-            except Exception:
-                local_ok = False
-            ss["_INDEX_LOCAL_READY"] = bool(local_ok)   # 노랑(준비중) 판단용
-            ss["_INDEX_IS_LATEST"] = False              # 복전 초록 금지
-            ss["_RESTORE_IN_PROGRESS"] = True           # 진단/로그용 신호
-        except Exception:
-            pass
-
-        # 헤더 먼저 렌더(노랑/주황을 즉시 노출)
-        _header()
-
-        # 진행표시(스텝/로그) — 자리만 깔기(중복 렌더 방지: 여기서는 stepper만 강제 생성)
-        try:
-            mod = importlib.import_module("src.services.index_state")
-            getattr(mod, "step_reset",     lambda *_a, **_k: None)()
-            getattr(mod, "render_stepper_safe", lambda *_a, **_k: None)(True)
-            getattr(mod, "log",            lambda *_a, **_k: None)("🔎 릴리스 확인 중...")
-            # ⚠️ 주의: render_index_steps()는 호출하지 않음 (진행 렌더는 부팅 훅에 위임)
-        except Exception:
-            pass
-
-        # (B) 릴리스 복원 실행(동기) → 완료 후 1회 재실행
-        try:
-            _boot_auto_restore_index()  # 내부에서 step/log 갱신 및(필요 시) 렌더
+            _boot_auto_restore_index()
             _boot_autoflow_hook()
         except Exception as e:
             _errlog(f"boot check failed: {e}", where="[render_body.boot]", exc=e)
         finally:
-            ss["_RESTORE_IN_PROGRESS"] = False
-            ss["_boot_checked"] = True
+            st.session_state["_boot_checked"] = True
 
-        # 헤더/진행표시 상태 업데이트를 위해 정확히 1회만 재실행
-        try:
-            _safe_rerun("boot_init", ttl=0.5)
-        except Exception:
-            pass
-        return
-
-    # 2) ✅ (포스트-부팅) 자동 시작 훅 — 필요 시만 동작
+    # 2) ✅ 상태 확정(자동 복원/READY 반영)을 헤더보다 먼저 수행
     try:
         _auto_start_once()
     except Exception as e:
@@ -1185,4 +1143,6 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-# =============================== [19] body & main — END =============================
+# ================================= [19] body & main — END =============================
+
+
