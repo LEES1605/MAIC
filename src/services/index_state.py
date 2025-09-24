@@ -74,26 +74,6 @@ def log(message: str, level: str = "info") -> None:
 # ============================== [04] helpers — END ====================================
 
 # ======================= [05] render helpers (UI) — START =============================
-def render_progress_with_fallback(pct: int, *, text: str = "") -> None:
-    """
-    Streamlit 버전별로 st.progress 시그니처(text 인자 유무)가 달라도
-    항상 진행바가 보이도록 안전하게 렌더한다.
-    """
-    if st is None:
-        return
-    try:
-        # 신 시그니처 (>= 1.22): st.progress(value, text="...")
-        st.progress(int(pct), text=str(text or ""))
-    except TypeError:
-        # 구 시그니처: text 인자를 받지 못함
-        st.progress(int(pct))
-        if text:
-            st.caption(str(text))
-    except Exception:
-        # 최후 폴백: 퍼센트+텍스트만
-        st.caption(f"{int(pct)}% {text}")
-
-
 def render_status(force: bool = False) -> None:
     """상태(로그) 영역을 렌더한다. force=True면 placeholder를 강제로 만든다."""
     if st is None:
@@ -105,6 +85,13 @@ def render_status(force: bool = False) -> None:
             return
         placeholder = st.empty()
         st.session_state["_IDX_STATUS_PH"] = placeholder
+    else:
+        # 🔧 중복 누적 방지: 다시 그리기 전 반드시 비움
+        try:
+            placeholder.empty()
+        except Exception:
+            pass
+
     logs = st.session_state.get("_IDX_LOGS", [])
     icon_map = {"info": "ℹ️", "warn": "⚠️", "err": "❌"}
     with placeholder.container():
@@ -119,10 +106,7 @@ def render_status(force: bool = False) -> None:
 
 
 def render_stepper_safe(force: bool = False) -> None:
-    """
-    앱(app.py)에 학생용 진행바 구현(_render_stepper)이 있으면 그걸 호출하고,
-    없으면 간단한 캡션만 표시한다.
-    """
+    """_render_stepper(force=...) 가 앱쪽에 있으면 그걸 사용하고, 없으면 간단한 자리표시자."""
     if st is None:
         return
     try:
@@ -132,14 +116,23 @@ def render_stepper_safe(force: bool = False) -> None:
             return
     except Exception:
         pass
-    # 폴백: 간단한 상자 자리표시자 생성
+
+    # 폴백: 간단한 상자 자리표시자 생성(중복 누적 없이 클린 렌더)
     ph = st.session_state.get("_IDX_STEPPER_PH")
-    if ph is None and force:
+    if ph is None:
+        if not force:
+            return
         ph = st.empty()
         st.session_state["_IDX_STEPPER_PH"] = ph
-    if ph is not None:
-        with ph.container():
-            st.caption("인덱싱 단계 표시기(간이 모드)")
+    else:
+        # 🔧 중복 누적 방지
+        try:
+            ph.empty()
+        except Exception:
+            pass
+
+    with ph.container():
+        st.caption("인덱싱 단계 표시기(간이 모드)")
 
 
 def render_index_steps() -> None:
@@ -170,6 +163,7 @@ def step_reset(step_names: Sequence[str] | None = None) -> None:
             st.session_state[key] = None
     render_index_steps()
 # ======================== [05] render helpers (UI) — END ==============================
+
 
 # (아래는 기존 helpers에 있던 함수들)
 def step_set(i: int, status: str, detail: str = "") -> None:
