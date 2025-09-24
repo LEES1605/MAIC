@@ -1,118 +1,165 @@
-# ============================ [01] future import — START ============================
+# =============================== [01] imports & setup — START ==========================
 from __future__ import annotations
-# ============================== [01] future import — END =============================
 
-# ============================ [02] module imports — START ============================
-from typing import Dict
-import textwrap
+from pathlib import Path
+from typing import Optional
+
 try:
     import streamlit as st
 except Exception:
-    st = None  # CI/비-Streamlit 환경 보호
-from src.ui.assist.prompt_normalizer import (
-    normalize_to_yaml,
-    normalize_to_yaml_from_pairs,
-)
-# ============================== [02] module imports — END ============================
+    st = None  # test/CI 환경 대비
 
-# ============================== [03] defaults — START ================================
-_DEF_PERSONA = textwrap.dedent("""
-    당신은 영문법을 깊이 있게 전공했으며, 현대 영/미 영어에 정통한 언어 분석 전문가입니다.
-    EFL 환경 사용자를 배려하여, 관용구/연어/굳어진 표현은 먼저 표기하고 설명을 덧붙입니다.
-    정확성/근거를 중시하며, 불확실하면 질문을 통해 지침을 명확히 합니다.
-""").strip()
+# 페이지 메타(중복 호출 예외 무시)
+if st is not None:
+    try:
+        st.set_page_config(page_title="Prompts Admin", layout="wide", initial_sidebar_state="collapsed")
+    except Exception:
+        pass
 
-_DEF_SYSTEM = textwrap.dedent("""
-    1) 질문을 요약한다.
-    2) 근거 자료(문법서적/코퍼스/AI지식)로 검증한다.
-    3) 규칙→근거→예문→요약 순서로 제시한다.
-    4) 오류/예외가 있으면 대비 설명을 덧붙인다.
-    5) 모든 주장에는 간단한 출처 라벨을 붙인다.
-""").strip()
-# =============================== [03] defaults — END =================================
+# 공용 헬퍼/정규화기
+def _persist_dir() -> Path:
+    try:
+        from src.core.persist import effective_persist_dir
+        return Path(str(effective_persist_dir())).expanduser()
+    except Exception:
+        return Path.home() / ".maic" / "persist"
 
-# ============================== [04] ui helpers — START ==============================
-def _ta(label: str, key: str, value: str = "", height: int = 420) -> str:
-    return st.text_area(
-        label,
-        value=value,
-        key=key,
-        height=height,
-        placeholder=f"{label}를 입력하세요...",
-        label_visibility="visible",
+def _openai_key() -> Optional[str]:
+    try:
+        return (st.secrets.get("OPENAI_API_KEY") if st and hasattr(st, "secrets") else None) or None
+    except Exception:
+        return None
+
+# =============================== [01] imports & setup — END ============================
+
+
+# =============================== [02] admin gate & header — START =====================
+def _render_header() -> None:
+    """프로젝트 헤더와 관리자 버튼(로그인 포함) 렌더."""
+    try:
+        from src.ui.header import render as _hdr
+        _hdr()
+    except Exception:
+        if st is not None:
+            st.markdown("**LEES AI Teacher — Admin**")
+
+def _require_admin() -> bool:
+    """관리자 모드일 때만 True. 아니면 로그인 유도."""
+    if st is None:
+        return False
+    _render_header()
+    ss = st.session_state
+    if not bool(ss.get("admin_mode")):
+        st.info("🔐 이 페이지는 **관리자 전용**입니다. 우측 상단의 **관리자** 버튼으로 로그인해 주세요.")
+        return False
+    return True
+# =============================== [02] admin gate & header — END =======================
+
+
+# =============================== [03] UI: persona + prompts — START ====================
+def _default_persona() -> str:
+    return (
+        "당신은 영문법에 정통한 최고 수준의 언어 분석 전문가 AI입니다. "
+        "근거 중심으로 간결하고 단계적으로 설명합니다. "
+        "모호하면 반드시 질문으로 확인합니다."
     )
-# =============================== [04] ui helpers — END ===============================
 
-# ================================ [05] main — START ==================================
+def _section_inputs() -> tuple[str, str, str, str]:
+    """
+    반환: (persona, grammar_text, sentence_text, passage_text)
+    - persona: 공통 상단 입력(모든 모드에 접두로 합쳐 전달)
+    - *text: 각 모드의 자유서술 프롬프트(자연어)
+    """
+    st.subheader("🧩 Prompts Admin")
+    with st.expander("도움말", expanded=False):
+        st.markdown(
+            "- 상단 **페르소나**는 모든 모드에 공통으로 접두됩니다.\n"
+            "- 각 모드 입력은 자유서술(자연어) 한 덩어리로 적어 주세요.\n"
+            "- [스키마 변환]은 OpenAI 키가 있으면 모델로, 없으면 템플릿 폴백으로 동작합니다."
+        )
+
+    persona = st.text_area("공통 페르소나", _default_persona(), height=180)
+    st.caption("아래 3개 입력은 자유서술입니다. (문법/문장/지문)")
+    grammar_text  = st.text_area("문법 모드 입력",    "", height=180, key="txt_grammar")
+    sentence_text = st.text_area("문장 모드 입력",    "", height=160, key="txt_sentence")
+    passage_text  = st.text_area("지문(독해) 모드 입력", "", height=140, key="txt_passage")
+    return persona, grammar_text, sentence_text, passage_text
+# =============================== [03] UI: persona + prompts — END ======================
+
+
+# =============================== [04] normalize & preview & save — START ==============
+def _normalize_and_preview(
+    persona: str,
+    grammar_text: str,
+    sentence_text: str,
+    passage_text: str,
+) -> str:
+    """
+    자연어 → 레니언트 정규화(YAML).
+    - 공통 페르소나는 각 모드 입력의 접두로 합쳐 전달.
+    - 실패 시 템플릿 폴백.
+    """
+    try:
+        from src.ui.assist.prompt_normalizer import normalize_to_yaml
+    except Exception:
+        # 최소 폴백
+        def normalize_to_yaml(**_k):  # type: ignore
+            return "version: auto\nmodes:\n  grammar: {persona: '', system_instructions: ''}\n  sentence: {persona: '', system_instructions: ''}\n  passage: {persona: '', system_instructions: ''}\n"
+
+    p = (persona or "").strip()
+    g = (p + "\n\n" + grammar_text).strip() if grammar_text.strip() else p
+    s = (p + "\n\n" + sentence_text).strip() if sentence_text.strip() else p
+    pa = (p + "\n\n" + passage_text).strip() if passage_text.strip() else p
+
+    yaml_text = normalize_to_yaml(
+        grammar_text=g,
+        sentence_text=s,
+        passage_text=pa,
+        openai_key=_openai_key(),
+        openai_model="gpt-4o-mini",
+    )
+    st.subheader("📄 미리보기 (YAML)")
+    st.code(yaml_text, language="yaml")
+    return yaml_text
+
+def _save_yaml(yaml_text: str) -> None:
+    base = _persist_dir()
+    base.mkdir(parents=True, exist_ok=True)
+    out = base / "prompts.yaml"
+    out.write_text(yaml_text, encoding="utf-8")
+    try:
+        st.toast(f"저장 완료: {out}", icon="✅")
+    except Exception:
+        st.success(f"저장 완료: {out}")
+
+def _actions(yaml_text: str) -> None:
+    col_a, col_b = st.columns([1,1])
+    with col_a:
+        if st.button("💾 persist/prompts.yaml 로 저장", type="primary"):
+            _save_yaml(yaml_text)
+    with col_b:
+        st.download_button("⬇️ YAML 내려받기", data=yaml_text.encode("utf-8"),
+                           file_name="prompts.yaml", mime="text/yaml")
+# =============================== [04] normalize & preview & save — END =================
+
+
+# =============================== [05] main — START ====================================
 def main() -> None:
     if st is None:
+        print("Streamlit 환경이 아닙니다.")
         return
-    st.set_page_config(page_title="Prompts Admin", layout="wide", initial_sidebar_state="collapsed")
-    st.title("Prompts Admin")
-    st.caption("페르소나와 작업 지침(프롬프트)을 **분리 입력**해 스키마 적합 YAML을 생성합니다.")
+    if not _require_admin():
+        return
 
-    with st.expander("옵션", expanded=False):
-        col_a, col_b, col_c = st.columns([1, 1, 1])
-        with col_a:
-            use_llm = st.toggle("LLM 리라이트 모드(자연어→요약/분해)", value=False, help="끄면 입력값을 그대로 스키마에 반영합니다.")
-        with col_b:
-            gpt_model = st.text_input("문법/지문 모델", "gpt-5-pro")
-        with col_c:
-            gemini_model = st.text_input("문장 모델", "gemini-pro")
+    persona, g, s, pa = _section_inputs()
 
-    tabs = st.tabs(["문법", "문장", "지문"])
-
-    # ── 문법
-    with tabs[0]:
-        g_persona = _ta("문법 - 페르소나", "g_persona", st.session_state.get("g_persona", _DEF_PERSONA))
-        g_system  = _ta("문법 - 시스템 지침", "g_system", st.session_state.get("g_system", _DEF_SYSTEM))
-
-    # ── 문장
-    with tabs[1]:
-        s_persona = _ta("문장 - 페르소나", "s_persona", st.session_state.get("s_persona", _DEF_PERSONA))
-        s_system  = _ta("문장 - 시스템 지침", "s_system", st.session_state.get("s_system", _DEF_SYSTEM))
-
-    # ── 지문
-    with tabs[2]:
-        p_persona = _ta("지문 - 페르소나", "p_persona", st.session_state.get("p_persona", _DEF_PERSONA))
-        p_system  = _ta("지문 - 시스템 지침", "p_system", st.session_state.get("p_system", _DEF_SYSTEM))
-
-    st.divider()
-    c1, c2 = st.columns([1, 3], vertical_alignment="center")
-    with c1:
-        go = st.button("🧪 YAML 만들기", type="primary")
-    with c2:
-        st.caption("버튼을 누르면 오른쪽에 YAML 미리보기가 생성됩니다. 다운로드 가능.")
-
-    if go:
-        if st.session_state.get("use_llm_overrides", False) or False:
-            # (보류) 전역 토글이 따로 있다면 사용 — 기본은 pairs 경로
-            pass
-
-        if not use_llm:
-            yaml_text = normalize_to_yaml_from_pairs(
-                grammar_persona=g_persona, grammar_system=g_system,
-                sentence_persona=s_persona, sentence_system=s_system,
-                passage_persona=p_persona, passage_system=p_system,
-                gpt_model=gpt_model, gemini_model=gemini_model,
-            )
-        else:
-            # LLM으로 자연어 덩어리를 분해/요약하고 싶을 때만 사용
-            yaml_text = normalize_to_yaml(
-                grammar_text=f"{g_persona}\n\n{g_system}",
-                sentence_text=f"{s_persona}\n\n{s_system}",
-                passage_text=f"{p_persona}\n\n{p_system}",
-                openai_key=st.secrets.get("OPENAI_API_KEY"),
-            )
-
-        st.session_state["_last_yaml"] = yaml_text
-
-    yaml_text = st.session_state.get("_last_yaml", "")
-    if yaml_text:
-        st.subheader("미리보기 (YAML)")
-        st.code(yaml_text, language="yaml")
-        st.download_button("💾 다운로드", data=yaml_text, file_name="prompts.yaml", mime="text/yaml")
+    run = st.button("🔧 스키마 변환", type="primary")
+    if run:
+        yaml_text = _normalize_and_preview(persona, g, s, pa)
+        _actions(yaml_text)
+    else:
+        st.caption("상단 입력 후 [🔧 스키마 변환]을 눌러 주세요.")
 
 if __name__ == "__main__":
     main()
-# ================================= [05] main — END ===================================
+# =============================== [05] main — END ======================================
