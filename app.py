@@ -81,9 +81,9 @@ def _load_prepared_api():
 
 # ===== [04] bootstrap env — START =====
 # (안전상 중복 import 허용)
-import os as _os_dup, time as _time_dup
+import os, time
+
 def _bootstrap_env() -> None:
-    """환경변수/Streamlit 설정 초기화."""
     try:
         _promote_env(keys=[
             "OPENAI_API_KEY", "OPENAI_MODEL",
@@ -139,7 +139,7 @@ if st:
     except Exception:
         pass
 
-    # (C) admin/goto 쿼리 파라미터 → 관리자 플래그 ON/OFF (전용 뷰 토글 포함)
+    # (C) admin/goto 쿼리 파라미터 → 관리자 플래그 ON/OFF (영구 수정)
     try:
         v = st.query_params.get("admin", None)
         goto = st.query_params.get("goto", None)
@@ -165,15 +165,10 @@ if st:
         if _has(v, _truthy) or _has(goto, lambda x: _norm(x) == "admin"):
             new_mode = True
 
-        # 🆕 프롬프트 뷰: goto=prompt → 관리자 모드 유지 + 전용 뷰 토글
-        if _has(goto, lambda x: _norm(x) == "prompt"):
-            st.session_state["_show_admin_prompt"] = True
-            new_mode = True
-
-        # 끄기: admin=0/false/off or goto=back|home
+        # 끄기(우선): admin=0/false/off or goto=back|home
+        # ❗️기존의 'prompt'는 여기서 제외 → 프롬프트 페이지 진입 시 관리자 모드 유지
         if _has(v, _falsy) or _has(goto, lambda x: _norm(x) in ("back", "home")):
             new_mode = False
-            st.session_state["_show_admin_prompt"] = False
 
         if new_mode != prev:
             if new_mode:
@@ -186,8 +181,7 @@ if st:
     except Exception:
         pass
 
-
-    # (D) 관리자/학생 크롬
+    # (D) 관리자/학생 크롬 적용 — 학생은 숨김, 관리자는 최소 사이드바 즉시 렌더
     try:
         _sider = __import__("src.ui.utils.sider", fromlist=["apply_admin_chrome"])
         getattr(_sider, "apply_admin_chrome", lambda **_: None)(
@@ -196,6 +190,7 @@ if st:
     except Exception:
         pass
 # ===== [04] bootstrap env — END =====
+
 
 # ======================= [05] path & logger — START =======================
 PERSIST_DIR: Path = effective_persist_dir()
@@ -1059,54 +1054,17 @@ def _render_body() -> None:
     if st is None:
         return
 
-    ss = st.session_state
-
-    # 1) 부팅 2-Phase: (A) 헤더/스켈레톤 선렌더 → (B) 복원 → 재실행 1회
-    boot_pending = not bool(ss.get("_boot_checked"))
-    if boot_pending:
-        # (A) 헤더 우선: 스테일 초록 방지 위해 세션키를 명시 초기화
+    # 1) 부팅 훅
+    if not st.session_state.get("_boot_checked"):
         try:
-            try:
-                local_ok = core_is_ready(effective_persist_dir())
-            except Exception:
-                local_ok = False
-
-            ss["_INDEX_LOCAL_READY"] = bool(local_ok)   # 노랑(준비중) 판단용
-            ss["_INDEX_IS_LATEST"] = False              # 복전 초록 금지
-            ss["_RESTORE_IN_PROGRESS"] = True           # 진단/로그용 신호
-        except Exception:
-            pass
-
-        # 헤더 먼저 렌더(노랑/주황을 즉시 노출)
-        _header()
-
-        # 진행표시(스텝/로그) 스켈레톤 1회 렌더 + 최초 로그
-        try:
-            mod = importlib.import_module("src.services.index_state")
-            getattr(mod, "step_reset", lambda *_a, **_k: None)()
-            getattr(mod, "log", lambda *_a, **_k: None)("🔎 릴리스 확인 중...")
-            getattr(mod, "render_index_steps", lambda *_a, **_k: None)()
-        except Exception:
-            pass
-
-        # (B) 릴리스 복원 실행(동기) → 완료 후 1회 재실행
-        try:
-            _boot_auto_restore_index()  # 내부에서 step/log 갱신(렌더 없음)
+            _boot_auto_restore_index()
             _boot_autoflow_hook()
         except Exception as e:
             _errlog(f"boot check failed: {e}", where="[render_body.boot]", exc=e)
         finally:
-            ss["_RESTORE_IN_PROGRESS"] = False
-            ss["_boot_checked"] = True
+            st.session_state["_boot_checked"] = True
 
-        # 헤더/진행표시 상태 업데이트를 위해 정확히 1회만 재실행
-        try:
-            _safe_rerun("boot_init", ttl=0.5)
-        except Exception:
-            pass
-        return
-
-    # 2) ✅ (포스트-부팅) 자동 시작 훅 — 필요 시만 동작
+    # 2) ✅ 상태 확정(자동 복원/READY 반영)을 헤더보다 먼저 수행
     try:
         _auto_start_once()
     except Exception as e:
@@ -1114,41 +1072,6 @@ def _render_body() -> None:
 
     # 3) 헤더
     _header()
-
-    # 🆕 3.5) 관리자 프롬프트 전용 화면 (툴버튼: goto=prompt)
-    if _is_admin_view() and bool(ss.get("_show_admin_prompt")):
-        st.markdown("### 🛠️ Admin Prompt")
-        # 안전 브리지: 다양한 구현명을 수용
-        try:
-            mod = None
-            for name in ("admin_prompt", "src.ui.assist.admin_prompt", "src.ui.admin_prompt"):
-                try:
-                    mod = importlib.import_module(name)
-                    break
-                except Exception:
-                    mod = None
-            fn = None
-            for fname in ("render_admin_prompt", "render", "render_ui", "main"):
-                f = getattr(mod, fname, None) if mod else None
-                if callable(f):
-                    fn = f
-                    break
-            if callable(fn):
-                fn()
-            else:
-                st.warning("admin_prompt 렌더러를 찾지 못했습니다.")
-        except Exception as e:
-            _errlog(f"admin_prompt render failed: {e}", where="[render_body.adminprompt]", exc=e)
-
-        left, right = st.columns([1, 4])
-        with left:
-            if st.button("← 뒤로", type="secondary"):
-                ss["_show_admin_prompt"] = False
-                try:
-                    st.rerun()
-                except Exception:
-                    pass
-        return
 
     # 4) 관리자 패널 (외부 모듈 호출: src.ui.ops.indexing_panel)
     if _is_admin_view():
@@ -1220,5 +1143,6 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-# =============================== [19] body & main — END =============================
+# ================================= [19] body & main — END =============================
+
 
