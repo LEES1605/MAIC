@@ -4,10 +4,10 @@
 Admin Prompt Editor (Persona + 3 Prompts per Mode)
 - Persona: shared across all modes
 - Prompts: Grammar / Sentence / Passage (three distinct inputs)
-- Outputs: YAML (via normalize_to_yaml_from_pairs), schema validation, download
+- Actions: Build YAML (from persona/prompt pairs), Schema Validate, Download, Publish
 
-This page focuses on editing and validation. GitHub publish is handled in
-'src/ui/admin_prompts.py' flow. SSOT for conventions/masterplan: docs/_gpt/.
+SSOT: docs/_gpt/ (see MASTERPLAN/CONVENTIONS). This page focuses on editing.
+Publishing to the repository is available via GitHub Actions workflow dispatch.
 """
 
 from __future__ import annotations
@@ -48,9 +48,9 @@ def _find_schema_path() -> Path:
     """
     here = Path(__file__).resolve()
     candidates = [
-        here.parent / "schemas" / "prompts.schema.json",       # repo root layout
-        here.parent.parent / "schemas" / "prompts.schema.json",# nested
-        Path.cwd() / "schemas" / "prompts.schema.json",        # fallback
+        here.parent / "schemas" / "prompts.schema.json",        # repo root layout
+        here.parent.parent / "schemas" / "prompts.schema.json", # nested
+        Path.cwd() / "schemas" / "prompts.schema.json",         # fallback
     ]
     for p in candidates:
         if p.exists():
@@ -142,6 +142,101 @@ except Exception:
         return yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
 
 
+# ===== GitHub publish helpers =====
+# Try to reuse the project's dispatcher; if missing, fall back to a local one.
+try:
+    from src.ui.admin_prompts import _gh_dispatch_workflow as _gh_dispatch  # type: ignore
+except Exception:
+    _gh_dispatch = None  # will use local fallback
+
+ELLIPSIS_UC = "\u2026"
+
+def _sanitize_ellipsis(text: str) -> Tuple[str, int]:
+    c = text.count(ELLIPSIS_UC)
+    return text.replace(ELLIPSIS_UC, "..."), c
+
+def _gh_dispatch_fallback(
+    *,
+    owner: str,
+    repo: str,
+    workflow: str,
+    ref: str,
+    token: str | None,
+    yaml_text: str,
+) -> None:
+    """
+    Local minimal dispatcher (used only if src.ui.admin_prompts._gh_dispatch_workflow is unavailable).
+    """
+    s, n = _sanitize_ellipsis(yaml_text)
+    if n:
+        st.info(f"U+2026 {n}개를 '...'로 치환했습니다.")
+    req: Any = importlib.import_module("requests")
+    url = f"https://api.github.com/repos/{owner}/{repo}/actions/workflows/{workflow}/dispatches"
+    payload = {"ref": ref, "inputs": {
+        "yaml_b64": importlib.import_module("base64").b64encode(s.encode("utf-8")).decode("ascii"),
+        "prerelease": "false",
+        "promote_latest": "true",
+    }}
+    headers = {"Accept": "application/vnd.github+json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    r = req.post(url, headers=headers, json=payload, timeout=20)
+    if r.status_code not in (201, 204):
+        raise RuntimeError(f"workflow_dispatch failed: {r.status_code} — {r.text}")
+
+
+def _publish_yaml_via_github(yaml_text: str) -> None:
+    """
+    Validate repo secrets and dispatch GitHub workflow to publish the YAML.
+    """
+    # Secrets / defaults
+    repo_full = st.secrets.get("GITHUB_REPO", "")
+    token = st.secrets.get("GITHUB_TOKEN")
+    ref = st.secrets.get("GITHUB_BRANCH", "main")
+    workflow = st.secrets.get("GITHUB_WORKFLOW", "publish-prompts.yml")
+
+    owner: str = ""
+    repo: str = ""
+    repo_config_error = False
+
+    if repo_full and "/" in repo_full:
+        owner, repo = repo_full.split("/", 1)
+        if not owner or not repo:
+            repo_config_error = True
+            st.error("GITHUB_REPO 형식이 잘못되었습니다. 예: OWNER/REPO")
+    elif repo_full:
+        repo_config_error = True
+        st.error("GITHUB_REPO 형식이 잘못되었습니다. 예: OWNER/REPO")
+    else:
+        repo_config_error = True
+        st.info("GITHUB_REPO 시크릿이 비어 있어 출판 기능이 비활성화됩니다.")
+
+    if repo_config_error or not owner or not repo:
+        st.warning("출판이 비활성화되었습니다. 시크릿을 설정하거나 형식을 수정하세요.")
+        return
+
+    # Validate YAML before publishing
+    ok, msgs = _validate_yaml_text(yaml_text)
+    if not ok:
+        st.error("스키마 검증 실패 — 먼저 오류를 해결하세요.")
+        if msgs:
+            st.write("\n".join(f"- {m}" for m in msgs))
+        return
+
+    # Dispatch
+    try:
+        if _gh_dispatch is not None:
+            _gh_dispatch(owner=owner, repo=repo, workflow=workflow, ref=ref, token=token, yaml_text=yaml_text)
+        else:
+            _gh_dispatch_fallback(owner=owner, repo=repo, workflow=workflow, ref=ref, token=token, yaml_text=yaml_text)
+        st.success("출판 요청 전송 완료 — Actions에서 처리 중입니다.")
+        st.markdown(
+            f"[열기: Actions › {workflow}](https://github.com/{owner}/{repo}/actions/workflows/{workflow})"
+        )
+    except Exception as exc:  # noqa: BLE001
+        st.exception(exc)
+
+
 # ===== page init =====
 def _init_admin_page() -> None:
     st.set_page_config(page_title="Prompts Admin (2-field + 3 prompts)", page_icon="🛠️", layout="wide")
@@ -158,7 +253,7 @@ def main() -> None:
     _init_admin_page()
 
     st.markdown("### 관리자 프롬프트 편집기 — 페르소나 + 모드별 프롬프트(3)")
-    st.caption("SSOT: `docs/_gpt/`의 규약·마스터플랜에 맞춰 편집하세요. (검증/다운로드 가능)")
+    st.caption("SSOT: `docs/_gpt/`의 규약·마스터플랜에 맞춰 편집하세요. (검증/다운로드/출판 가능)")
 
     # --- Inputs: Persona + 3 Prompts (Grammar/Sentence/Passage) ---
     persona = st.text_area("① 페르소나(Persona) — 모든 모드에 공통 적용", height=240, key="ap_persona")
@@ -218,6 +313,29 @@ def main() -> None:
             use_container_width=True,
             disabled=disabled,
         )
+
+    # --- Publish (separate row for clarity) ---
+    st.markdown("#### ③ 출판(Publish)")
+    # Disabled rule: no YAML or bad/missing repo secret
+    repo_full = st.secrets.get("GITHUB_REPO", "")
+    repo_bad = (not repo_full) or ("/" not in repo_full)
+    if repo_bad:
+        st.info("출판을 사용하려면 `GITHUB_REPO` 시크릿을 `OWNER/REPO` 형식으로 설정하세요.")
+    publish_disabled = (not bool(st.session_state.get("_PROMPTS_YAML"))) or repo_bad
+
+    if st.button(
+        "🚀 출판(Publish)",
+        type="primary",
+        use_container_width=True,
+        key="ap_publish_yaml",
+        disabled=publish_disabled,
+        help="먼저 YAML을 생성하고(GITHUB_REPO=OWNER/REPO) 시크릿이 준비되어야 합니다." if publish_disabled else None,
+    ):
+        ytext = st.session_state.get("_PROMPTS_YAML", "")
+        if not ytext:
+            st.warning("YAML이 없습니다. ‘🧠 YAML 병합(모드별)’을 먼저 수행하세요.")
+        else:
+            _publish_yaml_via_github(yaml_text=ytext)
 
     # --- Preview ---
     ytext = st.session_state.get("_PROMPTS_YAML", "")
