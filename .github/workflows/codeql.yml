@@ -1,39 +1,37 @@
+# ===== [01] FILE: .github/workflows/codeql.yml — START =====
 name: CodeQL
 
 on:
+  # 기본 브랜치 보호: main에 push 시 정기 분석
   push:
-    branches: [ "main" ]
-    paths:
-      - "**/*.py"
-      - "src/**"
-      - ".github/workflows/codeql.yml"
+    branches: ["main"]
+  # ⚠️ PR에서는 경로 필터를 두지 않습니다. (항상 실행되어야 PR diff가 계산됩니다)
   pull_request:
-    branches: [ "main" ]
-    paths:
-      - "**/*.py"
-      - "src/**"
-      - ".github/workflows/codeql.yml"
+    branches: ["main"]
+  # 주간 스케줄 스캔(UTC 월요일 19:00)
   schedule:
-    - cron: "0 3 * * 0"  # weekly
+    - cron: "0 19 * * 1"
   workflow_dispatch:
 
 permissions:
   contents: read
   security-events: write
-  actions: read
 
 jobs:
   analyze:
-    name: CodeQL (Python)
+    name: Analyze (${{ matrix.language }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
+    # Python 단일 언어 분석(필요 시 'javascript', 'typescript' 등 추가)
       matrix:
-        language: [ "python" ]
+        language: ["python"]
+
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
+          # PR 비교의 안정성을 위해 전체 이력
           fetch-depth: 0
 
       - name: Initialize CodeQL
@@ -41,9 +39,14 @@ jobs:
         with:
           languages: ${{ matrix.language }}
 
+      # Python은 빌드 단계가 보통 필요 없지만, 멀티언어 확장 대비하여 유지 가능
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v3
         with:
-          # ✅ 기준 브랜치와 동일한 카테고리로 업로드 (비교 가능)
+          # ✅ 기본 브랜치와 동일한 카테고리 키로 업로드되어야 PR diff가 계산됩니다.
           category: "/language:${{ matrix.language }}"
           upload: true
+# ===== [01] FILE: .github/workflows/codeql.yml — END =====
