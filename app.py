@@ -757,7 +757,6 @@ def _auto_start_once() -> None:
 
 # =============================== [17] chat styles & mode — START ======================
 def _inject_chat_styles_once() -> None:
-    """채팅판 CSS/토큰 주입(1회)."""
     if st is None:
         return
     if st.session_state.get("_chat_styles_injected_v2"):
@@ -775,7 +774,6 @@ def _inject_chat_styles_once() -> None:
   .chatpane-messages .messages{ max-height:60vh; overflow-y:auto; padding:8px; }
 
   /* ▶ 입력 영역 전용 컨테이너 */
-
   .chatpane-input{
     position:relative; background:#EDF4FF; border:1px solid #D5E6FF; border-radius:18px;
     padding:8px 10px 10px 10px; margin-top:12px;
@@ -792,7 +790,6 @@ def _inject_chat_styles_once() -> None:
   .chatpane-input div[data-testid="stRadio"] svg{ display:none!important }
 
   /* 입력 폼/버튼은 입력 컨테이너 하위로만 적용 */
-
   .chatpane-input form[data-testid="stForm"] { position:relative; margin:0; }
   .chatpane-input form[data-testid="stForm"] [data-testid="stTextInput"] input{
     background:#FFF8CC !important; border:1px solid #F2E4A2 !important;
@@ -812,7 +809,6 @@ def _inject_chat_styles_once() -> None:
   }
 
   /* ▶ 버블/칩 (글로벌) */
-
   .msg-row{ display:flex; margin:8px 0; }
   .msg-row.left{ justify-content:flex-start; }
   .msg-row.right{ justify-content:flex-end; }
@@ -837,7 +833,16 @@ def _inject_chat_styles_once() -> None:
     vertical-align:middle;
   }
 
-@media (max-width:480px){
+  /* ▶ 프롬프트/페르소나 대형 입력영역 */
+  .prompt-editor .stTextArea textarea{
+    min-height:260px !important; line-height:1.45; font-size:14px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  }
+  .prompt-editor .persona-title, .prompt-editor .inst-title{
+    font-weight:800; margin:6px 0 4px 0;
+  }
+
+  @media (max-width:480px){
     .bubble{ max-width:96%; }
     .chip-src{ max-width:160px; }
   }
@@ -848,7 +853,6 @@ def _inject_chat_styles_once() -> None:
 
 
 def _render_mode_controls_pills() -> str:
-    """문법/문장/지문 모드 선택 라디오."""
     _inject_chat_styles_once()
     if st is None:
         return "grammar"
@@ -968,20 +972,6 @@ def _render_chat_panel() -> None:
     if not question:
         return
 
-    # ── 상단 툴바: 평가 토글(기본 켜짐) ───────────────────────────────
-    top_c1, top_c2 = st.columns([1, 1])
-    with top_c1:
-        ss["_show_evaluator"] = st.toggle("미나쌤 평가 보기", value=bool(ss.get("_show_evaluator", True)))
-
-    # 사용자 버블 즉시 렌더
-    ph_user = st.empty()
-    _emit_bubble(ph_user, "나", question, source=None, align_right=True)
-
-    # 타이핑 핸드셰이크(피티쌤) — 첫 토막 전까지 표시
-    ph_typing = st.empty()
-    _emit_bubble(ph_typing, "피티쌤", "입력 중...", source="[검색중...]", align_right=False)
-
-    # 출처 탐색
     src_label = "[AI지식]"
     hits = []
     if callable(_search_hits):
@@ -1005,21 +995,15 @@ def _render_chat_panel() -> None:
         except Exception:
             chip_text = src_label
 
-    # 주답변 스트리밍
+    ph_user = st.empty()
+    _emit_bubble(ph_user, "나", question, source=None, align_right=True)
+
     ph_ans = st.empty()
     acc_ans = ""
-    started = False
 
     def _on_emit_ans(chunk: str) -> None:
-        nonlocal acc_ans, started
+        nonlocal acc_ans
         acc_ans += str(chunk or "")
-        # 첫 방출 시 타이핑 버블 제거
-        if not started and acc_ans:
-            try:
-                ph_typing.empty()
-            except Exception:
-                pass
-            started = True
         _emit_bubble(ph_ans, "피티쌤", acc_ans, source=chip_text, align_right=False)
 
     emit_chunk_ans, close_stream_ans = make_stream_handler(
@@ -1029,45 +1013,35 @@ def _render_chat_panel() -> None:
             flush_on_strong_punct=True, flush_on_newline=True,
         ),
     )
-    for piece in answer_stream(
-        question=question,
-        mode=ss.get("__mode", ""),
-        ctx={"hits": hits, "source_label": src_label},
-    ):
+    for piece in answer_stream(question=question, mode=ss.get("__mode", "")):
         emit_chunk_ans(str(piece or ""))
     close_stream_ans()
     full_answer = acc_ans.strip()
 
-    # 평가(옵션)
-    if bool(ss.get("_show_evaluator", True)):
-        ph_eval = st.empty()
-        acc_eval = ""
+    ph_eval = st.empty()
+    acc_eval = ""
 
-        def _on_emit_eval(chunk: str) -> None:
-            nonlocal acc_eval
-            acc_eval += str(chunk or "")
-            _emit_bubble(ph_eval, "미나쌤", acc_eval, source=chip_text, align_right=False)
+    def _on_emit_eval(chunk: str) -> None:
+        nonlocal acc_eval
+        acc_eval += str(chunk or "")
+        _emit_bubble(ph_eval, "미나쌤", acc_eval, source=chip_text, align_right=False)
 
-        emit_chunk_eval, close_stream_eval = make_stream_handler(
-            on_emit=_on_emit_eval,
-            opts=BufferOptions(
-                min_emit_chars=8, soft_emit_chars=24, max_latency_ms=150,
-                flush_on_strong_punct=True, flush_on_newline=True,
-            ),
-        )
-        for piece in evaluate_stream(
-            question=question,
-            mode=ss.get("__mode", ""),
-            answer=full_answer,
-            ctx={"answer": full_answer, "source_label": src_label},
-        ):
-            emit_chunk_eval(str(piece or ""))
-        close_stream_eval()
+    emit_chunk_eval, close_stream_eval = make_stream_handler(
+        on_emit=_on_emit_eval,
+        opts=BufferOptions(
+            min_emit_chars=8, soft_emit_chars=24, max_latency_ms=150,
+            flush_on_strong_punct=True, flush_on_newline=True,
+        ),
+    )
+    for piece in evaluate_stream(
+        question=question, mode=ss.get("__mode", ""), answer=full_answer, ctx={"answer": full_answer}
+    ):
+        emit_chunk_eval(str(piece or ""))
+    close_stream_eval()
 
     ss["last_q"] = question
     ss["inpane_q"] = ""
 # ================================= [18] chat panel — END ==============================
-
 
 # =============================== [19] body & main — START =============================
 def _render_body() -> None:
@@ -1079,33 +1053,32 @@ def _render_body() -> None:
     # 1) 부팅 2-Phase: (A) 헤더/스켈레톤 선렌더 → (B) 복원 → 재실행 1회
     boot_pending = not bool(ss.get("_boot_checked"))
     if boot_pending:
-        # (A) 헤더 우선: 스테일 초록 방지 위해 세션키를 명시 초기화
+        # (A) 헤더 우선: 세션키 초기화
         try:
             try:
                 local_ok = core_is_ready(effective_persist_dir())
             except Exception:
                 local_ok = False
-            ss["_INDEX_LOCAL_READY"] = bool(local_ok)   # 노랑(준비중) 판단용
-            ss["_INDEX_IS_LATEST"] = False              # 복전 초록 금지
-            ss["_RESTORE_IN_PROGRESS"] = True           # 진행 중 신호
+            ss["_INDEX_LOCAL_READY"] = bool(local_ok)
+            ss["_INDEX_IS_LATEST"] = False
+            ss["_RESTORE_IN_PROGRESS"] = True
         except Exception:
             pass
 
-        # 헤더 먼저 렌더(노랑/주황을 즉시 노출)
         _header()
 
-        # ▶ 학생 미니 진행바(로그 없이) — 1회차에도 바로 표시
+        # 진행표시(스텝/로그) 자리표시자 즉시 렌더
         try:
-            from src.services.index_state import step_reset, log, render_stepper_safe
-            step_reset()
-            log("🔎 릴리스 확인 중•••")
-            render_stepper_safe(force=True)
+            mod = importlib.import_module("src.services.index_state")
+            getattr(mod, "step_reset", lambda *_a, **_k: None)()
+            getattr(mod, "log", lambda *_a, **_k: None)("🔎 릴리스 확인 중...")
+            getattr(mod, "render_index_steps", lambda *_a, **_k: None)()
         except Exception:
             pass
 
         # (B) 릴리스 복원 실행(동기) → 완료 후 1회 재실행
         try:
-            _boot_auto_restore_index()  # 내부에서 step/log 갱신
+            _boot_auto_restore_index()
             _boot_autoflow_hook()
         except Exception as e:
             _errlog(f"boot check failed: {e}", where="[render_body.boot]", exc=e)
@@ -1113,14 +1086,13 @@ def _render_body() -> None:
             ss["_RESTORE_IN_PROGRESS"] = False
             ss["_boot_checked"] = True
 
-        # 헤더/진행표시 상태 업데이트를 위해 정확히 1회만 재실행
         try:
             _safe_rerun("boot_init", ttl=0.5)
         except Exception:
             pass
         return
 
-    # 2) ✅ (포스트-부팅) 자동 시작 훅 — 필요 시만 동작
+    # 2) ✅ 상태 확정
     try:
         _auto_start_once()
     except Exception as e:
@@ -1129,17 +1101,8 @@ def _render_body() -> None:
     # 3) 헤더
     _header()
 
-    # 3.5) ▶ 학생 화면: 최신 복원 전이면 미니 진행바 유지 렌더
-    try:
-        if not bool(ss.get("_INDEX_IS_LATEST")):
-            from src.services.index_state import render_stepper_safe
-            render_stepper_safe(force=True)
-    except Exception:
-        pass
-
-    # 4) 관리자 패널 (외부 모듈 호출: src.ui.ops.indexing_panel)
+    # 4) 관리자 패널
     if _is_admin_view():
-        # 지연 import로 순환 참조 방지 및 오버헤드 최소화
         try:
             from src.ui.ops.indexing_panel import (
                 render_orchestrator_header,
@@ -1170,7 +1133,7 @@ def _render_body() -> None:
         except Exception:
             pass
 
-    # 5) 채팅 메시지 영역 (컨테이너 클래스 분리)
+    # 5) 채팅 메시지 영역
     _inject_chat_styles_once()
     with st.container(key="chat_messages_container"):
         st.markdown('<div class="chatpane-messages" data-testid="chat-messages"><div class="messages">', unsafe_allow_html=True)
@@ -1180,15 +1143,63 @@ def _render_body() -> None:
             _errlog(f"chat panel failed: {e}", where="[render_body.chat]", exc=e)
         st.markdown("</div></div>", unsafe_allow_html=True)
 
-    # 6) 채팅 입력 폼 (컨테이너 클래스 분리 + key 안정화)
+    # 6) 채팅 입력 폼 (모드별 페르소나/자연어 지시 분리 입력)
     with st.container(border=True, key="chat_input_container"):
         st.markdown('<div class="chatpane-input" data-testid="chat-input">', unsafe_allow_html=True)
-        st.session_state["__mode"] = _render_mode_controls_pills() or st.session_state.get("__mode", "")
+
+        # (a) 모드 선택
+        mode_key = _render_mode_controls_pills() or ss.get("__mode", "grammar")
+        ss["__mode"] = mode_key
+
+        # (b) 모드별 세션 키
+        ui_persona_key = f"ui_persona_{mode_key}"
+        ui_prompt_key  = f"ui_prompt_{mode_key}"
+        sv_persona_key = f"__persona_{mode_key}"
+        sv_prompt_key  = f"__prompt_{mode_key}"
+
+        # (c) 기본값 세팅 — 사용자가 비웠을 때도 '보이는 값'이 남도록 UI 키에 세팅
+        DEFAULT_PERSONA = (
+            "AI 페르소나 정의:\n\n"
+            "당신은 영문법을 깊이 있게 전공했으며, 현대 영국 영어와 미국 영어 모두에 정통한 "
+            "최고 수준의 언어 분석 전문가 AI입니다. 최신 코퍼스 연구와 실제 용례에 근거해 "
+            "엄정하고 친절하게 설명합니다. 모호할 경우 반드시 질문하여 지침을 확인합니다.\n\n"
+            "핵심 분석 절차 요약(권장):\n"
+            "1) 문장 구조(괄호 규칙) → 2) 핵심 어휘·표현 → 3) 자연스러운 번역 → 4) 근거/출처"
+        )
+        if ui_persona_key not in ss:
+            ss[ui_persona_key] = ss.get(sv_persona_key, DEFAULT_PERSONA)
+        if ui_prompt_key not in ss:
+            ss[ui_prompt_key] = ss.get(sv_prompt_key, "")
+
+        # (d) 도구 버튼(즉시 반영)
+        colx, coly, _ = st.columns([1, 1, 5])
+        if colx.button("🧼 지시 비우기", use_container_width=True, key=f"btn_clear_{mode_key}"):
+            ss[ui_prompt_key] = ""
+            _safe_rerun("clear_prompt", ttl=0.2)
+        if coly.button("↺ 페르소나 기본값", use_container_width=True, key=f"btn_reset_{mode_key}"):
+            ss[ui_persona_key] = DEFAULT_PERSONA
+            _safe_rerun("reset_persona", ttl=0.2)
+
+        # (e) 프롬프트/페르소나 대형 입력(상하 2칸)
+        st.markdown('<div class="prompt-editor">', unsafe_allow_html=True)
+        st.markdown('<div class="persona-title">👤 페르소나(기본값 가능)</div>', unsafe_allow_html=True)
+        st.text_area("페르소나", key=ui_persona_key, height=260, label_visibility="collapsed")
+        st.markdown('<div class="inst-title">🧭 자연어 지시(문장분석 프롬프트)</div>', unsafe_allow_html=True)
+
+        # (f) 제출 폼(질문 입력 포함)
         submitted: bool = False
         with st.form("chat_form", clear_on_submit=False):
-            q: str = st.text_input("질문", placeholder="질문을 입력하세요•••", key="q_text")
+            st.text_area("자연어 지시", key=ui_prompt_key, height=220, label_visibility="collapsed",
+                         placeholder="예) 최근 10년 TOEFL/IELTS 기준으로, 괄호규칙을 엄수해 분석해줘.")
+            q: str = st.text_input("질문", placeholder="질문을 입력하세요...", key="q_text")
             submitted = st.form_submit_button("➤")
-        st.markdown("</div>", unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)  # /.prompt-editor
+
+        # (g) 세션 저장(답변기가 읽음)
+        ss[sv_persona_key] = (ss.get(ui_persona_key) or "").strip()
+        ss[sv_prompt_key]  = (ss.get(ui_prompt_key)  or "").strip()
+
+        st.markdown("</div>", unsafe_allow_html=True)  # /.chatpane-input
 
     # 7) 전송 처리
     if submitted and isinstance(q, str) and q.strip():
@@ -1208,4 +1219,3 @@ def main() -> None:
 if __name__ == "__main__":
     main()
 # =============================== [19] body & main — END =============================
-
