@@ -1079,18 +1079,19 @@ def _render_body() -> None:
         # 헤더 먼저 렌더(노랑/주황을 즉시 노출)
         _header()
 
-        # 진행표시 '자리만' 만든다(초기 로그는 [10]에서만 기록)
+        # 진행표시(스텝/로그) — 자리만 깔기(중복 렌더 방지: 여기서는 stepper만 강제 생성)
         try:
             mod = importlib.import_module("src.services.index_state")
-            getattr(mod, "ensure_index_state", lambda *_a, **_k: None)()
+            getattr(mod, "step_reset",     lambda *_a, **_k: None)()
             getattr(mod, "render_stepper_safe", lambda *_a, **_k: None)(True)
-            getattr(mod, "render_status", lambda *_a, **_k: None)(True)
+            getattr(mod, "log",            lambda *_a, **_k: None)("🔎 릴리스 확인 중...")
+            # ⚠️ 주의: render_index_steps()는 호출하지 않음 (진행 렌더는 부팅 훅에 위임)
         except Exception:
             pass
 
         # (B) 릴리스 복원 실행(동기) → 완료 후 1회 재실행
         try:
-            _boot_auto_restore_index()  # 내부에서 step/log 갱신 및 UI 초기화(1회) 수행
+            _boot_auto_restore_index()  # 내부에서 step/log 갱신 및(필요 시) 렌더
             _boot_autoflow_hook()
         except Exception as e:
             _errlog(f"boot check failed: {e}", where="[render_body.boot]", exc=e)
