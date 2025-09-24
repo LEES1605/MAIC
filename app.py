@@ -139,7 +139,7 @@ if st:
     except Exception:
         pass
 
-    # (C) admin/goto 쿼리 파라미터 → 관리자 플래그 ON/OFF
+    # (C) admin/goto 쿼리 파라미터 → 관리자 플래그 ON/OFF (전용 뷰 토글 포함)
     try:
         v = st.query_params.get("admin", None)
         goto = st.query_params.get("goto", None)
@@ -161,10 +161,19 @@ if st:
         prev = bool(st.session_state.get("admin_mode", False))
         new_mode = prev
 
+        # 켜기: admin=1/true/on or goto=admin
         if _has(v, _truthy) or _has(goto, lambda x: _norm(x) == "admin"):
             new_mode = True
-        if _has(v, _falsy) or _has(goto, lambda x: _norm(x) in ("back", "prompt", "home")):
+
+        # 🆕 프롬프트 뷰: goto=prompt → 관리자 모드 유지 + 전용 뷰 토글
+        if _has(goto, lambda x: _norm(x) == "prompt"):
+            st.session_state["_show_admin_prompt"] = True
+            new_mode = True
+
+        # 끄기: admin=0/false/off or goto=back|home
+        if _has(v, _falsy) or _has(goto, lambda x: _norm(x) in ("back", "home")):
             new_mode = False
+            st.session_state["_show_admin_prompt"] = False
 
         if new_mode != prev:
             if new_mode:
@@ -176,6 +185,7 @@ if st:
             st.rerun()
     except Exception:
         pass
+
 
     # (D) 관리자/학생 크롬
     try:
@@ -433,9 +443,9 @@ def _boot_auto_restore_index() -> None:
       - '불일치'면 복원 강제
       - 복원 성공 시에만 세션에 _INDEX_IS_LATEST=True 로 기록(헤더는 이 값으로만 초록 표시)
 
-    UI 연동:
-      - 이 함수가 '단 한 번만' 학생용 진행 UI(스텝퍼+로그)를 초기화한다.
-        세션키: _IDX_UI_INIT
+    UI 연동(진행표시 훅):
+      - 이 함수 내부에서는 **플레이스홀더 생성/렌더를 하지 않는다.**
+        (중복 렌더 방지: [19]에서 스켈레톤을 1회 그린 뒤, 여기서는 데이터만 갱신)
     """
     # 멱등 보호: 한 세션에서 한 번만 수행
     try:
@@ -455,18 +465,8 @@ def _boot_auto_restore_index() -> None:
         except Exception:
             return None
 
-    # UI 초기화는 정확히 1회만
-    try:
-        if "st" in globals() and st is not None:
-            if not st.session_state.get("_IDX_UI_INIT"):
-                _idx("ensure_index_state")
-                _idx("render_stepper_safe", True)  # 진행바 자리표시자
-                _idx("render_status", True)        # 로그 자리표시자
-                st.session_state["_IDX_UI_INIT"] = True
-    except Exception:
-        pass
-
-    # 첫 로그
+    # 플레이스홀더 생성/렌더는 [19]에서 수행. 여기서는 로그만 누적.
+    _idx("ensure_index_state")
     _idx("log", "부팅: 인덱스 복원 준비 중...")
 
     p = effective_persist_dir()
@@ -505,6 +505,7 @@ def _boot_auto_restore_index() -> None:
         ready_txt = ""
     local_ready = cj.exists() and cj.stat().st_size > 0 and is_ready_text(ready_txt)
     _idx("log", f"로컬 준비: {'OK' if local_ready else '미검출'}")
+
     try:
         if "st" in globals() and st is not None:
             st.session_state["_INDEX_LOCAL_READY"] = bool(local_ready)
@@ -611,7 +612,7 @@ def _boot_auto_restore_index() -> None:
             pass
         return
 
-    # 이외(불일치 또는 로컬 미준비): 최신 복원 강제
+    # 이외: 최신 복원 강제
     try:
         import datetime as _dt
         this_year = _dt.datetime.utcnow().year
@@ -666,7 +667,6 @@ def _boot_auto_restore_index() -> None:
             pass
         return
 # ================================= [10] auto-restore — END ============================
-
 
 # =============================== [11] boot hooks — START ==============================
 def _boot_autoflow_hook() -> None:
@@ -1070,6 +1070,7 @@ def _render_body() -> None:
                 local_ok = core_is_ready(effective_persist_dir())
             except Exception:
                 local_ok = False
+
             ss["_INDEX_LOCAL_READY"] = bool(local_ok)   # 노랑(준비중) 판단용
             ss["_INDEX_IS_LATEST"] = False              # 복전 초록 금지
             ss["_RESTORE_IN_PROGRESS"] = True           # 진단/로그용 신호
@@ -1079,19 +1080,18 @@ def _render_body() -> None:
         # 헤더 먼저 렌더(노랑/주황을 즉시 노출)
         _header()
 
-        # 진행표시(스텝/로그) — 자리만 깔기(중복 렌더 방지: 여기서는 stepper만 강제 생성)
+        # 진행표시(스텝/로그) 스켈레톤 1회 렌더 + 최초 로그
         try:
             mod = importlib.import_module("src.services.index_state")
-            getattr(mod, "step_reset",     lambda *_a, **_k: None)()
-            getattr(mod, "render_stepper_safe", lambda *_a, **_k: None)(True)
-            getattr(mod, "log",            lambda *_a, **_k: None)("🔎 릴리스 확인 중...")
-            # ⚠️ 주의: render_index_steps()는 호출하지 않음 (진행 렌더는 부팅 훅에 위임)
+            getattr(mod, "step_reset", lambda *_a, **_k: None)()
+            getattr(mod, "log", lambda *_a, **_k: None)("🔎 릴리스 확인 중...")
+            getattr(mod, "render_index_steps", lambda *_a, **_k: None)()
         except Exception:
             pass
 
         # (B) 릴리스 복원 실행(동기) → 완료 후 1회 재실행
         try:
-            _boot_auto_restore_index()  # 내부에서 step/log 갱신 및(필요 시) 렌더
+            _boot_auto_restore_index()  # 내부에서 step/log 갱신(렌더 없음)
             _boot_autoflow_hook()
         except Exception as e:
             _errlog(f"boot check failed: {e}", where="[render_body.boot]", exc=e)
@@ -1114,6 +1114,41 @@ def _render_body() -> None:
 
     # 3) 헤더
     _header()
+
+    # 🆕 3.5) 관리자 프롬프트 전용 화면 (툴버튼: goto=prompt)
+    if _is_admin_view() and bool(ss.get("_show_admin_prompt")):
+        st.markdown("### 🛠️ Admin Prompt")
+        # 안전 브리지: 다양한 구현명을 수용
+        try:
+            mod = None
+            for name in ("admin_prompt", "src.ui.assist.admin_prompt", "src.ui.admin_prompt"):
+                try:
+                    mod = importlib.import_module(name)
+                    break
+                except Exception:
+                    mod = None
+            fn = None
+            for fname in ("render_admin_prompt", "render", "render_ui", "main"):
+                f = getattr(mod, fname, None) if mod else None
+                if callable(f):
+                    fn = f
+                    break
+            if callable(fn):
+                fn()
+            else:
+                st.warning("admin_prompt 렌더러를 찾지 못했습니다.")
+        except Exception as e:
+            _errlog(f"admin_prompt render failed: {e}", where="[render_body.adminprompt]", exc=e)
+
+        left, right = st.columns([1, 4])
+        with left:
+            if st.button("← 뒤로", type="secondary"):
+                ss["_show_admin_prompt"] = False
+                try:
+                    st.rerun()
+                except Exception:
+                    pass
+        return
 
     # 4) 관리자 패널 (외부 모듈 호출: src.ui.ops.indexing_panel)
     if _is_admin_view():
@@ -1186,3 +1221,4 @@ def main() -> None:
 if __name__ == "__main__":
     main()
 # =============================== [19] body & main — END =============================
+
