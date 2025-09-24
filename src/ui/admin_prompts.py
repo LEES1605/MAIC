@@ -1,5 +1,3 @@
-# ===== [01] FILE: src/ui/admin_prompts.py — START =====
-#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """Admin UI — Prompts: 3 modes with single free-text input per mode."""
 from __future__ import annotations
@@ -109,7 +107,7 @@ def _init_admin_page() -> None:
     st.set_page_config(page_title="Prompts Admin", page_icon="🛠️", layout="wide")
     # 관리자: 바로 사이드바 펼침 + 최소 메뉴 렌더
     ensure_admin_sidebar()          # 관리자는 펼침, 학생이면 숨김(프로젝트 정책)
-    from src.ui.utils.sider import show_sidebar 
+    from src.ui.utils.sider import show_sidebar
     try:
         show_sidebar()  # 이 페이지에선 무조건 보이도록 강제
     except Exception:
@@ -122,10 +120,25 @@ def main() -> None:
     _init_admin_page()
 
     repo_full = st.secrets.get("GITHUB_REPO", "")
-    if "/" not in repo_full:
+    owner: str = ""
+    repo: str = ""
+    repo_config_error = False
+
+    if repo_full and "/" in repo_full:
+        owner, repo = repo_full.split("/", 1)
+        if not owner or not repo:
+            repo_config_error = True
+            st.error("GITHUB_REPO 형식이 잘못되었습니다. 예: OWNER/REPO")
+    elif repo_full:
+        repo_config_error = True
         st.error("GITHUB_REPO 형식이 잘못되었습니다. 예: OWNER/REPO")
-        st.stop()
-    owner, repo = repo_full.split("/", 1)
+    else:
+        repo_config_error = True
+        st.info(
+            "GITHUB_REPO 시크릿이 비어 있어 출판 기능이 비활성화됩니다."
+            " 편집과 저장은 계속 사용할 수 있습니다."
+        )
+
     token = st.secrets.get("GITHUB_TOKEN")
     ref = st.secrets.get("GITHUB_BRANCH", "main")
     workflow = st.secrets.get("GITHUB_WORKFLOW", "publish-prompts.yml")
@@ -157,12 +170,19 @@ def main() -> None:
             ok, msgs = _validate_yaml_text(y)
             st.success("검증 통과") if ok else st.error("\n".join(f"- {m}" for m in msgs))
     with c3:
-        if st.button(
+        publish_disabled = repo_config_error or not owner or not repo
+        publish_clicked = st.button(
             "🚀 출판(Publish)",
             type="primary",
             use_container_width=True,
             key="publish_all",
-        ):
+            disabled=publish_disabled,
+            help="GITHUB_REPO 시크릿이 설정되어 있어야 출판할 수 있습니다."
+            if publish_disabled
+            else None,
+        )
+
+        if publish_clicked:
             y = st.session_state.get("_merged_yaml", "")
             ok, msgs = _validate_yaml_text(y)
             if not ok:
@@ -190,4 +210,3 @@ def main() -> None:
     if st.session_state.get("_merged_yaml"):
         st.code(st.session_state["_merged_yaml"], language="yaml")
 # ===== [05] main — END =====
-
