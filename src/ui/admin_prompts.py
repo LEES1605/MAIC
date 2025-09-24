@@ -120,24 +120,10 @@ def main() -> None:
     _init_admin_page()
 
     repo_full = st.secrets.get("GITHUB_REPO", "")
-    owner: str = ""
-    repo: str = ""
-    repo_config_error = False
-
-    if repo_full and "/" in repo_full:
-        owner, repo = repo_full.split("/", 1)
-        if not owner or not repo:
-            repo_config_error = True
-            st.error("GITHUB_REPO 형식이 잘못되었습니다. 예: OWNER/REPO")
-    elif repo_full:
-        repo_config_error = True
+    if "/" not in repo_full:
         st.error("GITHUB_REPO 형식이 잘못되었습니다. 예: OWNER/REPO")
-    else:
-        repo_config_error = True
-        st.info(
-            "GITHUB_REPO 시크릿이 비어 있어 출판 기능이 비활성화됩니다."
-            " 편집과 저장은 계속 사용할 수 있습니다."
-        )
+        st.stop()
+    owner, repo = repo_full.split("/", 1)
 
     token = st.secrets.get("GITHUB_TOKEN")
     ref = st.secrets.get("GITHUB_BRANCH", "main")
@@ -170,19 +156,12 @@ def main() -> None:
             ok, msgs = _validate_yaml_text(y)
             st.success("검증 통과") if ok else st.error("\n".join(f"- {m}" for m in msgs))
     with c3:
-        publish_disabled = repo_config_error or not owner or not repo
-        publish_clicked = st.button(
+        if st.button(
             "🚀 출판(Publish)",
             type="primary",
             use_container_width=True,
             key="publish_all",
-            disabled=publish_disabled,
-            help="GITHUB_REPO 시크릿이 설정되어 있어야 출판할 수 있습니다."
-            if publish_disabled
-            else None,
-        )
-
-        if publish_clicked:
+        ):
             y = st.session_state.get("_merged_yaml", "")
             ok, msgs = _validate_yaml_text(y)
             if not ok:
