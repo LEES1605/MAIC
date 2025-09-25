@@ -1,0 +1,17 @@
+# ===== [01] NEW FILE: .github/codeql/codeql-full.yml — START =====
+# main/schedule에서 사용하는 풀 스캔 설정입니다.
+# 기본 쿼리 세트: 보안 + 품질(시간 더 소요되지만 정밀)
+
+name: "codeql-full"
+disable-default-queries: false
+queries:
+  - uses: security-and-quality
+
+# 풀 스캔은 전체 경로 대상으로 두되, 명백한 비코드 자산은 제외해도 됩니다.
+paths-ignore:
+  - "docs/**"
+  - "**/*.md"
+  - "**/*.ipynb"
+  - ".venv/**"
+  - "venv/**"
+# ===== [01] NEW FILE: .github/codeql/codeql-full.yml — END =====

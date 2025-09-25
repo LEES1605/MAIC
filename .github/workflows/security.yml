@@ -1,24 +1,51 @@
-# File: .github/workflows/security.yml
-# ===================== [01] Security Scans — START =====================
-name: CI • Security
+# ===== [01] FILE: .github/workflows/codeql.yml — START =====
+name: CodeQL
 
 on:
-  pull_request:
   push:
-    branches: [ main ]
+    branches: ["main"]
+  # PR에서도 항상 실행되어야 diff가 계산됩니다.
+  pull_request:
+    branches: ["main"]
+  # 주간 스케줄 스캔(UTC 월요일 19:00)
+  schedule:
+    - cron: "0 19 * * 1"
+  workflow_dispatch:
+
+# ✅ 업로드/메타조회에 필요한 권한을 명시
+permissions:
+  contents: read
+  security-events: write
+  actions: read   # ← 추가: analyze가 workflow run 메타를 조회하는 데 필요
 
 jobs:
-  gitleaks:
+  analyze:
+    name: Analyze (${{ matrix.language }})
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        language: ["python"]
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
         with:
+          # PR 비교의 안정성을 위해 전체 이력
           fetch-depth: 0
-      - name: Run gitleaks
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        # (args 미지원 이슈로 기본 스캔 설정 사용)
-# ===================== [01] Security Scans — END =======================
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          # 동일 구성 인식을 위한 카테고리(언어별)
+          category: "/language:${{ matrix.language }}"
+          upload: true
+# ===== [01] FILE: .github/workflows/codeql.yml — END =====

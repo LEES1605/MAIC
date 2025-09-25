@@ -4,8 +4,8 @@
 Admin Prompt Editor (Persona + 3 Prompts per Mode)
 - Persona: shared across all modes
 - Prompts: Grammar / Sentence / Passage (three distinct inputs)
-- Actions: Build YAML, Validate, Download, Publish
-- NEW: Load Latest (from GitHub Release 'prompts-latest' → prompts.yaml), with auto-load toggle
+- Actions: Load Latest (Release/Repo/Local), Build YAML, Validate, Download, Publish
+- NEW: Health Check section (App URL / Release / Secrets)
 
 SSOT: docs/_gpt/ (MASTERPLAN/CONVENTIONS). Publishing pushes artifacts to Release.
 """
@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import importlib
 import io
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Tuple, Optional
 
@@ -145,11 +147,11 @@ def _gh_dispatch_fallback(
     token: str | None,
     yaml_text: str,
 ) -> None:
+    if req is None:
+        raise RuntimeError("requests not available")
     s, n = _sanitize_ellipsis(yaml_text)
     if n:
         st.info(f"U+2026 {n}개를 '...'로 치환했습니다.")
-    if req is None:
-        raise RuntimeError("requests not available")
     import base64
     url = f"https://api.github.com/repos/{owner}/{repo}/actions/workflows/{workflow}/dispatches"
     payload = {"ref": ref, "inputs": {
@@ -211,7 +213,7 @@ def _publish_yaml_via_github(yaml_text: str) -> None:
         st.exception(exc)
 
 
-# ===== helpers: Load Latest (Release / Repo / Local) =====
+# ===== helpers: Release/Repo/Local fetch =====
 def _split_repo(repo_full: str) -> Tuple[str, str]:
     owner, repo = "", ""
     if repo_full and "/" in repo_full:
@@ -249,11 +251,9 @@ def _fetch_release_prompts_yaml(owner: str, repo: str, token: Optional[str]) -> 
     Then download asset 'prompts.yaml' (case-insensitive).
     """
     try:
-        # Prefer tag 'prompts-latest'
         url_tag = f"https://api.github.com/repos/{owner}/{repo}/releases/tags/prompts-latest"
         rel = _http_get_json(url_tag, token=token)
     except Exception:
-        # Fallback: latest published release
         url_latest = f"https://api.github.com/repos/{owner}/{repo}/releases/latest"
         try:
             rel = _http_get_json(url_latest, token=token)
@@ -270,7 +270,6 @@ def _fetch_release_prompts_yaml(owner: str, repo: str, token: Optional[str]) -> 
     if not target:
         return None
 
-    # Prefer browser_download_url; fallback to API assets/{id}
     dl = target.get("browser_download_url")
     if dl:
         try:
@@ -289,10 +288,6 @@ def _fetch_release_prompts_yaml(owner: str, repo: str, token: Optional[str]) -> 
 
 
 def _fetch_repo_file(owner: str, repo: str, path: str, ref: str, token: Optional[str]) -> Optional[str]:
-    """
-    Private repos: use contents API with raw accept header.
-    Public repos: this also works. Avoid raw.githubusercontent.com for private.
-    """
     url = f"https://api.github.com/repos/{owner}/{repo}/contents/{path}?ref={ref}"
     try:
         return _http_get_text(url, token=token, accept="application/vnd.github.raw")
@@ -329,6 +324,7 @@ def _extract_fields_from_yaml(ytext: str) -> Tuple[str, str, str, str]:
     try:
         data = yaml.safe_load(ytext) or {}
         modes = data.get("modes") or {}
+
         def pick(mode: str, *keys: str) -> str:
             m = modes.get(mode) or {}
             for k in keys:
@@ -336,7 +332,7 @@ def _extract_fields_from_yaml(ytext: str) -> Tuple[str, str, str, str]:
                 if v:
                     return v
             return ""
-        # primary fields
+
         gp = pick("grammar", "persona")
         sp = pick("sentence", "persona")
         pp = pick("passage", "persona")
@@ -345,7 +341,6 @@ def _extract_fields_from_yaml(ytext: str) -> Tuple[str, str, str, str]:
         s = pick("sentence", "system", "prompt")
         p = pick("passage", "system", "prompt")
 
-        # last resort fallbacks (old formats)
         if not g:
             g = (data.get("grammar") or "").strip()
         if not s:
@@ -371,12 +366,6 @@ def _apply_yaml_to_fields(ytext: str) -> None:
 
 
 def _load_latest_into_fields(source_hint: str = "release") -> None:
-    """
-    Load latest prompts.yaml and prefill fields:
-    - source_hint = 'release' → release (prompts-latest → prompts.yaml)
-    - 'repo' → docs/_gpt/prompts.yaml (contents API)
-    - 'local' → local file fallback
-    """
     repo_full = st.secrets.get("GITHUB_REPO", "")
     token = st.secrets.get("GITHUB_TOKEN")
     ref = st.secrets.get("GITHUB_BRANCH", "main")
@@ -388,12 +377,10 @@ def _load_latest_into_fields(source_hint: str = "release") -> None:
         ytext = _fetch_release_prompts_yaml(owner, repo, token)
 
     if ytext is None and owner and repo:
-        # try repo tree (docs/_gpt/prompts.yaml → prompts.sample.yaml)
         ytext = _fetch_repo_file(owner, repo, "docs/_gpt/prompts.yaml", ref, token) \
             or _fetch_repo_file(owner, repo, "docs/_gpt/prompts.sample.yaml", ref, token)
 
     if ytext is None:
-        # local fallback inside the app filesystem
         ytext = _load_yaml_from_local_candidates()
 
     if not ytext:
@@ -407,6 +394,52 @@ def _load_latest_into_fields(source_hint: str = "release") -> None:
             st.write("\n".join(f"- {m}" for m in msgs))
     _apply_yaml_to_fields(ytext)
     st.success("최신 프롬프트를 칸에 주입했습니다.")
+
+
+# ===== health check helpers =====
+def _probe_app_url(url: str, timeout: int = 8) -> Tuple[bool, str, Optional[int]]:
+    if req is None:
+        return False, "requests not available", None
+    try:
+        t0 = time.perf_counter()
+        r = req.get(url, headers={"User-Agent": "MAIC-HealthCheck/1.0"}, timeout=timeout, allow_redirects=True)
+        ms = int((time.perf_counter() - t0) * 1000)
+        return True, f"HTTP {r.status_code}, {ms} ms", r.status_code
+    except Exception as exc:  # noqa: BLE001
+        return False, f"{type(exc).__name__}: {exc}", None
+
+
+def _fetch_release_meta(owner: str, repo: str, token: Optional[str]) -> Tuple[bool, str]:
+    """
+    Return (has_prompts_yaml, info_text)
+    """
+    try:
+        rel = _http_get_json(f"https://api.github.com/repos/{owner}/{repo}/releases/tags/prompts-latest", token=token)
+    except Exception:
+        try:
+            rel = _http_get_json(f"https://api.github.com/repos/{owner}/{repo}/releases/latest", token=token)
+        except Exception as exc:  # noqa: BLE001
+            return False, f"Release not found: {exc}"
+
+    tag = rel.get("tag_name") or "latest"
+    published = rel.get("published_at") or rel.get("created_at")
+    try:
+        ts = datetime.fromisoformat(published.replace("Z", "+00:00")).astimezone(timezone.utc) if published else None
+        when = ts.strftime("%Y-%m-%d %H:%M UTC") if ts else "unknown"
+    except Exception:
+        when = str(published or "unknown")
+
+    assets = rel.get("assets") or []
+    info = f"tag={tag}, published={when}, assets={len(assets)}"
+    has_prompts = False
+    for a in assets:
+        name = (a.get("name") or "").lower()
+        if name in ("prompts.yaml", "prompts.yml"):
+            size = a.get("size")
+            info += f", prompts.yaml={size}B"
+            has_prompts = True
+            break
+    return has_prompts, info
 
 
 # ===== page init =====
@@ -426,10 +459,56 @@ def main() -> None:
     st.markdown("### 관리자 프롬프트 편집기 — 페르소나 + 모드별 프롬프트(3)")
     st.caption("SSOT: `docs/_gpt/`의 규약·마스터플랜에 맞춰 편집하세요. (로드/병합/검증/다운로드/출판)")
 
-    # --- Auto-load controls (top) ---
+    # --- 0) Health Check (App / Release / Secrets) ---
+    st.markdown("#### 🩺 상태 점검")
+    default_app_url = st.secrets.get("APP_URL") or "https://fkygwdujjljdz9z9pugasr.streamlit.app"
+    col_h1, col_h2, col_h3 = st.columns([0.5, 0.25, 0.25])
+    with col_h1:
+        app_url = st.text_input("앱 주소(.streamlit.app)", value=default_app_url, key="ap_health_app_url")
+    with col_h2:
+        run_health = st.button("상태 점검 실행", use_container_width=True, key="ap_health_run")
+    with col_h3:
+        st.link_button("앱 열기", url=app_url, use_container_width=True)
+
+    repo_full = st.secrets.get("GITHUB_REPO", "")
+    owner, repo = _split_repo(repo_full)
+    repo_ok = bool(owner and repo)
+
+    if run_health:
+        # app url
+        ok_app, app_info, status = _probe_app_url(app_url)
+        if ok_app and status and status < 500:
+            st.success(f"앱 URL OK — {app_info}")
+        else:
+            st.error(f"앱 URL 점검 실패 — {app_info}")
+
+        # release
+        if repo_ok:
+            has_prompts, rel_info = _fetch_release_meta(owner, repo, st.secrets.get("GITHUB_TOKEN"))
+            if has_prompts:
+                st.success(f"릴리스 OK — {rel_info}")
+            else:
+                st.warning(f"릴리스는 있으나 prompts.yaml 미발견 — {rel_info}")
+            st.markdown(
+                f"- 릴리스 보기: https://github.com/{owner}/{repo}/releases (새 창에서 열림)"
+            )
+        else:
+            st.info("GITHUB_REPO가 비어있거나 형식이 잘못되어 릴리스 점검을 건너뜁니다. (예: OWNER/REPO)")
+
+        # secrets
+        if not repo_ok:
+            st.error("시크릿 점검: GITHUB_REPO 형식 오류 또는 미설정")
+        else:
+            st.success(f"시크릿 점검: GITHUB_REPO OK — `{owner}/{repo}`")
+    st.divider()
+
+    # --- 1) Auto-load controls (top) ---
     c0a, c0b, c0c = st.columns([0.32, 0.34, 0.34])
     with c0a:
-        auto_load = st.checkbox("로그인 후 진입 시 최신 프리필(릴리스)", value=st.session_state.get("ap_auto_load_enabled", True), key="ap_auto_load_enabled")
+        auto_load = st.checkbox(
+            "로그인 후 진입 시 최신 프리필(릴리스)", value=st.session_state.get("ap_auto_load_enabled", True),
+            key="ap_auto_load_enabled",
+        )
     with c0b:
         if st.button("🔄 최신 프롬프트 불러오기(릴리스 우선)", use_container_width=True, key="ap_load_latest"):
             _load_latest_into_fields("release")
@@ -437,7 +516,6 @@ def main() -> None:
         if st.button("📂 레포에서 불러오기(docs/_gpt)", use_container_width=True, key="ap_load_repo"):
             _load_latest_into_fields("repo")
 
-    # One-shot autoload per session
     if auto_load and not st.session_state.get("_ap_loaded_once"):
         try:
             _load_latest_into_fields("release")
@@ -445,7 +523,7 @@ def main() -> None:
         except Exception as exc:  # noqa: BLE001
             st.info(f"자동 로드 실패 — 수동으로 불러오기를 시도하세요. ({exc})")
 
-    # --- Inputs: Persona + 3 Prompts (Grammar/Sentence/Passage) ---
+    # --- 2) Inputs: Persona + 3 Prompts (Grammar/Sentence/Passage) ---
     persona = st.text_area("① 페르소나(Persona) — 모든 모드에 공통 적용", height=240, key="ap_persona")
 
     st.markdown("#### ② 모드별 프롬프트(지시/규칙)")
@@ -459,7 +537,7 @@ def main() -> None:
 
     st.divider()
 
-    # --- Actions: Build YAML / Validate / Download ---
+    # --- 3) Actions: Build YAML / Validate / Download ---
     c_left, c_mid, c_right = st.columns(3)
     with c_left:
         if st.button("🧠 YAML 병합(모드별)", use_container_width=True, key="ap_build_yaml"):
@@ -504,7 +582,7 @@ def main() -> None:
             disabled=disabled,
         )
 
-    # --- Publish ---
+    # --- 4) Publish ---
     st.markdown("#### ③ 출판(Publish)")
     repo_full = st.secrets.get("GITHUB_REPO", "")
     repo_bad = (not repo_full) or ("/" not in repo_full)
@@ -526,7 +604,7 @@ def main() -> None:
         else:
             _publish_yaml_via_github(yaml_text=ytext)
 
-    # --- Preview ---
+    # --- 5) Preview ---
     ytext = st.session_state.get("_PROMPTS_YAML", "")
     if ytext:
         st.markdown("#### YAML 미리보기")

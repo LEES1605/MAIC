@@ -1,6 +1,6 @@
 ## Workspace Pointer
 
-Source-of-Truth: github://LEES1605/MAIC@main/docs/_gpt/MAIC_refactor_report.md
+Source-of-Truth: github://LEES1605/MAIC@main/docs/_gpt
 SSOT Root: docs/_gpt/
 Owner: @LEES1605
 Version: 2025-09-08
