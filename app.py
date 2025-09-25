@@ -347,19 +347,34 @@ def _reset_rerun_guard(tag: str) -> None:
 # =============================== [08] header — START ==================================
 def _header() -> None:
     """
-    헤더 배지는 외부 헤더가 있으면 그대로 사용,
-    없으면 파일시스템 READY 기준(SSOT)으로 폴백 렌더.
+    H1: 상단 헤더에서 **최신 릴리스 복원 여부**를 3단계(🟩/🟨/🟧)로 항상 표기합니다.
+    - 우선 tri-state 배지를 렌더(지연 import, 실패 시 무시)
+    - 가능하면 외부 헤더(src.ui.header.render)도 이어서 렌더
+    - 외부 헤더가 없을 때만 간단 폴백을 표시
+    (H1 규칙은 MASTERPLAN vNext의 합의안을 준수합니다)
     """
-    # 1) 외부 헤더가 있으면 먼저 사용
+    if st is None:
+        return
+
+    # 0) Tri-state readiness chip (always try first)
+    try:
+        # 지연 import로 CI/비-Streamlit 환경에서도 안전
+        from src.ui.utils.readiness import render_readiness_header  # type: ignore
+        render_readiness_header(compact=True)
+    except Exception:
+        # 배지 렌더 실패는 치명적이지 않으므로 조용히 계속 진행
+        pass
+
+    # 1) 외부 헤더가 정의되어 있으면 추가로 렌더
     try:
         from src.ui.header import render as _render_header
         _render_header()
         return
     except Exception:
+        # 외부 헤더가 없으면 아래 폴백으로 이어감
         pass
 
-    if st is None:
-        return
+    # 2) 폴백 헤더 (파일시스템 READY 기준 간이 배지 + 경로 표시)
     try:
         p = _persist_dir_safe()
         ok = core_is_ready(p)
@@ -1144,5 +1159,3 @@ def main() -> None:
 if __name__ == "__main__":
     main()
 # ================================= [19] body & main — END =============================
-
-
