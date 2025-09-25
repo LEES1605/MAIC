@@ -1,298 +1,217 @@
-# ===== [01] FILE: src/runtime/gh_release.py — START =====
+# =============================== [01] imports & types — START =========================
 from __future__ import annotations
 
-import importlib
 import io
 import os
+import re
+import json
 import time
-import tempfile
+import shutil
+import zipfile
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Optional, Callable
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+import requests
+# =============================== [01] imports & types — END ===========================
+
+
+# =============================== [02] config & utils — START ==========================
 @dataclass(frozen=True)
 class GHConfig:
     owner: str
     repo: str
     token: Optional[str] = None
-    timeout: int = 20
-    max_retries: int = 3         # 네트워크 재시도 횟수
-    backoff_base: float = 0.4    # 지수 백오프 시작(초)
-    chunk_size: int = 2 << 20    # 2 MiB 스트리밍 청크
 
 
-class GHError(RuntimeError):
-    pass
+class _RestoreResult(dict):
+    """단순 딕트 형태로 반환(기존 app.py 호환)."""
+    def __init__(self, tag: Optional[str], release_id: Optional[int]):
+        super().__init__(tag=tag, release_id=release_id)
+        self.tag = tag
+        self.release_id = release_id
+# =============================== [02] config & utils — END ============================
 
 
-@dataclass(frozen=True)
-class RestoreLog:
-    tag: Optional[str]
-    release_id: Optional[int]
-    asset_name: Optional[str]
-    detail: str
-    used_latest_endpoint: bool = False
-
-
+# =============================== [03] class GHReleases — START ========================
 class GHReleases:
-    """GitHub Releases client (SSOT). Requests 기반, 스트리밍 다운로드/업로드, 재시도 내장."""
+    """
+    GitHub Releases 헬퍼.
+    - 'restore_latest_index()'에서 자산 이름을 광범위 패턴으로 탐지하여
+      index-타임스탬프 릴리스/자산에도 견고하게 동작.
+    """
 
-    def __init__(self, cfg: GHConfig) -> None:
+    # 기본 패턴(필터는 '소문자' 기준, fnmatch 유사: *와 ?를 지원)
+    DEFAULT_ASSET_GLOBS = [
+        "*indices*.zip",   # indices.zip / indices-YYYYMMDD.zip …
+        "*index*.zip",     # index.zip / index-1758719924.zip …
+        "*persist*.zip",   # persist.zip / persist-latest.zip …
+        "*hq_index*.zip",  # hq_index.zip …
+        "*prepared*.zip",  # prepared.zip …
+    ]
+
+    def __init__(self, cfg: GHConfig):
         self.cfg = cfg
-        self._session: Optional[Any] = None  # requests.Session
 
-    # ------------------------- http helpers -------------------------
-    def _sess(self) -> Any:
-        if self._session is None:
-            try:
-                requests = importlib.import_module("requests")
-            except Exception as exc:
-                raise GHError("requests is required: pip install requests") from exc
-            s = requests.Session()
-            s.headers.update(
-                {
-                    "Accept": "application/vnd.github+json",
-                    "User-Agent": "MAIC-IndexClient/1.0",
-                }
-            )
-            if self.cfg.token:
-                s.headers["Authorization"] = f"Bearer {self.cfg.token}"
-            self._session = s
-        return self._session
+    # ---------- HTTP ----------
+    def _headers(self, accept_json: bool = True) -> Dict[str, str]:
+        h = {"Accept": "application/vnd.github+json" if accept_json else "*/*"}
+        if self.cfg.token:
+            h["Authorization"] = f"Bearer {self.cfg.token}"
+        return h
 
-    def _with_retry(self, fn: Callable[[], Any]) -> Any:
-        n = max(1, int(self.cfg.max_retries))
-        base = max(0.1, float(self.cfg.backoff_base))
-        last = None
-        for i in range(n):
-            try:
-                return fn()
-            except Exception as e:
-                last = e
-                # 지수 백오프 + 소량 지터
-                time.sleep(base * (2 ** i) + (os.getpid() % 13) * 0.007)
-        raise GHError(str(last) if last else "request failed")
+    def _get_json(self, url: str, timeout: int = 20) -> dict:
+        r = requests.get(url, headers=self._headers(True), timeout=timeout)
+        r.raise_for_status()
+        return r.json()
 
-    def _get(self, url: str):
-        def _do():
-            r = self._sess().get(url, timeout=self.cfg.timeout)
-            if r.status_code == 404:
-                raise GHError("resource not found")
-            r.raise_for_status()
-            return r
-        return self._with_retry(_do)
+    def _get_bytes(self, url: str, timeout: int = 60) -> bytes:
+        r = requests.get(url, headers=self._headers(False), timeout=timeout, stream=True)
+        r.raise_for_status()
+        buf = io.BytesIO()
+        for chunk in r.iter_content(chunk_size=1024 * 256):
+            if chunk:
+                buf.write(chunk)
+        return buf.getvalue()
 
-    def _post(self, url: str, **kw: Any):
-        def _do():
-            r = self._sess().post(url, timeout=self.cfg.timeout, **kw)
-            r.raise_for_status()
-            return r
-        return self._with_retry(_do)
-
-    def _delete(self, url: str) -> None:
-        def _do():
-            r = self._sess().delete(url, timeout=self.cfg.timeout)
-            if r.status_code not in (200, 201, 202, 204, 404):
-                r.raise_for_status()
-        self._with_retry(_do)
-
-    # ------------------------- release ops -------------------------
+    # ---------- Releases ----------
     def get_release_by_tag(self, tag: str) -> dict:
-        url = f"https://api.github.com/repos/{self.cfg.owner}/{self.cfg.repo}/releases/tags/{tag}"
-        return self._get(url).json()
+        u = f"https://api.github.com/repos/{self.cfg.owner}/{self.cfg.repo}/releases/tags/{tag}"
+        return self._get_json(u)
 
     def get_latest_release(self) -> dict:
-        url = f"https://api.github.com/repos/{self.cfg.owner}/{self.cfg.repo}/releases/latest"
-        return self._get(url).json()
+        u = f"https://api.github.com/repos/{self.cfg.owner}/{self.cfg.repo}/releases/latest"
+        return self._get_json(u)
 
-    def ensure_release(self, tag: str, name: Optional[str] = None) -> dict:
-        """Return release by tag; create if missing."""
-        name = name or f"Indices {tag}"
-        try:
-            return self.get_release_by_tag(tag)
-        except GHError:
-            url = f"https://api.github.com/repos/{self.cfg.owner}/{self.cfg.repo}/releases"
-            payload = {"tag_name": tag, "name": name, "prerelease": False}
-            return self._post(url, json=payload).json()
+    # ---------- helpers ----------
+    @staticmethod
+    def _compile_glob(glob: str) -> re.Pattern:
+        # 단순 와일드카드(*, ?) → 정규식
+        esc = re.escape(glob).replace(r"\*", ".*").replace(r"\?", ".")
+        return re.compile(rf"^{esc}$", re.I)
 
-    def delete_asset_if_exists(self, rel: dict, asset_name: str) -> None:
-        for a in rel.get("assets", []) or []:
-            if a.get("name") == asset_name:
-                asset_id = a.get("id")
-                if asset_id:
-                    url = f"https://api.github.com/repos/{self.cfg.owner}/{self.cfg.repo}/releases/assets/{asset_id}"
-                    self._delete(url)
-
-    def upload_asset(self, rel: dict, file_path: Path, *, label: Optional[str] = None) -> None:
-        if not file_path.exists():
-            raise GHError(f"asset file not found: {file_path}")
-        fname = file_path.name
-        self.delete_asset_if_exists(rel, fname)
-
-        upload_url_tpl = rel.get("upload_url", "")
-        base = upload_url_tpl.split("{", 1)[0]
-        label_q = f"&label={label}" if label else ""
-        url = f"{base}?name={fname}{label_q}"
-
-        size = file_path.stat().st_size
-        headers = {
-            "Content-Type": "application/zip",
-            "Content-Length": str(size),
-        }
-        def _do():
-            with file_path.open("rb") as fp:
-                r = self._sess().post(url, headers=headers, data=fp, timeout=self.cfg.timeout)
-                r.raise_for_status()
-        self._with_retry(_do)
-
-    # ------------------------- download/restore -------------------------
-    def _download_to_temp(self, url: str) -> Path:
-        """
-        Stream download to a temp file (memory-safe).
-        Returns local temp file path.
-        """
-        tmp = Path(tempfile.mkstemp(prefix="maic_", suffix=".zip")[1])
-        try:
-            def _do():
-                with self._sess().get(
-                    url, headers={"Accept": "application/octet-stream"},
-                    timeout=self.cfg.timeout, stream=True
-                ) as r:
-                    r.raise_for_status()
-                    with tmp.open("wb") as out:
-                        for chunk in r.iter_content(chunk_size=self.cfg.chunk_size):
-                            if chunk:
-                                out.write(chunk)
-                return tmp
-            return self._with_retry(_do)
-        except Exception:
-            try: tmp.unlink(missing_ok=True)
-            except Exception: pass
-            raise
+    @classmethod
+    def _normalize_patterns(
+        cls, candidates: Optional[Iterable[str]]
+    ) -> List[re.Pattern]:
+        globs = list(cls.DEFAULT_ASSET_GLOBS)
+        for c in candidates or []:
+            c = (c or "").strip()
+            if not c:
+                continue
+            # 확장자 없으면 '.zip'도 허용
+            if "." not in c:
+                globs.append(c)
+                globs.append(f"{c}.zip")
+                globs.append(f"*{c}*.zip")
+            else:
+                globs.append(c)
+                # glob 문자가 없다면 양쪽 확장: "*name*"
+                if "*" not in c and "?" not in c:
+                    globs.append(f"*{c}*")
+        # 중복 제거
+        seen, uniq = set(), []
+        for g in globs:
+            g2 = g.lower()
+            if g2 in seen:
+                continue
+            seen.add(g2)
+            uniq.append(g)
+        return [cls._compile_glob(g) for g in uniq]
 
     @staticmethod
-    def _safe_extract_zip_file(zip_path: Path, dest: Path) -> None:
-        """Extract zip safely from file path (prevent path traversal)."""
-        import zipfile
-        dest.mkdir(parents=True, exist_ok=True)
-        with zipfile.ZipFile(zip_path, "r") as zf:
-            for info in zf.infolist():
-                rel = Path(info.filename)
-                if rel.is_absolute() or ".." in rel.parts:
-                    raise GHError(f"unsafe path in zip: {info.filename}")
+    def _is_zip_member_safe(member: zipfile.ZipInfo, dest: Path) -> bool:
+        # ZipSlip 방지: 추출 경로가 dest 밖으로 벗어나지 않는지 확인
+        target = (dest / member.filename).resolve()
+        return str(target).startswith(str(dest.resolve()))
+
+    @staticmethod
+    def _extract_zip_safely(zip_bytes: bytes, dest: Path) -> None:
+        with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+            for m in zf.infolist():
+                if not GHReleases._is_zip_member_safe(m, dest):
+                    raise RuntimeError(f"Unsafe zip path detected: {m.filename}")
             zf.extractall(dest)
 
-    def _clean_destination(self, dest: Path) -> None:
-        if not dest.exists():
-            return
-        for p in dest.glob("*"):
-            try:
-                if p.is_dir():
-                    for q in p.rglob("*"):
-                        if q.is_file():
-                            q.unlink(missing_ok=True)
-                    p.rmdir()
-                else:
-                    p.unlink(missing_ok=True)
-            except Exception:
-                pass
-
+    # ---------- core ----------
     def restore_latest_index(
         self,
         *,
-        tag_candidates: Iterable[str],
-        asset_candidates: Iterable[str],
-        dest: Path,
+        tag_candidates: Optional[Iterable[str]] = None,
+        asset_candidates: Optional[Iterable[str]] = None,
+        dest: Path | str,
         clean_dest: bool = True,
-    ) -> RestoreLog:
+    ) -> _RestoreResult:
         """
-        Try tags and asset names in order, then fall back to /releases/latest.
-        Always returns RestoreLog(tag/release_id/asset_name/detail/...).
+        최신 인덱스 자산(zip)을 다운로드 → dest에 복원.
+        - tag_candidates: 우선 고려할 태그 목록(없으면 latest)
+        - asset_candidates: 자산명 후보(없어도 DEFAULT_ASSET_GLOBS로 탐색)
+        - dest: 복원 대상 디렉터리
         """
-        tried: list[str] = []
-        last_err: Optional[str] = None
+        dest = Path(dest)
+        dest.mkdir(parents=True, exist_ok=True)
 
-        def _pick_zip(assets: list[dict]) -> Optional[dict]:
-            for name in asset_candidates:
-                for a in assets:
-                    if a.get("name") == name:
-                        return a
-            for a in assets:
-                if str(a.get("name", "")).lower().endswith(".zip"):
-                    return a
-            return None
+        # 1) 릴리스 선택
+        rel: Optional[dict] = None
+        tried_tags: List[str] = []
+        if tag_candidates:
+            for tg in tag_candidates:
+                try:
+                    rel = self.get_release_by_tag(tg)
+                    break
+                except Exception:
+                    tried_tags.append(tg)
+                    rel = None
+        if rel is None:
+            rel = self.get_latest_release()
 
-        # 1) try provided tags
-        for tag in tag_candidates:
-            try:
-                rel = self.get_release_by_tag(tag)
-            except Exception as exc:
-                tried.append(f"tag:{tag}=404")
-                last_err = str(exc)
+        tag = (rel.get("tag_name") or rel.get("name") or "").strip() or None
+        release_id = rel.get("id")
+        assets = rel.get("assets") or []
+
+        # 2) 자산 선택(광범위 패턴)
+        patterns = self._normalize_patterns(asset_candidates)
+        chosen = None
+        for a in assets:
+            name = (a.get("name") or "").strip()
+            name_lc = name.lower()
+            # “source code (zip)” 같은 자동 항목은 assets[]에 안 오지만 혹시 모를 잡음 방지
+            if not name or "source code" in name_lc:
                 continue
-
-            picked = _pick_zip(rel.get("assets") or [])
-            if not picked:
-                tried.append(f"tag:{tag}=no-zip")
-                continue
-
-            tmp = self._download_to_temp(picked.get("browser_download_url"))
-            try:
-                if clean_dest:
-                    self._clean_destination(dest)
-                self._safe_extract_zip_file(tmp, dest)
-            finally:
-                try: tmp.unlink(missing_ok=True)
-                except Exception: pass
-
-            name = picked.get("name", "unknown.zip")
-            tag_name = str(rel.get("tag_name") or tag or "").strip() or None
-            release_id = rel.get("id")
-            return RestoreLog(
-                tag=tag_name,
-                release_id=release_id,
-                asset_name=name,
-                detail=f"OK: tag={tag}, asset={name}, files restored to {dest}",
-                used_latest_endpoint=False,
+            if any(pat.match(name_lc) for pat in patterns):
+                chosen = a
+                break
+        if not chosen:
+            cand_list = ", ".join(sorted({p.pattern for p in patterns}))
+            raise RuntimeError(
+                f"index asset not found in release '{tag or release_id}'. "
+                f"patterns={cand_list}"
             )
 
-        # 2) fall back to latest release
-        try:
-            rel = self.get_latest_release()
-            picked = _pick_zip(rel.get("assets") or [])
-            if picked:
-                tmp = self._download_to_temp(picked.get("browser_download_url"))
-                try:
-                    if clean_dest:
-                        self._clean_destination(dest)
-                    self._safe_extract_zip_file(tmp, dest)
-                finally:
-                    try: tmp.unlink(missing_ok=True)
-                    except Exception: pass
+        url = chosen.get("browser_download_url")
+        if not url:
+            raise RuntimeError("chosen asset has no browser_download_url")
 
-                name = picked.get("name", "unknown.zip")
-                tag_name = str(rel.get("tag_name") or "latest").strip() or None
-                release_id = rel.get("id")
-                return RestoreLog(
-                    tag=tag_name,
-                    release_id=release_id,
-                    asset_name=name,
-                    detail=f"OK: tag=latest, asset={name}, files restored to {dest}",
-                    used_latest_endpoint=True,
-                )
-            tried.append("latest=no-zip")
-        except Exception as exc:
-            tried.append("latest=error")
-            last_err = str(exc)
+        # 3) 다운로드
+        data = self._get_bytes(url)
 
-        detail = "; ".join(tried)
-        raise GHError(f"no matching release asset. tried: {detail}. last={last_err}")
+        # 4) 정리 & 복원
+        if clean_dest:
+            for item in dest.iterdir():
+                if item.is_file():
+                    item.unlink(missing_ok=True)
+                else:
+                    shutil.rmtree(item, ignore_errors=True)
 
-    # convenience
-    def upload_index_zip(self, *, tag: str, name: Optional[str], zip_path: Path, make_tag: bool = True) -> str:
-        rel = self.ensure_release(tag, name=name or f"Indices {tag}")
-        self.upload_asset(rel, zip_path, label=None)
-        return f"OK: uploaded {zip_path.name} to tag={tag}"
+        self._extract_zip_safely(data, dest)
 
-__all__ = ["GHConfig", "GHError", "RestoreLog", "GHReleases"]
-# ===== [01] FILE: src/runtime/gh_release.py — END =====
+        # 5) 간단 무결성 힌트(옵션): 파일 존재 체크
+        chunks = dest / "chunks.jsonl"
+        ready = dest / ".ready"
+        if not chunks.exists():
+            raise RuntimeError("restored archive does not contain 'chunks.jsonl'")
+        # '.ready'가 없더라도 상위에서 normalize_ready_file()이 채운다.
+
+        return _RestoreResult(tag=tag, release_id=release_id)
+# =============================== [03] class GHReleases — END ==========================
