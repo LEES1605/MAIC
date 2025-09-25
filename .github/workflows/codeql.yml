@@ -2,51 +2,101 @@
 name: CodeQL
 
 on:
-  # 기본 브랜치 보호: main에 push 시 정기 분석
+  # main 푸시 때는 풀 스캔
   push:
     branches: ["main"]
-  # ⚠️ PR에서는 경로 필터를 두지 않습니다. (항상 실행되어야 PR diff가 계산됩니다)
+
+  # PR은 Python/워크플로 변경이 있을 때만 트리거(불필요 실행 차단)
   pull_request:
     branches: ["main"]
-  # 주간 스케줄 스캔(UTC 월요일 19:00)
+    paths:
+      - "**/*.py"
+      - ".github/workflows/**"
+      - ".github/codeql/**"
+
+  # 주간 풀 스캔(UTC 월요일 19:00) — 레포 품질 보증
   schedule:
     - cron: "0 19 * * 1"
+
   workflow_dispatch:
 
+# 업로드/메타조회/내용 접근 최소 권한
 permissions:
   contents: read
   security-events: write
+  actions: read
+
+# 동일 ref에서 이전 실행 취소(중복 비용 절감)
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  analyze:
-    name: Analyze (${{ matrix.language }})
+  # ---------------------------------------------------------
+  # PR 빠른 스캔(보안 중심, 대상 경로 축소)
+  # ---------------------------------------------------------
+  analyze_pr:
+    if: ${{ github.event_name == 'pull_request' }}
+    name: PR Quick Scan (security-only)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
-      fail-fast: false
-    # Python 단일 언어 분석(필요 시 'javascript', 'typescript' 등 추가)
       matrix:
         language: ["python"]
 
     steps:
-      - name: Checkout repository
+      - name: Checkout (HEAD)
         uses: actions/checkout@v4
         with:
-          # PR 비교의 안정성을 위해 전체 이력
-          fetch-depth: 0
+          fetch-depth: 1  # PR은 diff가 목적이므로 얕은 클론으로 속도↑
 
-      - name: Initialize CodeQL
+      - name: Initialize CodeQL (PR)
         uses: github/codeql-action/init@v3
         with:
           languages: ${{ matrix.language }}
+          # PR용 경량 설정: 경로 제한 + 보안 쿼리
+          config-file: .github/codeql/codeql-pr.yml
 
-      # Python은 빌드 단계가 보통 필요 없지만, 멀티언어 확장 대비하여 유지 가능
-      - name: Autobuild
-        uses: github/codeql-action/autobuild@v3
+      # 파이썬은 빌드 필요 없음 → autobuild 제거로 수 초 절약
 
-      - name: Perform CodeQL Analysis
+      - name: Analyze (PR)
         uses: github/codeql-action/analyze@v3
         with:
-          # ✅ 기본 브랜치와 동일한 카테고리 키로 업로드되어야 PR diff가 계산됩니다.
           category: "/language:${{ matrix.language }}"
           upload: true
+          threads: 2  # 런너 vCPU 활용(자동값과 유사하나 명시)
+          ram: "6144" # 메모리 힌트(런너 한계 내)
+
+  # ---------------------------------------------------------
+  # main 푸시/스케줄 풀 스캔(보안+품질, 전체 경로)
+  # ---------------------------------------------------------
+  analyze_main:
+    if: ${{ github.event_name != 'pull_request' }}
+    name: Full Scan (security-and-quality)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      matrix:
+        language: ["python"]
+
+    steps:
+      - name: Checkout (full history for accurate diff)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Initialize CodeQL (Full)
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          # 풀 스캔: 보안+품질 전체 쿼리
+          config-file: .github/codeql/codeql-full.yml
+
+      - name: Analyze (Full)
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"
+          upload: true
+          threads: 2
+          ram: "7168"
 # ===== [01] FILE: .github/workflows/codeql.yml — END =====
