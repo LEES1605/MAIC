@@ -1,0 +1,27 @@
+# ===== [01] NEW FILE: .github/codeql/codeql-pr.yml — START =====
+# PR에서는 "보안 핵심 쿼리"만 실행하고, 분석 대상을 src/pages 등 핵심 폴더로 축소합니다.
+# 필요 시 include/exclude 경로는 팀 합의에 맞춰 조정하세요.
+
+name: "codeql-pr"
+disable-default-queries: false
+queries:
+  - uses: security-extended  # 보안 중심(품질 쿼리는 제외하여 속도↑)
+
+paths:
+  - "src/**"
+  - "pages/**"
+  - "admin_prompt.py"
+
+paths-ignore:
+  - "docs/**"
+  - "**/*.md"
+  - "**/*.txt"
+  - "**/*.yml"
+  - "**/*.yaml"
+  - "**/*.json"
+  - "**/*.ipynb"
+  - "**/tests/**"
+  - ".github/**"
+  - ".venv/**"
+  - "venv/**"
+# ===== [01] NEW FILE: .github/codeql/codeql-pr.yml — END =====
