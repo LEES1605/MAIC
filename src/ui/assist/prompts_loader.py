@@ -167,26 +167,25 @@ def _parse_modes_like(data: dict) -> Dict[str, str]:
 
 
 # =============================== [04] loader core — START =============================
-def _download_prompts_yaml_from_release(
-    owner: str, repo: str, token: Optional[str], prefer_tag: Optional[str]
-) -> Optional[str]:
-    """릴리스에서 prompts.yaml(또는 .yml)을 가져온다. 없으면 None."""
-    # 1) prefer_tag 우선
-    if prefer_tag:
+def _download_prompts_yaml_from_repo(owner: str, repo: str, token: Optional[str], ref: str = "main") -> Optional[str]:
+    for path in ("docs/_gpt/prompts.yaml", "docs/_gpt/prompts.yml"):
         try:
-            rel = _http_get_json(
-                f"https://api.github.com/repos/{owner}/{repo}/releases/tags/{prefer_tag}",
-                token=token,
-            )
-            for a in rel.get("assets") or []:
-                name = (a.get("name") or "").lower()
-            # _download_prompts_yaml_from_release 내부에서
-            if name in ("prompts.yaml", "prompts.yml"):
-                # 우선: browser_download_url (공개 raw)
-                try:
-                    return _http_get_text(a.get("browser_download_url"), token=None, accept="application/octet-stream")
-                except Exception:
-                    pass
+            u = f"https://api.github.com/repos/{owner}/{repo}/contents/{path}?ref={ref}"
+            j = _http_get_json(u, token=token)
+            if isinstance(j, dict):
+                enc = j.get("encoding")
+                if enc == "base64":
+                    return base64.b64decode(j.get("content") or b"").decode("utf-8", "ignore")
+                # raw via download_url
+                dl = j.get("download_url")
+                if dl:
+                    return _http_get_text(dl, token=None, accept="application/octet-stream")
+                # raw via Accept header
+                return _http_get_text(u, token=token, accept="application/vnd.github.raw")
+        except Exception:
+            continue
+    return None
+
     # 폴백: assets/{id} (API)
     try:
         aid = a.get("id")
