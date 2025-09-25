@@ -166,7 +166,7 @@ if st:
             new_mode = True
 
         # 끄기(우선): admin=0/false/off or goto=back|home
-        # ❗️기존의 'prompt'는 여기서 제외 → 프롬프트 페이지 진입 시 관리자 모드 유지
+        # ❗️기존의 'prompt'는 제외 → 프롬프트 페이지 진입 시 관리자 모드 유지
         if _has(v, _falsy) or _has(goto, lambda x: _norm(x) in ("back", "home")):
             new_mode = False
 
@@ -348,21 +348,19 @@ def _reset_rerun_guard(tag: str) -> None:
 def _header() -> None:
     """
     H1: 상단 헤더에서 **최신 릴리스 복원 여부**를 3단계(🟩/🟨/🟧)로 항상 표기합니다.
-    - 우선 tri-state 배지를 렌더(지연 import, 실패 시 무시)
-    - 가능하면 외부 헤더(src.ui.header.render)도 이어서 렌더
-    - 외부 헤더가 없을 때만 간단 폴백을 표시
-    (H1 규칙은 MASTERPLAN vNext의 합의안을 준수합니다)
+    - 1) tri-state 배지를 렌더(지연 import, 실패 시 무시)
+    - 2) 가능하면 외부 헤더(src.ui.header.render)도 이어서 렌더
+    - 3) 외부 헤더가 없을 때만 간단 폴백을 표시
+    (H1 규칙은 MASTERPLAN vNext 합의안을 준수) :contentReference[oaicite:5]{index=5}
     """
     if st is None:
         return
 
     # 0) Tri-state readiness chip (always try first)
     try:
-        # 지연 import로 CI/비-Streamlit 환경에서도 안전
         from src.ui.utils.readiness import render_readiness_header  # type: ignore
         render_readiness_header(compact=True)
     except Exception:
-        # 배지 렌더 실패는 치명적이지 않으므로 조용히 계속 진행
         pass
 
     # 1) 외부 헤더가 정의되어 있으면 추가로 렌더
@@ -371,7 +369,6 @@ def _header() -> None:
         _render_header()
         return
     except Exception:
-        # 외부 헤더가 없으면 아래 폴백으로 이어감
         pass
 
     # 2) 폴백 헤더 (파일시스템 READY 기준 간이 배지 + 경로 표시)
@@ -447,17 +444,11 @@ def _render_stepper(*, force: bool = False) -> None:
 def _boot_auto_restore_index() -> None:
     """
     최신 릴리스 자동 복원 훅.
-    규칙:
-      - 로컬 준비 상태(.ready + chunks.jsonl)는 별도 기록(_INDEX_LOCAL_READY)
-      - 원격 최신 태그와 로컬 저장 메타가 '일치'면 복원 생략(최신으로 간주)
-      - '불일치'면 복원 강제
-      - 복원 성공 시에만 세션에 _INDEX_IS_LATEST=True 로 기록(헤더는 이 값으로만 초록 표시)
-
-    UI 연동(진행표시 훅):
-      - 이 함수 내부에서는 **플레이스홀더 생성/렌더를 하지 않는다.**
-        (중복 렌더 방지: [19]에서 스켈레톤을 1회 그린 뒤, 여기서는 데이터만 갱신)
+    - 로컬 준비 상태(.ready + chunks.jsonl)는 _INDEX_LOCAL_READY
+    - 최신 릴리스와 메타가 일치하면 _INDEX_IS_LATEST=True
+    - 자산 후보: indices.zip, persist.zip, hq_index.zip, prepared.zip
     """
-    # 멱등 보호: 한 세션에서 한 번만 수행
+    # 멱등 보호
     try:
         if "st" in globals() and st is not None:
             if st.session_state.get("_BOOT_RESTORE_DONE"):
@@ -465,7 +456,7 @@ def _boot_auto_restore_index() -> None:
     except Exception:
         pass
 
-    # ---- 진행표시 안전 호출자 ---------------------------------------------------------
+    # 진행 로깅 보조
     def _idx(name: str, *args, **kwargs):
         try:
             mod = importlib.import_module("src.services.index_state")
@@ -475,7 +466,6 @@ def _boot_auto_restore_index() -> None:
         except Exception:
             return None
 
-    # 플레이스홀더 생성/렌더는 [19]에서 수행. 여기서는 로그만 누적.
     _idx("ensure_index_state")
     _idx("log", "부팅: 인덱스 복원 준비 중...")
 
@@ -483,11 +473,10 @@ def _boot_auto_restore_index() -> None:
     cj = p / "chunks.jsonl"
     rf = p / ".ready"
 
-    # --- 공용 판정기(역호환 허용) 로드 ---
+    # 준비 판정 보조
     try:
         from src.core.readiness import is_ready_text, normalize_ready_file
     except Exception:
-        # 폴백(동일 로직)
         def _norm(x: str | bytes | None) -> str:
             if x is None:
                 return ""
@@ -505,7 +494,7 @@ def _boot_auto_restore_index() -> None:
             except Exception:
                 return False
 
-    # --- 로컬 준비 상태 계산 & 기록 ---
+    # 로컬 준비 기록
     _idx("step_set", 1, "run", "로컬 준비 상태 확인")
     ready_txt = ""
     try:
@@ -524,7 +513,7 @@ def _boot_auto_restore_index() -> None:
         pass
     _idx("step_set", 1, "ok" if local_ready else "wait", "로컬 준비 기록")
 
-    # --- 복원 메타 유틸(있으면 사용) ---
+    # 복원 메타 유틸(있으면 사용)
     def _safe_load_meta(path):
         try:
             return load_restore_meta(path)  # type: ignore[name-defined]
@@ -545,7 +534,7 @@ def _boot_auto_restore_index() -> None:
 
     stored_meta = _safe_load_meta(p)
 
-    # --- GitHub Releases 최신 메타 취득 ---
+    # GitHub Releases 최신 메타
     _idx("step_set", 2, "run", "원격 릴리스 조회")
     repo_full = os.getenv("GITHUB_REPO", "")
     token = os.getenv("GITHUB_TOKEN", None)
@@ -609,7 +598,7 @@ def _boot_auto_restore_index() -> None:
         except Exception:
             pass
 
-    # --- 일치/불일치 판정 ---
+    # 일치/불일치 판정
     if local_ready and remote_tag and _safe_meta_matches(stored_meta, remote_tag):
         _idx("log", "메타 일치: 복원 생략 (이미 최신)")
         _idx("step_set", 2, "ok", "메타 일치")
@@ -622,7 +611,7 @@ def _boot_auto_restore_index() -> None:
             pass
         return
 
-    # 이외: 최신 복원 강제
+    # 최신 복원 강제
     try:
         import datetime as _dt
         this_year = _dt.datetime.utcnow().year
@@ -1079,18 +1068,23 @@ def _render_body() -> None:
         finally:
             st.session_state["_boot_checked"] = True
 
-    # 2) ✅ 상태 확정(자동 복원/READY 반영)을 헤더보다 먼저 수행
+    # 2) 상태 확정(자동 복원/READY 반영)을 헤더보다 먼저 수행
     try:
         _auto_start_once()
     except Exception as e:
         _errlog(f"auto_start_once failed: {e}", where="[render_body.autostart]", exc=e)
 
-    # 3) 헤더
+    # 3) 헤더(3단계 칩)
     _header()
 
-    # 4) 관리자 패널 (외부 모듈 호출: src.ui.ops.indexing_panel)
+    # 3.5) 부팅/복원 스텝 미니 진행바를 항상 노출
+    try:
+        _render_stepper(force=True)
+    except Exception:
+        pass
+
+    # 4) 관리자 패널
     if _is_admin_view():
-        # 지연 import로 순환 참조 방지 및 오버헤드 최소화
         try:
             from src.ui.ops.indexing_panel import (
                 render_orchestrator_header,
@@ -1121,7 +1115,7 @@ def _render_body() -> None:
         except Exception:
             pass
 
-    # 5) 채팅 메시지 영역 (컨테이너 클래스 분리)
+    # 5) 채팅 메시지 영역
     _inject_chat_styles_once()
     with st.container(key="chat_messages_container"):
         st.markdown('<div class="chatpane-messages" data-testid="chat-messages"><div class="messages">', unsafe_allow_html=True)
@@ -1131,7 +1125,7 @@ def _render_body() -> None:
             _errlog(f"chat panel failed: {e}", where="[render_body.chat]", exc=e)
         st.markdown("</div></div>", unsafe_allow_html=True)
 
-    # 6) 채팅 입력 폼 (컨테이너 클래스 분리 + key 안정화)
+    # 6) 채팅 입력 폼
     with st.container(border=True, key="chat_input_container"):
         st.markdown('<div class="chatpane-input" data-testid="chat-input">', unsafe_allow_html=True)
         st.session_state["__mode"] = _render_mode_controls_pills() or st.session_state.get("__mode", "")
