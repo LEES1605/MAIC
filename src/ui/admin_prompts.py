@@ -178,8 +178,8 @@ def _parse_modes_like(data: dict) -> Dict[str, str]:
     """
     다양한 스키마를 관용적으로 파싱하여 grammar/sentence/passage 3개를 반환.
     지원 형태:
-      - data["modes"]가 리스트: [{key|name, prompt|…}] 또는 [{문법:{...}}]
-      - data["modes"]가 매핑: {grammar|문법: "…" 또는 {prompt|…}}
+      - data["modes"]가 리스트: [{key|name, prompt|...}] 또는 [{문법:{...}}]
+      - data["modes"]가 매핑: {grammar|문법: "..." 또는 {prompt|...}}
       - data["prompts"]가 유사 구조일 때도 동일 처리
     """
     out = {"grammar": "", "sentence": "", "passage": ""}
