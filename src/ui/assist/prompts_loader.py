@@ -49,8 +49,10 @@ def _http_get_json(url: str, token: Optional[str] = None, timeout: int = 12) -> 
     r.raise_for_status()
     return r.json()
 
-def _http_get_text(url: str, token: Optional[str] = None, timeout: int = 20) -> str:
-    headers = {"Accept": "text/plain"}
+def _http_get_text(url: str, token: Optional[str] = None, timeout: int = 20, accept: Optional[str] = None) -> str:
+    headers = {}
+    if accept:
+        headers["Accept"] = accept
     if token:
         headers["Authorization"] = f"Bearer {token}"
     r = req.get(url, headers=headers, timeout=timeout)
@@ -178,10 +180,22 @@ def _download_prompts_yaml_from_release(
             )
             for a in rel.get("assets") or []:
                 name = (a.get("name") or "").lower()
-                if name in ("prompts.yaml", "prompts.yml"):
-                    return _http_get_text(a.get("browser_download_url"), token=token)
-        except Exception:
-            pass
+            # _download_prompts_yaml_from_release 내부에서
+            if name in ("prompts.yaml", "prompts.yml"):
+                # 우선: browser_download_url (공개 raw)
+                try:
+                    return _http_get_text(a.get("browser_download_url"), token=None, accept="application/octet-stream")
+                except Exception:
+                    pass
+    # 폴백: assets/{id} (API)
+    try:
+        aid = a.get("id")
+        if aid:
+            api = f"https://api.github.com/repos/{owner}/{repo}/releases/assets/{aid}"
+            return _http_get_text(api, token=token, accept="application/octet-stream")
+    except Exception:
+        pass
+
 
     # 2) 최신 릴리스들 페이지네이션 스캔(최대 5페이지)
     for page in range(1, 6):
