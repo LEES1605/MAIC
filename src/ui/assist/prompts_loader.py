@@ -17,21 +17,22 @@ _KEY_ALIASES = {
     "sentence": {"sentence", "문장", "mn", "미나", "미나쌤"},
     "passage": {"passage", "지문", "reading", "독해"},
 }
-
+# 값 후보(국문 포함)
 _VAL_FIELDS = (
     "prompt", "instruction", "instructions", "rules", "guidelines",
     "text", "content", "template", "value",
     "system", "assistant",
+    # 한국어 동의어
+    "지시", "지침", "규칙", "가이드", "가이드라인", "설명", "본문", "프롬프트", "템플릿",
+    # 리스트형 후보
+    "lines", "bullets", "items",
 )
 
 def _canon_key(k: str) -> Optional[str]:
     k = (k or "").strip().lower()
     for canon, aliases in _KEY_ALIASES.items():
-        if k in aliases:
+        if k in aliases or k == canon:
             return canon
-    # 영문 정확 키는 그대로 허용
-    if k in _KEY_ALIASES.keys():
-        return k
     return None
 
 def _split_repo(repo_full: str) -> Tuple[str, str]:
@@ -40,7 +41,7 @@ def _split_repo(repo_full: str) -> Tuple[str, str]:
         return o, r
     return "", ""
 
-def _http_get_json(url: str, token: Optional[str] = None, timeout: int = 12) -> dict:
+def _http_get_json(url: str, token: Optional[str] = None, timeout: int = 12) -> Any:
     headers = {"Accept": "application/vnd.github+json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
@@ -62,6 +63,13 @@ def _norm(x: Any) -> str:
     s = str(x)
     return s.replace("\r\n", "\n").strip()
 
+def _join_list(val: Any) -> str:
+    if isinstance(val, list):
+        parts = [_norm(x) for x in val if isinstance(x, str)]
+        if parts:
+            return "\n".join(parts)
+    return ""
+
 def _pick(*candidates: Any) -> str:
     for c in candidates:
         s = _norm(c)
@@ -76,21 +84,20 @@ def _extract_text(val: Any) -> str:
     if isinstance(val, dict):
         # 우선 순위 필드
         s = _pick(*(val.get(k) for k in _VAL_FIELDS if k in val))
+        if not s:
+            # 리스트형 필드 결합
+            s = _join_list(val.get("lines") or val.get("bullets") or val.get("items"))
         if s:
             return s
         # Chat messages 형식 지원
         msgs = val.get("messages") or val.get("chat")
         if isinstance(msgs, list):
-            # 1순위 system, 없으면 모든 content를 개행 결합
             sys = [m for m in msgs if (m.get("role") or "").lower() == "system"]
             if sys and sys[0].get("content"):
                 return _norm(sys[0]["content"])
             return _norm("\n".join(_norm(m.get("content")) for m in msgs if m.get("content")))
     if isinstance(val, list):
-        # 리스트면 문자열만 모아 결합
-        parts = [_norm(x) for x in val if isinstance(x, str)]
-        if parts:
-            return "\n".join(parts)
+        return _join_list(val)
     return ""
 # =============================== [02] helpers — END ===================================
 
@@ -100,9 +107,10 @@ def _parse_modes_like(data: dict) -> Dict[str, str]:
     """
     다양한 스키마를 관용적으로 파싱하여 grammar/sentence/passage 3개를 반환.
     지원 형태:
-      - data["modes"]가 리스트: [{key|name, prompt|...}]
-      - data["modes"]가 매핑: {grammar|문법: "..." 또는 {prompt|...}}
+      - data["modes"]가 리스트: [{key|name, prompt|…}]
+      - data["modes"]가 매핑: {grammar|문법: "…" 또는 {prompt|…}}
       - data["prompts"]가 유사 구조일 때도 동일 처리
+      - 키가 PT/MN 같은 별칭이어도 _canon_key가 정규화
     """
     out = {"grammar": "", "sentence": "", "passage": ""}
 
@@ -134,6 +142,12 @@ def _parse_modes_like(data: dict) -> Dict[str, str]:
     if isinstance(prompts, dict):
         _apply_mapping(prompts)
 
+    # 3) 사후 보정: sentence/passage 한쪽만 있으면 복사
+    if not out["passage"] and out["sentence"]:
+        out["passage"] = out["sentence"]
+    if not out["sentence"] and out["passage"]:
+        out["sentence"] = out["passage"]
+
     return out
 # =============================== [03] parse modes — END ================================
 
@@ -142,29 +156,38 @@ def _parse_modes_like(data: dict) -> Dict[str, str]:
 def _download_prompts_yaml_from_release(
     owner: str, repo: str, token: Optional[str], prefer_tag: Optional[str]
 ) -> Optional[str]:
-    """릴리스에서 prompts.yaml(또는 .yml)을 찾아 텍스트 반환. 없으면 None."""
-    # 1) 태그 시도 → 실패하면 latest
-    rel = None
+    """릴리스에서 prompts.yaml(또는 .yml)을 가져온다. 없으면 None."""
+    # 1) prefer_tag 우선
     if prefer_tag:
         try:
             rel = _http_get_json(
                 f"https://api.github.com/repos/{owner}/{repo}/releases/tags/{prefer_tag}",
                 token=token,
             )
+            for a in rel.get("assets") or []:
+                name = (a.get("name") or "").lower()
+                if name in ("prompts.yaml", "prompts.yml"):
+                    return _http_get_text(a.get("browser_download_url"), token=token)
         except Exception:
-            rel = None
-    if rel is None:
-        rel = _http_get_json(
-            f"https://api.github.com/repos/{owner}/{repo}/releases/latest", token=token
-        )
+            pass
 
-    assets = rel.get("assets") or []
-    for a in assets:
-        name = (a.get("name") or "").lower()
-        if name in ("prompts.yaml", "prompts.yml"):
-            dl = a.get("browser_download_url")
-            if dl:
-                return _http_get_text(dl, token=token)
+    # 2) 최신 릴리스들 페이지네이션 스캔(최대 5페이지)
+    for page in range(1, 6):
+        rels = _http_get_json(
+            f"https://api.github.com/repos/{owner}/{repo}/releases?per_page=20&page={page}",
+            token=token,
+        )
+        if not isinstance(rels, list) or not rels:
+            break
+        for rel in rels:
+            if rel.get("draft") is True:
+                continue
+            for a in rel.get("assets") or []:
+                name = (a.get("name") or "").lower()
+                if name in ("prompts.yaml", "prompts.yml"):
+                    return _http_get_text(a.get("browser_download_url"), token=token)
+        if len(rels) < 20:
+            break
     return None
 
 
@@ -172,8 +195,8 @@ def _download_prompts_yaml_from_repo(
     owner: str, repo: str, token: Optional[str], ref: str = "main",
 ) -> Optional[str]:
     """
-    레포의 SSOT 경로에서 prompts.yaml을 가져오는 폴백.
-    - SSOT: docs/_gpt/ ... (Workspace Pointer 규약) :contentReference[oaicite:3]{index=3}
+    레포 SSOT 경로에서 prompts.yaml 폴백 로드.
+    SSOT: docs/_gpt/ … (Workspace Pointer 규약)  :contentReference[oaicite:4]{index=4}
     """
     for path in ("docs/_gpt/prompts.yaml", "docs/_gpt/prompts.yml"):
         try:
@@ -192,7 +215,8 @@ def load_prompts_from_release(
     prefer_tag: str = "prompts-latest",
 ) -> Dict[str, str]:
     """
-    (1) 릴리스에서 prompts.yaml 시도 → (2) 없으면 레포의 docs/_gpt/prompts.yaml로 폴백.
+    (1) 릴리스 다건 스캔 → prompts.yaml 탐색
+    (2) 실패 시 레포의 docs/_gpt/prompts.yaml 폴백
     어떤 스키마든 관용 파서로 persona + 3모드 텍스트를 뽑아 반환.
     """
     repo_full = repo_full or st.secrets.get("GITHUB_REPO", "")
@@ -203,7 +227,6 @@ def load_prompts_from_release(
 
     ytext = _download_prompts_yaml_from_release(owner, repo, token, prefer_tag)
     if not ytext:
-        # 폴백: SSOT 레포 경로
         ytext = _download_prompts_yaml_from_repo(owner, repo, token, ref="main")
     if not ytext:
         raise RuntimeError("prompts.yaml not found (release nor repo)")
@@ -212,13 +235,11 @@ def load_prompts_from_release(
     if not isinstance(data, dict):
         raise RuntimeError("prompts.yaml: root must be a mapping")
 
-    # persona
     persona = _pick(
         data.get("persona"),
         (data.get("persona") or {}).get("common") if isinstance(data.get("persona"), dict) else None,
     )
 
-    # modes
     modes = _parse_modes_like(data)
 
     return {
