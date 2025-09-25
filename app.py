@@ -181,14 +181,23 @@ if st:
     except Exception:
         pass
 
-    # (D) 관리자/학생 크롬 적용 — 학생은 숨김, 관리자는 최소 사이드바 즉시 렌더
+    # (D) 관리자/학생 크롬 적용 — 학생은 숨김, 관리자는 최소 사이드바 즉시 렌더 (admin_mode 기준)
     try:
-        _sider = __import__("src.ui.utils.sider", fromlist=["apply_admin_chrome"])
-        getattr(_sider, "apply_admin_chrome", lambda **_: None)(
-            back_page="app.py", icon_only=True
-        )
+        adm = bool(st.session_state.get("admin_mode", False))
+        if adm:
+            _sider = __import__("src.ui.utils.sider", fromlist=["apply_admin_chrome"])
+            getattr(_sider, "apply_admin_chrome", lambda **_: None)(
+                back_page="app.py", icon_only=True
+            )
+        else:
+            # 학생: 사이드바 전체 숨김 (네비만 숨기는 CSS가 아니라, 섹션 자체를 숨김)
+            st.markdown(
+                "<style>section[data-testid='stSidebar']{display:none!important;}</style>",
+                unsafe_allow_html=True,
+            )
     except Exception:
         pass
+
 # ===== [04] bootstrap env — END =====
 
 
