@@ -1,39 +1,51 @@
-# ===== [01] FILE: .github/workflows/security.yml — START =====
-name: CI • Security
+# ===== [01] FILE: .github/workflows/codeql.yml — START =====
+name: CodeQL
 
 on:
   push:
-    branches: [ main ]
+    branches: ["main"]
+  # PR에서도 항상 실행되어야 diff가 계산됩니다.
   pull_request:
-    types: [ opened, synchronize, reopened ]
+    branches: ["main"]
+  # 주간 스케줄 스캔(UTC 월요일 19:00)
+  schedule:
+    - cron: "0 19 * * 1"
+  workflow_dispatch:
 
-# 최소 권한 원칙: 코드 읽기 + PR 코멘트 작성만 허용
+# ✅ 업로드/메타조회에 필요한 권한을 명시
 permissions:
   contents: read
-  pull-requests: write
-
-# 동일 ref에 대해 중복 실행 방지
-concurrency: sec-gitleaks-${{ github.ref }}
+  security-events: write
+  actions: read   # ← 추가: analyze가 workflow run 메타를 조회하는 데 필요
 
 jobs:
-  gitleaks:
-    name: Gitleaks Secret Scan
+  analyze:
+    name: Analyze (${{ matrix.language }})
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        language: ["python"]
 
     steps:
-      - name: Checkout target code (PR HEAD or push commit)
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          # PR에서 신규 유출 탐지를 위해 반드시 HEAD를 스캔
-          # 히스토리 기반 룰의 신뢰도 강화를 위해 전체 이력
+          # PR 비교의 안정성을 위해 전체 이력
           fetch-depth: 0
 
-      - name: Run gitleaks
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          # PR 요약 코멘트를 위해 필요(레포 기본 토큰)
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # 액션이 PR 요약을 남기도록 활성화
-          GITLEAKS_ENABLE_SUMMARY: "true"
-# ===== [01] FILE: .github/workflows/security.yml — END =====
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          # 동일 구성 인식을 위한 카테고리(언어별)
+          category: "/language:${{ matrix.language }}"
+          upload: true
+# ===== [01] FILE: .github/workflows/codeql.yml — END =====
