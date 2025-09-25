@@ -110,7 +110,7 @@ def _parse_modes_like(data: dict) -> Dict[str, str]:
       - data["modes"]가 리스트:
           (A) [{key|name|id|mode: "...", prompt|...}]  ← 기존 지원
           (B) [{문법:{...}}, {문장:{...}}, {지문:{...}}] ← ★신규: 중첩 키 스캔
-      - data["modes"]가 매핑: {grammar|문법: "…" 또는 {prompt|…}}
+      - data["modes"]가 매핑: {grammar|문법: "..." 또는 {prompt|...}}
       - data["prompts"]가 유사 구조일 때도 동일 처리
     """
     out = {"grammar": "", "sentence": "", "passage": ""}
@@ -124,7 +124,7 @@ def _parse_modes_like(data: dict) -> Dict[str, str]:
 
     modes = data.get("modes")
 
-    # 1) 리스트: (A) key/name/id/mode… or (B) {문법:{...}} 한 항목=한 모드
+    # 1) 리스트: (A) key/name/id/mode... or (B) {문법:{...}} 한 항목=한 모드
     if isinstance(modes, list):
         for item in modes:
             if not isinstance(item, dict):
