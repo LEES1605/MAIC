@@ -1,24 +1,39 @@
+# ===== [01] FILE: .github/workflows/security.yml — START =====
 name: CI • Security
 
 on:
   push:
     branches: [ main ]
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [ opened, synchronize, reopened ]
 
+# 최소 권한 원칙: 코드 읽기 + PR 코멘트 작성만 허용
 permissions:
   contents: read
   pull-requests: write
 
+# 동일 ref에 대해 중복 실행 방지
+concurrency: sec-gitleaks-${{ github.ref }}
+
 jobs:
   gitleaks:
+    name: Gitleaks Secret Scan
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout target code (PR HEAD or push commit)
+        uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # 히스토리 스캔 위해 권장
+          # PR에서 신규 유출 탐지를 위해 반드시 HEAD를 스캔
+          # 히스토리 기반 룰의 신뢰도 강화를 위해 전체 이력
+          fetch-depth: 0
+
       - name: Run gitleaks
         uses: gitleaks/gitleaks-action@v2
         env:
+          # PR 요약 코멘트를 위해 필요(레포 기본 토큰)
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_ENABLE_SUMMARY: true
+          # 액션이 PR 요약을 남기도록 활성화
+          GITLEAKS_ENABLE_SUMMARY: "true"
+# ===== [01] FILE: .github/workflows/security.yml — END =====
