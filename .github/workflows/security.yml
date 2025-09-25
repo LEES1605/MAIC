@@ -1,33 +1,24 @@
-# File: .github/workflows/security.yml
-# ===================== [01] Security Scans — START =====================
 name: CI • Security
 
 on:
   push:
     branches: [ main ]
-  # 'pull_request' 대신 'pull_request_target'을 사용해 권한 문제 해결
-  pull_request_target:
-    types: [ opened, synchronize, reopened ]
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
 
 jobs:
   gitleaks:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read # 코드 읽기 권한 부여
-      pull-requests: write # PR에 코멘트를 남기기 위한 권한 (gitleaks 요약 기능)
-
     steps:
-      # 중요: PR의 코드가 아닌 '대상 브랜치(base)'의 코드를 체크아웃하여 보안 강화
       - uses: actions/checkout@v4
         with:
-          repository: ${{ github.event.pull_request.base.repo.full_name }}
-          ref: ${{ github.event.pull_request.base.ref }}
-
-      # gitleaks-action v2는 PR의 최신 코드를 자동으로 가져와서 스캔합니다.
+          fetch-depth: 0   # 히스토리 스캔 위해 권장
       - name: Run gitleaks
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_ENABLE_SUMMARY: true # PR 요약에 결과를 표시하도록 활성화
-
-# ===================== [01] Security Scans — END =======================
+          GITLEAKS_ENABLE_SUMMARY: true
