@@ -107,8 +107,8 @@ def _parse_modes_like(data: dict) -> Dict[str, str]:
     """
     다양한 스키마를 관용적으로 파싱하여 grammar/sentence/passage 3개를 반환.
     지원 형태:
-      - data["modes"]가 리스트: [{key|name, prompt|…}]
-      - data["modes"]가 매핑: {grammar|문법: "…" 또는 {prompt|…}}
+      - data["modes"]가 리스트: [{key|name, prompt|...}]
+      - data["modes"]가 매핑: {grammar|문법: "..." 또는 {prompt|...}}
       - data["prompts"]가 유사 구조일 때도 동일 처리
       - 키가 PT/MN 같은 별칭이어도 _canon_key가 정규화
     """
@@ -196,7 +196,7 @@ def _download_prompts_yaml_from_repo(
 ) -> Optional[str]:
     """
     레포 SSOT 경로에서 prompts.yaml 폴백 로드.
-    SSOT: docs/_gpt/ … (Workspace Pointer 규약)  :contentReference[oaicite:4]{index=4}
+    SSOT: docs/_gpt/ ... (Workspace Pointer 규약)  :contentReference[oaicite:4]{index=4}
     """
     for path in ("docs/_gpt/prompts.yaml", "docs/_gpt/prompts.yml"):
         try:
