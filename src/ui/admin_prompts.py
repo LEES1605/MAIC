@@ -165,7 +165,7 @@ def main() -> None:
             st.info("GITHUB_REPO 시크릿이 비어 있어 출판 기능이 비활성화됩니다. 편집과 저장은 계속 사용할 수 있습니다.")
 
         # 릴리스 체크(최신 + prompts.yaml 존재)
-        with st.status("릴리스 점검 중…", expanded=False) as stx:
+        with st.status("릴리스 점검 중...", expanded=False) as stx:
             rel_ok = False
             asset_count = 0
             try:
@@ -191,16 +191,16 @@ def main() -> None:
 
     # --- 편집 UI ------------------------------------------------------------------
     st.markdown("### ① 페르소나(공통)")
-    persona = st.text_area("모든 모드에 공통 적용", key="persona_text", height=160, placeholder="페르소나 텍스트…", help="모든 모드 공통 지침")
+    persona = st.text_area("모든 모드에 공통 적용", key="persona_text", height=160, placeholder="페르소나 텍스트...", help="모든 모드 공통 지침")
 
     st.markdown("### ② 모드별 프롬프트(지시/규칙)")
     c1, c2, c3 = st.columns(3)
     with c1:
-        grammar_prompt = st.text_area("문법(Grammar) 프롬프트", key="grammar_prompt", height=200, placeholder="문법 모드 지시/규칙…")
+        grammar_prompt = st.text_area("문법(Grammar) 프롬프트", key="grammar_prompt", height=200, placeholder="문법 모드 지시/규칙...")
     with c2:
-        sentence_prompt = st.text_area("문장(Sentence) 프롬프트", key="sentence_prompt", height=200, placeholder="문장 모드 지시/규칙…")
+        sentence_prompt = st.text_area("문장(Sentence) 프롬프트", key="sentence_prompt", height=200, placeholder="문장 모드 지시/규칙...")
     with c3:
-        passage_prompt = st.text_area("지문(Passage) 프롬프트", key="passage_prompt", height=200, placeholder="지문 모드 지시/규칙…")
+        passage_prompt = st.text_area("지문(Passage) 프롬프트", key="passage_prompt", height=200, placeholder="지문 모드 지시/규칙...")
 
     # 액션 버튼
     st.markdown("### ③ 액션")
