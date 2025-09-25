@@ -4,10 +4,10 @@
 Admin Prompt Editor (Persona + 3 Prompts per Mode)
 - Persona: shared across all modes
 - Prompts: Grammar / Sentence / Passage (three distinct inputs)
-- Actions: Build YAML (from persona/prompt pairs), Schema Validate, Download, Publish
+- Actions: Build YAML, Validate, Download, Publish
+- NEW: Load Latest (from GitHub Release 'prompts-latest' → prompts.yaml), with auto-load toggle
 
-SSOT: docs/_gpt/ (see MASTERPLAN/CONVENTIONS). This page focuses on editing.
-Publishing to the repository is available via GitHub Actions workflow dispatch.
+SSOT: docs/_gpt/ (MASTERPLAN/CONVENTIONS). Publishing pushes artifacts to Release.
 """
 
 from __future__ import annotations
@@ -15,21 +15,26 @@ from __future__ import annotations
 import importlib
 import io
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Tuple, Optional
 
-# --- Streamlit (lazy import to avoid hard fail in non-UI contexts) ---
+# --- Streamlit (lazy import) ---
 st: Any = importlib.import_module("streamlit")
 
-# --- Optional deps (yaml/jsonschema) ---
+# --- Optional deps (yaml/jsonschema/requests) ---
 try:
     import yaml  # type: ignore
 except Exception:  # pragma: no cover
-    yaml = None  # will be checked before use
+    yaml = None
 
 try:
     js = importlib.import_module("jsonschema")
 except Exception:  # pragma: no cover
     js = None
+
+try:
+    req = importlib.import_module("requests")
+except Exception:  # pragma: no cover
+    req = None
 
 # --- Sidebar helpers (best-effort, non-fatal) ---
 _apply_admin_chrome = None
@@ -42,10 +47,6 @@ except Exception:
 
 # ===== schema helpers =====
 def _find_schema_path() -> Path:
-    """
-    Look for 'schemas/prompts.schema.json' near repo root.
-    Works whether this file is at repo root or inside a package.
-    """
     here = Path(__file__).resolve()
     candidates = [
         here.parent / "schemas" / "prompts.schema.json",        # repo root layout
@@ -65,10 +66,6 @@ def _load_schema() -> Dict[str, Any]:
 
 
 def _validate_yaml_text(yaml_text: str) -> Tuple[bool, list[str]]:
-    """
-    Parse YAML and validate against JSON Schema (if jsonschema is available).
-    Returns (ok, messages).
-    """
     msgs: list[str] = []
     if yaml is None:
         return False, ["PyYAML(yaml) not available"]
@@ -81,7 +78,6 @@ def _validate_yaml_text(yaml_text: str) -> Tuple[bool, list[str]]:
         return False, [f"YAML parse error: {exc}"]
 
     if js is None:
-        # Soft-fail if jsonschema isn't installed; allow editing to proceed.
         return True, ["jsonschema not installed — structural checks skipped"]
 
     try:
@@ -102,7 +98,6 @@ def _validate_yaml_text(yaml_text: str) -> Tuple[bool, list[str]]:
 
 
 # ===== normalization helpers =====
-# Prefer project-provided normalizer; provide a tiny fallback if import fails.
 try:
     from src.ui.assist.prompt_normalizer import (  # type: ignore
         normalize_to_yaml_from_pairs,
@@ -117,33 +112,19 @@ except Exception:
         passage_persona: str,
         passage_system: str,
     ) -> str:
-        """
-        Fallback minimal YAML builder (structure may differ from official schema).
-        Intended only as emergency editing aid when the project normalizer is missing.
-        """
         if yaml is None:
             raise RuntimeError("PyYAML not available for fallback builder")
         data: Dict[str, Any] = {
             "modes": {
-                "grammar": {
-                    "persona": grammar_persona,
-                    "system": grammar_system,
-                },
-                "sentence": {
-                    "persona": sentence_persona,
-                    "system": sentence_system,
-                },
-                "passage": {
-                    "persona": passage_persona,
-                    "system": passage_system,
-                },
+                "grammar": {"persona": grammar_persona, "system": grammar_system},
+                "sentence": {"persona": sentence_persona, "system": sentence_system},
+                "passage": {"persona": passage_persona, "system": passage_system},
             }
         }
         return yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
 
 
 # ===== GitHub publish helpers =====
-# Try to reuse the project's dispatcher; if missing, fall back to a local one.
 try:
     from src.ui.admin_prompts import _gh_dispatch_workflow as _gh_dispatch  # type: ignore
 except Exception:
@@ -164,16 +145,15 @@ def _gh_dispatch_fallback(
     token: str | None,
     yaml_text: str,
 ) -> None:
-    """
-    Local minimal dispatcher (used only if src.ui.admin_prompts._gh_dispatch_workflow is unavailable).
-    """
     s, n = _sanitize_ellipsis(yaml_text)
     if n:
         st.info(f"U+2026 {n}개를 '...'로 치환했습니다.")
-    req: Any = importlib.import_module("requests")
+    if req is None:
+        raise RuntimeError("requests not available")
+    import base64
     url = f"https://api.github.com/repos/{owner}/{repo}/actions/workflows/{workflow}/dispatches"
     payload = {"ref": ref, "inputs": {
-        "yaml_b64": importlib.import_module("base64").b64encode(s.encode("utf-8")).decode("ascii"),
+        "yaml_b64": base64.b64encode(s.encode("utf-8")).decode("ascii"),
         "prerelease": "false",
         "promote_latest": "true",
     }}
@@ -186,10 +166,6 @@ def _gh_dispatch_fallback(
 
 
 def _publish_yaml_via_github(yaml_text: str) -> None:
-    """
-    Validate repo secrets and dispatch GitHub workflow to publish the YAML.
-    """
-    # Secrets / defaults
     repo_full = st.secrets.get("GITHUB_REPO", "")
     token = st.secrets.get("GITHUB_TOKEN")
     ref = st.secrets.get("GITHUB_BRANCH", "main")
@@ -215,7 +191,6 @@ def _publish_yaml_via_github(yaml_text: str) -> None:
         st.warning("출판이 비활성화되었습니다. 시크릿을 설정하거나 형식을 수정하세요.")
         return
 
-    # Validate YAML before publishing
     ok, msgs = _validate_yaml_text(yaml_text)
     if not ok:
         st.error("스키마 검증 실패 — 먼저 오류를 해결하세요.")
@@ -223,7 +198,6 @@ def _publish_yaml_via_github(yaml_text: str) -> None:
             st.write("\n".join(f"- {m}" for m in msgs))
         return
 
-    # Dispatch
     try:
         if _gh_dispatch is not None:
             _gh_dispatch(owner=owner, repo=repo, workflow=workflow, ref=ref, token=token, yaml_text=yaml_text)
@@ -237,10 +211,207 @@ def _publish_yaml_via_github(yaml_text: str) -> None:
         st.exception(exc)
 
 
+# ===== helpers: Load Latest (Release / Repo / Local) =====
+def _split_repo(repo_full: str) -> Tuple[str, str]:
+    owner, repo = "", ""
+    if repo_full and "/" in repo_full:
+        owner, repo = repo_full.split("/", 1)
+    return owner, repo
+
+
+def _http_get_json(url: str, token: Optional[str] = None, timeout: int = 20) -> Dict[str, Any]:
+    if req is None:
+        raise RuntimeError("requests not available")
+    headers = {"Accept": "application/vnd.github+json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    r = req.get(url, headers=headers, timeout=timeout)
+    r.raise_for_status()
+    return r.json()
+
+
+def _http_get_text(url: str, token: Optional[str] = None, timeout: int = 20, accept: Optional[str] = None) -> str:
+    if req is None:
+        raise RuntimeError("requests not available")
+    headers = {}
+    if accept:
+        headers["Accept"] = accept
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    r = req.get(url, headers=headers, timeout=timeout)
+    r.raise_for_status()
+    return r.text
+
+
+def _fetch_release_prompts_yaml(owner: str, repo: str, token: Optional[str]) -> Optional[str]:
+    """
+    Try: /releases/tags/prompts-latest → /releases/latest
+    Then download asset 'prompts.yaml' (case-insensitive).
+    """
+    try:
+        # Prefer tag 'prompts-latest'
+        url_tag = f"https://api.github.com/repos/{owner}/{repo}/releases/tags/prompts-latest"
+        rel = _http_get_json(url_tag, token=token)
+    except Exception:
+        # Fallback: latest published release
+        url_latest = f"https://api.github.com/repos/{owner}/{repo}/releases/latest"
+        try:
+            rel = _http_get_json(url_latest, token=token)
+        except Exception:
+            return None
+
+    assets = rel.get("assets") or []
+    target = None
+    for a in assets:
+        name = (a.get("name") or "").lower()
+        if name in ("prompts.yaml", "prompts.yml"):
+            target = a
+            break
+    if not target:
+        return None
+
+    # Prefer browser_download_url; fallback to API assets/{id}
+    dl = target.get("browser_download_url")
+    if dl:
+        try:
+            return _http_get_text(dl, token=None, accept="application/octet-stream")
+        except Exception:
+            pass
+
+    asset_id = target.get("id")
+    if asset_id:
+        url_asset = f"https://api.github.com/repos/{owner}/{repo}/releases/assets/{asset_id}"
+        try:
+            return _http_get_text(url_asset, token=token, accept="application/octet-stream")
+        except Exception:
+            return None
+    return None
+
+
+def _fetch_repo_file(owner: str, repo: str, path: str, ref: str, token: Optional[str]) -> Optional[str]:
+    """
+    Private repos: use contents API with raw accept header.
+    Public repos: this also works. Avoid raw.githubusercontent.com for private.
+    """
+    url = f"https://api.github.com/repos/{owner}/{repo}/contents/{path}?ref={ref}"
+    try:
+        return _http_get_text(url, token=token, accept="application/vnd.github.raw")
+    except Exception:
+        return None
+
+
+def _load_yaml_from_local_candidates() -> Optional[str]:
+    candidates = [
+        Path(__file__).resolve().parent / "docs" / "_gpt" / "prompts.yaml",
+        Path(__file__).resolve().parent / "docs" / "_gpt" / "prompts.sample.yaml",
+        Path.cwd() / "docs" / "_gpt" / "prompts.yaml",
+        Path.cwd() / "docs" / "_gpt" / "prompts.sample.yaml",
+    ]
+    for p in candidates:
+        try:
+            if p.exists():
+                return p.read_text(encoding="utf-8")
+        except Exception:
+            continue
+    return None
+
+
+def _extract_fields_from_yaml(ytext: str) -> Tuple[str, str, str, str]:
+    """
+    Parse YAML to (persona, g_prompt, s_prompt, p_prompt).
+    Supports the project's canonical shape:
+      modes.grammar.persona/system, modes.sentence.persona/system, modes.passage.persona/system
+    With best-effort fallbacks for older shapes.
+    """
+    persona, g, s, p = "", "", "", ""
+    if yaml is None:
+        return persona, g, s, p
+    try:
+        data = yaml.safe_load(ytext) or {}
+        modes = data.get("modes") or {}
+        def pick(mode: str, *keys: str) -> str:
+            m = modes.get(mode) or {}
+            for k in keys:
+                v = (m.get(k) or "").strip() if isinstance(m, dict) else ""
+                if v:
+                    return v
+            return ""
+        # primary fields
+        gp = pick("grammar", "persona")
+        sp = pick("sentence", "persona")
+        pp = pick("passage", "persona")
+        persona = gp or sp or pp or (data.get("persona") or "").strip()  # global fallback
+        g = pick("grammar", "system", "prompt")
+        s = pick("sentence", "system", "prompt")
+        p = pick("passage", "system", "prompt")
+
+        # last resort fallbacks (old formats)
+        if not g:
+            g = (data.get("grammar") or "").strip()
+        if not s:
+            s = (data.get("sentence") or "").strip()
+        if not p:
+            p = (data.get("passage") or "").strip()
+        return persona, g, s, p
+    except Exception:
+        return "", "", "", ""
+
+
+def _apply_yaml_to_fields(ytext: str) -> None:
+    persona, g, s, p = _extract_fields_from_yaml(ytext)
+    if persona:
+        st.session_state["ap_persona"] = persona
+    if g:
+        st.session_state["ap_prompt_g"] = g
+    if s:
+        st.session_state["ap_prompt_s"] = s
+    if p:
+        st.session_state["ap_prompt_p"] = p
+    st.session_state["_PROMPTS_YAML"] = ytext
+
+
+def _load_latest_into_fields(source_hint: str = "release") -> None:
+    """
+    Load latest prompts.yaml and prefill fields:
+    - source_hint = 'release' → release (prompts-latest → prompts.yaml)
+    - 'repo' → docs/_gpt/prompts.yaml (contents API)
+    - 'local' → local file fallback
+    """
+    repo_full = st.secrets.get("GITHUB_REPO", "")
+    token = st.secrets.get("GITHUB_TOKEN")
+    ref = st.secrets.get("GITHUB_BRANCH", "main")
+    owner, repo = _split_repo(repo_full)
+
+    ytext: Optional[str] = None
+
+    if source_hint == "release" and owner and repo:
+        ytext = _fetch_release_prompts_yaml(owner, repo, token)
+
+    if ytext is None and owner and repo:
+        # try repo tree (docs/_gpt/prompts.yaml → prompts.sample.yaml)
+        ytext = _fetch_repo_file(owner, repo, "docs/_gpt/prompts.yaml", ref, token) \
+            or _fetch_repo_file(owner, repo, "docs/_gpt/prompts.sample.yaml", ref, token)
+
+    if ytext is None:
+        # local fallback inside the app filesystem
+        ytext = _load_yaml_from_local_candidates()
+
+    if not ytext:
+        st.warning("불러올 최신 프롬프트를 찾지 못했습니다. (Release/Repo/Local 모두 실패)")
+        return
+
+    ok, msgs = _validate_yaml_text(ytext)
+    if not ok:
+        st.warning("가져온 YAML이 스키마 검증을 통과하지 못했습니다. (내용은 칸에 주입합니다)")
+        if msgs:
+            st.write("\n".join(f"- {m}" for m in msgs))
+    _apply_yaml_to_fields(ytext)
+    st.success("최신 프롬프트를 칸에 주입했습니다.")
+
+
 # ===== page init =====
 def _init_admin_page() -> None:
     st.set_page_config(page_title="Prompts Admin (2-field + 3 prompts)", page_icon="🛠️", layout="wide")
-    # Minimal admin chrome (if available). Non-fatal if util missing.
     try:
         if callable(_apply_admin_chrome):
             _apply_admin_chrome(back_page="app.py", icon_only=True)
@@ -253,7 +424,26 @@ def main() -> None:
     _init_admin_page()
 
     st.markdown("### 관리자 프롬프트 편집기 — 페르소나 + 모드별 프롬프트(3)")
-    st.caption("SSOT: `docs/_gpt/`의 규약·마스터플랜에 맞춰 편집하세요. (검증/다운로드/출판 가능)")
+    st.caption("SSOT: `docs/_gpt/`의 규약·마스터플랜에 맞춰 편집하세요. (로드/병합/검증/다운로드/출판)")
+
+    # --- Auto-load controls (top) ---
+    c0a, c0b, c0c = st.columns([0.32, 0.34, 0.34])
+    with c0a:
+        auto_load = st.checkbox("로그인 후 진입 시 최신 프리필(릴리스)", value=st.session_state.get("ap_auto_load_enabled", True), key="ap_auto_load_enabled")
+    with c0b:
+        if st.button("🔄 최신 프롬프트 불러오기(릴리스 우선)", use_container_width=True, key="ap_load_latest"):
+            _load_latest_into_fields("release")
+    with c0c:
+        if st.button("📂 레포에서 불러오기(docs/_gpt)", use_container_width=True, key="ap_load_repo"):
+            _load_latest_into_fields("repo")
+
+    # One-shot autoload per session
+    if auto_load and not st.session_state.get("_ap_loaded_once"):
+        try:
+            _load_latest_into_fields("release")
+            st.session_state["_ap_loaded_once"] = True
+        except Exception as exc:  # noqa: BLE001
+            st.info(f"자동 로드 실패 — 수동으로 불러오기를 시도하세요. ({exc})")
 
     # --- Inputs: Persona + 3 Prompts (Grammar/Sentence/Passage) ---
     persona = st.text_area("① 페르소나(Persona) — 모든 모드에 공통 적용", height=240, key="ap_persona")
@@ -314,9 +504,8 @@ def main() -> None:
             disabled=disabled,
         )
 
-    # --- Publish (separate row for clarity) ---
+    # --- Publish ---
     st.markdown("#### ③ 출판(Publish)")
-    # Disabled rule: no YAML or bad/missing repo secret
     repo_full = st.secrets.get("GITHUB_REPO", "")
     repo_bad = (not repo_full) or ("/" not in repo_full)
     if repo_bad:
