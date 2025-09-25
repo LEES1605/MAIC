@@ -386,28 +386,25 @@ def _header() -> None:
         st.code(str(p), language="text")
 # ================================== [08] header — END =================================
 
-# ============================== [09] student progress stepper — START =====================
+# =============================== [09] student progress stepper — START =====================
 def _render_stepper(*, force: bool = False) -> None:
     """
     학생 화면에서 보여줄 '미니 진행바'.
-    - src.services.index_state.render_stepper_safe()가 이 함수를 찾아 호출한다.
     - 진행률: ok=1.0, run=0.6, wait/err=0.0 가중 합을 총 스텝수로 나눠 환산.
-    - 라벨: '진행 중' 스텝의 detail 또는 name.
-    - Streamlit 구/신 시그니처 모두 대응(내부 호환 래퍼 사용).
+    - 라벨: 'run' 상태가 있으면 그 스텝의 detail/name, 모두 OK면 '인덱스 복원 완료'.
     """
     if st is None:
         return
 
     try:
         from src.services.index_state import (
-            ensure_index_state,         # 세션 컨테이너 보장
-            render_progress_with_fallback,  # 진행바 호환 래퍼
+            ensure_index_state,
+            render_progress_with_fallback,
         )
         ensure_index_state()
     except Exception:
         return
 
-    # 진행바를 그릴 자리(placeholder)
     ph = st.session_state.get("_IDX_STEPPER_PH")
     if ph is None:
         if not force:
@@ -415,7 +412,6 @@ def _render_stepper(*, force: bool = False) -> None:
         ph = st.empty()
         st.session_state["_IDX_STEPPER_PH"] = ph
 
-    # 진행률 계산
     steps: list[dict[str, object]] = st.session_state.get("_IDX_STEPS") or []
     if not isinstance(steps, list):
         steps = []
@@ -432,13 +428,17 @@ def _render_stepper(*, force: bool = False) -> None:
             running_label = str(s.get("detail") or s.get("name") or "")
 
     pct = int(min(100, max(0, round(acc / total * 100))))
-    text = running_label or "인덱스 준비 중•••"
+    # ✅ 완료 시 라벨도 완료로 바꿔 준다
+    if pct >= 100:
+        text = "인덱스 복원 완료"
+    else:
+        text = running_label or "인덱스 준비 중•••"
 
-    # 미니 UI 렌더
     with ph.container():
         st.caption("인덱싱 단계 표시기(간이 모드)")
         render_progress_with_fallback(pct, text=text)
-# =============================== [09] student progress stepper — END ======================
+# =============================== [09] student progress stepper — END =======================
+
 
 # =============================== [10] auto-restore — START ============================
 def _boot_auto_restore_index() -> None:
