@@ -1,42 +1,45 @@
-# [01] START: FILE app.py — single-router + test-friendly guards
+# [F1] START: FILE app.py — multipage + sider + test-friendly
 from __future__ import annotations
 import importlib
 from typing import Callable, Optional, Dict, Any, Tuple
 from pathlib import Path
 import streamlit as st
 
-# ---------------------------------------------------------------------------
-# Page Config (테스트의 가짜 streamlit 객체에는 없을 수 있으므로 방어)
-# ---------------------------------------------------------------------------
+# ---- Page Config (pytest 더블 대비 안전 가드) -----------------------------------
 try:
     if hasattr(st, "set_page_config"):
         st.set_page_config(page_title="MAIC", page_icon="🤖", layout="wide")
 except Exception:
-    # pytest에서 주입한 SimpleNamespace 등은 set_page_config가 없거나
-    # 내부에서 예외가 날 수 있음. 테스트 시엔 조용히 패스.
     pass
 
-# ---------------------------------------------------------------------------
-# Persist 루트(테스트에서 덮어쓰기 쉬운 표면 제공)
-# pytest가 tmp_path로 교체하기 쉽게 별칭도 노출한다.
-# ---------------------------------------------------------------------------
-PERSIST_ROOT: Path = Path(".maic_persist")
-_PERSIST_DIR: Path = PERSIST_ROOT  # alias for legacy/tests
+# ---- 기본 멀티페이지 네비(“Pages”) 완전 숨김 -----------------------------------
+def _hide_default_pages_nav() -> None:
+    try:
+        st.markdown(
+            """
+            <style>
+              [data-testid="stSidebarNav"],
+              section[data-testid="stSidebarNav"],
+              nav[data-testid="stSidebarNav"],
+              div[data-testid="stSidebarNav"] {
+                display: none !important; height:0 !important; overflow:hidden !important;
+              }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+    except Exception:
+        pass
 
-# ---------------------------------------------------------------------------
-# Prepared Helpers (API Surface)
-# 테스트가 헬퍼 표면을 검사/사용할 수 있도록 노출한다.
-# ---------------------------------------------------------------------------
+# ---- Persist Root (테스트에서 주입/검사 용이하도록 노출) -------------------------
+PERSIST_ROOT: Path = Path(".maic_persist")
+_PERSIST_DIR: Path = PERSIST_ROOT  # legacy alias
+
+# ---- Prepared Helpers (tests 가 API surface를 검사) -----------------------------
 def prepared_helpers() -> Dict[str, Any]:
-    """테스트/호출자가 안전하게 쓸 수 있는 헬퍼 표면."""
-    # rerun 핸들러: 존재하는 것 우선 사용
-    rerun_fn = None
-    if hasattr(st, "rerun"):
-        rerun_fn = st.rerun  # Streamlit ≥1.27
-    elif hasattr(st, "experimental_rerun"):
-        rerun_fn = st.experimental_rerun
-    else:
-        rerun_fn = lambda: None  # no-op
+    if hasattr(st, "rerun"):  rr = st.rerun
+    elif hasattr(st, "experimental_rerun"): rr = st.experimental_rerun
+    else: rr = lambda: None
 
     def get_state(k: str, default: Any = None) -> Any:
         ss = getattr(st, "session_state", None)
@@ -44,160 +47,82 @@ def prepared_helpers() -> Dict[str, Any]:
 
     def set_state(k: str, v: Any) -> None:
         ss = getattr(st, "session_state", None)
-        if isinstance(ss, dict):
-            ss[k] = v
+        if isinstance(ss, dict): ss[k] = v
 
-    return {
-        "st": st,
-        "get_state": get_state,
-        "set_state": set_state,
-        "rerun": rerun_fn,
-        "secrets": getattr(st, "secrets", {}),
-        "persist_root": PERSIST_ROOT,
-    }
+    return {"st": st, "get_state": get_state, "set_state": set_state,
+            "rerun": rr, "secrets": getattr(st, "secrets", {}), "persist_root": PERSIST_ROOT}
 
-# ---------------------------------------------------------------------------
-# Boot: 최신 인덱스 자동 복원 헬퍼 (GH Releases 더블과 호환)
-# tests/test_boot_auto_restore_index.py에서 owner/repo/token 더블을 주입함.
-# ---------------------------------------------------------------------------
+# ---- Boot: 최신 인덱스 자동 복원 (테스트 더블 호환) ------------------------------
 def _parse_owner_repo(repo_full: str) -> Tuple[str, str]:
-    if not repo_full or "/" not in repo_full:
-        return "", ""
+    if not repo_full or "/" not in repo_full: return "", ""
     owner, repo = repo_full.split("/", 1)
     return owner.strip(), repo.strip()
 
 def boot_restore_latest_index(persist_dir: Optional[Path] = None):
-    """
-    GitHub Releases에서 최신 인덱스를 복원한다.
-    - 테스트 더블(src.runtime.gh_release)와 시그니처 호환( **kwargs 수용 )을 고려.
-    - 호출 성공 시 GH 리스토어 결과(객체/딕트)를 그대로 반환하거나, 실패 시 None.
-    """
     secrets = getattr(st, "secrets", {}) or {}
-    repo_full = secrets.get("GITHUB_REPO", "")
+    owner, repo = _parse_owner_repo(secrets.get("GITHUB_REPO", ""))
     token = secrets.get("GITHUB_TOKEN", None)
-
-    owner, repo = _parse_owner_repo(repo_full)
-    if not owner or not repo:
-        return None  # 설정 부족: 조용히 종료(테스트도 이 경로를 허용)
-
+    if not owner or not repo: return None
     try:
-        # 테스트에서 sys.modules["src.runtime.gh_release"]에 더블이 주입됨
         from src.runtime.gh_release import GHConfig, GHReleases  # type: ignore
     except Exception:
         return None
 
     cfg = GHConfig(owner, repo, token=token)
     gh = GHReleases(cfg)
+    try: _ = gh.get_latest_release()
+    except Exception: pass
 
-    # 최신 릴리스 조회(테스트는 이 호출 횟수를 계수한다)
-    try:
-        _ = gh.get_latest_release()
-    except Exception:
-        # 조회 실패는 복원 시도에 반드시 치명적이지 않을 수 있으므로 무시
-        pass
-
-    # 대상 디렉터리(없으면 모듈 전역 기본값)
     target = persist_dir or PERSIST_ROOT
     try:
-        # 테스트 더블이 **kwargs 를 허용하므로 이름 충돌 걱정 없이 전달 가능
-        return gh.restore_latest_index(target_dir=str(target))
+        res = gh.restore_latest_index(target_dir=str(target))
     except TypeError:
-        # 어떤 구현은 인자 없이 동작할 수 있음
-        try:
-            return gh.restore_latest_index()
-        except Exception:
-            return None
+        try: res = gh.restore_latest_index()
+        except Exception: return None
     except Exception:
         return None
 
-# 과거/테스트 호환용 별칭 노출
-_boot_restore_latest_index = boot_restore_latest_index
-_boot_restore = boot_restore_latest_index
-
-# ---------------------------------------------------------------------------
-# 라우터 유틸 (테스트가 표면을 검사할 수 있도록 내부 함수도 노출)
-# ---------------------------------------------------------------------------
-def _get_view() -> str:
-    """쿼리파라미터 → 세션 → 기본 순서로 현재 뷰 결정."""
-    qp_view = None
+    # H1: 최신 복원 성공 시 세션 플래그 정합(헤더 3단계 기준). :contentReference[oaicite:3]{index=3}
     try:
-        qp = st.query_params if hasattr(st, "query_params") else st.experimental_get_query_params()  # type: ignore
-        if isinstance(qp, dict):
-            qp_view = qp.get("view")
-            if isinstance(qp_view, list):
-                qp_view = qp_view[0]
-    except Exception:
-        qp_view = None
-    return getattr(st, "session_state", {}).get("_view") or qp_view or "chat"
-
-def _set_view(v: str) -> None:
-    """세션/쿼리파라미터 동기화."""
-    ss = getattr(st, "session_state", None)
-    if isinstance(ss, dict):
-        ss["_view"] = v
-    try:
-        if hasattr(st, "experimental_set_query_params"):
-            st.experimental_set_query_params(view=v)
+        st.session_state["_INDEX_LOCAL_READY"] = True
+        st.session_state["_INDEX_IS_LATEST"] = bool(getattr(res, "used_latest_endpoint", False) or
+                                                    getattr(res, "tag", "") == "index-latest")
     except Exception:
         pass
+    return res
 
+# ---- 안전한 main (멀티페이지 진입점: chat 페이지 본문만 호출) -------------------
 def _import_main(path: str) -> Optional[Callable[[], None]]:
-    """모듈을 import하고 main()을 찾아 반환. 실패 시 None."""
     try:
         mod = importlib.import_module(path)
         fn = getattr(mod, "main", None)
         return fn if callable(fn) else None
-    except Exception as e:
-        # 테스트 중 내부 정보 과다 노출 방지: 간단 에러만 표기
-        try:
-            st.error(f"모듈 로드 실패: {path} — {e}")
-        except Exception:
-            pass
+    except Exception:
         return None
 
-def _render_fallback_chat() -> None:
-    """chat 모듈이 없을 때의 안전한 대체 화면."""
+def _fallback_chat() -> None:
     try:
-        from src.ui.nav import render_sidebar  # lazy import: 임포트시 부작용 최소화
+        # 진짜 사이드바: sider 사용
+        from src.ui.utils.sider import render_sidebar
         render_sidebar()
     except Exception:
-        pass
+        _hide_default_pages_nav()
     try:
         st.header("채팅")
-        st.info("채팅 모듈(src.ui.chat.main)을 찾지 못해 임시 화면을 표시합니다.")
+        st.info("채팅 모듈을 준비 중입니다. 잠시 후 다시 시도해 주세요.")
     except Exception:
         pass
 
-# ---------------------------------------------------------------------------
-# 메인 라우터
-# ---------------------------------------------------------------------------
 def main() -> None:
-    view = _get_view()
-    _set_view(view)
-
-    if view == "admin_prompt":
-        fn = _import_main("src.ui.admin_prompt")
-        if fn:
-            fn()
-            return
-
-    if view == "index_status":
-        fn = _import_main("src.ui.index_status")
-        if fn:
-            fn()
-            return
-
-    # default -> chat
+    # 멀티페이지에서는 app.py가 첫 화면. 사이드바/Pages 네비는 sider가 관리.
+    _hide_default_pages_nav()
     fn = _import_main("src.ui.chat")
-    if fn:
-        fn()
-    else:
-        _render_fallback_chat()
+    if fn: fn()
+    else: _fallback_chat()
 
 if __name__ == "__main__":
     main()
-# [01] END: FILE app.py — single-router + test-friendly guards
-
+# [F1] END: FILE app.py
 
 
 # =============================== [02] module imports — START ==========================
