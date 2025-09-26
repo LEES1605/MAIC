@@ -1,4 +1,4 @@
-# [F3] START: FILE src/ui/chat.py — minimal skeleton using sider
+# [04] START: FILE src/ui/chat.py — minimal chat skeleton using sider
 from __future__ import annotations
 import streamlit as st
 from src.ui.utils.sider import render_sidebar
@@ -7,7 +7,7 @@ def main() -> None:
     render_sidebar()
     st.header("LEES AI Teacher")
     st.subheader("질문")
-    c1, c2 = st.columns([9,1])
+    c1, c2 = st.columns([9, 1])
     with c1:
         q = st.text_input("질문을 입력하세요...", key="chat_input", label_visibility="collapsed")
     with c2:
@@ -18,4 +18,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-# [F3] END: FILE src/ui/chat.py
+# [04] END: FILE src/ui/chat.py
