@@ -103,13 +103,13 @@ def main() -> None:
         else: st.warning("prompts.yaml을 release/assets 또는 루트에서 찾지 못했습니다.")
 
     st.markdown("### ① 페르소나(공통)")
-    st.text_area("모든 모드에 공통 적용", key="persona_text", height=160, placeholder="페르소나 텍스트…")
+    st.text_area("모든 모드에 공통 적용", key="persona_text", height=160, placeholder="페르소나 텍스트...")
 
     st.markdown("### ② 모드별 프롬프트(지시/규칙)")
     c1, c2, c3 = st.columns(3)
-    with c1: st.text_area("문법(Grammar) 프롬프트", key=K_GRAMMAR, height=220, placeholder="문법 모든 지시/규칙…")
-    with c2: st.text_area("문장(Sentence) 프롬프트", key=K_SENTENCE, height=220, placeholder="문장 모든 지시/규칙…")
-    with c3: st.text_area("지문(Passage) 프롬프트",  key=K_PASSAGE,  height=220, placeholder="지문 모든 지시/규칙…")
+    with c1: st.text_area("문법(Grammar) 프롬프트", key=K_GRAMMAR, height=220, placeholder="문법 모든 지시/규칙...")
+    with c2: st.text_area("문장(Sentence) 프롬프트", key=K_SENTENCE, height=220, placeholder="문장 모든 지시/규칙...")
+    with c3: st.text_area("지문(Passage) 프롬프트",  key=K_PASSAGE,  height=220, placeholder="지문 모든 지시/규칙...")
 
     st.markdown("### ③ 액션")
     st.button("🧲 최신 프롬프트 불러오기(릴리스 우선)", on_click=on_click_load_latest_prompts)
