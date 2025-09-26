@@ -1,2 +1,3 @@
-# Package marker for mypy; UI components live under src/ui
-__all__ = ["admin_prompts"]
+# [H3] START: FILE src/ui/__init__.py
+"""UI package."""
+# [H3] END: FILE src/ui/__init__.py
