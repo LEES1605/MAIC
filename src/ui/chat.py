@@ -28,7 +28,7 @@ def main() -> None:
         send = st.button("➤", key="chat_send__skeleton", use_container_width=True)
     if send and q.strip():
         st.write(f"**질문:** {q.strip()}")
-        st.write("**답변:** 준비 중입니다… (스켈레톤)")
+        st.write("**답변:** 준비 중입니다... (스켈레톤)")
 
 if __name__ == "__main__":
     main()
