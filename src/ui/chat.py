@@ -14,7 +14,7 @@ def main() -> None:
         send = st.button("➤", use_container_width=True)
     if send and q.strip():
         st.write(f"**질문:** {q.strip()}")
-        st.write("**답변:** 준비 중입니다… (스트리밍 연결 전 임시)")
+        st.write("**답변:** 준비 중입니다... (스트리밍 연결 전 임시)")
 
 if __name__ == "__main__":
     main()
