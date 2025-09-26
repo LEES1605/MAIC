@@ -1,8 +1,8 @@
-# [F4] START: FILE pages/10_admin_prompt.py — wrapper to real admin prompt
+# [H5] START: FILE pages/10_admin_prompt.py — wrapper to real admin prompt
 from __future__ import annotations
 import streamlit as st
 
-# 기본 Pages 네비 숨김(보조)
+# 기본 “Pages” 네비 숨김 (버전별 testid 변형 모두 차단)
 st.markdown(
     """
     <style>
@@ -11,9 +11,10 @@ st.markdown(
       nav[data-testid="stSidebarNav"],
       div[data-testid="stSidebarNav"] { display:none !important; height:0 !important; overflow:hidden !important; }
     </style>
-    """, unsafe_allow_html=True
+    """,
+    unsafe_allow_html=True,
 )
 
-from src.ui.admin_prompt import main as _render  # 실제 구현 호출
+from src.ui.admin_prompt import main as _render
 _render()
-# [F4] END
+# [H5] END
