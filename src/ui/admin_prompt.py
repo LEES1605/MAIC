@@ -120,7 +120,8 @@ def on_click_load_latest_prompts() -> None:
         # 상세 예외는 내부 로그로만(민감정보 노출 방지)
         st.session_state["_flash_error"] = "프롬프트 로딩 중 오류가 발생했습니다."
         st.rerun()
-# [01] END
+# [01] END: admin_prompt — Loader helpers (release/prompts.yaml)
+
 # [02] START: admin_prompt — UI widgets + Action button (Loader)
 import streamlit as st
 from ui.nav import render_sidebar  # 이전 브랜치에서 추가된 공통 사이드바
@@ -150,7 +151,7 @@ st.button("🧲 최신 프롬프트 불러오기(릴리스 우선)", on_click=on
 _last = st.session_state.get("_last_prompts_source")
 if _last:
     st.caption(f"최근 소스: {_last}")
-# [02] END
+# [02] END: admin_prompt — UI widgets + Action button (Loader)
 
 
 
@@ -174,7 +175,7 @@ def test_extract_prompts_pt_dict():
     y = {"pt": {"full": "GG"}}
     out = _extract_prompts(y)
     assert out[K_GRAMMAR] == "GG"
-# [03] END
+# [03] END: tests — test_admin_prompt_loader_extract.py
 
 
 
