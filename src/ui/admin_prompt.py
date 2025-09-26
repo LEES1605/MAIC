@@ -230,13 +230,13 @@ def main() -> None:
 
     # 4) 편집 UI (SSOT 키)
     st.markdown("### ① 페르소나(공통)")
-    st.text_area("모든 모드에 공통 적용", key=K_PERSONA, height=160, placeholder="페르소나 텍스트…")
+    st.text_area("모든 모드에 공통 적용", key=K_PERSONA, height=160, placeholder="페르소나 텍스트...")
 
     st.markdown("### ② 모드별 프롬프트(지시/규칙)")
     c1, c2, c3 = st.columns(3)
-    with c1: st.text_area("문법(Grammar) 프롬프트", key=K_GRAMMAR,  height=220, placeholder="문법 모든 지시/규칙…")
-    with c2: st.text_area("문장(Sentence) 프롬프트", key=K_SENTENCE, height=220, placeholder="문장 모든 지시/규칙…")
-    with c3: st.text_area("지문(Passage) 프롬프트",  key=K_PASSAGE,  height=220, placeholder="지문 모든 지시/규칙…")
+    with c1: st.text_area("문법(Grammar) 프롬프트", key=K_GRAMMAR,  height=220, placeholder="문법 모든 지시/규칙...")
+    with c2: st.text_area("문장(Sentence) 프롬프트", key=K_SENTENCE, height=220, placeholder="문장 모든 지시/규칙...")
+    with c3: st.text_area("지문(Passage) 프롬프트",  key=K_PASSAGE,  height=220, placeholder="지문 모든 지시/규칙...")
 
     # 5) 액션
     st.markdown("### ③ 액션")
