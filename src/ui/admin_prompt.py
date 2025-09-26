@@ -6,14 +6,12 @@ import json, yaml, streamlit as st
 
 # [H1] START: admin_prompt import shim (robust import of sider)
 # ✅ 진짜 사이드바: utils/sider 를 상대 임포트 우선으로 로드
+# [A1] START: robust import of real sidebar (admin_prompt)
 try:
-    from .utils.sider import render_sidebar  # when module loaded as 'src.ui.admin_prompt'
+    from .utils.sider import render_sidebar  # 권장: 패키지 상대경로
 except Exception:
-    try:
-        from src.ui.utils.sider import render_sidebar  # when 'src' is top-level on sys.path
-    except Exception:
-        from ui.utils.sider import render_sidebar  # legacy path fallback
-# [H1] END
+    from src.ui.utils.sider import render_sidebar  # 절대경로 폴백
+# [A1] END
 
 # ---- 기본 Pages 네비 완전 숨김(보조) --------------------------------------------
 def _hide_default_pages_nav() -> None:
