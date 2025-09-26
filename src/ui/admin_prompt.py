@@ -139,9 +139,9 @@ if _error:
 st.header("② 모드별 프롬프트(지시/규칙)")
 
 # 중요: value 인자 미사용. 세션 상태(key) 단일 소스 유지.
-st.text_area("문법(Grammar) 프롬프트", key=K_GRAMMAR, height=220, placeholder="문법 모든 지시/규칙…")
-st.text_area("문장(Sentence) 프롬프트", key=K_SENTENCE, height=220, placeholder="문장 모든 지시/규칙…")
-st.text_area("지문(Passage) 프롬프트", key=K_PASSAGE,  height=220, placeholder="지문 모든 지시/규칙…")
+st.text_area("문법(Grammar) 프롬프트", key=K_GRAMMAR, height=220, placeholder="문법 모든 지시/규칙...")
+st.text_area("문장(Sentence) 프롬프트", key=K_SENTENCE, height=220, placeholder="문장 모든 지시/규칙...")
+st.text_area("지문(Passage) 프롬프트", key=K_PASSAGE,  height=220, placeholder="지문 모든 지시/규칙...")
 
 st.markdown("### ③ 액션")
 st.button("🧲 최신 프롬프트 불러오기(릴리스 우선)", on_click=on_click_load_latest_prompts)
