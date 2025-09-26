@@ -1,6 +1,87 @@
-# =============================== [01] future import — START ===========================
+# [01] START: FILE app.py — single-router baseline (paste to replace entire file)
 from __future__ import annotations
-# ================================ [01] future import — END ============================
+import importlib
+from typing import Callable, Optional
+import streamlit as st
+
+# ---- Page Config -------------------------------------------------------------
+# 필요 시 제목/아이콘은 자유롭게 조정
+st.set_page_config(page_title="MAIC", page_icon="🤖", layout="wide")
+
+# ---- View State Helpers ------------------------------------------------------
+def _get_view() -> str:
+    """쿼리파라미터 → 세션 → 기본순으로 현재 뷰를 결정한다."""
+    qp_view = None
+    try:
+        # Streamlit 최신/구버전 호환
+        qp = st.query_params if hasattr(st, "query_params") else st.experimental_get_query_params()
+        if isinstance(qp, dict):
+            qp_view = qp.get("view")
+            if isinstance(qp_view, list):
+                qp_view = qp_view[0]
+    except Exception:
+        qp_view = None
+    return st.session_state.get("_view") or qp_view or "chat"
+
+def _set_view(v: str) -> None:
+    """세션/쿼리파라미터를 동기화한다."""
+    st.session_state["_view"] = v
+    try:
+        st.experimental_set_query_params(view=v)
+    except Exception:
+        pass
+
+def _import_main(path: str) -> Optional[Callable[[], None]]:
+    """모듈을 import하고 main()을 찾아 반환. 실패 시 None."""
+    try:
+        mod = importlib.import_module(path)
+        fn = getattr(mod, "main", None)
+        if callable(fn):
+            return fn
+    except Exception as e:
+        # UI에 과도한 내부정보가 새지 않도록 간단히만 표기
+        st.error(f"모듈 로드 실패: {path} — {e}")
+    return None
+
+def _render_fallback_chat() -> None:
+    """chat 모듈이 없을 때의 안전한 대체 화면."""
+    try:
+        # 커스텀 사이드바(기본 네비 숨김 포함)
+        from src.ui.nav import render_sidebar
+        render_sidebar()
+    except Exception:
+        pass
+    st.header("채팅")
+    st.info("채팅 모듈(src.ui.chat.main)을 찾지 못해 임시 화면을 표시합니다.")
+
+# ---- Main Router -------------------------------------------------------------
+def main() -> None:
+    view = _get_view()
+    _set_view(view)
+
+    if view == "admin_prompt":
+        fn = _import_main("src.ui.admin_prompt")
+        if fn:
+            fn()
+            return
+
+    if view == "index_status":
+        fn = _import_main("src.ui.index_status")
+        if fn:
+            fn()
+            return
+
+    # default route -> chat
+    fn = _import_main("src.ui.chat")
+    if fn:
+        fn()
+    else:
+        _render_fallback_chat()
+
+if __name__ == "__main__":
+    main()
+# [01] END: FILE app.py — single-router baseline
+
 
 # =============================== [02] module imports — START ==========================
 import os
