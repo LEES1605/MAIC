@@ -1,12 +1,12 @@
-# [AP-KANON] START: FILE src/ui/admin_prompt.py — ko/en mode label canonicalization + prefill handshake
+# [AP-KANON-FINAL] START: src/ui/admin_prompt.py — ko/en canonicalization + robust extract + prefill handshake
 from __future__ import annotations
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 import json
 import yaml
 import streamlit as st
 
-# ✅ 진짜 사이드바
+# ✅ 진짜 사이드바(Single Source of Truth)
 try:
     from .utils.sider import render_sidebar
 except Exception:
@@ -18,84 +18,103 @@ K_GRAMMAR  = "grammar_prompt"
 K_SENTENCE = "sentence_prompt"
 K_PASSAGE  = "passage_prompt"
 
-# ---- tiny utils --------------------------------------------------------------
+# ---- canon helpers -----------------------------------------------------------
 def _norm_token(x: Any) -> str:
-    """공백/대소문자/구두점 영향 줄인 토큰(한글 대응)."""
+    """공백/대소문자/구두점 영향 최소화. (한글 포함)"""
     s = str(x or "").strip().lower()
-    # 숫자/영문/한글만 남기고 공백 제거
     return "".join(ch for ch in s if ch.isalnum())
 
 def _coerce_yaml_to_text(v: Any) -> str:
+    """문자열이 아니어도 보기 좋게 문자열화(dict/list 지원)."""
     if v is None:
         return ""
     if isinstance(v, str):
         return v
     if isinstance(v, dict):
         for k in ("prompt", "text", "full", "system", "value", "content"):
-            if isinstance(v.get(k), str) and v[k].strip():
-                return v[k]
+            vs = v.get(k)
+            if isinstance(vs, str) and vs.strip():
+                return vs
         return json.dumps(v, ensure_ascii=False, indent=2)
     if isinstance(v, (list, tuple)):
         return "\n".join(str(x) for x in v)
     return str(v)
 
+# —— 1순위: core.modes 유틸이 있으면 적극 사용(있을 수도, 없을 수도)
+def _canon_via_core_modes(label: str) -> Optional[str]:
+    try:
+        import src.core.modes as _m
+    except Exception:
+        return None
+    # 가능한 여러 이름을 시도 (존재하지 않으면 무시)
+    for cand in ("canon_mode", "canon_key", "normalize_mode", "normalize_key", "find_mode_by_label"):
+        fn = getattr(_m, cand, None)
+        if not callable(fn):
+            continue
+        try:
+            res = fn(label)
+        except Exception:
+            continue
+        # 문자열 또는 .key 보유 객체 모두 수용
+        if isinstance(res, str):
+            s = res.strip().lower()
+            if s in ("grammar", "sentence", "passage"):
+                return s
+            # 한국어 레이블을 돌려주는 구현일 수도 있음
+            if s in ("문법", "문장", "지문"):
+                return {"문법": "grammar", "문장": "sentence", "지문": "passage"}[s]
+        key = getattr(res, "key", None)
+        if isinstance(key, str) and key in ("grammar", "sentence", "passage"):
+            return key
+    return None
+
+# —— 2순위: 내장 시소러스 + 부분일치(“문장구조분석” 등) ---------------------------
+_SYNONYMS = {
+    "grammar": {
+        "grammar", "pt", "문법", "문법설명", "문법해설", "문법규칙", "품사", "품사판별",
+        "문장성분", "문법검사", "문법풀이", "문법 문제", "문법해석",
+    },
+    "sentence": {
+        "sentence", "sent", "문장", "문장분석", "문장해석", "문장구조", "문장구조분석",
+        "문장성분분석", "문장완성", "문장구조해석", "문장구조파악",
+    },
+    "passage": {
+        "passage", "para", "지문", "지문분석", "독해", "독해지문", "독해분석", "지문해석",
+        "독해 문제", "장문", "장문독해",
+    },
+}
+_SUBSTR_HINTS: List[Tuple[str, Tuple[str, ...]]] = [
+    ("grammar", ("문법", "품사", "성분")),
+    ("sentence", ("문장", "구조", "성분", "완성")),
+    ("passage", ("지문", "독해", "장문")),
+]
+
 def _canon_mode_key(label_or_key: Any) -> str:
-    """
-    입력(한국어 라벨/영문키/약어)을 표준 모드 키('grammar'|'sentence'|'passage')로 변환.
-    1순위: src.core.modes가 제공하는 정규화/검색 유틸
-    2순위: 내장 시소러스
-    """
+    """한국어/영문/약어 라벨을 표준 키('grammar'|'sentence'|'passage')로 정규화."""
     s = str(label_or_key or "").strip()
     if not s:
         return ""
-
-    # 1) core.modes가 있으면 우선 사용(견고하게 여러 이름 시도)
-    try:
-        import src.core.modes as _m
-        # find_mode_by_label(라벨→spec)
-        fn = getattr(_m, "find_mode_by_label", None)
-        if callable(fn):
-            spec = fn(s)
-            key = getattr(spec, "key", None)
-            if isinstance(key, str) and key in ("grammar", "sentence", "passage"):
-                return key
-        # 추가적인 정규화 함수가 있으면 시도
-        for cand in ("canon_mode", "canon_key", "canon_label", "normalize_mode", "normalize_key", "normalize_label"):
-            g = getattr(_m, cand, None)
-            if callable(g):
-                try:
-                    res = g(s)
-                    if isinstance(res, str) and res in ("grammar", "sentence", "passage"):
-                        return res
-                    key = getattr(res, "key", None)
-                    if isinstance(key, str) and key in ("grammar", "sentence", "passage"):
-                        return key
-                except Exception:
-                    pass
-    except Exception:
-        pass
-
-    # 2) 내장 시소러스(한국어/영문/약어)
+    # 1) core.modes 우선
+    via_core = _canon_via_core_modes(s)
+    if via_core:
+        return via_core
+    # 2) 동의어 정규화(정확일치)
     t = _norm_token(s)
-    synonyms = {
-        "grammar": {
-            "grammar", "pt", "문법", "문법설명", "문법해설", "문법규칙", "품사", "문장성분", "문법검사"
-        },
-        "sentence": {
-            "sentence", "sent", "문장", "문장분석", "문장해석", "문장구조", "문장구조분석", "문장구조해석",
-            "문장구조분해", "문장구조파악", "문장구조분", "문장 구조 분석"
-        },
-        "passage": {
-            "passage", "para", "지문", "지문분석", "독해", "독해지문", "독해분석", "지문해석"
-        },
-    }
-    # 빠른 매칭: normalize 후 비교
-    for key, names in synonyms.items():
+    for key, names in _SYNONYMS.items():
         for name in names:
             if _norm_token(name) == t:
                 return key
-    return ""  # 미매칭
+    # 3) 부분일치 힌트(‘문장구조분석’, ‘독해 문제’ 등)
+    low = s.lower()
+    for key, hints in _SUBSTR_HINTS:
+        if any(h in low for h in hints):
+            return key
+    # 4) 영문 축약
+    if t in ("pt", "mn", "mina"):
+        return "sentence" if t != "pt" else "grammar"
+    return ""
 
+# ---- file resolve ------------------------------------------------------------
 def _resolve_release_prompts_file() -> Path | None:
     """release/assets → release → ./assets → ./ 순으로 prompts.yaml 탐색."""
     base = Path(st.session_state.get("_release_dir", "release")).resolve()
@@ -110,28 +129,23 @@ def _resolve_release_prompts_file() -> Path | None:
             continue
     return None
 
+# ---- robust extractor --------------------------------------------------------
 def _extract_prompts(doc: Dict[str, Any]) -> Dict[str, str]:
     """
-    다양한 YAML 스키마를 허용해 'UI 키'로 매핑한다.
-    - Top-level: {grammar/sentence/passage} + 한국어 라벨도 허용
-    - Nested: {mn:{sentence/passage}}, {pt:{grammar/prompt/...}} 등
-    - List: {modes:[{key|label|name, prompt|text|...}, ...]}
+    다양한 YAML 스키마를 **견고하게** 수용해 UI 키로 매핑한다.
+    - Top-level 한글/영문 라벨(문장구조분석/문법설명/지문분석 등) → 정규화
+    - Nested: { mn:{sentence,passage} }, { pt:{grammar/prompt/...} } 등
+    - List/Dict: { modes:[...]} 또는 { modes:{...} } / { 모드: ... } / 기타 유사 키도 재귀 스캔
+    - 마지막 수단: 부분일치/시소러스로 추정 매핑
     """
-    d = {(k.lower() if isinstance(k, str) else k): v for k, v in (doc or {}).items()}
     out = {K_PERSONA: "", K_GRAMMAR: "", K_SENTENCE: "", K_PASSAGE: ""}
 
-    # 0) Persona / Common
-    for yk in ("persona", "common", "profile", "system", "페르소나", "공통", "프로필"):
-        if yk in d:
-            out[K_PERSONA] = _coerce_yaml_to_text(d[yk])
-            break
-
-    # 1) Top-level keys: 한국어 라벨 포함 → 정규화
-    for raw_key, val in list(d.items()):
-        canon = _canon_mode_key(raw_key)
+    def _assign(canon: str, payload: Any) -> None:
         if not canon:
-            continue
-        text = _coerce_yaml_to_text(val)
+            return
+        text = _coerce_yaml_to_text(payload)
+        if not text:
+            return
         if canon == "grammar":
             out[K_GRAMMAR] = text
         elif canon == "sentence":
@@ -139,54 +153,76 @@ def _extract_prompts(doc: Dict[str, Any]) -> Dict[str, str]:
         elif canon == "passage":
             out[K_PASSAGE] = text
 
-    # 2) Nested: mn / pt 계열 보정
-    mn = d.get("mn") or d.get("mina")
+    def _maybe_persona(k: Any, v: Any) -> bool:
+        kk = str(k or "").strip().lower()
+        if kk in {"persona", "common", "profile", "system", "페르소나", "공통", "프로필"}:
+            out[K_PERSONA] = _coerce_yaml_to_text(v)
+            return True
+        return False
+
+    # 1) 1차: 얕은 레벨 스캔
+    for k, v in (doc or {}).items():
+        if _maybe_persona(k, v):
+            continue
+        canon = _canon_mode_key(k)
+        if canon:
+            _assign(canon, v)
+
+    # 2) mn/pt 보정
+    mn = doc.get("mn") or doc.get("mina")
     if isinstance(mn, dict):
         for nk, nv in mn.items():
-            canon = _canon_mode_key(nk)
-            if not canon:
-                continue
-            text = _coerce_yaml_to_text(nv)
-            if canon == "sentence":
-                out[K_SENTENCE] = text
-            elif canon == "passage":
-                out[K_PASSAGE] = text
-
-    pt = d.get("pt") if isinstance(d.get("pt"), dict) else None
+            _assign(_canon_mode_key(nk), nv)
+    pt = doc.get("pt") if isinstance(doc.get("pt"), dict) else None
     if isinstance(pt, dict) and not out[K_GRAMMAR]:
         # pt 내부에서 문법 텍스트 찾기
         for k in ("grammar", "prompt", "text", "full", "system", "설명"):
             if k in pt:
-                out[K_GRAMMAR] = _coerce_yaml_to_text(pt[k])
+                _assign("grammar", pt[k])
                 break
 
-    # 3) List: modes
-    modes: Optional[List[dict]] = None
-    if isinstance(d.get("modes"), list):
-        modes = d.get("modes")
-    elif isinstance(d.get("모드"), list):
-        modes = d.get("모드")
-    if isinstance(modes, list):
-        for m in modes:
-            if not isinstance(m, dict):
-                continue
-            label = m.get("key") or m.get("label") or m.get("name") or m.get("라벨")
-            canon = _canon_mode_key(label)
-            if not canon:
-                continue
-            text = None
-            for tk in ("prompt", "text", "full", "system", "value", "content", "지시", "규칙"):
-                if isinstance(m.get(tk), str) and m.get(tk).strip():
-                    text = m.get(tk)
-                    break
-            if text is None:
-                text = _coerce_yaml_to_text(m)
-            if canon == "grammar":
-                out[K_GRAMMAR] = text
-            elif canon == "sentence":
-                out[K_SENTENCE] = text
-            elif canon == "passage":
-                out[K_PASSAGE] = text
+    # 3) modes 섹션: dict/list/한글키 모두 수용
+    for key in ("modes", "모드", "mode_prompts", "modeprompts", "prompts_by_mode"):
+        sect = doc.get(key)
+        if isinstance(sect, dict):
+            for mk, mv in sect.items():
+                canon = _canon_mode_key(mk)
+                if canon:
+                    _assign(canon, mv)
+        elif isinstance(sect, list):
+            for entry in sect:
+                if not isinstance(entry, dict):
+                    continue
+                label = entry.get("key") or entry.get("label") or entry.get("name") or entry.get("라벨")
+                canon = _canon_mode_key(label)
+                # payload 후보 우선순위
+                text = None
+                for tk in ("prompt", "text", "full", "system", "value", "content", "지시", "규칙"):
+                    if isinstance(entry.get(tk), str) and entry.get(tk).strip():
+                        text = entry.get(tk)
+                        break
+                if text is None:
+                    text = entry
+                if canon:
+                    _assign(canon, text)
+
+    # 4) 2차: 재귀 스캔(안전한 제한, 깊이≤3)
+    def _walk(node: Any, depth: int = 0) -> None:
+        if depth >= 3:
+            return
+        if isinstance(node, dict):
+            for k, v in node.items():
+                if _maybe_persona(k, v):
+                    continue
+                canon = _canon_mode_key(k)
+                if canon:
+                    _assign(canon, v)
+                _walk(v, depth + 1)
+        elif isinstance(node, list):
+            for it in node:
+                _walk(it, depth + 1)
+
+    _walk(doc)
 
     return out
 
@@ -198,7 +234,7 @@ def _load_prompts_from_release() -> tuple[Dict[str, str], Path]:
         y = yaml.safe_load(f) or {}
     return _extract_prompts(y), p
 
-# ---- Prefill handshake (콜백 rerun 경고 없이 즉시 반영) -----------------------------
+# ---- prefill handshake (콜백 rerun 경고 없이 즉시 반영) ----------------------
 def _apply_pending_prefill() -> None:
     ss = st.session_state
     data = ss.pop("_PREFILL_PROMPTS", None)
@@ -208,27 +244,27 @@ def _apply_pending_prefill() -> None:
         ss[K_SENTENCE] = data.get(K_SENTENCE, "")
         ss[K_PASSAGE]  = data.get(K_PASSAGE,  "")
 
-# ---- Page Main -----------------------------------------------------------------------
+# ---- Page Main ---------------------------------------------------------------
 def main() -> None:
     render_sidebar()
 
-    # 1) 프리필 예약분 우선 반영(위젯 생성 전에)
+    # (1) 프리필 예약분 적용(위젯 생성 전에)
     _apply_pending_prefill()
 
-    # 2) 플래시
+    # (2) 플래시
     ok = st.session_state.pop("_flash_success", None)
     er = st.session_state.pop("_flash_error",   None)
     if ok: st.success(ok)
     if er: st.error(er)
 
-    # 3) 상태 점검
+    # (3) 상태 점검
     with st.container(border=True):
         st.subheader("🔍 상태 점검", divider="gray")
         p = _resolve_release_prompts_file()
         if p: st.success(f"경로 OK — prompts.yaml 확인: {p}")
         else: st.warning("prompts.yaml을 release/assets 또는 루트에서 찾지 못했습니다.")
 
-    # 4) 편집 UI (SSOT 키)
+    # (4) 편집 UI — SSOT 키
     st.markdown("### ① 페르소나(공통)")
     st.text_area("모든 모드에 공통 적용", key=K_PERSONA, height=160, placeholder="페르소나 텍스트...")
 
@@ -238,7 +274,7 @@ def main() -> None:
     with c2: st.text_area("문장(Sentence) 프롬프트", key=K_SENTENCE, height=220, placeholder="문장 모든 지시/규칙...")
     with c3: st.text_area("지문(Passage) 프롬프트",  key=K_PASSAGE,  height=220, placeholder="지문 모든 지시/규칙...")
 
-    # 5) 액션
+    # (5) 액션
     st.markdown("### ③ 액션")
     if st.button("📥 최신 프롬프트 불러오기(릴리스 우선)", use_container_width=True, key="btn_fetch_prompts"):
         try:
@@ -263,4 +299,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-# [AP-KANON] END: FILE src/ui/admin_prompt.py
+# [AP-KANON-FINAL] END
