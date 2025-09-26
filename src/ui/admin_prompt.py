@@ -2,74 +2,60 @@
 # -*- coding: utf-8 -*-
 """
 관리자 프롬프트 편집기 — 페르소나 + 모드별 프롬프트(문법/문장/지문)
+- 요구사항:
+  (1) 릴리스에서 최신 prompts.yaml을 불러오면 3개 모드 칸까지 정확히 채워질 것
+  (2) 편집 → YAML 미리보기 → 검증 → 출판(워크플로 dispatch)
+  (3) GITHUB_REPO 시크릿이 비어도 '편집'은 가능하고, 출판만 비활성화
 
-핵심:
-- 프롬프트 페이지에서도 app.py와 동일하게
-  (1) 기본 멀티페이지 네비 CSS 숨김
-  (2) 관리자 미니 사이드바(apply_admin_chrome) 렌더
-- 최신 프롬프트 불러오기는 '프리필 예약 → rerun → 위젯 렌더 전 주입' 핸드셰이크로 예외 제거
-
-SSOT:
-- 문서/프롬프트의 단일 진실 소스는 docs/_gpt/ (Workspace Pointer 정책). :contentReference[oaicite:2]{index=2}
+SSOT/정책:
+- 문서 단일 진실 소스는 docs/_gpt/ (Workspace Pointer 참조).
+- 헤더/상태 표시는 MASTERPLAN vNext 합의안(H1)에 따름.
 """
-
 from __future__ import annotations
 
 import base64
-import io
 import importlib
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Tuple
 
 import yaml
 
-# -- deps
+# Streamlit & Requests
 st: Any = importlib.import_module("streamlit")
 req: Any = importlib.import_module("requests")
 
-# -- loader: 릴리스 → SSOT 폴백(페르소나+3모드 추출)
-#    (release pages 순회 + docs/_gpt/prompts.yaml 폴백) :contentReference[oaicite:3]{index=3}
-_loader = importlib.import_module("src.ui.assist.prompts_loader")
-load_prompts_from_release = getattr(_loader, "load_prompts_from_release")
-apply_prompts_to_session = getattr(_loader, "apply_prompts_to_session")
-
-# -- sider: 관리자 미니바(app.py와 동일한 버튼 구색) :contentReference[oaicite:4]{index=4}
+# Admin sider(있으면 사용)
 try:
     _sider = importlib.import_module("src.ui.utils.sider")
-    apply_admin_chrome = getattr(_sider, "apply_admin_chrome")
+    ensure_admin_sidebar = getattr(_sider, "ensure_admin_sidebar")
+    render_minimal_admin_sidebar = getattr(_sider, "render_minimal_admin_sidebar")
+    show_sidebar = getattr(_sider, "show_sidebar")
 except Exception:
-    def apply_admin_chrome(**_: Any) -> None:  # 폴백
-        return
+    def ensure_admin_sidebar() -> None: ...
+    def render_minimal_admin_sidebar(*_: Any, **__: Any) -> None: ...
+    def show_sidebar() -> None: ...
+
+# 관용 로더(릴리스 → 페르소나+3모드)
+try:
+    _loader = importlib.import_module("src.ui.assist.prompts_loader")
+    load_prompts_from_release = getattr(_loader, "load_prompts_from_release")
+    apply_prompts_to_session = getattr(_loader, "apply_prompts_to_session")
+except Exception:
+    load_prompts_from_release = apply_prompts_to_session = None  # type: ignore
+
+# (옵션) LLM 변환기
+try:
+    normalize_to_yaml = importlib.import_module("src.ui.assist.prompt_normalizer").normalize_to_yaml
+except Exception:
+    normalize_to_yaml = None  # type: ignore
 
 
-# ===== [02] 공통: 기본 네비 숨김 + 스키마 검증 + GH dispatch =====
-def _hide_default_page_nav() -> None:
-    """app.py에서 쓰는 CSS와 동일하게 페이지 네비를 숨긴다. :contentReference[oaicite:5]{index=5}"""
-    st.markdown(
-        "<style>"
-        "nav[data-testid='stSidebarNav']{display:none!important;}"
-        "div[data-testid='stSidebarNav']{display:none!important;}"
-        "section[data-testid='stSidebar'] [data-testid='stSidebarNav']{display:none!important;}"
-        "section[data-testid='stSidebar'] ul[role='list']{display:none!important;}"
-        "</style>",
-        unsafe_allow_html=True,
-    )
-
+# ===== [02] schema helpers — START =====
 ELLIPSIS_UC = "\u2026"
 
 def _sanitize_ellipsis(text: str) -> Tuple[str, int]:
     c = text.count(ELLIPSIS_UC)
     return text.replace(ELLIPSIS_UC, "..."), c
-
-
-def _load_schema() -> Optional[dict]:
-    """schemas/prompts.schema.json이 있을 때만 스키마 체크."""
-    root = Path(__file__).resolve().parents[1]
-    sp = root / "schemas" / "prompts.schema.json"
-    if not sp.exists():
-        return None
-    import json
-    return json.loads(sp.read_text(encoding="utf-8"))
 
 
 def _validate_yaml_text(yaml_text: str) -> Tuple[bool, list[str]]:
@@ -83,12 +69,17 @@ def _validate_yaml_text(yaml_text: str) -> Tuple[bool, list[str]]:
     try:
         js = importlib.import_module("jsonschema")
         validator = getattr(js, "Draft202012Validator", None)
-        if not validator:
-            return True, ["jsonschema 미탑재 — 구조 검사는 건너뜀"]
-        schema = _load_schema()
-        if not schema:
-            return True, []
-        errs = sorted(validator(schema).iter_errors(data), key=lambda e: list(e.path))
+        if validator is None:
+            return False, ["jsonschema.Draft202012Validator not found"]
+        # schemas/prompts.schema.json 가정(없으면 관용 통과)
+        root = Path(__file__).resolve().parents[1]
+        sp = root / "schemas" / "prompts.schema.json"
+        if sp.exists():
+            import json
+            schema = json.loads(sp.read_text(encoding="utf-8"))
+            errs = sorted(validator(schema).iter_errors(data), key=lambda e: list(e.path))
+        else:
+            errs = []
     except Exception as exc:  # noqa: BLE001
         return False, [f"schema check failed: {exc}"]
 
@@ -99,10 +90,20 @@ def _validate_yaml_text(yaml_text: str) -> Tuple[bool, list[str]]:
             msgs.append(f"{loc}: {e.message}")
         return False, msgs
     return True, []
+# ===== [02] schema helpers — END =====
 
 
+# ===== [03] publish helpers — START =====
 def _gh_dispatch_workflow(
-    *, owner: str, repo: str, workflow: str, ref: str, token: Optional[str], yaml_text: str
+    *,
+    owner: str,
+    repo: str,
+    workflow: str,
+    ref: str,
+    token: str | None,
+    yaml_text: str,
+    prerelease: bool = False,
+    promote_latest: bool = True,
 ) -> None:
     s, n = _sanitize_ellipsis(yaml_text)
     if n:
@@ -110,8 +111,8 @@ def _gh_dispatch_workflow(
     url = f"https://api.github.com/repos/{owner}/{repo}/actions/workflows/{workflow}/dispatches"
     payload = {"ref": ref, "inputs": {
         "yaml_b64": base64.b64encode(s.encode("utf-8")).decode("ascii"),
-        "prerelease": "false",
-        "promote_latest": "true",
+        "prerelease": "true" if prerelease else "false",
+        "promote_latest": "true" if promote_latest else "false",
     }}
     headers = {"Accept": "application/vnd.github+json"}
     if token:
@@ -119,84 +120,139 @@ def _gh_dispatch_workflow(
     r = req.post(url, headers=headers, json=payload, timeout=20)
     if r.status_code not in (201, 204):
         raise RuntimeError(f"workflow_dispatch failed: {r.status_code} — {r.text}")
+# ===== [03] publish helpers — END =====
 
 
-# ===== [03] 프리필 핸드셰이크(충돌 방지 핵심) =====
+# ===== [04] page init — START =====
+def _init_admin_page() -> None:
+    st.set_page_config(page_title="Prompts Admin", page_icon="🛠️", layout="wide")
+    ensure_admin_sidebar()
+    try:
+        show_sidebar()  # 이 페이지에선 사이드바 강제 노출
+    except Exception:
+        pass
+    render_minimal_admin_sidebar(back_page="app.py")
+# ===== [04] page init — END =====
+
+
+# ===== [05] prefill handshake — START =====
 def _apply_pending_prefill() -> None:
     """
-    버튼 클릭 런에서는 _PREFILL_PROMPTS에만 저장 → rerun.
-    다음 런 초반(위젯 생성 전) 여기서 한 번에 주입.
+    버튼 클릭 → _PREFILL_PROMPTS에 담아 rerun → 이 함수가 '위젯 생성 전에'
+    세션 키(persona_text/grammar_prompt/...)에 안전 주입.
     """
-    pending = st.session_state.pop("_PREFILL_PROMPTS", None)
-    if isinstance(pending, dict) and pending:
-        # 관용 키 매핑으로 세션키(persona_text, grammar_prompt, ...) 주입. :contentReference[oaicite:6]{index=6}
-        apply_prompts_to_session(pending)
+    if not callable(apply_prompts_to_session):
+        return
+    ss = st.session_state
+    pending = None
+    for k in ("_PREFILL_PROMPTS", "_prefill_prompts"):
+        if k in ss and isinstance(ss[k], dict):
+            pending = ss.pop(k)
+            break
+    if pending:
+        # 아직 위젯이 만들어지기 '전'이므로 안전하게 세션키에 주입 가능
+        apply_prompts_to_session(pending)  # 관용 키 매핑 사용 (loader 구현 참조)
+# ===== [05] prefill handshake — END =====
 
 
-# ===== [04] 메인 =====
+# ===== [06] main — START =====
 def main() -> None:
-    st.set_page_config(page_title="Prompts Admin", page_icon="🛠️", layout="wide")
+    _init_admin_page()
 
-    # 1) 기본 네비 숨김 + 관리자 미니바(app.py와 동일한 버튼)  :contentReference[oaicite:7]{index=7}
-    _hide_default_page_nav()
-    apply_admin_chrome(back_page="app.py", icon_only=True)
-
-    # 2) 위젯 생성 전에 프리필 예약분을 세션키에 주입(핵심)
+    # ✅ 프리필 예약분이 있으면, 위젯 생성 전에 먼저 주입
     _apply_pending_prefill()
 
-    # 3) 상태 박스(간단)
+    # --- 상태점검 박스 -------------------------------------------------------------
     with st.container(border=True):
-        st.subheader("🩺 상태 점검")
+        st.subheader("🔍 상태 점검", divider="gray")
         repo_full = st.secrets.get("GITHUB_REPO", "")
         token = st.secrets.get("GITHUB_TOKEN")
         ref = st.secrets.get("GITHUB_BRANCH", "main")
         workflow = st.secrets.get("GITHUB_WORKFLOW", "publish-prompts.yml")
 
         owner = repo = ""
-        repo_bad = True
+        repo_config_error = False
         if repo_full and "/" in repo_full:
             owner, repo = repo_full.split("/", 1)
-            repo_bad = not owner or not repo
-        if repo_bad:
-            st.warning("출판 비활성화: GITHUB_REPO 시크릿이 필요합니다. 형식: OWNER/REPO")
+            if not owner or not repo:
+                repo_config_error = True
+                st.error("GITHUB_REPO 형식이 잘못되었습니다. 예: OWNER/REPO")
+        elif repo_full:
+            repo_config_error = True
+            st.error("GITHUB_REPO 형식이 잘못되었습니다. 예: OWNER/REPO")
+        else:
+            repo_config_error = True
+            st.info("GITHUB_REPO 시크릿이 비어 있어 출판 기능이 비활성화됩니다. 편집과 저장은 계속 사용할 수 있습니다.")
 
-        st.caption(f"GITHUB_REPO = {repo_full or '(unset)'}")
+        # 릴리스 체크(최신 + prompts.yaml 존재)
+        try:
+            headers = {"Accept": "application/vnd.github+json"}
+            if token:
+                headers["Authorization"] = f"Bearer {token}"
+            url = f"https://api.github.com/repos/{owner}/{repo}/releases/tags/prompts-latest"
+            r = req.get(url, headers=headers, timeout=10)
+            if r.status_code == 404:  # fallback
+                r = req.get(f"https://api.github.com/repos/{owner}/{repo}/releases/latest", headers=headers, timeout=10)
+            rel = r.json() if r.ok else {}
+            assets = rel.get("assets") or []
+            has_prompts = any((a.get("name") or "").lower() in ("prompts.yaml","prompts.yml") for a in assets)
+            if has_prompts:
+                st.success(f"릴리스 OK — prompts.yaml 자산 확인 (assets={len(assets)})")
+            else:
+                st.warning(f"릴리스에 prompts.yaml 자산이 보이지 않습니다. (assets={len(assets)})")
+        except Exception as e:
+            st.warning(f"릴리스 확인 실패: {e}")
 
-    # 4) 입력 UI
+    # --- 편집 UI ------------------------------------------------------------------
     st.markdown("### ① 페르소나(공통)")
-    st.text_area("모든 모드에 공통 적용", key="persona_text", height=180,
-                 placeholder="페르소나 텍스트...")
+    persona = st.text_area("모든 모드에 공통 적용", key="persona_text", height=160, placeholder="페르소나 텍스트...", help="모든 모드 공통 지침")
 
     st.markdown("### ② 모드별 프롬프트(지시/규칙)")
     c1, c2, c3 = st.columns(3)
     with c1:
-        st.text_area("문법(Grammar) 프롬프트", key="grammar_prompt", height=220,
-                     placeholder="문법 모드 지시/규칙...")
+        grammar_prompt = st.text_area("문법(Grammar) 프롬프트", key="grammar_prompt", height=200, placeholder="문법 모드 지시/규칙...")
     with c2:
-        st.text_area("문장(Sentence) 프롬프트", key="sentence_prompt", height=220,
-                     placeholder="문장 모드 지시/규칙...")
+        sentence_prompt = st.text_area("문장(Sentence) 프롬프트", key="sentence_prompt", height=200, placeholder="문장 모드 지시/규칙...")
     with c3:
-        st.text_area("지문(Passage) 프롬프트", key="passage_prompt", height=220,
-                     placeholder="지문 모드 지시/규칙...")
+        passage_prompt = st.text_area("지문(Passage) 프롬프트", key="passage_prompt", height=200, placeholder="지문 모드 지시/규칙...")
 
-    # 5) 액션들
+    # 액션 버튼
     st.markdown("### ③ 액션")
-    a, b, c, d, e = st.columns(5)
+    b1, b2, b3, b4 = st.columns(4, vertical_alignment="center")
 
-    # (A) 최신 프롬프트 불러오기 — 릴리스 우선, 실패 시 SSOT 폴백  :contentReference[oaicite:8]{index=8}
-    with a:
-        if st.button("📥 최신 프롬프트 불러오기(릴리스 우선)", use_container_width=True):
+    # (a) 최신 프롬프트 불러오기(릴리스)
+    with b1:
+        if st.button("📥 최신 프롬프트 불러오기(릴리스 우선)", use_container_width=True, key="btn_fetch_prompts"):
             try:
-                data = load_prompts_from_release()  # persona + grammar/sentence/passage
-                # ❗️같은 런에서 위젯 키를 직접 덮지 않는다 → 예약 후 rerun
-                st.session_state["_PREFILL_PROMPTS"] = data
-                st.rerun()
+                if callable(load_prompts_from_release):
+                    data = load_prompts_from_release()  # 릴리스 → SSOT 폴백, persona+3모드 추출
+                    # ❗️직접 세션키를 덮지 말고 예약키에 저장 → 즉시 rerun → 위젯 생성 이전에 주입
+                    st.session_state["_PREFILL_PROMPTS"] = data
+                    st.rerun()
+                else:
+                    st.error("prompts_loader 모듈을 불러오지 못했습니다.")
             except Exception as e:
                 st.exception(e)
 
-    # (B) YAML 병합(로컬 필드→YAML)
-    with b:
-        if st.button("🧾 YAML 병합(로컬 필드→YAML)", use_container_width=True):
+    # (b) YAML 병합(LLM) — 선택 사항
+    with b2:
+        if st.button("🧠 전체 정리(LLM)", use_container_width=True, key="llm_all"):
+            if callable(normalize_to_yaml):
+                y = normalize_to_yaml(
+                    grammar_text=st.session_state.get("grammar_prompt", "") or "",
+                    sentence_text=st.session_state.get("sentence_prompt", "") or "",
+                    passage_text=st.session_state.get("passage_prompt", "") or "",
+                    openai_key=st.secrets.get("OPENAI_API_KEY"),
+                    openai_model=st.secrets.get("OPENAI_MODEL", "gpt-4o-mini"),
+                )
+                st.session_state["_merged_yaml"] = y
+            else:
+                st.warning("LLM 정리기(normalize_to_yaml)를 찾지 못했습니다. 수동 YAML 미리보기로 진행하세요.")
+
+    # (c) 수동 병합/미리보기 — LLM 없어도 동작
+    with b3:
+        if st.button("🧾 YAML 병합(로컬 필드→YAML)", use_container_width=True, key="merge_local"):
+            # 관용 YAML 스냅샷(간결 포맷)
             doc = {
                 "version": "auto",
                 "persona": st.session_state.get("persona_text", "") or "",
@@ -206,56 +262,36 @@ def main() -> None:
                     {"key": "passage", "prompt": st.session_state.get("passage_prompt", "") or ""},
                 ],
             }
-            st.session_state["_PROMPTS_YAML"] = yaml.safe_dump(doc, allow_unicode=True, sort_keys=False)
-            st.success("YAML 병합 완료 — 아래 미리보기 확인")
+            st.session_state["_merged_yaml"] = yaml.safe_dump(doc, allow_unicode=True, sort_keys=False)
 
-    # (C) 스키마 검증
-    with c:
-        if st.button("🔎 스키마 검증", use_container_width=True):
-            y = st.session_state.get("_PROMPTS_YAML", "") or ""
-            if not y:
-                st.warning("먼저 ‘🧾 YAML 병합’을 실행하세요.")
-            else:
-                ok, msgs = _validate_yaml_text(y)
-                if ok:
-                    st.success("검증 통과")
-                else:
-                    st.error("스키마 검증 실패")
-                    if msgs:
-                        st.code("\n".join(f"- {m}" for m in msgs))
-
-    # (D) YAML 다운로드
-    with d:
-        y = st.session_state.get("_PROMPTS_YAML", "") or ""
-        st.download_button("📥 YAML 다운로드", data=io.BytesIO(y.encode("utf-8")),
-                           file_name="prompts.yaml", mime="text/yaml",
-                           use_container_width=True, disabled=not bool(y))
-
-    # (E) 출판
-    with e:
-        repo_full = st.secrets.get("GITHUB_REPO", "")
-        token = st.secrets.get("GITHUB_TOKEN")
-        ref = st.secrets.get("GITHUB_BRANCH", "main")
-        workflow = st.secrets.get("GITHUB_WORKFLOW", "publish-prompts.yml")
-
-        owner = repo = ""
-        disabled = True
-        if repo_full and "/" in repo_full:
-            owner, repo = repo_full.split("/", 1)
-            disabled = not (owner and repo and st.session_state.get("_PROMPTS_YAML"))
-
-        if st.button("🚀 출판(Publish)", type="primary", use_container_width=True,
-                     disabled=disabled,
-                     help=None if not disabled else "GITHUB_REPO 시크릿과 병합된 YAML이 필요합니다."):
-            y = st.session_state.get("_PROMPTS_YAML", "") or ""
+    # (d) 출판(Publish)
+    with b4:
+        publish_disabled = repo_config_error or not owner or not repo
+        publish_clicked = st.button(
+            "🚀 출판(Publish)",
+            type="primary",
+            use_container_width=True,
+            key="publish_all",
+            disabled=publish_disabled,
+            help="GITHUB_REPO 시크릿이 설정되어 있어야 출판할 수 있습니다." if publish_disabled else None,
+        )
+        if publish_clicked:
+            y = st.session_state.get("_merged_yaml", "")
             ok, msgs = _validate_yaml_text(y)
             if not ok:
                 st.error("스키마 검증 실패 — 먼저 오류를 해결하세요.")
                 if msgs:
-                    st.code("\n".join(f"- {m}" for m in msgs))
+                    st.write("\n".join(f"- {m}" for m in msgs))
             else:
                 try:
-                    _gh_dispatch_workflow(owner=owner, repo=repo, workflow=workflow, ref=ref, token=token, yaml_text=y)
+                    _gh_dispatch_workflow(
+                        owner=owner,
+                        repo=repo,
+                        workflow=workflow,
+                        ref=ref,
+                        token=token,
+                        yaml_text=y,
+                    )
                     st.success("출판 요청 전송 완료 — Actions에서 처리 중입니다.")
                     st.markdown(
                         f"[열기: Actions › {workflow}]"
@@ -264,13 +300,13 @@ def main() -> None:
                 except Exception as exc:  # noqa: BLE001
                     st.exception(exc)
 
-    # 6) 미리보기
-    ytext = st.session_state.get("_PROMPTS_YAML")
-    if ytext:
+    # YAML 미리보기
+    if st.session_state.get("_merged_yaml"):
         st.markdown("### YAML 미리보기")
-        st.code(ytext, language="yaml")
+        st.code(st.session_state["_merged_yaml"], language="yaml")
 
 
 if __name__ == "__main__":
     main()
+# ===== [06] main — END =====
 # ===== [01] FILE: src/ui/admin_prompt.py — END =====
