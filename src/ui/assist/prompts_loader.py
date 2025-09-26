@@ -17,7 +17,6 @@ _KEY_ALIASES = {
     "sentence": {"sentence", "문장", "mn", "미나", "미나쌤"},
     "passage": {"passage", "지문", "reading", "독해"},
 }
-# 값 후보(국문 포함)
 _VAL_FIELDS = (
     "prompt", "instruction", "instructions", "rules", "guidelines",
     "text", "content", "template", "value",
@@ -50,7 +49,7 @@ def _http_get_json(url: str, token: Optional[str] = None, timeout: int = 12) -> 
     return r.json()
 
 def _http_get_text(url: str, token: Optional[str] = None, timeout: int = 20, accept: Optional[str] = None) -> str:
-    headers = {}
+    headers: Dict[str, str] = {}
     if accept:
         headers["Accept"] = accept
     if token:
@@ -84,14 +83,11 @@ def _extract_text(val: Any) -> str:
     if isinstance(val, str):
         return _norm(val)
     if isinstance(val, dict):
-        # 우선 순위 필드
         s = _pick(*(val.get(k) for k in _VAL_FIELDS if k in val))
         if not s:
-            # 리스트형 필드 결합
             s = _join_list(val.get("lines") or val.get("bullets") or val.get("items"))
         if s:
             return s
-        # Chat messages 형식 지원
         msgs = val.get("messages") or val.get("chat")
         if isinstance(msgs, list):
             sys = [m for m in msgs if (m.get("role") or "").lower() == "system"]
@@ -110,9 +106,9 @@ def _parse_modes_like(data: dict) -> Dict[str, str]:
     다양한 스키마를 관용적으로 파싱하여 grammar/sentence/passage 3개를 반환.
     지원 형태:
       - data["modes"]가 리스트:
-          (A) [{key|name|id|mode: "...", prompt|...}]  ← 기존 지원
-          (B) [{문법:{...}}, {문장:{...}}, {지문:{...}}] ← ★신규: 중첩 키 스캔
-      - data["modes"]가 매핑: {grammar|문법: "..." 또는 {prompt|...}}
+          (A) [{key|name|id|mode: "...", prompt|...}]
+          (B) [{문법:{...}}, {문장:{...}}, {지문:{...}}]  ← ★중첩 키
+      - data["modes"]가 매핑: {grammar|문법: "…" 또는 {prompt|…}}
       - data["prompts"]가 유사 구조일 때도 동일 처리
     """
     out = {"grammar": "", "sentence": "", "passage": ""}
@@ -126,82 +122,73 @@ def _parse_modes_like(data: dict) -> Dict[str, str]:
 
     modes = data.get("modes")
 
-    # 1) 리스트: (A) key/name/id/mode... or (B) {문법:{...}} 한 항목=한 모드
     if isinstance(modes, list):
         for item in modes:
             if not isinstance(item, dict):
                 continue
+            # (A) key/name… 보통형
             raw_k = item.get("key") or item.get("name") or item.get("id") or item.get("mode")
             ck = _canon_key(str(raw_k)) if raw_k else None
             if ck and ck in out:
                 out[ck] = _extract_text(item)
                 continue
-            # (B) {문법:{...}} 형태 처리
+            # (B) {문법:{...}} 형태
             for k2, v2 in item.items():
                 ck2 = _canon_key(str(k2))
                 if ck2 and ck2 in out:
                     out[ck2] = _extract_text(v2)
-        # 루트 보정은 아래에서 공통 처리
+        # 루트 보정은 아래 공통 처리로
     elif isinstance(modes, dict):
         _apply_mapping(modes)
 
-    # 2) prompts (대체 키)
     prompts = data.get("prompts")
     if isinstance(prompts, dict):
         _apply_mapping(prompts)
 
-    # 3) 루트 대체 키
+    # 루트 대체 키
     out["grammar"]  = out["grammar"]  or _norm(data.get("grammar"))
     out["sentence"] = out["sentence"] or _norm(data.get("sentence"))
     out["passage"]  = out["passage"]  or _norm(data.get("passage"))
 
-    # 4) 상호 보정(한쪽만 있으면 복사)
+    # 상호 보정
     if not out["passage"] and out["sentence"]:
         out["passage"] = out["sentence"]
     if not out["sentence"] and out["passage"]:
         out["sentence"] = out["passage"]
 
     return out
-
 # =============================== [03] parse modes — END ================================
 
 
 # =============================== [04] loader core — START =============================
-def _download_prompts_yaml_from_repo(owner: str, repo: str, token: Optional[str], ref: str = "main") -> Optional[str]:
-    for path in ("docs/_gpt/prompts.yaml", "docs/_gpt/prompts.yml"):
+def _download_prompts_yaml_from_release(
+    owner: str, repo: str, token: Optional[str], prefer_tag: Optional[str]
+) -> Optional[str]:
+    """릴리스에서 prompts.yaml(또는 .yml)을 가져온다. 없으면 None."""
+    # 1) prefer_tag 우선
+    if prefer_tag:
         try:
-            u = f"https://api.github.com/repos/{owner}/{repo}/contents/{path}?ref={ref}"
-            j = _http_get_json(u, token=token)
-            if isinstance(j, dict):
-                enc = j.get("encoding")
-                if enc == "base64":
-                    return base64.b64decode(j.get("content") or b"").decode("utf-8", "ignore")
-                # raw via download_url
-                dl = j.get("download_url")
-                if dl:
-                    return _http_get_text(dl, token=None, accept="application/octet-stream")
-                # raw via Accept header
-                return _http_get_text(u, token=token, accept="application/vnd.github.raw")
+            rel = _http_get_json(
+                f"https://api.github.com/repos/{owner}/{repo}/releases/tags/{prefer_tag}",
+                token=token,
+            )
+            for a in rel.get("assets") or []:
+                name = (a.get("name") or "").lower()
+                if name in ("prompts.yaml", "prompts.yml"):
+                    # 브라우저 URL → raw(octet-stream) 우선
+                    return _http_get_text(a.get("browser_download_url"), token=None, accept="application/octet-stream")
         except Exception:
-            continue
-    return None
-
-    # 폴백: assets/{id} (API)
-    try:
-        aid = a.get("id")
-        if aid:
-            api = f"https://api.github.com/repos/{owner}/{repo}/releases/assets/{aid}"
-            return _http_get_text(api, token=token, accept="application/octet-stream")
-    except Exception:
-        pass
-
+            pass
 
     # 2) 최신 릴리스들 페이지네이션 스캔(최대 5페이지)
     for page in range(1, 6):
-        rels = _http_get_json(
-            f"https://api.github.com/repos/{owner}/{repo}/releases?per_page=20&page={page}",
-            token=token,
-        )
+        try:
+            rels = _http_get_json(
+                f"https://api.github.com/repos/{owner}/{repo}/releases?per_page=20&page={page}",
+                token=token,
+            )
+        except Exception:
+            break
         if not isinstance(rels, list) or not rels:
             break
         for rel in rels:
@@ -210,7 +197,17 @@ def _download_prompts_yaml_from_repo(owner: str, repo: str, token: Optional[str]
             for a in rel.get("assets") or []:
                 name = (a.get("name") or "").lower()
                 if name in ("prompts.yaml", "prompts.yml"):
-                    return _http_get_text(a.get("browser_download_url"), token=token)
+                    try:
+                        return _http_get_text(a.get("browser_download_url"), token=None, accept="application/octet-stream")
+                    except Exception:
+                        # API 자산 엔드포인트 폴백
+                        aid = a.get("id")
+                        if aid:
+                            try:
+                                api = f"https://api.github.com/repos/{owner}/{repo}/releases/assets/{aid}"
+                                return _http_get_text(api, token=token, accept="application/octet-stream")
+                            except Exception:
+                                pass
         if len(rels) < 20:
             break
     return None
@@ -221,7 +218,7 @@ def _download_prompts_yaml_from_repo(
 ) -> Optional[str]:
     """
     레포 SSOT 경로에서 prompts.yaml 폴백 로드.
-    SSOT: docs/_gpt/ ... (Workspace Pointer 규약)  :contentReference[oaicite:4]{index=4}
+    SSOT: docs/_gpt/ ... (Workspace Pointer 규약)
     """
     for path in ("docs/_gpt/prompts.yaml", "docs/_gpt/prompts.yml"):
         try:
@@ -229,6 +226,8 @@ def _download_prompts_yaml_from_repo(
             j = _http_get_json(u, token=token)
             if isinstance(j, dict) and j.get("encoding") == "base64":
                 return base64.b64decode(j.get("content") or b"").decode("utf-8", "ignore")
+            # raw via vendor accept
+            return _http_get_text(u, token=token, accept="application/vnd.github.raw")
         except Exception:
             continue
     return None
