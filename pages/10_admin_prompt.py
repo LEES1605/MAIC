@@ -3,6 +3,7 @@ from __future__ import annotations
 import streamlit as st
 
 # 기본 “Pages” 네비 숨김 (버전별 testid 변형 모두 차단)
+
 st.markdown(
     """
     <style>

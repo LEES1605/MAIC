@@ -15,7 +15,6 @@ except Exception:
         from ui.utils.sider import render_sidebar  # legacy path fallback
 # [H1] END
 
-
 # ---- 기본 Pages 네비 완전 숨김(보조) --------------------------------------------
 def _hide_default_pages_nav() -> None:
     st.markdown(
