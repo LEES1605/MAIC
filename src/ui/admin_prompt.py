@@ -1,126 +1,182 @@
-# ===== [01] FILE: src/ui/admin_prompt.py — START =====
-# -*- coding: utf-8 -*-
-"""
-관리자 프롬프트 편집기 — 페르소나 + 모드별 프롬프트(문법/문장/지문)
-- 요구사항:
-  (1) 릴리스에서 최신 prompts.yaml을 불러오면 3개 모드 칸까지 정확히 채워질 것
-  (2) 편집 → YAML 미리보기 → 검증 → 출판(워크플로 dispatch)
-  (3) GITHUB_REPO 시크릿이 비어도 '편집'은 가능하고, 출판만 비활성화
-
-SSOT/정책:
-- 문서 단일 진실 소스는 docs/_gpt/ (Workspace Pointer 참조).
-- 헤더/상태 표시는 MASTERPLAN vNext 합의안(H1)에 따름.
-"""
+# [01] START: admin_prompt — Loader helpers (release/prompts.yaml)
 from __future__ import annotations
 
-import base64
-import importlib
 from pathlib import Path
-from typing import Any, Dict, Tuple
-
+from typing import Any, Dict
+import json
 import yaml
+import streamlit as st
 
-# Streamlit & Requests
-st: Any = importlib.import_module("streamlit")
-req: Any = importlib.import_module("requests")
+# ---- UI Widget Keys (stable) ----
+K_GRAMMAR: str = "prompt_PT"               # 문법(Grammar)
+K_SENTENCE: str = "prompt_MN_sentence"     # 문장(Sentence)
+K_PASSAGE: str = "prompt_MN_passage"       # 지문(Passage)
 
-# Admin sider(있으면 사용)
-try:
-    _sider = importlib.import_module("src.ui.utils.sider")
-    ensure_admin_sidebar = getattr(_sider, "ensure_admin_sidebar")
-    render_minimal_admin_sidebar = getattr(_sider, "render_minimal_admin_sidebar")
-    show_sidebar = getattr(_sider, "show_sidebar")
-except Exception:
-    def ensure_admin_sidebar() -> None: ...
-    def render_minimal_admin_sidebar(*_: Any, **__: Any) -> None: ...
-    def show_sidebar() -> None: ...
+def _resolve_release_prompts_file() -> Path | None:
+    """
+    릴리스/에셋 위치에서 prompts.yaml을 가장 먼저 발견되는 경로로 선택.
+    우선순위: <_release_dir>/assets > <_release_dir> > ./assets > ./
+    """
+    base = Path(st.session_state.get("_release_dir", "release")).resolve()
+    candidates = [
+        base / "assets" / "prompts.yaml",
+        base / "prompts.yaml",
+        Path("assets/prompts.yaml").resolve(),
+        Path("prompts.yaml").resolve(),
+    ]
+    for p in candidates:
+        try:
+            if p.exists() and p.is_file():
+                return p
+        except Exception:
+            # 경로 이슈(권한/부정확한 심볼릭 등)는 무시하고 다음 후보로 진행
+            continue
+    return None
 
-# 관용 로더(릴리스 → 페르소나+3모드)
-try:
-    _loader = importlib.import_module("src.ui.assist.prompts_loader")
-    load_prompts_from_release = getattr(_loader, "load_prompts_from_release")
-    apply_prompts_to_session = getattr(_loader, "apply_prompts_to_session")
-except Exception:
-    load_prompts_from_release = apply_prompts_to_session = None  # type: ignore
+def _coerce_yaml_to_text(value: Any) -> str:
+    """문자열이 아니어도 보기 좋게 문자열화한다(dict/list 지원)."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        for key in ("full", "system", "text", "prompt"):
+            v = value.get(key)
+            if isinstance(v, str):
+                return v
+        return json.dumps(value, ensure_ascii=False, indent=2)
+    if isinstance(value, (list, tuple)):
+        return "\n".join(str(x) for x in value)
+    return str(value)
 
-# (옵션) LLM 변환기
-try:
-    normalize_to_yaml = importlib.import_module("src.ui.assist.prompt_normalizer").normalize_to_yaml
-except Exception:
-    normalize_to_yaml = None  # type: ignore
+def _extract_prompts(yaml_data: Dict[str, Any]) -> Dict[str, str]:
+    """
+    다양한 YAML 스키마를 허용해 3개 텍스트(문법/문장/지문)로 매핑한다.
+    지원 예:
+      - {grammar, sentence, passage}
+      - {pt: "...", mn: {sentence: "...", passage: "..."}}  등
+    """
+    data: Dict[str, Any] = {
+        (k.lower() if isinstance(k, str) else k): v
+        for k, v in (yaml_data or {}).items()
+    }
+    out: Dict[str, str] = {K_GRAMMAR: "", K_SENTENCE: "", K_PASSAGE: ""}
 
+    # 1) 최상위 단일 키 매핑(여러 별칭 허용)
+    mapping = {
+        "grammar": K_GRAMMAR, "pt": K_GRAMMAR, "grammar_prompt": K_GRAMMAR,
+        "sentence": K_SENTENCE, "mn_sentence": K_SENTENCE, "sentence_prompt": K_SENTENCE,
+        "passage": K_PASSAGE, "mn_passage": K_PASSAGE, "passage_prompt": K_PASSAGE,
+    }
+    for yk, sk in mapping.items():
+        if yk in data:
+            out[sk] = _coerce_yaml_to_text(data[yk])
 
-# ===== [02] schema helpers — START =====
-ELLIPSIS_UC = "\u2026"
+    # 2) { mn: { sentence, passage } } 지원
+    mn = data.get("mn") or data.get("mina")
+    if isinstance(mn, dict):
+        if "sentence" in mn:
+            out[K_SENTENCE] = _coerce_yaml_to_text(mn["sentence"])
+        if "passage" in mn:
+            out[K_PASSAGE] = _coerce_yaml_to_text(mn["passage"])
 
-def _sanitize_ellipsis(text: str) -> Tuple[str, int]:
-    c = text.count(ELLIPSIS_UC)
-    return text.replace(ELLIPSIS_UC, "..."), c
+    # 3) { pt: { grammar/prompt/text/... } } 보정(드문 케이스)
+    ptsec = data.get("pt") if isinstance(data.get("pt"), dict) else None
+    if isinstance(ptsec, dict) and not out[K_GRAMMAR]:
+        for k in ("grammar", "prompt", "text", "full", "system"):
+            if k in ptsec:
+                out[K_GRAMMAR] = _coerce_yaml_to_text(ptsec[k])
+                break
 
+    return out
 
-def _validate_yaml_text(yaml_text: str) -> Tuple[bool, list[str]]:
+def _load_prompts_from_release() -> tuple[Dict[str, str], Path]:
+    """릴리스/에셋에서 YAML을 읽어 표준 3필드로 반환."""
+    p = _resolve_release_prompts_file()
+    if not p:
+        raise FileNotFoundError("prompts.yaml을 release 또는 assets에서 찾지 못했습니다.")
+    with p.open("r", encoding="utf-8") as f:
+        y = yaml.safe_load(f) or {}
+    texts = _extract_prompts(y)
+    return texts, p
+
+def on_click_load_latest_prompts() -> None:
+    """
+    버튼 핸들러: 세션 키에 값 주입 후 즉시 rerun.
+    UI에는 value= 초기값을 쓰지 않고 key 바인딩만 사용해야 한다.
+    """
     try:
-        data = yaml.safe_load(yaml_text)
-        if not isinstance(data, dict):
-            return False, ["<root>: mapping(object) required"]
-    except Exception as exc:  # noqa: BLE001
-        return False, [f"YAML parse error: {exc}"]
+        texts, src = _load_prompts_from_release()
+        st.session_state[K_GRAMMAR] = texts[K_GRAMMAR]
+        st.session_state[K_SENTENCE] = texts[K_SENTENCE]
+        st.session_state[K_PASSAGE]  = texts[K_PASSAGE]
+        st.session_state["_last_prompts_source"] = str(src)
+        st.session_state["_flash_success"] = f"릴리스에서 프롬프트를 불러왔습니다: {src}"
+        st.rerun()  # 즉시 반영
+    except FileNotFoundError as e:
+        st.session_state["_flash_error"] = str(e)
+        st.rerun()
+    except Exception:
+        # 상세 예외는 내부 로그로만(민감정보 노출 방지)
+        st.session_state["_flash_error"] = "프롬프트 로딩 중 오류가 발생했습니다."
+        st.rerun()
+# [01] END: admin_prompt — Loader helpers (release/prompts.yaml)
 
-    try:
-        js = importlib.import_module("jsonschema")
-        validator = getattr(js, "Draft202012Validator", None)
-        if validator is None:
-            return False, ["jsonschema.Draft202012Validator not found"]
-        # schemas/prompts.schema.json 가정(없으면 관용 통과)
-        root = Path(__file__).resolve().parents[1]
-        sp = root / "schemas" / "prompts.schema.json"
-        if sp.exists():
-            import json
-            schema = json.loads(sp.read_text(encoding="utf-8"))
-            errs = sorted(validator(schema).iter_errors(data), key=lambda e: list(e.path))
-        else:
-            errs = []
-    except Exception as exc:  # noqa: BLE001
-        return False, [f"schema check failed: {exc}"]
+# [02] START: admin_prompt — UI widgets + Action button (Loader)
+import streamlit as st
+from ui.nav import render_sidebar  # 이전 브랜치에서 추가된 공통 사이드바
 
-    if errs:
-        msgs = []
-        for e in errs:
-            loc = "/".join(str(p) for p in e.path) or "<root>"
-            msgs.append(f"{loc}: {e.message}")
-        return False, msgs
-    return True, []
-# ===== [02] schema helpers — END =====
+# 사이드바 일관 렌더
+render_sidebar()
+
+# 이전 단계에서 설정해둔 플래시 메시지 표출(1회성)
+_success = st.session_state.pop("_flash_success", None)
+_error = st.session_state.pop("_flash_error", None)
+if _success:
+    st.success(_success)
+if _error:
+    st.error(_error)
+
+st.header("② 모드별 프롬프트(지시/규칙)")
+
+# 중요: value 인자 미사용. 세션 상태(key) 단일 소스 유지.
+st.text_area("문법(Grammar) 프롬프트", key=K_GRAMMAR, height=220, placeholder="문법 모든 지시/규칙...")
+st.text_area("문장(Sentence) 프롬프트", key=K_SENTENCE, height=220, placeholder="문장 모든 지시/규칙...")
+st.text_area("지문(Passage) 프롬프트", key=K_PASSAGE,  height=220, placeholder="지문 모든 지시/규칙...")
+
+st.markdown("### ③ 액션")
+st.button("🧲 최신 프롬프트 불러오기(릴리스 우선)", on_click=on_click_load_latest_prompts)
+
+# 운영 가시성을 위해 최근 소스 경로를 표시(선택)
+_last = st.session_state.get("_last_prompts_source")
+if _last:
+    st.caption(f"최근 소스: {_last}")
+# [02] END: admin_prompt — UI widgets + Action button (Loader)
 
 
-# ===== [03] publish helpers — START =====
-def _gh_dispatch_workflow(
-    *,
-    owner: str,
-    repo: str,
-    workflow: str,
-    ref: str,
-    token: str | None,
-    yaml_text: str,
-    prerelease: bool = False,
-    promote_latest: bool = True,
-) -> None:
-    s, n = _sanitize_ellipsis(yaml_text)
-    if n:
-        st.info(f"U+2026 {n}개를 '...'로 치환했습니다.")
-    url = f"https://api.github.com/repos/{owner}/{repo}/actions/workflows/{workflow}/dispatches"
-    payload = {"ref": ref, "inputs": {
-        "yaml_b64": base64.b64encode(s.encode("utf-8")).decode("ascii"),
-        "prerelease": "true" if prerelease else "false",
-        "promote_latest": "true" if promote_latest else "false",
-    }}
-    headers = {"Accept": "application/vnd.github+json"}
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    r = req.post(url, headers=headers, json=payload, timeout=20)
-    if r.status_code not in (201, 204):
-        raise RuntimeError(f"workflow_dispatch failed: {r.status_code} — {r.text}")
-# ===== [03] publish helpers — END =====
+
+# [03] START: tests — test_admin_prompt_loader_extract.py
+from admin_prompt import _extract_prompts, K_GRAMMAR, K_SENTENCE, K_PASSAGE
+
+def test_extract_prompts_top_level():
+    y = {"grammar": "G", "sentence": "S", "passage": "P"}
+    out = _extract_prompts(y)
+    assert out[K_GRAMMAR] == "G"
+    assert out[K_SENTENCE] == "S"
+    assert out[K_PASSAGE]  == "P"
+
+def test_extract_prompts_nested_mn():
+    y = {"mn": {"sentence": "S2", "passage": "P2"}}
+    out = _extract_prompts(y)
+    assert out[K_SENTENCE] == "S2"
+    assert out[K_PASSAGE]  == "P2"
+
+def test_extract_prompts_pt_dict():
+    y = {"pt": {"full": "GG"}}
+    out = _extract_prompts(y)
+    assert out[K_GRAMMAR] == "GG"
+# [03] END: tests — test_admin_prompt_loader_extract.py
+
 
 
 # ===== [04] page init — START =====
