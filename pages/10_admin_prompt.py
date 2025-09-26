@@ -1,9 +1,8 @@
-# [H5] START: FILE pages/10_admin_prompt.py — wrapper to real admin prompt
+# [03] START: FILE pages/10_admin_prompt.py — wrapper to real admin prompt
 from __future__ import annotations
 import streamlit as st
 
-# 기본 “Pages” 네비 숨김 (버전별 testid 변형 모두 차단)
-
+# 기본 "Pages" 네비 완전 숨김
 st.markdown(
     """
     <style>
@@ -16,6 +15,6 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-from src.ui.admin_prompt import main as _render
+from src.ui.admin_prompt import main as _render  # 실제 구현 호출
 _render()
-# [H5] END
+# [03] END: FILE pages/10_admin_prompt.py
