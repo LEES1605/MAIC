@@ -165,19 +165,19 @@ def main() -> None:
     # 4) 입력 UI
     st.markdown("### ① 페르소나(공통)")
     st.text_area("모든 모드에 공통 적용", key="persona_text", height=180,
-                 placeholder="페르소나 텍스트…")
+                 placeholder="페르소나 텍스트...")
 
     st.markdown("### ② 모드별 프롬프트(지시/규칙)")
     c1, c2, c3 = st.columns(3)
     with c1:
         st.text_area("문법(Grammar) 프롬프트", key="grammar_prompt", height=220,
-                     placeholder="문법 모드 지시/규칙…")
+                     placeholder="문법 모드 지시/규칙...")
     with c2:
         st.text_area("문장(Sentence) 프롬프트", key="sentence_prompt", height=220,
-                     placeholder="문장 모드 지시/규칙…")
+                     placeholder="문장 모드 지시/규칙...")
     with c3:
         st.text_area("지문(Passage) 프롬프트", key="passage_prompt", height=220,
-                     placeholder="지문 모드 지시/규칙…")
+                     placeholder="지문 모드 지시/규칙...")
 
     # 5) 액션들
     st.markdown("### ③ 액션")
