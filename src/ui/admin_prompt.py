@@ -154,34 +154,28 @@ if _last:
 
 
 
-# ===== [03] publish helpers — START =====
-def _gh_dispatch_workflow(
-    *,
-    owner: str,
-    repo: str,
-    workflow: str,
-    ref: str,
-    token: str | None,
-    yaml_text: str,
-    prerelease: bool = False,
-    promote_latest: bool = True,
-) -> None:
-    s, n = _sanitize_ellipsis(yaml_text)
-    if n:
-        st.info(f"U+2026 {n}개를 '...'로 치환했습니다.")
-    url = f"https://api.github.com/repos/{owner}/{repo}/actions/workflows/{workflow}/dispatches"
-    payload = {"ref": ref, "inputs": {
-        "yaml_b64": base64.b64encode(s.encode("utf-8")).decode("ascii"),
-        "prerelease": "true" if prerelease else "false",
-        "promote_latest": "true" if promote_latest else "false",
-    }}
-    headers = {"Accept": "application/vnd.github+json"}
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    r = req.post(url, headers=headers, json=payload, timeout=20)
-    if r.status_code not in (201, 204):
-        raise RuntimeError(f"workflow_dispatch failed: {r.status_code} — {r.text}")
-# ===== [03] publish helpers — END =====
+# [03] START: tests — test_admin_prompt_loader_extract.py
+from admin_prompt import _extract_prompts, K_GRAMMAR, K_SENTENCE, K_PASSAGE
+
+def test_extract_prompts_top_level():
+    y = {"grammar": "G", "sentence": "S", "passage": "P"}
+    out = _extract_prompts(y)
+    assert out[K_GRAMMAR] == "G"
+    assert out[K_SENTENCE] == "S"
+    assert out[K_PASSAGE]  == "P"
+
+def test_extract_prompts_nested_mn():
+    y = {"mn": {"sentence": "S2", "passage": "P2"}}
+    out = _extract_prompts(y)
+    assert out[K_SENTENCE] == "S2"
+    assert out[K_PASSAGE]  == "P2"
+
+def test_extract_prompts_pt_dict():
+    y = {"pt": {"full": "GG"}}
+    out = _extract_prompts(y)
+    assert out[K_GRAMMAR] == "GG"
+# [03] END
+
 
 
 # ===== [04] page init — START =====
