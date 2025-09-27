@@ -1,0 +1,65 @@
+# [WF-INDEX] START: .github/workflows/publish-index-bundle.yml
+name: Publish Index Bundle
+
+on:
+  workflow_dispatch:
+    inputs:
+      src_dir:
+        description: "Directory to zip (persist root)"
+        required: false
+        default: ".maic/persist"
+      zip_path:
+        description: "Output zip path"
+        required: false
+        default: "dist-index/indices.zip"
+      tag_name:
+        description: "Release tag"
+        required: false
+        default: "indices-latest"
+      release_name:
+        description: "Release name"
+        required: false
+        default: "Indices Latest"
+      asset_name:
+        description: "Asset filename as uploaded"
+        required: false
+        default: "indices.zip"
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Ensure zip and create archive
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          SRC="${{ github.event.inputs.src_dir || '.maic/persist' }}"
+          ZIP="${{ github.event.inputs.zip_path || 'dist-index/indices.zip' }}"
+          mkdir -p "$(dirname "$ZIP")"
+          if [[ ! -d "$SRC" ]]; then
+            echo "::error ::source dir not found: $SRC"
+            exit 2
+          fi
+          # ZIP 생성(재현성 향상: 정렬)
+          pushd "$SRC" >/dev/null
+          zip -X -q -r "$OLDPWD/$ZIP" .
+          popd >/dev/null
+          ls -l "$ZIP"
+
+      - name: Upload release (indices-latest)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag_name || 'indices-latest' }}
+          name: ${{ github.event.inputs.release_name || 'Indices Latest' }}
+          make_latest: true
+          files: |
+            ${{ github.event.inputs.zip_path || 'dist-index/indices.zip' }}#${{ github.event.inputs.asset_name || 'indices.zip' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+# [WF-INDEX] END
