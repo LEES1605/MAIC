@@ -1,0 +1,7 @@
+on:
+  workflow_dispatch:
+    inputs:
+      prompts_yaml:
+        description: "Prompts YAML"
+        required: true
+        type: string
