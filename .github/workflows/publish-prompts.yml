@@ -4,56 +4,61 @@ on:
   workflow_dispatch:
     inputs:
       prompts_yaml:
-        description: "YAML payload (persona + modes)"
+        description: "Prompts YAML (version + modes only)"
         required: false
+        default: ""
   repository_dispatch:
     types: [publish-prompts]
-
-permissions:
-  contents: write  # 릴리스 생성/업데이트에 필요
 
 jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      # payload를 안전하게 파일로 저장 (JS로 처리: 셸 quoting 이슈 차단)
-      - name: Write prompts.yaml from payload
-        id: write
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-            const path = require('path');
-            const isWD = (context.eventName === 'workflow_dispatch');
-            const data = isWD
-              ? (core.getInput('prompts_yaml') || '')
-              : ((context.payload.client_payload && context.payload.client_payload.prompts_yaml) || '');
-            fs.mkdirSync('release/assets', { recursive: true });
-            fs.writeFileSync('release/assets/prompts.yaml', data, { encoding: 'utf8' });
-            core.setOutput('size', String(data.length));
-
-      - name: Show payload size
-        run: echo "payload_size=${{ steps.write.outputs.size }}"
-
-      - name: Validate schema (if repo has validator)
+      - name: Create prompts.yaml from inputs/payload or fallback
+        id: mk
+        shell: bash
         run: |
+          set -euo pipefail
+          PY=$(mktemp)
+          cat > "$PY" <<'PYCODE'
+          import os, sys, json, yaml, pathlib
+          ev = json.loads(os.getenv('GITHUB_EVENT', '{}'))
+          # 1) inputs.prompts_yaml (workflow_dispatch)
+          txt = (ev.get('inputs') or {}).get('prompts_yaml') or ''
+          # 2) client_payload.prompts_yaml (repository_dispatch)
+          if not txt:
+              txt = (ev.get('client_payload') or {}).get('prompts_yaml') or ''
+          # 3) fallback 파일(있으면)
+          if not txt:
+              for cand in ('release/assets/prompts.yaml','assets/prompts.yaml','prompts.yaml'):
+                  p = pathlib.Path(cand)
+                  if p.exists():
+                      txt = p.read_text(encoding='utf-8')
+                      break
+          # 안전 가드
+          y = yaml.safe_load(txt) if txt.strip() else {}
+          if not isinstance(y, dict) or 'modes' not in y:
+              raise SystemExit("invalid or empty prompts YAML (need object with 'modes')")
+          pathlib.Path("dist").mkdir(exist_ok=True)
+          pathlib.Path("dist/prompts.yaml").write_text(yaml.safe_dump(y, allow_unicode=True, sort_keys=False), encoding="utf-8")
+          print("created: dist/prompts.yaml")
+          PYCODE
+          python "$PY"
+
+      - name: Validate schema (if project validator exists)
+        shell: bash
+        run: |
+          set -euo pipefail
           if [ -f scripts/validate_prompts.py ]; then
-            python scripts/validate_prompts.py "release/assets/prompts.yaml"
+            python scripts/validate_prompts.py "dist/prompts.yaml"
           else
-            echo "No validator script found. Skipping strict validation."
+            echo "no project validator; basic validation already done."
           fi
 
-      # 최신 릴리스 태그 prompts-latest 로 파일 첨부/갱신
-      - name: Upload to GitHub Release (tag=prompts-latest)
-        uses: softprops/action-gh-release@v2
+      - name: Upload artifact (optional)
+        uses: actions/upload-artifact@v4
         with:
-          tag_name: prompts-latest
-          name: Prompts Latest
-          files: release/assets/prompts.yaml
-          make_latest: true
-          fail_on_unmatched_files: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          name: prompts
+          path: dist/prompts.yaml
