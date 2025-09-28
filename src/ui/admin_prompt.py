@@ -1,4 +1,4 @@
-# [01] imports & constants — START
+# [AP-V4] START: FILE src/ui/admin_prompt.py — release/로더 + 로컬 저장/불러오기 + 출판/상태 폴링(양 트리거)
 from __future__ import annotations
 
 from pathlib import Path
@@ -14,7 +14,7 @@ import streamlit as st
 
 # ✅ 진짜 사이드바(SSOT)
 try:
-    from .utils.sider import render_sidebar  # official entry
+    from .utils.sider import render_sidebar  # official
 except Exception:
     from src.ui.utils.sider import render_sidebar  # fallback
 
@@ -32,11 +32,10 @@ S_PUB_RUN_ID      = "_PUBLISH_RUN_ID"
 S_PUB_RUN_URL     = "_PUBLISH_RUN_URL"
 S_PUB_NEXT_POLL   = "_PUBLISH_NEXT_POLL"
 S_PUB_INPUT_KEY   = "_publish_input_key"      # workflow_dispatch.inputs 키
-S_PUB_EVENT       = "_publish_event"          # "workflow_dispatch" | "repository_dispatch"
-# [01] imports & constants — END
 
-
-# [02] release loader (ko/en canonicalization) — START
+# =============================================================================
+# Loader — release/prompts.yaml → 세션키(페르소나/3모드)로 주입
+# =============================================================================
 def _norm_token(x: Any) -> str:
     s = str(x or "").strip().lower()
     return "".join(ch for ch in s if ch.isalnum())
@@ -92,9 +91,11 @@ def _resolve_release_prompts_file() -> Path | None:
 def _extract_prompts(doc: Dict[str, Any]) -> Dict[str, str]:
     """
     다양한 YAML 스키마를 허용해 4개 텍스트(페르소나/문법/문장/지문)로 매핑.
+    지원:
       • Top-level: {grammar/sentence/passage} + 한국어 라벨/약어
       • Nested: {mn:{sentence,passage}}, {pt:{grammar|prompt|text|...}}
-      • Modes: dict/list( {key|label|name, prompt|text|...} )
+      • Modes:  dict → {modes:{grammar|sentence|passage}}
+                list → {modes:[{key|label|name, prompt|text|full|...}, ...]}
     """
     out: Dict[str, str] = {K_PERSONA:"", K_GRAMMAR:"", K_SENTENCE:"", K_PASSAGE:""}
     d = {(k.lower() if isinstance(k, str) else k): v for k, v in (doc or {}).items()}
@@ -107,13 +108,13 @@ def _extract_prompts(doc: Dict[str, Any]) -> Dict[str, str]:
 
     # 1) Top-level ko/en key들
     for raw_key, val in list(d.items()):
-        ck = _canon_mode_key(raw_key)
-        if not ck:
+        canon = _canon_mode_key(raw_key)
+        if not canon:
             continue
         txt = _coerce_yaml_to_text(val)
-        if ck == "grammar":  out[K_GRAMMAR]  = txt
-        if ck == "sentence": out[K_SENTENCE] = txt
-        if ck == "passage":  out[K_PASSAGE]  = txt
+        if canon == "grammar":  out[K_GRAMMAR]  = txt
+        if canon == "sentence": out[K_SENTENCE] = txt
+        if canon == "passage":  out[K_PASSAGE]  = txt
 
     # 2) Nested mn/pt
     mn = d.get("mn") or d.get("mina")
@@ -131,17 +132,17 @@ def _extract_prompts(doc: Dict[str, Any]) -> Dict[str, str]:
     if modes is None and isinstance(d.get("모드"), (dict, list)):
         modes = d.get("모드")
 
-    def _apply(ck: str, payload: Any) -> None:
+    def _apply_canon(canon_key: str, payload: Any) -> None:
         txt = _coerce_yaml_to_text(payload)
-        if ck == "grammar":  out[K_GRAMMAR]  = txt
-        if ck == "sentence": out[K_SENTENCE] = txt
-        if ck == "passage":  out[K_PASSAGE]  = txt
+        if canon_key == "grammar":  out[K_GRAMMAR]  = txt
+        if canon_key == "sentence": out[K_SENTENCE] = txt
+        if canon_key == "passage":  out[K_PASSAGE]  = txt
 
     if isinstance(modes, dict):
         for mk, mv in modes.items():
             ck = _canon_mode_key(mk) or str(mk).strip().lower()
             if ck in ("grammar","sentence","passage"):
-                _apply(ck, mv)
+                _apply_canon(ck, mv)
     elif isinstance(modes, list):
         for entry in modes:
             if not isinstance(entry, dict):
@@ -151,9 +152,11 @@ def _extract_prompts(doc: Dict[str, Any]) -> Dict[str, str]:
             for tk in ("prompt","text","full","system","value","content","지시","규칙"):
                 if isinstance(entry.get(tk), str) and entry.get(tk).strip():
                     payload = entry.get(tk); break
-            if payload is None: payload = entry
+            if payload is None:
+                payload = entry
             ck = _canon_mode_key(label)
-            if ck: _apply(ck, payload)
+            if ck: _apply_canon(ck, payload)
+
     return out
 
 def _load_prompts_from_release() -> tuple[Dict[str, str], Path]:
@@ -172,10 +175,10 @@ def _apply_pending_prefill() -> None:
         ss[K_GRAMMAR]  = data.get(K_GRAMMAR,  "")
         ss[K_SENTENCE] = data.get(K_SENTENCE, "")
         ss[K_PASSAGE]  = data.get(K_PASSAGE,  "")
-# [02] release loader — END
 
-
-# [03] local persist (save & load) — START
+# =============================================================================
+# Local Save/Load — per-mode(4개 파일: persona + 3모드)
+# =============================================================================
 def _effective_persist_dir() -> Path:
     try:
         from src.core.persist import effective_persist_dir  # app.py와 정합
@@ -200,29 +203,26 @@ def _save_local_per_mode(persona: str, g: str, s: str, psg: str) -> Dict[str, Pa
 
 def _load_local_per_mode() -> Dict[str, str]:
     root = _effective_persist_dir()
-    def rd(name: str) -> str:
+    def _r(name: str) -> str:
         p = root / name
         try:
             return p.read_text(encoding="utf-8")
         except Exception:
             return ""
     return {
-        K_PERSONA:  rd("persona.txt"),
-        K_GRAMMAR:  rd("grammar.txt"),
-        K_SENTENCE: rd("sentence.txt"),
-        K_PASSAGE:  rd("passage.txt"),
+        K_PERSONA:  _r("persona.txt"),
+        K_GRAMMAR:  _r("grammar.txt"),
+        K_SENTENCE: _r("sentence.txt"),
+        K_PASSAGE:  _r("passage.txt"),
     }
-# [03] local persist — END
 
-
-# [04] YAML builder (publish) & validator — START
+# =============================================================================
+# YAML(출판용 내부 자동 병합) + 사전검증
+# =============================================================================
 def _build_yaml_for_publish() -> str:
-    """
-    출판 스키마 요구사항에 맞게 **modes만** 포함합니다.
-    (페르소나는 별도로 배포/주입)
-    """
     doc = {
         "version": "1",
+        "persona": st.session_state.get(K_PERSONA, "") or "",
         "modes": {
             "grammar":  st.session_state.get(K_GRAMMAR,  "") or "",
             "sentence": st.session_state.get(K_SENTENCE, "") or "",
@@ -253,10 +253,10 @@ def _validate_yaml_text(text: str) -> tuple[bool, List[str]]:
         if extras:
             msgs.append(f"'modes'에 허용되지 않은 키: {extras}")
     return (len(msgs) == 0), msgs
-# [04] YAML builder & validator — END
 
-
-# [05] GitHub Actions dispatch helpers — START
+# =============================================================================
+# GitHub Actions — 입력 자동탐지 + 디스패치 + 폴백/폴링
+# =============================================================================
 def _gh_headers(token: Optional[str]) -> Dict[str, str]:
     h = {"Accept": "application/vnd.github+json"}
     if token: h["Authorization"] = f"Bearer {token}"
@@ -309,7 +309,7 @@ def _repository_dispatch(owner: str, repo: str, token: str, yaml_text: str,
     payload = {"event_type": event_type, "client_payload": {"prompts_yaml": yaml_text, "via": "admin-ui"}}
     r = req.post(url, headers=headers, json=payload, timeout=15)
     if 200 <= r.status_code < 300:
-        return {"status": r.status_code, "detail": "ok(repository_dispatch)", "event": "repository_dispatch"}
+        return {"status": r.status_code, "detail": "ok(repository_dispatch)"}
     raise RuntimeError(f"repository_dispatch 실패(status={r.status_code}): {r.text}")
 
 def _dispatch_workflow(owner: str, repo: str, workflow: str, ref: str,
@@ -331,7 +331,7 @@ def _dispatch_workflow(owner: str, repo: str, workflow: str, ref: str,
     r = _post(payload)
 
     if 200 <= r.status_code < 300:
-        return {"status": r.status_code, "detail": "ok", "event": "workflow_dispatch"}
+        return {"status": r.status_code, "detail": "ok"}
 
     # 422 처리
     try:
@@ -347,27 +347,24 @@ def _dispatch_workflow(owner: str, repo: str, workflow: str, ref: str,
     if r.status_code == 422 and "unexpected" in msg:
         r2 = _post({"ref": ref})
         if 200 <= r2.status_code < 300:
-            return {"status": r2.status_code, "detail": "ok (fallback: no inputs)", "event": "workflow_dispatch"}
+            return {"status": r2.status_code, "detail": "ok (fallback: no inputs)"}
         raise RuntimeError(f"workflow dispatch 실패(status={r2.status_code}): {r2.text}")
 
     raise RuntimeError(f"workflow dispatch 실패(status={r.status_code}): {js or r.text}")
-# [05] GitHub Actions dispatch helpers — END
 
-
-# [06] run listing / polling — START
 def _iso_to_epoch(s: str) -> float:
     try:
         return dt.datetime.fromisoformat(s.replace("Z","+00:00")).timestamp()
     except Exception:
         return 0.0
 
-def _list_runs(owner: str, repo: str, workflow: str, ref: str,
-               token: Optional[str], event: Optional[str]) -> List[Dict[str, Any]]:
+def _list_runs(owner: str, repo: str, workflow: str, ref: str, token: Optional[str]) -> List[Dict[str, Any]]:
+    """
+    ⚠️ 이벤트 필터를 걸지 않는다. (workflow_dispatch/ repository_dispatch 모두 캡처)
+    """
     headers = _gh_headers(token)
     url = f"https://api.github.com/repos/{owner}/{repo}/actions/workflows/{workflow}/runs"
     params = {"branch": ref, "per_page": 10}
-    if event in ("workflow_dispatch", "repository_dispatch"):
-        params["event"] = event
     try:
         r = req.get(url, headers=headers, params=params, timeout=10)
         if not r.ok:
@@ -400,9 +397,8 @@ def _poll_run_by_id(owner: str, repo: str, run_id: int, token: Optional[str]) ->
     return "error", url
 
 def _find_recent_run_after_dispatch(owner: str, repo: str, workflow: str, ref: str,
-                                    token: Optional[str], since_ts: float,
-                                    event: Optional[str]) -> Optional[Dict[str, Any]]:
-    runs = _list_runs(owner, repo, workflow, ref, token, event=event)
+                                    token: Optional[str], since_ts: float) -> Optional[Dict[str, Any]]:
+    runs = _list_runs(owner, repo, workflow, ref, token)
     if not runs:
         return None
     threshold = max(0.0, float(since_ts or 0.0) - 30.0)
@@ -420,6 +416,7 @@ def _find_recent_run_after_dispatch(owner: str, repo: str, workflow: str, ref: s
     cands.sort(key=lambda x: x[0], reverse=True)
     return cands[0][1]
 
+# ---- 상태 버튼 UI ------------------------------------------------------------
 def _inject_status_css_once() -> None:
     if st.session_state.get("_status_css_v2"):
         return
@@ -478,7 +475,6 @@ def _handle_publish_state(owner: str, repo: str, workflow: str, ref: str, token:
     if cur != "running":
         return
 
-    # 1) run_id가 있으면 그걸 우선 폴링
     run_id = ss.get(S_PUB_RUN_ID)
     if isinstance(run_id, int) and run_id > 0:
         state, url = _poll_run_by_id(owner, repo, run_id, token)
@@ -489,13 +485,8 @@ def _handle_publish_state(owner: str, repo: str, workflow: str, ref: str, token:
             ss[S_PUB_STATE] = state
         return
 
-    # 2) dispatch 이후 생성된 최신 run을 event 유형에 맞춰 탐색
-    event = ss.get(S_PUB_EVENT) or "workflow_dispatch"
-    found = _find_recent_run_after_dispatch(
-        owner, repo, workflow, ref, token,
-        since_ts=float(ss.get(S_PUB_DISPATCH_AT, 0.0) or 0.0),
-        event=event,
-    )
+    found = _find_recent_run_after_dispatch(owner, repo, workflow, ref, token,
+                                            since_ts=float(ss.get(S_PUB_DISPATCH_AT, 0.0) or 0.0))
     if found:
         try:
             ss[S_PUB_RUN_ID] = int(found.get("id"))
@@ -505,16 +496,16 @@ def _handle_publish_state(owner: str, repo: str, workflow: str, ref: str, token:
         if isinstance(url, str) and url:
             ss[S_PUB_RUN_URL] = url
     _tick_auto_poll(6.0)
-# [06] run listing / polling — END
 
-
-# [07] page UI — START
+# =============================================================================
+# Page
+# =============================================================================
 def main() -> None:
     # 사이드바(SSOT) — app 진입·네비 일관성 보장
-    render_sidebar()
+    render_sidebar()  # app/sider와 정합. 
     _apply_pending_prefill()
 
-    # --- 상태 점검/시크릿 -----------------------------------------------------------
+    # 상태 점검/시크릿
     with st.container(border=True):
         st.subheader("🔍 상태 점검", divider="gray")
 
@@ -545,7 +536,7 @@ def main() -> None:
         else:
             st.caption("이 워크플로는 입력 없이 디스패치됩니다.")
 
-    # --- 편집 UI(세로 배열) ---------------------------------------------------------
+    # 편집 UI(세로 배열)
     st.markdown("### ① 페르소나(공통)")
     st.text_area("모든 모드에 공통 적용", key=K_PERSONA, height=160, placeholder="페르소나 텍스트...")
 
@@ -554,7 +545,7 @@ def main() -> None:
     st.text_area("문장(Sentence) 프롬프트", key=K_SENTENCE, height=220, placeholder="문장 모드 지시/규칙...")
     st.text_area("지문(Passage) 프롬프트",  key=K_PASSAGE,  height=220, placeholder="지문 모드 지시/규칙...")
 
-    # --- 액션 -----------------------------------------------------------------------
+    # 액션
     st.markdown("### ③ 액션")
     c1, c2, c3, c4 = st.columns(4)
 
@@ -590,12 +581,12 @@ def main() -> None:
             st.success("로컬 저장 완료")
             st.code("\n".join(f"{k}: {v}" for k, v in files.items()) + f"\nroot={root}", language="text")
 
-    # (c) 📥 모드별 불러오기(로컬 → 세션)
+    # (c) 📤 로컬에서 불러오기(4파일 → 세션)
     with c3:
-        if st.button("📥 모드별 불러오기(로컬)", use_container_width=True, key="load_per_mode"):
+        if st.button("📤 로컬에서 불러오기", use_container_width=True, key="load_per_mode"):
             data = _load_local_per_mode()
             st.session_state["_PREFILL_PROMPTS"] = data
-            st.session_state["_flash_success"] = "로컬 파일에서 프롬프트를 불러왔습니다."
+            st.session_state["_flash_success"] = "로컬 저장본을 불러왔습니다."
             st.rerun()
 
     # (d) 🚀 출판(Publish) — 내부 자동 병합 → 디스패치 → 상태 버튼
@@ -610,7 +601,7 @@ def main() -> None:
                             disabled=disabled, use_container_width=True,
                             help=None if not disabled else "GITHUB_REPO와 GITHUB_TOKEN 시크릿이 필요합니다.")
         if clicked:
-            y = _build_yaml_for_publish()  # ✅ 항상 내부 병합(페르소나 제외)
+            y = _build_yaml_for_publish()  # ✅ 항상 내부 병합
             okv, msgs = _validate_yaml_text(y)
             if not okv:
                 st.error("스키마 검증 실패 — 필드 내용을 확인하세요.")
@@ -619,13 +610,12 @@ def main() -> None:
                 try:
                     owner, repo = str(repo_full).split("/", 1)
                     input_key = st.session_state.get(S_PUB_INPUT_KEY)
-                    res = _dispatch_workflow(owner=owner, repo=repo, workflow=workflow,
-                                             ref=ref, token=token, yaml_text=y, input_key=input_key)
+                    _ = _dispatch_workflow(owner=owner, repo=repo, workflow=workflow,
+                                           ref=ref, token=token, yaml_text=y, input_key=input_key)
                     st.session_state[S_PUB_STATE] = "running"
                     st.session_state[S_PUB_DISPATCH_AT] = time.time()
                     st.session_state[S_PUB_RUN_ID] = None
                     st.session_state[S_PUB_RUN_URL] = None
-                    st.session_state[S_PUB_EVENT] = res.get("event") or "workflow_dispatch"
                     st.toast("출판 요청 전송 — Actions에서 처리 중입니다.", icon="⌛")
                 except Exception as exc:
                     st.session_state[S_PUB_STATE] = "error"
@@ -656,4 +646,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-# [07] page UI — END
+# ============== [AP-V4] END: FILE src/ui/admin_prompt.py ==============
