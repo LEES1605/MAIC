@@ -17,7 +17,7 @@ try:
     from .utils.sider import render_sidebar  # official
 except Exception:
     from src.ui.utils.sider import render_sidebar  # fallback
-# [01] END — imports & sidebar hook (replace whole file with this)
+# [01] END==============================
 
 
 # [02] START — UI keys & publish state keys
@@ -34,7 +34,7 @@ S_PUB_RUN_URL     = "_PUBLISH_RUN_URL"        # str | None
 S_PUB_NEXT_POLL   = "_PUBLISH_NEXT_POLL"      # float epoch
 S_PUB_INPUT_KEY   = "_publish_input_key"      # workflow_dispatch.inputs 키
 S_PUB_EVENT       = "_PUBLISH_EVENT"          # 'workflow_dispatch' | 'repository_dispatch'
-# [02] END — UI keys & publish state keys
+# [02] END==============================
 
 
 # [03] START — release/prompts.yaml loader (ko/en 라벨/스키마 호환)
@@ -169,7 +169,7 @@ def _load_prompts_from_release() -> tuple[Dict[str, str], Path]:
     with p.open("r", encoding="utf-8") as f:
         y = yaml.safe_load(f) or {}
     return _extract_prompts(y), p
-# [03] END — release/prompts.yaml loader (ko/en 라벨/스키마 호환)
+# [03] END==============================
 
 
 # [04] START — prefill handshake (rerun 경고 없이 안전 주입)
@@ -181,10 +181,10 @@ def _apply_pending_prefill() -> None:
         ss[K_GRAMMAR]  = data.get(K_GRAMMAR,  "")
         ss[K_SENTENCE] = data.get(K_SENTENCE, "")
         ss[K_PASSAGE]  = data.get(K_PASSAGE,  "")
-# [04] END — prefill handshake (rerun 경고 없이 안전 주입)
+# [04] END==============================
 
 
-# [05] START — per-mode local save (persona + 3모드)
+# [05] START — per-mode local IO (persona + 3모드)
 def _effective_persist_dir() -> Path:
     try:
         from src.core.persist import effective_persist_dir  # app.py와 정합
@@ -206,7 +206,28 @@ def _save_local_per_mode(persona: str, g: str, s: str, psg: str) -> Dict[str, Pa
     out["sentence.txt"].write_text(s or "", encoding="utf-8")
     out["passage.txt"].write_text(psg or "", encoding="utf-8")
     return out
-# [05] END — per-mode local save (persona + 3모드)
+
+def _load_local_per_mode() -> Dict[str, str]:
+    """
+    로컬 persist에서 persona/grammar/sentence/passage 텍스트를 읽어 반환.
+    파일이 없으면 빈 문자열로 채움(안전).
+    """
+    root = _effective_persist_dir()
+    def _read(name: str) -> str:
+        p = root / name
+        try:
+            if p.exists() and p.is_file():
+                return p.read_text(encoding="utf-8")
+        except Exception:
+            pass
+        return ""
+    return {
+        K_PERSONA:  _read("persona.txt"),
+        K_GRAMMAR:  _read("grammar.txt"),
+        K_SENTENCE: _read("sentence.txt"),
+        K_PASSAGE:  _read("passage.txt"),
+    }
+# [05] END==============================
 
 
 # [06] START — YAML builder & validator (출판용 내부 병합)
@@ -244,7 +265,7 @@ def _validate_yaml_text(text: str) -> tuple[bool, List[str]]:
         if extras:
             msgs.append(f"'modes'에 허용되지 않은 키: {extras}")
     return (len(msgs) == 0), msgs
-# [06] END — YAML builder & validator (출판용 내부 병합)
+# [06] END==============================
 
 
 # [07] START — GitHub Actions: inputs auto-discovery, dispatch, poll
@@ -419,7 +440,7 @@ def _find_recent_run_after_dispatch(owner: str, repo: str, workflow: str, ref: s
         return None
     cands.sort(key=lambda x: x[0], reverse=True)
     return cands[0][1]
-# [07] END — GitHub Actions: inputs auto-discovery, dispatch, poll
+# [07] END==============================
 
 
 # [08] START — status button UI + auto-poll ticking
@@ -491,7 +512,6 @@ def _handle_publish_state(owner: str, repo: str, workflow: str, ref: str, token:
             ss[S_PUB_STATE] = state
         return
 
-    # 아직 run_id가 없으면: 이벤트 힌트로 넓게 탐색
     expect_event = ss.get(S_PUB_EVENT) or None
     found = _find_recent_run_after_dispatch(
         owner, repo, workflow, ref, token,
@@ -508,13 +528,13 @@ def _handle_publish_state(owner: str, repo: str, workflow: str, ref: str, token:
             ss[S_PUB_RUN_URL] = url
 
     _tick_auto_poll(6.0)
-# [08] END — status button UI + auto-poll ticking
+# [08] END==============================
 
 
 # [09] START — Page main (UI/Actions)
 def main() -> None:
-    # 사이드바 — SSOT 일관성(멀티페이지 네비 숨김 포함). app/sider와 정합. 
-    render_sidebar()  # 합의(H1/U3)에 맞춘 공식 사이드바. :contentReference[oaicite:2]{index=2}
+    # 사이드바 — SSOT 일관성(멀티페이지 네비 숨김 포함).
+    render_sidebar()  # 공식 사이드바. :contentReference[oaicite:2]{index=2}
 
     # 1) 프리필 예약분 우선 반영(위젯 생성 전에)
     _apply_pending_prefill()
@@ -582,7 +602,7 @@ def main() -> None:
             except Exception:
                 st.session_state["_flash_error"] = "프롬프트 로딩 중 오류가 발생했습니다."; st.rerun()
 
-    # (b) 💾 모드별 저장(로컬 persist에 4파일)
+    # (b) 💾/📤 모드별 저장·불러오기(로컬 persist)
     with c2:
         if st.button("💾 모드별 저장(로컬)", use_container_width=True, key="save_per_mode"):
             files = _save_local_per_mode(
@@ -594,6 +614,16 @@ def main() -> None:
             root = _effective_persist_dir()
             st.success("로컬 저장 완료")
             st.code("\n".join(f"{k}: {v}" for k, v in files.items()) + f"\nroot={root}", language="text")
+
+        # ✅ 신규: 모드별 불러오기(로컬)
+        if st.button("📤 모드별 불러오기(로컬)", use_container_width=True, key="load_per_mode"):
+            data = _load_local_per_mode()
+            st.session_state[K_PERSONA]  = data.get(K_PERSONA,  "")
+            st.session_state[K_GRAMMAR]  = data.get(K_GRAMMAR,  "")
+            st.session_state[K_SENTENCE] = data.get(K_SENTENCE, "")
+            st.session_state[K_PASSAGE]  = data.get(K_PASSAGE,  "")
+            st.toast("로컬에서 프롬프트를 불러왔습니다.", icon="📤")
+            st.rerun()
 
     # (c) 🚀 출판(Publish) — 내부 자동 병합 → 디스패치 → 상태 버튼
     with c3:
