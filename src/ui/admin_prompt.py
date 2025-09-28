@@ -1,4 +1,4 @@
-# [ADMIN-PROMPTS v4] START: FILE src/ui/admin_prompt.py — poller(fixes) + remote fetch
+# [ADMIN-PROMPTS LOADER FIX v3.1] START: src/ui/admin_prompt.py
 from __future__ import annotations
 
 from pathlib import Path
@@ -7,7 +7,6 @@ import base64
 import json
 import time
 import datetime as dt
-import io
 
 import yaml
 import requests as req
@@ -74,84 +73,10 @@ def _coerce_yaml_to_text(v: Any) -> str:
         return "\n".join(str(x) for x in v)
     return str(v)
 
-# ---- GitHub helpers (공통) ---------------------------------------------------
-def _gh_headers(token: Optional[str]) -> Dict[str, str]:
-    h = {"Accept": "application/vnd.github+json"}
-    if token: h["Authorization"] = f"Bearer {token}"
-    return h
-
-def _parse_repo(repo_full: str) -> tuple[str, str]:
-    try:
-        if "/" in str(repo_full):
-            o, r = str(repo_full).split("/", 1)
-            return o.strip(), r.strip()
-    except Exception:
-        pass
-    return "", ""
-
-# ---- Latest prompts.yaml (원격 → 로컬 캐시) -----------------------------------
-def _download_latest_prompts_to_local(*, owner: str, repo: str, token: Optional[str]) -> Path:
-    """
-    GitHub Releases에서 prompts.yaml(또는 .yml)을 찾아 내려받고,
-    로컬 <project>/release/assets/prompts.yaml 로 저장.
-    """
-    headers = _gh_headers(token)
-    # 1) tag=prompts-latest 우선 → 없으면 latest
-    rel_json = None
-    try:
-        r = req.get(
-            f"https://api.github.com/repos/{owner}/{repo}/releases/tags/prompts-latest",
-            headers=headers, timeout=10
-        )
-        if r.ok:
-            rel_json = r.json()
-    except Exception:
-        rel_json = None
-    if not rel_json:
-        try:
-            r = req.get(
-                f"https://api.github.com/repos/{owner}/{repo}/releases/latest",
-                headers=headers, timeout=10
-            )
-            if r.ok:
-                rel_json = r.json()
-        except Exception:
-            rel_json = None
-    if not rel_json:
-        raise FileNotFoundError("원격 릴리스가 없습니다.")
-
-    assets = rel_json.get("assets") or []
-    url = ""
-    for a in assets:
-        name = str(a.get("name") or "").lower()
-        if name in ("prompts.yaml", "prompts.yml"):
-            url = str(a.get("browser_download_url") or "")
-            break
-    if not url:
-        raise FileNotFoundError("릴리스에 prompts.yaml 자산이 없습니다.")
-
-    # 2) 다운로드
-    try:
-        r2 = req.get(url, headers=headers, timeout=15)
-        if not r2.ok:
-            raise RuntimeError(f"다운로드 실패: HTTP {r2.status_code}")
-        data = r2.content
-    except Exception as e:
-        raise RuntimeError(f"다운로드 실패: {e}")
-
-    # 3) 저장 (release/assets/prompts.yaml)
-    base = Path("release").resolve()
-    dest_dir = base / "assets"
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    dest = dest_dir / "prompts.yaml"
-    dest.write_bytes(data)
-    return dest
-
 def _resolve_release_prompts_file() -> Path | None:
     """
     릴리스/에셋 위치에서 prompts.yaml을 가장 먼저 발견되는 경로로 선택.
     우선순위: <_release_dir>/assets > <_release_dir> > ./assets > ./
-    (없으면 시도: GitHub Releases에서 최신본 내려받아 캐시 후 경로 반환)
     """
     base = Path(st.session_state.get("_release_dir", "release")).resolve()
     for p in (base/"assets/prompts.yaml", base/"prompts.yaml",
@@ -161,16 +86,6 @@ def _resolve_release_prompts_file() -> Path | None:
                 return p
         except Exception:
             continue
-
-    # 로컬에 없으면 원격에서 가져온다
-    repo_full = st.secrets.get("GITHUB_REPO", "") or ""
-    token     = st.secrets.get("GITHUB_TOKEN", None)
-    owner, repo = _parse_repo(repo_full)
-    if owner and repo:
-        try:
-            return _download_latest_prompts_to_local(owner=owner, repo=repo, token=token)
-        except Exception:
-            return None
     return None
 
 def _extract_prompts(doc: Dict[str, Any]) -> Dict[str, str]:
@@ -217,7 +132,7 @@ def _extract_prompts(doc: Dict[str, Any]) -> Dict[str, str]:
     if modes is None and isinstance(d.get("모드"), (dict, list)):
         modes = d.get("모드")
 
-    def _apply(canon_key: str, payload: Any) -> None:
+    def _apply_canon(canon_key: str, payload: Any) -> None:
         txt = _coerce_yaml_to_text(payload)
         if canon_key == "grammar":  out[K_GRAMMAR]  = txt
         if canon_key == "sentence": out[K_SENTENCE] = txt
@@ -227,7 +142,7 @@ def _extract_prompts(doc: Dict[str, Any]) -> Dict[str, str]:
         for mk, mv in modes.items():
             ck = _canon_mode_key(mk) or str(mk).strip().lower()
             if ck in ("grammar","sentence","passage"):
-                _apply(ck, mv)
+                _apply_canon(ck, mv)
     elif isinstance(modes, list):
         for entry in modes:
             if not isinstance(entry, dict):
@@ -240,15 +155,11 @@ def _extract_prompts(doc: Dict[str, Any]) -> Dict[str, str]:
             if payload is None:
                 payload = entry
             ck = _canon_mode_key(label)
-            if ck: _apply(ck, payload)
+            if ck: _apply_canon(ck, payload)
 
     return out
 
 def _load_prompts_from_release() -> tuple[Dict[str, str], Path]:
-    """
-    1) 원격 최신 릴리스에서 prompts.yaml 다운로드(캐시) 시도
-    2) 실패 시 로컬 release/assets/ 또는 루트에서 탐색
-    """
     p = _resolve_release_prompts_file()
     if not p:
         raise FileNotFoundError("prompts.yaml을 release/assets 또는 루트에서 찾지 못했습니다.")
@@ -266,7 +177,7 @@ def _apply_pending_prefill() -> None:
         ss[K_PASSAGE]  = data.get(K_PASSAGE,  "")
 
 # =============================================================================
-# Local Save/Load — per-mode(4개 파일: persona + 3모드)
+# Local Save — per-mode(4개 파일: persona + 3모드) 저장
 # =============================================================================
 def _effective_persist_dir() -> Path:
     try:
@@ -289,18 +200,6 @@ def _save_local_per_mode(persona: str, g: str, s: str, psg: str) -> Dict[str, Pa
     out["sentence.txt"].write_text(s or "", encoding="utf-8")
     out["passage.txt"].write_text(psg or "", encoding="utf-8")
     return out
-
-def _load_local_per_mode() -> Dict[str, str]:
-    root = _effective_persist_dir()
-    def _read(p: Path) -> str:
-        try: return p.read_text(encoding="utf-8")
-        except Exception: return ""
-    return {
-        K_PERSONA:  _read(root/"persona.txt"),
-        K_GRAMMAR:  _read(root/"grammar.txt"),
-        K_SENTENCE: _read(root/"sentence.txt"),
-        K_PASSAGE:  _read(root/"passage.txt"),
-    }
 
 # =============================================================================
 # YAML(출판용 내부 자동 병합) + 사전검증
@@ -343,6 +242,11 @@ def _validate_yaml_text(text: str) -> tuple[bool, List[str]]:
 # =============================================================================
 # GitHub Actions — 입력 자동탐지 + 디스패치 + 폴백/폴링
 # =============================================================================
+def _gh_headers(token: Optional[str]) -> Dict[str, str]:
+    h = {"Accept": "application/vnd.github+json"}
+    if token: h["Authorization"] = f"Bearer {token}"
+    return h
+
 def _fetch_workflow_yaml(owner: str, repo: str, workflow: str, ref: str, token: Optional[str]) -> Optional[str]:
     headers = _gh_headers(token)
     try:
@@ -441,12 +345,11 @@ def _iso_to_epoch(s: str) -> float:
 
 def _list_runs(owner: str, repo: str, workflow: str, ref: str, token: Optional[str]) -> List[Dict[str, Any]]:
     """
-    ⚠️ 기존 v3는 event=workflow_dispatch만 조회 → repository_dispatch 런을 못 찾아 무한 'running'.
-       이벤트 필터를 제거하고 브랜치 기준으로 정렬/필터한다.  :contentReference[oaicite:3]{index=3}
+    ✅ 이벤트 필터 제거(둘 다 조회): workflow_dispatch + repository_dispatch
     """
     headers = _gh_headers(token)
     url = f"https://api.github.com/repos/{owner}/{repo}/actions/workflows/{workflow}/runs"
-    params = {"branch": ref, "per_page": 20}  # event 필터 제거
+    params = {"branch": ref, "per_page": 10}  # event 필터 제거 ← 핵심 수정
     try:
         r = req.get(url, headers=headers, params=params, timeout=10)
         if not r.ok:
@@ -489,8 +392,7 @@ def _find_recent_run_after_dispatch(owner: str, repo: str, workflow: str, ref: s
         try:
             created = _iso_to_epoch(str(r.get("created_at") or ""))
             rid = int(r.get("id"))
-            # head_branch 일치 + 디스패치 이후
-            if (created >= threshold) and (str(r.get("head_branch") or "") == str(ref)):
+            if created >= threshold:
                 cands.append((rid, r))
         except Exception:
             continue
@@ -538,7 +440,7 @@ def _tick_auto_poll(interval: float = 6.0) -> None:
     if now < nxt:
         return
     st.session_state[S_PUB_NEXT_POLL] = now + max(2.0, float(interval))
-    time.sleep(0.2)
+    time.sleep(0.3)
     try:
         st.rerun()
     except Exception:
@@ -585,7 +487,7 @@ def _handle_publish_state(owner: str, repo: str, workflow: str, ref: str, token:
 # =============================================================================
 def main() -> None:
     # 사이드바(SSOT) — app 진입·네비 일관성 보장
-    render_sidebar()  # app/sider와 정합.  
+    render_sidebar()
     _apply_pending_prefill()
 
     # 상태 점검/시크릿
@@ -597,7 +499,10 @@ def main() -> None:
         ref       = st.secrets.get("GITHUB_BRANCH", "main")
         workflow  = st.secrets.get("GITHUB_WORKFLOW", "publish-prompts.yml")
 
-        owner, repo = _parse_repo(repo_full)
+        owner = repo = ""
+        if repo_full and "/" in str(repo_full):
+            owner, repo = str(repo_full).split("/", 1)
+
         if not (owner and repo):
             st.info("GITHUB_REPO 시크릿이 비어 있어 출판 기능이 비활성화됩니다.")
         else:
@@ -614,7 +519,7 @@ def main() -> None:
             st.selectbox("출판 입력키", options=keys, index=keys.index(chosen), key=S_PUB_INPUT_KEY,
                          help="workflow_dispatch.inputs 중 하나를 선택합니다.")
         else:
-            st.caption("이 워크플로는 입력 없이 디스패치되거나(repository_dispatch) 자체로 prompts를 준비합니다.")
+            st.caption("이 워크플로는 입력 없이 디스패치됩니다.")
 
     # 편집 UI(세로 배열)
     st.markdown("### ① 페르소나(공통)")
@@ -627,20 +532,12 @@ def main() -> None:
 
     # 액션
     st.markdown("### ③ 액션")
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3 = st.columns(3)
 
-    # (a) 최신 프롬프트 불러오기(원격→로컬 캐시→세션)
+    # (a) 최신 프롬프트 불러오기(릴리스 → 세션)
     with c1:
         if st.button("📥 최신 프롬프트 불러오기(릴리스 우선)", use_container_width=True, key="btn_fetch_prompts"):
             try:
-                owner, repo = _parse_repo(st.secrets.get("GITHUB_REPO","") or "")
-                token = st.secrets.get("GITHUB_TOKEN", None)
-                if owner and repo:
-                    # 항상 최신 내려받아 캐시 갱신
-                    try:
-                        _download_latest_prompts_to_local(owner=owner, repo=repo, token=token)
-                    except Exception:
-                        pass
                 texts, src = _load_prompts_from_release()
                 st.session_state["_PREFILL_PROMPTS"] = {
                     K_PERSONA:  texts.get(K_PERSONA, ""),
@@ -669,16 +566,8 @@ def main() -> None:
             st.success("로컬 저장 완료")
             st.code("\n".join(f"{k}: {v}" for k, v in files.items()) + f"\nroot={root}", language="text")
 
-    # (c) 📂 모드별 불러오기(로컬 persist)
+    # (c) 🚀 출판(Publish) — 내부 자동 병합 → 디스패치 → 상태 버튼
     with c3:
-        if st.button("📂 모드별 불러오기(로컬)", use_container_width=True, key="load_per_mode"):
-            data = _load_local_per_mode()
-            st.session_state["_PREFILL_PROMPTS"] = data
-            st.session_state["_flash_success"] = "로컬에 저장된 모드별 프롬프트를 불러왔습니다."
-            st.rerun()
-
-    # (d) 🚀 출판(Publish) — 내부 자동 병합 → 디스패치 → 상태 버튼
-    with c4:
         repo_full = st.secrets.get("GITHUB_REPO", "")
         token     = st.secrets.get("GITHUB_TOKEN", "")
         ref       = st.secrets.get("GITHUB_BRANCH", "main")
@@ -696,7 +585,7 @@ def main() -> None:
                 if msgs: st.write("\n".join(f"- {m}" for m in msgs))
             else:
                 try:
-                    owner, repo = _parse_repo(repo_full)
+                    owner, repo = str(repo_full).split("/", 1)
                     input_key = st.session_state.get(S_PUB_INPUT_KEY)
                     _ = _dispatch_workflow(owner=owner, repo=repo, workflow=workflow,
                                            ref=ref, token=token, yaml_text=y, input_key=input_key)
@@ -721,8 +610,8 @@ def main() -> None:
         token     = st.secrets.get("GITHUB_TOKEN", "")
         ref       = st.secrets.get("GITHUB_BRANCH", "main")
         workflow  = st.secrets.get("GITHUB_WORKFLOW", "publish-prompts.yml")
-        owner, repo = _parse_repo(repo_full)
-        if owner and repo:
+        if repo_full and "/" in str(repo_full):
+            owner, repo = str(repo_full).split("/", 1)
             _handle_publish_state(owner, repo, workflow, ref, token)
 
     # 플래시 메시지(1회성)
@@ -734,4 +623,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-# [ADMIN-PROMPTS v4] END
+# [ADMIN-PROMPTS LOADER FIX v3.1] END
