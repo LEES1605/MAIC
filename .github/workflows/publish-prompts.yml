@@ -1,11 +1,10 @@
-# [PP-01] START: FILE .github/workflows/publish-prompts.yml (full replace)
 name: Publish Prompts
 
 on:
   workflow_dispatch:
     inputs:
       prompts_yaml:
-        description: "Prompts YAML text (persona + modes)"
+        description: "Prompts YAML (version + modes only)"
         required: false
         default: ""
   repository_dispatch:
@@ -13,86 +12,53 @@ on:
 
 jobs:
   publish:
-    name: Build & Release prompts.yaml
     runs-on: ubuntu-latest
-
-    permissions:
-      contents: write    # release 생성에 필요
-      actions: read
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Resolve YAML input → file
-        id: input
+      - name: Create prompts.yaml from inputs/payload or fallback
+        id: mk
         shell: bash
         run: |
           set -euo pipefail
-          # 1) 두 이벤트 경로 모두에서 YAML 원문을 추출
-          PY="${{ github.event.inputs.prompts_yaml }}"
-          if [ -z "${PY:-}" ] && [ "${{ github.event_name }}" = "repository_dispatch" ]; then
-            PY="${{ github.event.client_payload.prompts_yaml }}"
-          fi
+          PY=$(mktemp)
+          cat > "$PY" <<'PYCODE'
+          import os, sys, json, yaml, pathlib
+          ev = json.loads(os.getenv('GITHUB_EVENT', '{}'))
+          # 1) inputs.prompts_yaml (workflow_dispatch)
+          txt = (ev.get('inputs') or {}).get('prompts_yaml') or ''
+          # 2) client_payload.prompts_yaml (repository_dispatch)
+          if not txt:
+              txt = (ev.get('client_payload') or {}).get('prompts_yaml') or ''
+          # 3) fallback 파일(있으면)
+          if not txt:
+              for cand in ('release/assets/prompts.yaml','assets/prompts.yaml','prompts.yaml'):
+                  p = pathlib.Path(cand)
+                  if p.exists():
+                      txt = p.read_text(encoding='utf-8')
+                      break
+          # 안전 가드
+          y = yaml.safe_load(txt) if txt.strip() else {}
+          if not isinstance(y, dict) or 'modes' not in y:
+              raise SystemExit("invalid or empty prompts YAML (need object with 'modes')")
+          pathlib.Path("dist").mkdir(exist_ok=True)
+          pathlib.Path("dist/prompts.yaml").write_text(yaml.safe_dump(y, allow_unicode=True, sort_keys=False), encoding="utf-8")
+          print("created: dist/prompts.yaml")
+          PYCODE
+          python "$PY"
 
-          # 2) 입력이 비었으면 즉시 실패(앱 UI도 '실패'로 전환되도록)
-          if [ -z "${PY:-}" ]; then
-            echo "::error ::No prompts_yaml provided via inputs or client_payload."
-            exit 1
-          fi
-
-          # 3) 파일로 저장
-          printf '%s\n' "$PY" > prompts.yaml
-          echo "bytes=$(wc -c < prompts.yaml)" >> $GITHUB_OUTPUT
-          echo "ok=true" >> $GITHUB_OUTPUT
-
-      - name: Show size
-        run: echo "prompts.yaml size = ${{ steps.input.outputs.bytes }} bytes"
-
-      - name: Validate schema (if script exists)
+      - name: Validate schema (if project validator exists)
         shell: bash
         run: |
           set -euo pipefail
           if [ -f scripts/validate_prompts.py ]; then
-            python scripts/validate_prompts.py prompts.yaml
+            python scripts/validate_prompts.py "dist/prompts.yaml"
           else
-            echo "[warn] scripts/validate_prompts.py not found; skipping schema validation"
+            echo "no project validator; basic validation already done."
           fi
 
-      - name: Prepare release assets
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p release/assets
-          cp prompts.yaml release/assets/prompts.yaml
-          # 모드별 분할 파일도 생성(운영 확인용 아티팩트)
-          python - <<'PY'
-          import yaml, pathlib
-          data = yaml.safe_load(open("prompts.yaml","r",encoding="utf-8")) or {}
-          modes = (data.get("modes") or {}) if isinstance(data.get("modes"), dict) else {}
-          out = pathlib.Path("release/assets"); out.mkdir(parents=True, exist_ok=True)
-          (out/"persona.txt").write_text(data.get("persona") or "", encoding="utf-8")
-          for k in ("grammar","sentence","passage"):
-              t = modes.get(k) or ""
-              (out/f"{k}.txt").write_text(t, encoding="utf-8")
-          PY
-
-      - name: Upload artifact
+      - name: Upload artifact (optional)
         uses: actions/upload-artifact@v4
         with:
-          name: prompts-release
-          path: release/assets
-
-      - name: Create/Update 'prompts-latest' release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          TAG="prompts-latest"
-          # 기존 태그 삭제(없으면 무시) → 새로 생성
-          gh release delete "$TAG" -y || true
-          gh release create "$TAG" release/assets/* \
-            --title "Prompts Latest" \
-            --notes "Published via Admin UI"
-# [PP-01] END ==============
+          name: prompts
+          path: dist/prompts.yaml
