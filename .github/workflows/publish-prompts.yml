@@ -1,19 +1,16 @@
-# [01] START: .github/workflows/publish-prompts.yml — FULL REPLACEMENT
 name: publish-prompts
 
 on:
-  # 수동 실행(관리자 UI에서 직접 던질 수 있도록 입력 허용)
   workflow_dispatch:
     inputs:
       prompts_yaml:
-        description: "prompts.yaml contents (multiline OK). If empty, fallbacks to repo files."
+        description: "prompts.yaml contents (multiline OK). If empty, falls back to repo files."
         required: false
-  # 앱/관리자 UI가 repository_dispatch로 보낼 때 (client_payload.prompts_yaml 사용)
   repository_dispatch:
     types: [publish-prompts]
 
 permissions:
-  contents: write   # 릴리스 자산 업로드에 필요
+  contents: write
   actions: read
 
 concurrency:
@@ -31,23 +28,27 @@ jobs:
       prompts_yaml_sha256: ${{ steps.prep.outputs.prompts_yaml_sha256 }}
 
     steps:
-      # [02] Checkout
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # [03] Python 준비(검증용 pyyaml)
+      - name: Ensure tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v jq >/dev/null || sudo apt-get update && sudo apt-get install -y jq
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.x"
+
       - name: Install deps (pyyaml)
         run: |
           python -m pip install --upgrade pip
           pip install pyyaml
 
-      # [04] 입력/대체 소스에서 prompts.yaml 확보 → "파일 경로"만 outputs로 전달
       - name: Prepare prompts.yaml
         id: prep
         shell: bash
@@ -57,7 +58,7 @@ jobs:
           out="${RUNNER_TEMP}/prompts.yaml"
           have=""
 
-          # 1) repository_dispatch: client_payload.prompts_yaml (JSON 문자열 → 원문)
+          # 1) repository_dispatch → client_payload.prompts_yaml
           if [[ "${GITHUB_EVENT_NAME}" == "repository_dispatch" ]]; then
             raw='${{ toJSON(github.event.client_payload.prompts_yaml) }}'
             if [[ "$raw" != "null" && -n "$raw" ]]; then
@@ -66,7 +67,7 @@ jobs:
             fi
           fi
 
-          # 2) workflow_dispatch: inputs.prompts_yaml
+          # 2) workflow_dispatch → inputs.prompts_yaml
           if [[ -z "${have}" ]]; then
             raw='${{ toJSON(github.event.inputs.prompts_yaml) }}'
             if [[ "$raw" != "null" && -n "$raw" ]]; then
@@ -75,7 +76,7 @@ jobs:
             fi
           fi
 
-          # 3) 리포의 SSOT 파일: docs/_gpt/prompts.yaml → 없으면 샘플로 폴백
+          # 3) 리포 SSOT 폴백
           if [[ -z "${have}" ]]; then
             if [[ -f "docs/_gpt/prompts.yaml" ]]; then
               cp "docs/_gpt/prompts.yaml" "$out"
@@ -99,45 +100,44 @@ jobs:
           echo "prompts_yaml_path=${out}" >> "$GITHUB_OUTPUT"
           echo "prompts_yaml_sha256=$(sha256sum "$out" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
 
-      # [05] 스키마/내용 최소 검증 + 포맷 정규화(선택)
       - name: Validate schema (lightweight)
         env:
           PROMPTS_YAML_PATH: ${{ steps.prep.outputs.prompts_yaml_path }}
         run: |
           set -euo pipefail
           python - <<'PY'
-          import sys, yaml, hashlib, io
-          p = "${PROMPTS_YAML_PATH}"
-          with open(p, "r", encoding="utf-8") as f:
+          import os, sys, yaml
+          p = os.environ.get("PROMPTS_YAML_PATH")
+          if not p:
+            print("PROMPTS_YAML_PATH not set", file=sys.stderr); sys.exit(1)
+          try:
+            with open(p, "r", encoding="utf-8") as f:
               data = yaml.safe_load(f) or {}
+          except FileNotFoundError:
+            print(f"File not found: {p}", file=sys.stderr); sys.exit(1)
+
           if not isinstance(data, dict):
-              print("[schema] root must be a mapping(dict)"); sys.exit(1)
+            print("[schema] root must be a mapping(dict)", file=sys.stderr); sys.exit(1)
 
-          # 필수 키 존재
-          if "version" not in data or "modes" not in data:
-              print("[schema] <root>: 'version' and 'modes' are required"); sys.exit(1)
+          # 최소 필수키
+          for key in ("version", "modes"):
+            if key not in data:
+              print(f"[schema] missing required key: {key}", file=sys.stderr); sys.exit(1)
 
-          modes = data.get("modes") or {}
+          modes = data.get("modes")
           if not isinstance(modes, dict):
-              print("[schema] 'modes' must be a mapping"); sys.exit(1)
+            print("[schema] 'modes' must be a mapping", file=sys.stderr); sys.exit(1)
 
-          required = ("grammar","sentence","passage")
-          for k in required:
-              if k not in modes:
-                  print(f"[schema] modes.{k}: required"); sys.exit(1)
+          for k in ("grammar", "sentence", "passage"):
+            if k not in modes:
+              print(f"[schema] modes.{k}: required", file=sys.stderr); sys.exit(1)
+            v = modes.get(k)
+            if v is None or (isinstance(v, str) and not v.strip()):
+              print(f"[schema] modes.{k}: empty value", file=sys.stderr); sys.exit(1)
 
-          # (보수적으로) modes.*는 임의 구조 허용. 단, 비어있으면 경고
-          for k in required:
-              v = modes.get(k)
-              if v is None or (isinstance(v, str) and not v.strip()):
-                  print(f"[schema] modes.{k}: empty value"); sys.exit(1)
-
-          # 정상: 요약 출력
-          y = yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
-          print("[ok] schema. bytes=", len(y))
+          print("[ok] schema validation passed")
           PY
 
-      # [06] 산출물 보관(아티팩트) — 운영 추적/디버깅용
       - name: Upload artifact (prompts.yaml)
         uses: actions/upload-artifact@v4
         with:
@@ -146,7 +146,6 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      # [07] 릴리스 자산 게시 (prompts-latest 태그에 업로드)
       - name: Publish release (prompts-latest)
         uses: softprops/action-gh-release@v2
         with:
@@ -156,11 +155,10 @@ jobs:
           generate_release_notes: false
           fail_on_unmatched_files: true
           files: |
-            ${{ steps.prep.outputs.prompts_yaml_path }}#prompts.yaml
+            ${{ steps.prep.outputs.prompts_yaml_path }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # [08] 요약 출력
       - name: Summary
         env:
           SHA256: ${{ steps.prep.outputs.prompts_yaml_sha256 }}
@@ -173,4 +171,3 @@ jobs:
             echo "- SHA256: \`${SHA256}\`"
             echo "- 릴리스 태그: \`prompts-latest\` (자산명: \`prompts.yaml\`)"
           } >> "$GITHUB_STEP_SUMMARY"
-# [01] END: .github/workflows/publish-prompts.yml — FULL REPLACEMENT
