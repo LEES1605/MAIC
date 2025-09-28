@@ -1,18 +1,16 @@
-# [AP-V4] START: FILE .github/workflows/publish-prompts.yml — inputs→prompts.yaml 저장 + 스키마검증 + 릴리스 업로드
 name: Publish Prompts
 
 on:
   workflow_dispatch:
     inputs:
       prompts_yaml:
-        description: "Prompts YAML (persona + modes.grammar/sentence/passage)"
+        description: "Prompts YAML (persona + modes)"
         required: false
-        default: ""
   repository_dispatch:
     types: [publish-prompts]
 
 permissions:
-  contents: write   # gh release upload/create 에 필요
+  contents: write
 
 jobs:
   publish:
@@ -21,48 +19,57 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Write prompts.yaml from event input/payload
+      - name: Resolve prompts.yaml (inputs or client_payload)
+        env:
+          INP: ${{ github.event.inputs.prompts_yaml }}
+          PAY: ${{ github.event.client_payload.prompts_yaml }}
         shell: bash
         run: |
           set -euo pipefail
-          CONTENT=""
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            CONTENT="${{ github.event.inputs.prompts_yaml }}"
-          elif [[ "${{ github.event_name }}" == "repository_dispatch" ]]; then
-            CONTENT="${{ github.event.client_payload.prompts_yaml }}"
-          fi
-          if [[ -z "${CONTENT// }" ]]; then
-            echo "[error] No prompts_yaml provided."
+          INPUT="${INP:-}"
+          if [ -z "$INPUT" ]; then INPUT="${PAY:-}"; fi
+          if [ -z "$INPUT" ]; then
+            echo "Error:  No prompts_yaml provided."
             exit 1
           fi
-          printf '%s\n' "$CONTENT" > prompts.yaml
-          echo "[ok] wrote $(wc -c < prompts.yaml) bytes to prompts.yaml"
+          printf '%s\n' "$INPUT" > prompts.yaml
+          echo "Wrote prompts.yaml ($(wc -c < prompts.yaml) bytes)"
 
-      - name: Validate schema (must have version + modes.{grammar,sentence,passage})
+      - name: Validate schema (strict)
         shell: bash
         run: |
           set -euo pipefail
-          python - <<'PY'
-          import yaml, sys
-          y = yaml.safe_load(open("prompts.yaml","r",encoding="utf-8")) or {}
-          assert isinstance(y, dict), "[schema] <root>: must be object"
-          assert "version" in y, "[schema] <root>: 'version' is a required property"
+          python3 - <<'PY'
+          import sys, yaml, io
+          y = yaml.safe_load(io.open("prompts.yaml","r",encoding="utf-8")) or {}
+          errs=[]
+          if "version" not in y: errs.append("'version' is required")
           modes = y.get("modes")
-          assert isinstance(modes, dict), "[schema] modes: must be object"
-          for k in ("grammar","sentence","passage"):
-              assert k in modes, f"[schema] modes: '{k}' is a required property"
-          extras = [k for k in modes.keys() if k not in ("grammar","sentence","passage")]
-          assert not extras, f"[schema] modes: Additional properties are not allowed {extras}"
-          print("[schema] OK")
+          if not isinstance(modes, dict):
+              errs.append("'modes' must be a mapping")
+          else:
+              for k in ("grammar","sentence","passage"):
+                  v = modes.get(k)
+                  if not isinstance(v, str) or not v.strip():
+                      errs.append(f"'modes.{k}' must be a non-empty string")
+              extras=[k for k in modes if k not in ("grammar","sentence","passage")]
+              if extras: errs.append(f"extra keys in 'modes': {extras}")
+          if errs:
+              print("\n".join(f"[schema] {e}" for e in errs))
+              sys.exit(1)
+          print("schema ok")
           PY
 
-      - name: Upload prompts.yaml to 'prompts-latest' release
+      - name: Ensure release & upload asset
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
-          # 이미 있으면 덮어쓰기, 없으면 새로 생성
-          gh release upload prompts-latest prompts.yaml --clobber --repo "$GITHUB_REPOSITORY" || \
-          gh release create prompts-latest prompts.yaml --title "Prompts Latest" --latest --notes "Published via admin UI" --repo "$GITHUB_REPOSITORY"
-# ============== [AP-V4] END: FILE .github/workflows/publish-prompts.yml ==============
+          TAG="prompts-latest"
+          NOTE="Automated publish from admin panel"
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --notes "$NOTE"
+          fi
+          gh release upload "$TAG" prompts.yaml --clobber
+          echo "uploaded"
