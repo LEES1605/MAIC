@@ -1,4 +1,4 @@
-# [AP-V4] START: FILE src/ui/admin_prompt.py — release/로더 + 로컬 저장/불러오기 + 출판/상태 폴링(양 트리거)
+# [APUB‑V4] START: FILE src/ui/admin_prompt.py — publish fixes (dispatch+poll+local load)
 from __future__ import annotations
 
 from pathlib import Path
@@ -203,17 +203,16 @@ def _save_local_per_mode(persona: str, g: str, s: str, psg: str) -> Dict[str, Pa
 
 def _load_local_per_mode() -> Dict[str, str]:
     root = _effective_persist_dir()
-    def _r(name: str) -> str:
-        p = root / name
+    def _read(p: Path) -> str:
         try:
             return p.read_text(encoding="utf-8")
         except Exception:
             return ""
     return {
-        K_PERSONA:  _r("persona.txt"),
-        K_GRAMMAR:  _r("grammar.txt"),
-        K_SENTENCE: _r("sentence.txt"),
-        K_PASSAGE:  _r("passage.txt"),
+        K_PERSONA: _read(root/"persona.txt"),
+        K_GRAMMAR: _read(root/"grammar.txt"),
+        K_SENTENCE: _read(root/"sentence.txt"),
+        K_PASSAGE:  _read(root/"passage.txt"),
     }
 
 # =============================================================================
@@ -315,25 +314,27 @@ def _repository_dispatch(owner: str, repo: str, token: str, yaml_text: str,
 def _dispatch_workflow(owner: str, repo: str, workflow: str, ref: str,
                        token: str, yaml_text: str, input_key: Optional[str]) -> Dict[str, Any]:
     """
-    1) workflow_dispatch
-    2) 422 'does not have workflow_dispatch' → repository_dispatch 폴백
-    3) 422 'Unexpected inputs' → 입력 없이 재시도
+    우선순위:
+      1) input_key가 있으면 workflow_dispatch(inputs 포함)
+      2) 그 외(입력키 없음/422 등)에는 repository_dispatch로 폴백
     """
+    # 입력키가 없으면 곧장 repository_dispatch 사용
+    if not input_key:
+        return _repository_dispatch(owner, repo, token, yaml_text, event_type="publish-prompts")
+
     url = f"https://api.github.com/repos/{owner}/{repo}/actions/workflows/{workflow}/dispatches"
     headers = _gh_headers(token)
 
     def _post(payload): 
         return req.post(url, headers=headers, json=payload, timeout=15)
 
-    payload: Dict[str, Any] = {"ref": ref}
-    if input_key:
-        payload["inputs"] = {input_key: yaml_text}
+    payload: Dict[str, Any] = {"ref": ref, "inputs": {input_key: yaml_text}}
     r = _post(payload)
 
     if 200 <= r.status_code < 300:
         return {"status": r.status_code, "detail": "ok"}
 
-    # 422 처리
+    # 422 처리 → 모두 repository_dispatch로 전환
     try:
         js = r.json() if r.content else {}
         msg = (js.get("message") or "").lower()
@@ -341,14 +342,9 @@ def _dispatch_workflow(owner: str, repo: str, workflow: str, ref: str,
         js = {}
         msg = ""
 
-    if r.status_code == 422 and "does not have 'workflow_dispatch'" in (js.get("message") or ""):
+    # ‘does not have workflow_dispatch’ 또는 ‘Unexpected inputs’ 모두 폴백
+    if r.status_code == 422 and ("does not have 'workflow_dispatch'" in (js.get("message") or "") or "unexpected" in msg):
         return _repository_dispatch(owner, repo, token, yaml_text, event_type="publish-prompts")
-
-    if r.status_code == 422 and "unexpected" in msg:
-        r2 = _post({"ref": ref})
-        if 200 <= r2.status_code < 300:
-            return {"status": r2.status_code, "detail": "ok (fallback: no inputs)"}
-        raise RuntimeError(f"workflow dispatch 실패(status={r2.status_code}): {r2.text}")
 
     raise RuntimeError(f"workflow dispatch 실패(status={r.status_code}): {js or r.text}")
 
@@ -360,11 +356,11 @@ def _iso_to_epoch(s: str) -> float:
 
 def _list_runs(owner: str, repo: str, workflow: str, ref: str, token: Optional[str]) -> List[Dict[str, Any]]:
     """
-    ⚠️ 이벤트 필터를 걸지 않는다. (workflow_dispatch/ repository_dispatch 모두 캡처)
+    ❗️이벤트 필터(event=...)를 제거해 workflow_dispatch/repository_dispatch 모두 추적.
     """
     headers = _gh_headers(token)
     url = f"https://api.github.com/repos/{owner}/{repo}/actions/workflows/{workflow}/runs"
-    params = {"branch": ref, "per_page": 10}
+    params = {"branch": ref, "per_page": 10}  # event 필터 제거
     try:
         r = req.get(url, headers=headers, params=params, timeout=10)
         if not r.ok:
@@ -501,8 +497,8 @@ def _handle_publish_state(owner: str, repo: str, workflow: str, ref: str, token:
 # Page
 # =============================================================================
 def main() -> None:
-    # 사이드바(SSOT) — app 진입·네비 일관성 보장
-    render_sidebar()  # app/sider와 정합. 
+    # 사이드바(SSOT)
+    render_sidebar()
     _apply_pending_prefill()
 
     # 상태 점검/시크릿
@@ -534,7 +530,7 @@ def main() -> None:
             st.selectbox("출판 입력키", options=keys, index=keys.index(chosen), key=S_PUB_INPUT_KEY,
                          help="workflow_dispatch.inputs 중 하나를 선택합니다.")
         else:
-            st.caption("이 워크플로는 입력 없이 디스패치됩니다.")
+            st.caption("이 워크플로는 입력 없이 디스패치되며, UI가 자동으로 repository_dispatch를 사용합니다.")
 
     # 편집 UI(세로 배열)
     st.markdown("### ① 페르소나(공통)")
@@ -547,7 +543,7 @@ def main() -> None:
 
     # 액션
     st.markdown("### ③ 액션")
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3 = st.columns(3)
 
     # (a) 최신 프롬프트 불러오기(릴리스 → 세션)
     with c1:
@@ -568,8 +564,16 @@ def main() -> None:
             except Exception:
                 st.session_state["_flash_error"] = "프롬프트 로딩 중 오류가 발생했습니다."; st.rerun()
 
-    # (b) 💾 모드별 저장(로컬 persist에 4파일)
+    # (b) 📂 모드별 불러오기(로컬 persist)
     with c2:
+        if st.button("📂 모드별 불러오기(로컬)", use_container_width=True, key="load_per_mode"):
+            data = _load_local_per_mode()
+            st.session_state["_PREFILL_PROMPTS"] = data
+            st.session_state["_flash_success"] = "로컬 저장본을 불러왔습니다."
+            st.rerun()
+
+    # (c) 💾 모드별 저장(로컬 persist에 4파일)
+    with c3:
         if st.button("💾 모드별 저장(로컬)", use_container_width=True, key="save_per_mode"):
             files = _save_local_per_mode(
                 st.session_state.get(K_PERSONA,  ""),
@@ -581,47 +585,39 @@ def main() -> None:
             st.success("로컬 저장 완료")
             st.code("\n".join(f"{k}: {v}" for k, v in files.items()) + f"\nroot={root}", language="text")
 
-    # (c) 📤 로컬에서 불러오기(4파일 → 세션)
-    with c3:
-        if st.button("📤 로컬에서 불러오기", use_container_width=True, key="load_per_mode"):
-            data = _load_local_per_mode()
-            st.session_state["_PREFILL_PROMPTS"] = data
-            st.session_state["_flash_success"] = "로컬 저장본을 불러왔습니다."
-            st.rerun()
-
     # (d) 🚀 출판(Publish) — 내부 자동 병합 → 디스패치 → 상태 버튼
-    with c4:
-        repo_full = st.secrets.get("GITHUB_REPO", "")
-        token     = st.secrets.get("GITHUB_TOKEN", "")
-        ref       = st.secrets.get("GITHUB_BRANCH", "main")
-        workflow  = st.secrets.get("GITHUB_WORKFLOW", "publish-prompts.yml")
-        disabled  = not (repo_full and "/" in str(repo_full) and token)
+    st.divider()
+    repo_full = st.secrets.get("GITHUB_REPO", "")
+    token     = st.secrets.get("GITHUB_TOKEN", "")
+    ref       = st.secrets.get("GITHUB_BRANCH", "main")
+    workflow  = st.secrets.get("GITHUB_WORKFLOW", "publish-prompts.yml")
+    disabled  = not (repo_full and "/" in str(repo_full) and token)
 
-        clicked = st.button("🚀 출판(Publish)", type="primary",
-                            disabled=disabled, use_container_width=True,
-                            help=None if not disabled else "GITHUB_REPO와 GITHUB_TOKEN 시크릿이 필요합니다.")
-        if clicked:
-            y = _build_yaml_for_publish()  # ✅ 항상 내부 병합
-            okv, msgs = _validate_yaml_text(y)
-            if not okv:
-                st.error("스키마 검증 실패 — 필드 내용을 확인하세요.")
-                if msgs: st.write("\n".join(f"- {m}" for m in msgs))
-            else:
-                try:
-                    owner, repo = str(repo_full).split("/", 1)
-                    input_key = st.session_state.get(S_PUB_INPUT_KEY)
-                    _ = _dispatch_workflow(owner=owner, repo=repo, workflow=workflow,
-                                           ref=ref, token=token, yaml_text=y, input_key=input_key)
-                    st.session_state[S_PUB_STATE] = "running"
-                    st.session_state[S_PUB_DISPATCH_AT] = time.time()
-                    st.session_state[S_PUB_RUN_ID] = None
-                    st.session_state[S_PUB_RUN_URL] = None
-                    st.toast("출판 요청 전송 — Actions에서 처리 중입니다.", icon="⌛")
-                except Exception as exc:
-                    st.session_state[S_PUB_STATE] = "error"
-                    st.exception(exc)
+    clicked = st.button("🚀 출판(Publish)", type="primary",
+                        disabled=disabled, use_container_width=True,
+                        help=None if not disabled else "GITHUB_REPO와 GITHUB_TOKEN 시크릿이 필요합니다.")
+    if clicked:
+        y = _build_yaml_for_publish()  # ✅ 항상 내부 병합
+        okv, msgs = _validate_yaml_text(y)
+        if not okv:
+            st.error("스키마 검증 실패 — 필드 내용을 확인하세요.")
+            if msgs: st.write("\n".join(f"- {m}" for m in msgs))
+        else:
+            try:
+                owner, repo = str(repo_full).split("/", 1)
+                input_key = st.session_state.get(S_PUB_INPUT_KEY)
+                _ = _dispatch_workflow(owner=owner, repo=repo, workflow=workflow,
+                                       ref=ref, token=token, yaml_text=y, input_key=input_key)
+                st.session_state[S_PUB_STATE] = "running"
+                st.session_state[S_PUB_DISPATCH_AT] = time.time()
+                st.session_state[S_PUB_RUN_ID] = None
+                st.session_state[S_PUB_RUN_URL] = None
+                st.toast("출판 요청 전송 — Actions에서 처리 중입니다.", icon="⌛")
+            except Exception as exc:
+                st.session_state[S_PUB_STATE] = "error"
+                st.exception(exc)
 
-        _render_status_button()
+    _render_status_button()
 
     # (선택) YAML 미리보기(읽기 전용)
     with st.expander("고급: 출판용 YAML 미리보기(읽기 전용)", expanded=False):
@@ -629,10 +625,6 @@ def main() -> None:
 
     # 폴링 유지
     if st.session_state.get(S_PUB_STATE) == "running":
-        repo_full = st.secrets.get("GITHUB_REPO", "")
-        token     = st.secrets.get("GITHUB_TOKEN", "")
-        ref       = st.secrets.get("GITHUB_BRANCH", "main")
-        workflow  = st.secrets.get("GITHUB_WORKFLOW", "publish-prompts.yml")
         if repo_full and "/" in str(repo_full):
             owner, repo = str(repo_full).split("/", 1)
             _handle_publish_state(owner, repo, workflow, ref, token)
@@ -646,4 +638,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-# ============== [AP-V4] END: FILE src/ui/admin_prompt.py ==============
+# [APUB‑V4] END: FILE src/ui/admin_prompt.py
