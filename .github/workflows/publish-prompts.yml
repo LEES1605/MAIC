@@ -1,59 +1,98 @@
+# [PP-01] START: FILE .github/workflows/publish-prompts.yml (full replace)
 name: Publish Prompts
 
 on:
   workflow_dispatch:
     inputs:
       prompts_yaml:
-        description: "YAML payload (persona + modes)"
+        description: "Prompts YAML text (persona + modes)"
         required: false
+        default: ""
   repository_dispatch:
     types: [publish-prompts]
 
-permissions:
-  contents: write  # 릴리스 생성/업데이트에 필요
-
 jobs:
   publish:
+    name: Build & Release prompts.yaml
     runs-on: ubuntu-latest
+
+    permissions:
+      contents: write    # release 생성에 필요
+      actions: read
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # payload를 안전하게 파일로 저장 (JS로 처리: 셸 quoting 이슈 차단)
-      - name: Write prompts.yaml from payload
-        id: write
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-            const path = require('path');
-            const isWD = (context.eventName === 'workflow_dispatch');
-            const data = isWD
-              ? (core.getInput('prompts_yaml') || '')
-              : ((context.payload.client_payload && context.payload.client_payload.prompts_yaml) || '');
-            fs.mkdirSync('release/assets', { recursive: true });
-            fs.writeFileSync('release/assets/prompts.yaml', data, { encoding: 'utf8' });
-            core.setOutput('size', String(data.length));
-
-      - name: Show payload size
-        run: echo "payload_size=${{ steps.write.outputs.size }}"
-
-      - name: Validate schema (if repo has validator)
+      - name: Resolve YAML input → file
+        id: input
+        shell: bash
         run: |
-          if [ -f scripts/validate_prompts.py ]; then
-            python scripts/validate_prompts.py "release/assets/prompts.yaml"
-          else
-            echo "No validator script found. Skipping strict validation."
+          set -euo pipefail
+          # 1) 두 이벤트 경로 모두에서 YAML 원문을 추출
+          PY="${{ github.event.inputs.prompts_yaml }}"
+          if [ -z "${PY:-}" ] && [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            PY="${{ github.event.client_payload.prompts_yaml }}"
           fi
 
-      # 최신 릴리스 태그 prompts-latest 로 파일 첨부/갱신
-      - name: Upload to GitHub Release (tag=prompts-latest)
-        uses: softprops/action-gh-release@v2
+          # 2) 입력이 비었으면 즉시 실패(앱 UI도 '실패'로 전환되도록)
+          if [ -z "${PY:-}" ]; then
+            echo "::error ::No prompts_yaml provided via inputs or client_payload."
+            exit 1
+          fi
+
+          # 3) 파일로 저장
+          printf '%s\n' "$PY" > prompts.yaml
+          echo "bytes=$(wc -c < prompts.yaml)" >> $GITHUB_OUTPUT
+          echo "ok=true" >> $GITHUB_OUTPUT
+
+      - name: Show size
+        run: echo "prompts.yaml size = ${{ steps.input.outputs.bytes }} bytes"
+
+      - name: Validate schema (if script exists)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f scripts/validate_prompts.py ]; then
+            python scripts/validate_prompts.py prompts.yaml
+          else
+            echo "[warn] scripts/validate_prompts.py not found; skipping schema validation"
+          fi
+
+      - name: Prepare release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release/assets
+          cp prompts.yaml release/assets/prompts.yaml
+          # 모드별 분할 파일도 생성(운영 확인용 아티팩트)
+          python - <<'PY'
+          import yaml, pathlib
+          data = yaml.safe_load(open("prompts.yaml","r",encoding="utf-8")) or {}
+          modes = (data.get("modes") or {}) if isinstance(data.get("modes"), dict) else {}
+          out = pathlib.Path("release/assets"); out.mkdir(parents=True, exist_ok=True)
+          (out/"persona.txt").write_text(data.get("persona") or "", encoding="utf-8")
+          for k in ("grammar","sentence","passage"):
+              t = modes.get(k) or ""
+              (out/f"{k}.txt").write_text(t, encoding="utf-8")
+          PY
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
         with:
-          tag_name: prompts-latest
-          name: Prompts Latest
-          files: release/assets/prompts.yaml
-          make_latest: true
-          fail_on_unmatched_files: true
+          name: prompts-release
+          path: release/assets
+
+      - name: Create/Update 'prompts-latest' release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="prompts-latest"
+          # 기존 태그 삭제(없으면 무시) → 새로 생성
+          gh release delete "$TAG" -y || true
+          gh release create "$TAG" release/assets/* \
+            --title "Prompts Latest" \
+            --notes "Published via Admin UI"
+# [PP-01] END ==============
