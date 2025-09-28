@@ -1,13 +1,20 @@
-name: Publish Prompts
+# [01] START: .github/workflows/publish-prompts.yml — FULL REPLACEMENT
+name: publish-prompts
 
 on:
+  # 수동 실행(관리자 UI에서 직접 던질 수 있도록 입력 허용)
   workflow_dispatch:
-  push:
-    paths:
-      - 'docs/_gpt/**'  # SSOT 루트 변경 시만 트리거 (Workspace Pointer 기준)
+    inputs:
+      prompts_yaml:
+        description: "prompts.yaml contents (multiline OK). If empty, fallbacks to repo files."
+        required: false
+  # 앱/관리자 UI가 repository_dispatch로 보낼 때 (client_payload.prompts_yaml 사용)
+  repository_dispatch:
+    types: [publish-prompts]
 
 permissions:
-  contents: read
+  contents: write   # 릴리스 자산 업로드에 필요
+  actions: read
 
 concurrency:
   group: publish-prompts-${{ github.ref }}
@@ -15,68 +22,155 @@ concurrency:
 
 jobs:
   publish:
+    name: Build & Validate & Release
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
+    outputs:
+      prompts_yaml_path: ${{ steps.prep.outputs.prompts_yaml_path }}
+      prompts_yaml_sha256: ${{ steps.prep.outputs.prompts_yaml_sha256 }}
+
     steps:
+      # [02] Checkout
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # 스텝 1) prompts.yaml을 "파일"로 만들어 outputs로 경로만 전달
-      - name: Build prompts.yaml
-        id: build
+      # [03] Python 준비(검증용 pyyaml)
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Install deps (pyyaml)
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyyaml
+
+      # [04] 입력/대체 소스에서 prompts.yaml 확보 → "파일 경로"만 outputs로 전달
+      - name: Prepare prompts.yaml
+        id: prep
         shell: bash
         run: |
           set -euo pipefail
 
           out="${RUNNER_TEMP}/prompts.yaml"
+          have=""
 
-          # 1순위: 저장소의 빌드 스크립트가 있으면 그 결과를 사용
-          if [[ -x "./scripts/build-prompts-yaml.sh" ]]; then
-            ./scripts/build-prompts-yaml.sh > "$out"
-          # 2순위: SSOT에 직접 커밋된 prompts.yaml 사용
-          elif [[ -f "docs/_gpt/prompts.yaml" ]]; then
-            cp "docs/_gpt/prompts.yaml" "$out"
-          else
-            echo "Error: could not find scripts/build-prompts-yaml.sh or docs/_gpt/prompts.yaml" >&2
+          # 1) repository_dispatch: client_payload.prompts_yaml (JSON 문자열 → 원문)
+          if [[ "${GITHUB_EVENT_NAME}" == "repository_dispatch" ]]; then
+            raw='${{ toJSON(github.event.client_payload.prompts_yaml) }}'
+            if [[ "$raw" != "null" && -n "$raw" ]]; then
+              printf '%s' "$raw" | jq -r '.' > "$out"
+              have="1"
+            fi
+          fi
+
+          # 2) workflow_dispatch: inputs.prompts_yaml
+          if [[ -z "${have}" ]]; then
+            raw='${{ toJSON(github.event.inputs.prompts_yaml) }}'
+            if [[ "$raw" != "null" && -n "$raw" ]]; then
+              printf '%s' "$raw" | jq -r '.' > "$out"
+              have="1"
+            fi
+          fi
+
+          # 3) 리포의 SSOT 파일: docs/_gpt/prompts.yaml → 없으면 샘플로 폴백
+          if [[ -z "${have}" ]]; then
+            if [[ -f "docs/_gpt/prompts.yaml" ]]; then
+              cp "docs/_gpt/prompts.yaml" "$out"
+              have="1"
+            elif [[ -f "docs/_gpt/prompts.sample.yaml" ]]; then
+              cp "docs/_gpt/prompts.sample.yaml" "$out"
+              have="1"
+            fi
+          fi
+
+          if [[ -z "${have}" ]]; then
+            echo "Error: No prompts_yaml provided and no fallback file found." >&2
             exit 1
           fi
 
-          # 내용 검증(빈 파일 금지)
           if [[ ! -s "$out" ]]; then
             echo "Error: prompts.yaml is empty." >&2
             exit 1
           fi
 
-          # 다음 스텝으로 "경로"만 안전하게 전달
-          printf 'prompts_yaml_path=%s\n' "$out" >> "$GITHUB_OUTPUT"
+          echo "prompts_yaml_path=${out}" >> "$GITHUB_OUTPUT"
+          echo "prompts_yaml_sha256=$(sha256sum "$out" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
 
-      # 스텝 2) 게시 — 파일 경로를 env로 주입하고, 내용은 같은 스텝에서 export
-      - name: Publish prompts
+      # [05] 스키마/내용 최소 검증 + 포맷 정규화(선택)
+      - name: Validate schema (lightweight)
         env:
-          PROMPTS_YAML_PATH: ${{ steps.build.outputs.prompts_yaml_path }}
-        shell: bash
+          PROMPTS_YAML_PATH: ${{ steps.prep.outputs.prompts_yaml_path }}
         run: |
           set -euo pipefail
+          python - <<'PY'
+          import sys, yaml, hashlib, io
+          p = "${PROMPTS_YAML_PATH}"
+          with open(p, "r", encoding="utf-8") as f:
+              data = yaml.safe_load(f) or {}
+          if not isinstance(data, dict):
+              print("[schema] root must be a mapping(dict)"); sys.exit(1)
 
-          # 필수 입력 확인(set -u 안전 패턴)
-          : "${PROMPTS_YAML_PATH:?No prompts_yaml provided}"
+          # 필수 키 존재
+          if "version" not in data or "modes" not in data:
+              print("[schema] <root>: 'version' and 'modes' are required"); sys.exit(1)
 
-          # 일부 스크립트가 PROMPTS_YAML "내용"을 기대하는 경우를 위해 export
-          export PROMPTS_YAML="$(cat "$PROMPTS_YAML_PATH")"
+          modes = data.get("modes") or {}
+          if not isinstance(modes, dict):
+              print("[schema] 'modes' must be a mapping"); sys.exit(1)
 
-          # 이중 검증(빈 내용 금지)
-          if [[ -z "${PROMPTS_YAML-}" ]]; then
-            echo "Error: No prompts_yaml provided." >&2
-            exit 1
-          fi
+          required = ("grammar","sentence","passage")
+          for k in required:
+              if k not in modes:
+                  print(f"[schema] modes.{k}: required"); sys.exit(1)
 
-          # 게시 스크립트 실행(가능하면 표준입력으로도 전달)
-          if [[ -x "./scripts/publish-prompts.sh" ]]; then
-            ./scripts/publish-prompts.sh <<< "$PROMPTS_YAML"
-          else
-            echo "Error: ./scripts/publish-prompts.sh not found or not executable." >&2
-            exit 1
-          fi
+          # (보수적으로) modes.*는 임의 구조 허용. 단, 비어있으면 경고
+          for k in required:
+              v = modes.get(k)
+              if v is None or (isinstance(v, str) and not v.strip()):
+                  print(f"[schema] modes.{k}: empty value"); sys.exit(1)
+
+          # 정상: 요약 출력
+          y = yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
+          print("[ok] schema. bytes=", len(y))
+          PY
+
+      # [06] 산출물 보관(아티팩트) — 운영 추적/디버깅용
+      - name: Upload artifact (prompts.yaml)
+        uses: actions/upload-artifact@v4
+        with:
+          name: prompts-${{ steps.prep.outputs.prompts_yaml_sha256 }}
+          path: ${{ steps.prep.outputs.prompts_yaml_path }}
+          if-no-files-found: error
+          retention-days: 7
+
+      # [07] 릴리스 자산 게시 (prompts-latest 태그에 업로드)
+      - name: Publish release (prompts-latest)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "prompts-latest"
+          name: "Prompts Latest"
+          make_latest: true
+          generate_release_notes: false
+          fail_on_unmatched_files: true
+          files: |
+            ${{ steps.prep.outputs.prompts_yaml_path }}#prompts.yaml
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # [08] 요약 출력
+      - name: Summary
+        env:
+          SHA256: ${{ steps.prep.outputs.prompts_yaml_sha256 }}
+          PATH_OUT: ${{ steps.prep.outputs.prompts_yaml_path }}
+        run: |
+          {
+            echo "## ✅ publish-prompts 결과"
+            echo ""
+            echo "- 파일: \`${PATH_OUT}\`"
+            echo "- SHA256: \`${SHA256}\`"
+            echo "- 릴리스 태그: \`prompts-latest\` (자산명: \`prompts.yaml\`)"
+          } >> "$GITHUB_STEP_SUMMARY"
+# [01] END: .github/workflows/publish-prompts.yml — FULL REPLACEMENT
