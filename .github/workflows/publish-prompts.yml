@@ -1,75 +1,82 @@
-name: Publish Prompts
+name: publish-prompts
 
 on:
+  # 수동 실행(입력값으로 YAML 문자열을 직접 넘길 수 있음)
   workflow_dispatch:
     inputs:
       prompts_yaml:
-        description: "Prompts YAML (persona + modes)"
+        description: "prompts.yaml contents"
         required: false
+  # 앱에서 repository_dispatch로 보낼 때
   repository_dispatch:
     types: [publish-prompts]
 
-permissions:
-  contents: write
-
 jobs:
-  publish:
+  build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
 
-      - name: Resolve prompts.yaml (inputs or client_payload)
-        env:
-          INP: ${{ github.event.inputs.prompts_yaml }}
-          PAY: ${{ github.event.client_payload.prompts_yaml }}
-        shell: bash
+      - name: Prepare PROMPTS_YAML
+        id: prep
         run: |
           set -euo pipefail
-          INPUT="${INP:-}"
-          if [ -z "$INPUT" ]; then INPUT="${PAY:-}"; fi
-          if [ -z "$INPUT" ]; then
-            echo "Error:  No prompts_yaml provided."
+
+          # 1) repository_dispatch 우선: client_payload.prompts_yaml
+          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            RAW=${{ toJSON(github.event.client_payload.prompts_yaml) }}
+            if [ "$RAW" != "null" ] && [ -n "$RAW" ]; then
+              echo "PROMPTS_YAML<<'EOF'" >> "$GITHUB_ENV"
+              echo "$RAW" | jq -r . >> "$GITHUB_ENV"
+              echo "EOF" >> "$GITHUB_ENV"
+            fi
+          fi
+
+          # 2) workflow_dispatch 입력값 폴백
+          if [ -z "${PROMPTS_YAML:-}" ]; then
+            IN="${{ inputs.prompts_yaml || '' }}"
+            if [ -n "$IN" ]; then
+              echo "PROMPTS_YAML<<'EOF'" >> "$GITHUB_ENV"
+              printf "%s\n" "$IN" >> "$GITHUB_ENV"
+              echo "EOF" >> "$GITHUB_ENV"
+            fi
+          fi
+
+          # 3) 최종 점검
+          if [ -z "${PROMPTS_YAML:-}" ]; then
+            echo "Error:  No prompts_yaml provided." >&2
             exit 1
           fi
-          printf '%s\n' "$INPUT" > prompts.yaml
-          echo "Wrote prompts.yaml ($(wc -c < prompts.yaml) bytes)"
 
-      - name: Validate schema (strict)
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          import sys, yaml, io
-          y = yaml.safe_load(io.open("prompts.yaml","r",encoding="utf-8")) or {}
-          errs=[]
-          if "version" not in y: errs.append("'version' is required")
-          modes = y.get("modes")
-          if not isinstance(modes, dict):
-              errs.append("'modes' must be a mapping")
-          else:
-              for k in ("grammar","sentence","passage"):
-                  v = modes.get(k)
-                  if not isinstance(v, str) or not v.strip():
-                      errs.append(f"'modes.{k}' must be a non-empty string")
-              extras=[k for k in modes if k not in ("grammar","sentence","passage")]
-              if extras: errs.append(f"extra keys in 'modes': {extras}")
-          if errs:
-              print("\n".join(f"[schema] {e}" for e in errs))
-              sys.exit(1)
-          print("schema ok")
-          PY
-
-      - name: Ensure release & upload asset
+      - name: Validate schema
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
+          PROMPTS_YAML: ${{ env.PROMPTS_YAML }}
         run: |
-          set -euo pipefail
-          TAG="prompts-latest"
-          NOTE="Automated publish from admin panel"
-          if ! gh release view "$TAG" >/dev/null 2>&1; then
-            gh release create "$TAG" --notes "$NOTE"
-          fi
-          gh release upload "$TAG" prompts.yaml --clobber
-          echo "uploaded"
+          python - <<'PY'
+          import os, sys, yaml
+          s = os.environ.get("PROMPTS_YAML","")
+          try:
+              data = yaml.safe_load(s) or {}
+          except Exception as e:
+              print(f"[schema] YAML parse failed: {e}")
+              sys.exit(1)
+          # required top-level
+          if "version" not in data or "modes" not in data:
+              print("[schema] <root>: 'version' and 'modes' are required")
+              sys.exit(1)
+          m = data.get("modes") or {}
+          for k in ("grammar","sentence","passage"):
+              v = m.get(k,"")
+              if not isinstance(v,str) or not v.strip():
+                  print(f"[schema] modes.{k}: non-empty string required")
+                  sys.exit(1)
+          # forbid extras in modes
+          extras = [k for k in m.keys() if k not in ("grammar","sentence","passage")]
+          if extras:
+              print(f"[schema] modes: extra keys not allowed: {extras}")
+              sys.exit(1)
+          print("[ok] schema")
+          PY
