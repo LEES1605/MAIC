@@ -17,7 +17,7 @@ try:
     from .utils.sider import render_sidebar  # official
 except Exception:
     from src.ui.utils.sider import render_sidebar  # fallback
-# [01] END
+# [01] END==============================
 
 
 # [02] START — UI keys & publish state keys
@@ -34,7 +34,7 @@ S_PUB_RUN_URL     = "_PUBLISH_RUN_URL"        # str | None
 S_PUB_NEXT_POLL   = "_PUBLISH_NEXT_POLL"      # float epoch
 S_PUB_INPUT_KEY   = "_publish_input_key"      # workflow_dispatch.inputs 키
 S_PUB_EVENT       = "_PUBLISH_EVENT"          # 'workflow_dispatch' | 'repository_dispatch'
-# [02] END
+# [02] END==============================
 
 
 # [03] START — release/prompts.yaml loader (ko/en 라벨/스키마 호환)
@@ -169,7 +169,7 @@ def _load_prompts_from_release() -> tuple[Dict[str, str], Path]:
     with p.open("r", encoding="utf-8") as f:
         y = yaml.safe_load(f) or {}
     return _extract_prompts(y), p
-# [03] END
+# [03] END==============================
 
 
 # [04] START — prefill handshake (rerun 경고 없이 안전 주입)
@@ -181,7 +181,7 @@ def _apply_pending_prefill() -> None:
         ss[K_GRAMMAR]  = data.get(K_GRAMMAR,  "")
         ss[K_SENTENCE] = data.get(K_SENTENCE, "")
         ss[K_PASSAGE]  = data.get(K_PASSAGE,  "")
-# [04] END
+# [04] END==============================
 
 
 # [05] START — per-mode local IO (persona + 3모드)
@@ -227,7 +227,7 @@ def _load_local_per_mode() -> Dict[str, str]:
         K_SENTENCE: _read("sentence.txt"),
         K_PASSAGE:  _read("passage.txt"),
     }
-# [05] END
+# [05] END==============================
 
 
 # [06] START — YAML builder & validator (출판용 내부 병합)
@@ -265,7 +265,7 @@ def _validate_yaml_text(text: str) -> tuple[bool, List[str]]:
         if extras:
             msgs.append(f"'modes'에 허용되지 않은 키: {extras}")
     return (len(msgs) == 0), msgs
-# [06] END
+# [06] END==============================
 
 
 # [07] START — GitHub Actions: inputs auto-discovery, dispatch, poll
@@ -440,7 +440,7 @@ def _find_recent_run_after_dispatch(owner: str, repo: str, workflow: str, ref: s
         return None
     cands.sort(key=lambda x: x[0], reverse=True)
     return cands[0][1]
-# [07] END
+# [07] END==============================
 
 
 # [08] START — status button UI + auto-poll ticking
@@ -528,7 +528,7 @@ def _handle_publish_state(owner: str, repo: str, workflow: str, ref: str, token:
             ss[S_PUB_RUN_URL] = url
 
     _tick_auto_poll(6.0)
-# [08] END
+# [08] END==============================
 
 
 # [09] START — Page main (UI/Actions)
