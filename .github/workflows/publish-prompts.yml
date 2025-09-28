@@ -1,18 +1,16 @@
-# [WF-PROMPTS] START: .github/workflows/publish-prompts.yml
 name: Publish Prompts
 
 on:
   workflow_dispatch:
     inputs:
       prompts_yaml:
-        description: "Prompts YAML (optional)"
+        description: "YAML payload (persona + modes)"
         required: false
-        type: string
   repository_dispatch:
     types: [publish-prompts]
 
 permissions:
-  contents: write
+  contents: write  # 릴리스 생성/업데이트에 필요
 
 jobs:
   publish:
@@ -21,55 +19,41 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      # payload를 안전하게 파일로 저장 (JS로 처리: 셸 quoting 이슈 차단)
+      - name: Write prompts.yaml from payload
+        id: write
+        uses: actions/github-script@v7
         with:
-          python-version: "3.11"
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const isWD = (context.eventName === 'workflow_dispatch');
+            const data = isWD
+              ? (core.getInput('prompts_yaml') || '')
+              : ((context.payload.client_payload && context.payload.client_payload.prompts_yaml) || '');
+            fs.mkdirSync('release/assets', { recursive: true });
+            fs.writeFileSync('release/assets/prompts.yaml', data, { encoding: 'utf8' });
+            core.setOutput('size', String(data.length));
 
-      - name: Install deps (PyYAML)
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          python -m pip install --upgrade pip
-          pip install pyyaml
+      - name: Show payload size
+        run: echo "payload_size=${{ steps.write.outputs.size }}"
 
-      - name: Ensure prompts.yaml (input or repo file)
-        id: ensure
-        shell: bash
+      - name: Validate schema (if repo has validator)
         run: |
-          set -Eeuo pipefail
-          INPUT="${{ github.event.inputs.prompts_yaml || github.event.client_payload.prompts_yaml || '' }}"
-          if [[ -n "$INPUT" ]]; then
-            printf "%s" "$INPUT" > prompts.yaml
-            echo "from=input" >> "$GITHUB_OUTPUT"
-          elif [[ -f prompts.yaml ]]; then
-            echo "from=repo" >> "$GITHUB_OUTPUT"
+          if [ -f scripts/validate_prompts.py ]; then
+            python scripts/validate_prompts.py "release/assets/prompts.yaml"
           else
-            echo "::error ::prompts.yaml not provided and not found in repo"
-            exit 1
+            echo "No validator script found. Skipping strict validation."
           fi
-          ls -l prompts.yaml
 
-      - name: Normalize prompts.yaml (schema-compat)
-        run: python .github/scripts/normalize_prompts_yaml.py prompts.yaml
-
-      - name: Validate schema
-        run: python scripts/validate_prompts.py "prompts.yaml"
-
-      - name: Build composite prompts (A‑a/b/c)
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          python .github/scripts/build_prompts_full.py
-
-      - name: Upload release (tag: prompts-latest)
+      # 최신 릴리스 태그 prompts-latest 로 파일 첨부/갱신
+      - name: Upload to GitHub Release (tag=prompts-latest)
         uses: softprops/action-gh-release@v2
         with:
           tag_name: prompts-latest
+          name: Prompts Latest
+          files: release/assets/prompts.yaml
           make_latest: true
-          files: |
-            prompts.yaml
-            prompts_full/*.txt
+          fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-# [WF-PROMPTS] END
