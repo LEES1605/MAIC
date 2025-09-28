@@ -1,4 +1,4 @@
-# [ADMIN-PROMPTS-PER-MODE v2] START: src/ui/admin_prompt.py
+# [ADMIN-PROMPTS LOADER FIX v3] START: src/ui/admin_prompt.py
 from __future__ import annotations
 
 from pathlib import Path
@@ -14,7 +14,7 @@ import streamlit as st
 
 # ✅ 진짜 사이드바(SSOT)
 try:
-    from .utils.sider import render_sidebar
+    from .utils.sider import render_sidebar  # official
 except Exception:
     from src.ui.utils.sider import render_sidebar  # fallback
 
@@ -27,11 +27,11 @@ K_PASSAGE  = "passage_prompt"
 # ---- Publish State Keys ------------------------------------------------------
 S_PUB_STATE       = "_PUBLISH_STATE"          # "idle" | "running" | "done" | "error"
 S_PUB_LAST_STATE  = "_PUBLISH_LAST_STATE"
-S_PUB_DISPATCH_AT = "_PUBLISH_DISPATCH_AT"    # float epoch
-S_PUB_RUN_ID      = "_PUBLISH_RUN_ID"         # int | None
-S_PUB_RUN_URL     = "_PUBLISH_RUN_URL"        # str | None
-S_PUB_NEXT_POLL   = "_PUBLISH_NEXT_POLL"      # float epoch
-S_PUB_INPUT_KEY   = "_publish_input_key"      # 선택된 입력키(UI)
+S_PUB_DISPATCH_AT = "_PUBLISH_DISPATCH_AT"
+S_PUB_RUN_ID      = "_PUBLISH_RUN_ID"
+S_PUB_RUN_URL     = "_PUBLISH_RUN_URL"
+S_PUB_NEXT_POLL   = "_PUBLISH_NEXT_POLL"
+S_PUB_INPUT_KEY   = "_publish_input_key"      # workflow_dispatch.inputs 키
 
 # =============================================================================
 # Loader — release/prompts.yaml → 세션키(페르소나/3모드)로 주입
@@ -40,13 +40,31 @@ def _norm_token(x: Any) -> str:
     s = str(x or "").strip().lower()
     return "".join(ch for ch in s if ch.isalnum())
 
+_SYNONYMS = {
+    "grammar": {
+        "grammar","pt","문법","문법설명","문법해설","문법규칙","품사","문장성분","문법검사"
+    },
+    "sentence": {
+        "sentence","sent","문장","문장분석","문장해석","문장구조","문장구조분석","문장완성","문장성분분석"
+    },
+    "passage": {
+        "passage","para","지문","지문분석","독해","독해지문","독해분석","지문해석","장문독해"
+    },
+}
+def _canon_mode_key(label_or_key: Any) -> str:
+    t = _norm_token(label_or_key)
+    for key, names in _SYNONYMS.items():
+        if any(_norm_token(n) == t for n in names):
+            return key
+    return ""
+
 def _coerce_yaml_to_text(v: Any) -> str:
     if v is None:
         return ""
     if isinstance(v, str):
         return v
     if isinstance(v, dict):
-        for k in ("prompt", "text", "full", "system", "value", "content"):
+        for k in ("prompt","text","full","system","value","content"):
             s = v.get(k)
             if isinstance(s, str) and s.strip():
                 return s
@@ -55,24 +73,14 @@ def _coerce_yaml_to_text(v: Any) -> str:
         return "\n".join(str(x) for x in v)
     return str(v)
 
-_SYNONYMS = {
-    "grammar": {"grammar","pt","문법","문법설명","문법해설","문법규칙","품사","문장성분","문법검사"},
-    "sentence": {"sentence","sent","문장","문장분석","문장해석","문장구조","문장구조분석","문장성분분석","문장완성"},
-    "passage": {"passage","para","지문","지문분석","독해","독해지문","독해분석","지문해석","장문독해"},
-}
-def _canon_mode_key(label_or_key: Any) -> str:
-    s = str(label_or_key or "").strip()
-    if not s: return ""
-    t = _norm_token(s)
-    for key, names in _SYNONYMS.items():
-        if any(_norm_token(n) == t for n in names):
-            return key
-    return ""
-
 def _resolve_release_prompts_file() -> Path | None:
+    """
+    릴리스/에셋 위치에서 prompts.yaml을 가장 먼저 발견되는 경로로 선택.
+    우선순위: <_release_dir>/assets > <_release_dir> > ./assets > ./
+    """
     base = Path(st.session_state.get("_release_dir", "release")).resolve()
-    for p in [base/"assets/prompts.yaml", base/"prompts.yaml",
-              Path("assets/prompts.yaml").resolve(), Path("prompts.yaml").resolve()]:
+    for p in (base/"assets/prompts.yaml", base/"prompts.yaml",
+              Path("assets/prompts.yaml").resolve(), Path("prompts.yaml").resolve()):
         try:
             if p.exists() and p.is_file():
                 return p
@@ -81,37 +89,77 @@ def _resolve_release_prompts_file() -> Path | None:
     return None
 
 def _extract_prompts(doc: Dict[str, Any]) -> Dict[str, str]:
-    out = {K_PERSONA:"", K_GRAMMAR:"", K_SENTENCE:"", K_PASSAGE:""}
-    data = {(k.lower() if isinstance(k, str) else k): v for k,v in (doc or {}).items()}
+    """
+    다양한 YAML 스키마를 허용해 4개 텍스트(페르소나/문법/문장/지문)로 매핑.
+    지원:
+      • Top-level: {grammar/sentence/passage} + 한국어 라벨/약어
+      • Nested: {mn:{sentence,passage}}, {pt:{grammar|prompt|text|...}}
+      • Modes:  dict → {modes:{grammar|sentence|passage}}
+                list → {modes:[{key|label|name, prompt|text|full|...}, ...]}
+    """
+    out: Dict[str, str] = {K_PERSONA:"", K_GRAMMAR:"", K_SENTENCE:"", K_PASSAGE:""}
+    d = {(k.lower() if isinstance(k, str) else k): v for k, v in (doc or {}).items()}
 
-    # persona/common
+    # 0) Persona/Common
     for yk in ("persona","common","profile","system","페르소나","공통","프로필"):
-        if yk in data:
-            out[K_PERSONA] = _coerce_yaml_to_text(data[yk]); break
+        if yk in d:
+            out[K_PERSONA] = _coerce_yaml_to_text(d[yk])
+            break
 
-    # top-level ko/en
-    for raw_key, val in list(data.items()):
+    # 1) Top-level ko/en key들
+    for raw_key, val in list(d.items()):
         canon = _canon_mode_key(raw_key)
-        if not canon: continue
+        if not canon:
+            continue
         txt = _coerce_yaml_to_text(val)
         if canon == "grammar":  out[K_GRAMMAR]  = txt
         if canon == "sentence": out[K_SENTENCE] = txt
         if canon == "passage":  out[K_PASSAGE]  = txt
 
-    # nested mn/pt
-    mn = data.get("mn") or data.get("mina")
+    # 2) Nested mn/pt
+    mn = d.get("mn") or d.get("mina")
     if isinstance(mn, dict):
         if "sentence" in mn: out[K_SENTENCE] = _coerce_yaml_to_text(mn["sentence"])
         if "passage"  in mn: out[K_PASSAGE]  = _coerce_yaml_to_text(mn["passage"])
-
-    pt = data.get("pt") if isinstance(data.get("pt"), dict) else None
+    pt = d.get("pt") if isinstance(d.get("pt"), dict) else None
     if isinstance(pt, dict) and not out[K_GRAMMAR]:
-        for k in ("grammar","prompt","text","full","system"):
+        for k in ("grammar","prompt","text","full","system","설명"):
             if k in pt:
                 out[K_GRAMMAR] = _coerce_yaml_to_text(pt[k]); break
+
+    # 3) Modes(dict/list)
+    modes = d.get("modes") if isinstance(d.get("modes"), (dict, list)) else None
+    if modes is None and isinstance(d.get("모드"), (dict, list)):
+        modes = d.get("모드")
+
+    def _apply_canon(canon_key: str, payload: Any) -> None:
+        txt = _coerce_yaml_to_text(payload)
+        if canon_key == "grammar":  out[K_GRAMMAR]  = txt
+        if canon_key == "sentence": out[K_SENTENCE] = txt
+        if canon_key == "passage":  out[K_PASSAGE]  = txt
+
+    if isinstance(modes, dict):
+        for mk, mv in modes.items():
+            ck = _canon_mode_key(mk) or str(mk).strip().lower()
+            if ck in ("grammar","sentence","passage"):
+                _apply_canon(ck, mv)
+    elif isinstance(modes, list):
+        for entry in modes:
+            if not isinstance(entry, dict):
+                continue
+            label = entry.get("key") or entry.get("label") or entry.get("name") or entry.get("라벨")
+            payload = None
+            for tk in ("prompt","text","full","system","value","content","지시","규칙"):
+                if isinstance(entry.get(tk), str) and entry.get(tk).strip():
+                    payload = entry.get(tk); break
+            if payload is None:
+                payload = entry
+            ck = _canon_mode_key(label)
+            if ck: _apply_canon(ck, payload)
+
     return out
 
-def _load_prompts_from_release() -> tuple[Dict[str,str], Path]:
+def _load_prompts_from_release() -> tuple[Dict[str, str], Path]:
     p = _resolve_release_prompts_file()
     if not p:
         raise FileNotFoundError("prompts.yaml을 release/assets 또는 루트에서 찾지 못했습니다.")
@@ -154,7 +202,7 @@ def _save_local_per_mode(persona: str, g: str, s: str, psg: str) -> Dict[str, Pa
     return out
 
 # =============================================================================
-# YAML (출판용 내부 자동 병합) + 스키마 사전검증
+# YAML(출판용 내부 자동 병합) + 사전검증
 # =============================================================================
 def _build_yaml_for_publish() -> str:
     doc = {
@@ -177,7 +225,6 @@ def _validate_yaml_text(text: str) -> tuple[bool, List[str]]:
 
     if not isinstance(y.get("version"), (str, int, float)):
         msgs.append("'version' 필드가 필요합니다.")
-
     modes = y.get("modes")
     if not isinstance(modes, dict):
         msgs.append("'modes'는 매핑(dict)이어야 합니다.")
@@ -190,11 +237,10 @@ def _validate_yaml_text(text: str) -> tuple[bool, List[str]]:
         extras = [k for k in modes.keys() if k not in required]
         if extras:
             msgs.append(f"'modes'에 허용되지 않은 키: {extras}")
-
     return (len(msgs) == 0), msgs
 
 # =============================================================================
-# GitHub Actions — 입력 자동탐지 + 디스패치 + 정확 폴백/폴링
+# GitHub Actions — 입력 자동탐지 + 디스패치 + 폴백/폴링
 # =============================================================================
 def _gh_headers(token: Optional[str]) -> Dict[str, str]:
     h = {"Accept": "application/vnd.github+json"}
@@ -243,7 +289,6 @@ def _discover_inputs(owner: str, repo: str, workflow: str, ref: str, token: Opti
 
 def _repository_dispatch(owner: str, repo: str, token: str, yaml_text: str,
                          event_type: str = "publish-prompts") -> Dict[str, Any]:
-    """GitHub repository_dispatch 폴백."""
     url = f"https://api.github.com/repos/{owner}/{repo}/dispatches"
     headers = _gh_headers(token)
     payload = {"event_type": event_type, "client_payload": {"prompts_yaml": yaml_text, "via": "admin-ui"}}
@@ -439,7 +484,7 @@ def _handle_publish_state(owner: str, repo: str, workflow: str, ref: str, token:
 # =============================================================================
 def main() -> None:
     # 사이드바(SSOT) — app 진입·네비 일관성 보장
-    render_sidebar()  # app/sider와 일관. 
+    render_sidebar()  # app/sider와 정합. 
     _apply_pending_prefill()
 
     # 상태 점검/시크릿
@@ -491,7 +536,12 @@ def main() -> None:
         if st.button("📥 최신 프롬프트 불러오기(릴리스 우선)", use_container_width=True, key="btn_fetch_prompts"):
             try:
                 texts, src = _load_prompts_from_release()
-                st.session_state["_PREFILL_PROMPTS"] = texts  # 위젯 생성前 주입
+                st.session_state["_PREFILL_PROMPTS"] = {
+                    K_PERSONA:  texts.get(K_PERSONA, ""),
+                    K_GRAMMAR:  texts.get(K_GRAMMAR, ""),
+                    K_SENTENCE: texts.get(K_SENTENCE, ""),
+                    K_PASSAGE:  texts.get(K_PASSAGE, ""),
+                }
                 st.session_state["_last_prompts_source"] = str(src)
                 st.session_state["_flash_success"] = f"릴리스에서 프롬프트를 불러왔습니다: {src}"
                 st.rerun()
@@ -525,8 +575,7 @@ def main() -> None:
                             disabled=disabled, use_container_width=True,
                             help=None if not disabled else "GITHUB_REPO와 GITHUB_TOKEN 시크릿이 필요합니다.")
         if clicked:
-            # 1) 내부 자동 병합(YAML)
-            y = _build_yaml_for_publish()
+            y = _build_yaml_for_publish()  # ✅ 항상 내부 병합
             okv, msgs = _validate_yaml_text(y)
             if not okv:
                 st.error("스키마 검증 실패 — 필드 내용을 확인하세요.")
@@ -537,7 +586,6 @@ def main() -> None:
                     input_key = st.session_state.get(S_PUB_INPUT_KEY)
                     _ = _dispatch_workflow(owner=owner, repo=repo, workflow=workflow,
                                            ref=ref, token=token, yaml_text=y, input_key=input_key)
-                    # 상태 전이
                     st.session_state[S_PUB_STATE] = "running"
                     st.session_state[S_PUB_DISPATCH_AT] = time.time()
                     st.session_state[S_PUB_RUN_ID] = None
@@ -572,4 +620,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-# [ADMIN-PROMPTS-PER-MODE v2] END
+# [ADMIN-PROMPTS LOADER FIX v3] END
