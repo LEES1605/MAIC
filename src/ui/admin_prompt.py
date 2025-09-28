@@ -444,7 +444,7 @@ def _render_status_button() -> None:
     url = st.session_state.get(S_PUB_RUN_URL)
 
     label = "대기"; klass = ""
-    if state == "running": label, klass = "🟡 처리중…", "running"
+    if state == "running": label, klass = "🟡 처리중...", "running"
     elif state == "done":  label, klass = "🟢 처리완료", "done"
     elif state == "error": label, klass = "🔴 실패", "error"
 
@@ -552,12 +552,12 @@ def main() -> None:
 
     # 3) 편집 UI(세로 배열)
     st.markdown("### ① 페르소나(공통)")
-    st.text_area("모든 모드에 공통 적용", key=K_PERSONA, height=160, placeholder="페르소나 텍스트…")
+    st.text_area("모든 모드에 공통 적용", key=K_PERSONA, height=160, placeholder="페르소나 텍스트...")
 
     st.markdown("### ② 모드별 프롬프트(지시/규칙)")
-    st.text_area("문법(Grammar) 프롬프트",  key=K_GRAMMAR,  height=220, placeholder="문법 모드 지시/규칙…")
-    st.text_area("문장(Sentence) 프롬프트", key=K_SENTENCE, height=220, placeholder="문장 모드 지시/규칙…")
-    st.text_area("지문(Passage) 프롬프트",  key=K_PASSAGE,  height=220, placeholder="지문 모드 지시/규칙…")
+    st.text_area("문법(Grammar) 프롬프트",  key=K_GRAMMAR,  height=220, placeholder="문법 모드 지시/규칙...")
+    st.text_area("문장(Sentence) 프롬프트", key=K_SENTENCE, height=220, placeholder="문장 모드 지시/규칙...")
+    st.text_area("지문(Passage) 프롬프트",  key=K_PASSAGE,  height=220, placeholder="지문 모드 지시/규칙...")
 
     # 4) 액션
     st.markdown("### ③ 액션")
