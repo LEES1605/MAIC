@@ -452,17 +452,15 @@ def _render_stepper(*, force: bool = False) -> None:
 def _boot_auto_restore_index() -> None:
     """
     최신 릴리스 자동 복원 훅.
-    규칙:
-      - 로컬 준비 상태(.ready + chunks.jsonl)는 별도 기록(_INDEX_LOCAL_READY)
-      - 원격 최신 태그와 로컬 저장 메타가 '일치'면 복원 생략(최신으로 간주)
-      - '불일치'면 복원 강제
-      - 복원 성공 시에만 세션에 _INDEX_IS_LATEST=True 로 기록(헤더는 이 값으로만 초록 표시)
+    규칙(개선):
+      - 로컬 준비 기록(_INDEX_LOCAL_READY)은 그대로 유지
+      - 원격 최신과의 일치 판정은 **release_id 우선**, 없을 때만 tag 비교로 폴백
+      - 일치하지 않으면 복원 강제
+      - 복원 성공 시에만 _INDEX_IS_LATEST=True
 
-    UI 연동(진행표시 훅):
-      - 이 함수 내부에서는 **플레이스홀더 생성/렌더를 하지 않는다.**
-        (중복 렌더 방지: [19]에서 스켈레톤을 1회 그린 뒤, 여기서는 데이터만 갱신)
+    UI 연동(진행표시 훅): 플레이스홀더 생성은 [19]에서만 수행
     """
-    # 멱등 보호: 한 세션에서 한 번만 수행
+    # 멱등 보호
     try:
         if "st" in globals() and st is not None:
             if st.session_state.get("_BOOT_RESTORE_DONE"):
@@ -470,7 +468,6 @@ def _boot_auto_restore_index() -> None:
     except Exception:
         pass
 
-    # ---- 진행표시 안전 호출자 ---------------------------------------------------------
     def _idx(name: str, *args, **kwargs):
         try:
             mod = importlib.import_module("src.services.index_state")
@@ -480,7 +477,6 @@ def _boot_auto_restore_index() -> None:
         except Exception:
             return None
 
-    # 플레이스홀더 생성/렌더는 [19]에서 수행. 여기서는 로그만 누적.
     _idx("ensure_index_state")
     _idx("log", "부팅: 인덱스 복원 준비 중...")
 
@@ -488,21 +484,18 @@ def _boot_auto_restore_index() -> None:
     cj = p / "chunks.jsonl"
     rf = p / ".ready"
 
-    # --- 공용 판정기(역호환 허용) 로드 ---
+    # --- 공용 판정기 로드 ---
     try:
         from src.core.readiness import is_ready_text, normalize_ready_file
     except Exception:
-        # 폴백(동일 로직)
         def _norm(x: str | bytes | None) -> str:
             if x is None:
                 return ""
             if isinstance(x, bytes):
                 x = x.decode("utf-8", "ignore")
             return x.replace("\ufeff", "").strip().lower()
-
         def is_ready_text(x):  # type: ignore
             return _norm(x) in {"ready", "ok", "true", "1", "on", "yes", "y", "green"}
-
         def normalize_ready_file(_):  # type: ignore
             try:
                 (p / ".ready").write_text("ready", encoding="utf-8")
@@ -510,7 +503,7 @@ def _boot_auto_restore_index() -> None:
             except Exception:
                 return False
 
-    # --- 로컬 준비 상태 계산 & 기록 ---
+    # --- 로컬 준비 상태 ---
     _idx("step_set", 1, "run", "로컬 준비 상태 확인")
     ready_txt = ""
     try:
@@ -529,18 +522,36 @@ def _boot_auto_restore_index() -> None:
         pass
     _idx("step_set", 1, "ok" if local_ready else "wait", "로컬 준비 기록")
 
-    # --- 복원 메타 유틸(있으면 사용) ---
+    # --- 복원 메타 유틸 ---
     def _safe_load_meta(path):
         try:
             return load_restore_meta(path)  # type: ignore[name-defined]
         except Exception:
             return None
 
-    def _safe_meta_matches(meta, tag: str) -> bool:
+    def _safe_meta_tag_matches(meta, tag: str) -> bool:
         try:
             return bool(meta_matches_tag(meta, tag))  # type: ignore[name-defined]
         except Exception:
             return False
+
+    def _safe_meta_release_id(meta) -> Optional[int]:
+        try:
+            for k in ("release_id", "releaseId", "id"):
+                v = getattr(meta, k, None)
+                if v is not None:
+                    return int(v)
+        except Exception:
+            pass
+        try:
+            if isinstance(meta, dict):
+                for k in ("release_id", "releaseId", "id"):
+                    v = meta.get(k)
+                    if v is not None:
+                        return int(v)
+        except Exception:
+            pass
+        return None
 
     def _safe_save_meta(path, tag: str | None, release_id: int | None):
         try:
@@ -550,7 +561,7 @@ def _boot_auto_restore_index() -> None:
 
     stored_meta = _safe_load_meta(p)
 
-    # --- GitHub Releases 최신 메타 취득 ---
+    # --- 원격 최신 메타 ---
     _idx("step_set", 2, "run", "원격 릴리스 조회")
     repo_full = os.getenv("GITHUB_REPO", "")
     token = os.getenv("GITHUB_TOKEN", None)
@@ -599,7 +610,7 @@ def _boot_auto_restore_index() -> None:
             remote_release_id = int(raw_id)
         except (TypeError, ValueError):
             remote_release_id = None
-        _idx("log", f"원격 최신 릴리스 태그: {remote_tag or '없음'}")
+        _idx("log", f"원격 최신 릴리스: tag={remote_tag or '-'} id={remote_release_id or '-'}")
     except Exception:
         remote_tag = None
         remote_release_id = None
@@ -614,8 +625,14 @@ def _boot_auto_restore_index() -> None:
         except Exception:
             pass
 
-    # --- 일치/불일치 판정 ---
-    if local_ready and remote_tag and _safe_meta_matches(stored_meta, remote_tag):
+    # --- 일치/불일치 판정 (release_id 우선) ---
+    stored_id = _safe_meta_release_id(stored_meta)
+    match_by_id = (remote_release_id is not None) and (stored_id is not None) and (stored_id == remote_release_id)
+    match_by_tag = False
+    if not match_by_id and remote_tag:
+        match_by_tag = _safe_meta_tag_matches(stored_meta, remote_tag)
+
+    if local_ready and (match_by_id or (remote_release_id is None and match_by_tag)):
         _idx("log", "메타 일치: 복원 생략 (이미 최신)")
         _idx("step_set", 2, "ok", "메타 일치")
         try:
@@ -627,7 +644,7 @@ def _boot_auto_restore_index() -> None:
             pass
         return
 
-    # 이외: 최신 복원 강제
+    # --- 최신 복원 강제 ---
     try:
         import datetime as _dt
         this_year = _dt.datetime.utcnow().year
@@ -682,6 +699,7 @@ def _boot_auto_restore_index() -> None:
             pass
         return
 # ================================= [10] auto-restore — END ============================
+
 
 # =============================== [11] boot hooks — START ==============================
 def _boot_autoflow_hook() -> None:
