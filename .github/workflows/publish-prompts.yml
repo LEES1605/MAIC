@@ -1,64 +1,68 @@
+# [AP-V4] START: FILE .github/workflows/publish-prompts.yml — inputs→prompts.yaml 저장 + 스키마검증 + 릴리스 업로드
 name: Publish Prompts
 
 on:
   workflow_dispatch:
     inputs:
       prompts_yaml:
-        description: "Prompts YAML (version + modes only)"
+        description: "Prompts YAML (persona + modes.grammar/sentence/passage)"
         required: false
         default: ""
   repository_dispatch:
     types: [publish-prompts]
 
+permissions:
+  contents: write   # gh release upload/create 에 필요
+
 jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Create prompts.yaml from inputs/payload or fallback
-        id: mk
+      - name: Write prompts.yaml from event input/payload
         shell: bash
         run: |
           set -euo pipefail
-          PY=$(mktemp)
-          cat > "$PY" <<'PYCODE'
-          import os, sys, json, yaml, pathlib
-          ev = json.loads(os.getenv('GITHUB_EVENT', '{}'))
-          # 1) inputs.prompts_yaml (workflow_dispatch)
-          txt = (ev.get('inputs') or {}).get('prompts_yaml') or ''
-          # 2) client_payload.prompts_yaml (repository_dispatch)
-          if not txt:
-              txt = (ev.get('client_payload') or {}).get('prompts_yaml') or ''
-          # 3) fallback 파일(있으면)
-          if not txt:
-              for cand in ('release/assets/prompts.yaml','assets/prompts.yaml','prompts.yaml'):
-                  p = pathlib.Path(cand)
-                  if p.exists():
-                      txt = p.read_text(encoding='utf-8')
-                      break
-          # 안전 가드
-          y = yaml.safe_load(txt) if txt.strip() else {}
-          if not isinstance(y, dict) or 'modes' not in y:
-              raise SystemExit("invalid or empty prompts YAML (need object with 'modes')")
-          pathlib.Path("dist").mkdir(exist_ok=True)
-          pathlib.Path("dist/prompts.yaml").write_text(yaml.safe_dump(y, allow_unicode=True, sort_keys=False), encoding="utf-8")
-          print("created: dist/prompts.yaml")
-          PYCODE
-          python "$PY"
-
-      - name: Validate schema (if project validator exists)
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ -f scripts/validate_prompts.py ]; then
-            python scripts/validate_prompts.py "dist/prompts.yaml"
-          else
-            echo "no project validator; basic validation already done."
+          CONTENT=""
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            CONTENT="${{ github.event.inputs.prompts_yaml }}"
+          elif [[ "${{ github.event_name }}" == "repository_dispatch" ]]; then
+            CONTENT="${{ github.event.client_payload.prompts_yaml }}"
           fi
+          if [[ -z "${CONTENT// }" ]]; then
+            echo "[error] No prompts_yaml provided."
+            exit 1
+          fi
+          printf '%s\n' "$CONTENT" > prompts.yaml
+          echo "[ok] wrote $(wc -c < prompts.yaml) bytes to prompts.yaml"
 
-      - name: Upload artifact (optional)
-        uses: actions/upload-artifact@v4
-        with:
-          name: prompts
-          path: dist/prompts.yaml
+      - name: Validate schema (must have version + modes.{grammar,sentence,passage})
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import yaml, sys
+          y = yaml.safe_load(open("prompts.yaml","r",encoding="utf-8")) or {}
+          assert isinstance(y, dict), "[schema] <root>: must be object"
+          assert "version" in y, "[schema] <root>: 'version' is a required property"
+          modes = y.get("modes")
+          assert isinstance(modes, dict), "[schema] modes: must be object"
+          for k in ("grammar","sentence","passage"):
+              assert k in modes, f"[schema] modes: '{k}' is a required property"
+          extras = [k for k in modes.keys() if k not in ("grammar","sentence","passage")]
+          assert not extras, f"[schema] modes: Additional properties are not allowed {extras}"
+          print("[schema] OK")
+          PY
+
+      - name: Upload prompts.yaml to 'prompts-latest' release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # 이미 있으면 덮어쓰기, 없으면 새로 생성
+          gh release upload prompts-latest prompts.yaml --clobber --repo "$GITHUB_REPOSITORY" || \
+          gh release create prompts-latest prompts.yaml --title "Prompts Latest" --latest --notes "Published via admin UI" --repo "$GITHUB_REPOSITORY"
+# ============== [AP-V4] END: FILE .github/workflows/publish-prompts.yml ==============
