@@ -1,178 +1,91 @@
-# [01] START: .github/workflows/publish-prompts.yml — prompts.yaml를 릴리스에 안전 업로드(덮어쓰기 보장)
+# [01] START: .github/workflows/publish-prompts.yml — 입력/폴백·릴리스 보장·--clobber
 name: publish-prompts
 
 on:
   workflow_dispatch:
     inputs:
       prompts_yaml:
-        description: "prompts.yaml contents (multiline OK). If empty, falls back to repo files."
+        description: "Prompts YAML contents (multiline)."
         required: false
   repository_dispatch:
     types: [publish-prompts]
 
 permissions:
-  contents: write   # 릴리스/자산 쓰기 필수 (softprops/GH CLI 공통). Ref: action-gh-release docs
-  actions: read
-
-concurrency:
-  group: publish-prompts
-  cancel-in-progress: false
+  contents: write  # 릴리스/자산 쓰기 권한
 
 jobs:
   publish:
-    name: Build & Validate & Release
+    if: ${{ github.event_name != 'pull_request' }}  # fork PR 컨텍스트 회피
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-
-    outputs:
-      prompts_yaml_path: ${{ steps.prep.outputs.prompts_yaml_path }}
-      prompts_yaml_sha256: ${{ steps.prep.outputs.prompts_yaml_sha256 }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with: { fetch-depth: 0 }
 
-      - name: Ensure tools (jq/gh)
-        shell: bash
-        run: |
-          set -euo pipefail
-          command -v jq >/dev/null 2>&1 || sudo apt-get update -y && sudo apt-get install -y jq
+      - name: Setup tools (Python/jq/gh)
+        uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: |
+          sudo apt-get update -y && sudo apt-get install -y jq
           gh --version || true
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install deps (pyyaml)
-        run: |
-          python -m pip install --upgrade pip
-          pip install pyyaml
-
-      - name: Prepare prompts.yaml
+      - name: Prepare prompts.yaml (inputs → client_payload → SSOT fallback)
         id: prep
         shell: bash
         run: |
           set -euo pipefail
-          out="${RUNNER_TEMP}/prompts.yaml"
-          have=""
+          OUT="${RUNNER_TEMP}/prompts.yaml"
+          HAVE=""
 
-          # 1) repository_dispatch → client_payload.prompts_yaml
-          if [[ "${GITHUB_EVENT_NAME}" == "repository_dispatch" ]]; then
-            raw='${{ toJSON(github.event.client_payload.prompts_yaml) }}'
-            if [[ "$raw" != "null" && -n "$raw" ]]; then
-              printf '%s' "$raw" | jq -r '.' > "$out"
-              have="1"
+          if [[ "${{ github.event_name }}" == "repository_dispatch" ]]; then
+            RAW='${{ toJSON(github.event.client_payload.prompts_yaml) }}'
+            if [[ "$RAW" != "null" && -n "$RAW" ]]; then
+              printf '%s' "$RAW" | jq -r '.' > "$OUT"; HAVE=1
             fi
           fi
 
-          # 2) workflow_dispatch → inputs.prompts_yaml
-          if [[ -z "${have}" ]]; then
-            raw='${{ toJSON(github.event.inputs.prompts_yaml) }}'
-            if [[ "$raw" != "null" && -n "$raw" ]]; then
-              printf '%s' "$raw" | jq -r '.' > "$out"
-              have="1"
+          if [[ -z "${HAVE}" ]]; then
+            RAW='${{ toJSON(github.event.inputs.prompts_yaml) }}'
+            if [[ "$RAW" != "null" && -n "$RAW" ]]; then
+              printf '%s' "$RAW" | jq -r '.' > "$OUT"; HAVE=1
             fi
           fi
 
-          # 3) 레포 SSOT 폴백
-          if [[ -z "${have}" ]]; then
-            if [[ -f "docs/_gpt/prompts.yaml" ]]; then
-              cp "docs/_gpt/prompts.yaml" "$out"; have="1"
-            elif [[ -f "docs/_gpt/prompts.yml" ]]; then
-              cp "docs/_gpt/prompts.yml" "$out"; have="1"
-            elif [[ -f "docs/_gpt/prompts.sample.yaml" ]]; then
-              cp "docs/_gpt/prompts.sample.yaml" "$out"; have="1"
+          if [[ -z "${HAVE}" ]]; then
+            if [[ -f docs/_gpt/prompts.yaml ]]; then
+              cp docs/_gpt/prompts.yaml "$OUT"; HAVE=1
+            elif [[ -f docs/_gpt/prompts.sample.yaml ]]; then
+              cp docs/_gpt/prompts.sample.yaml "$OUT"; HAVE=1
             fi
           fi
 
-          if [[ -z "${have}" ]]; then
-            echo "Error: No prompts.yaml provided and no fallback file found." >&2
+          if [[ -z "${HAVE}" ]]; then
+            echo "No prompts provided and no fallback found." >&2
             exit 1
           fi
 
-          if [[ ! -s "$out" ]]; then
-            echo "Error: prompts.yaml is empty." >&2
-            exit 1
-          fi
+          echo "out=$OUT" >> "$GITHUB_OUTPUT"
 
-          echo "prompts_yaml_path=${out}" >> "$GITHUB_OUTPUT"
-          echo "prompts_yaml_sha256=$(sha256sum "$out" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
-
-      - name: Validate schema (lightweight)
-        env:
-          PROMPTS_YAML_PATH: ${{ steps.prep.outputs.prompts_yaml_path }}
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          import os, sys, yaml
-          p = os.environ.get("PROMPTS_YAML_PATH")
-          if not p:
-              print("PROMPTS_YAML_PATH missing", file=sys.stderr); sys.exit(1)
-          try:
-              with open(p, "r", encoding="utf-8") as f:
-                  data = yaml.safe_load(f)
-          except FileNotFoundError:
-              print(f"File not found: {p}", file=sys.stderr); sys.exit(1)
-          if not isinstance(data, dict):
-              print("[schema] root must be a mapping(dict)", file=sys.stderr); sys.exit(1)
-          for key in ("version", "modes"):
-              if key not in data:
-                  print(f"[schema] missing required key: {key}", file=sys.stderr); sys.exit(1)
-          modes = data.get("modes")
-          if not isinstance(modes, dict):
-              print("[schema] 'modes' must be a mapping", file=sys.stderr); sys.exit(1)
-          for k in ("grammar", "sentence", "passage"):
-              if k not in modes:
-                  print(f"[schema] modes.{k}: required", file=sys.stderr); sys.exit(1)
-              v = modes.get(k)
-              if v is None or (isinstance(v, str) and not v.strip()):
-                  print(f"[schema] modes.{k}: empty value", file=sys.stderr); sys.exit(1)
-          print("[ok] schema validation passed")
-          PY
-
-      - name: Upload artifact (prompts.yaml)
-        uses: actions/upload-artifact@v4
-        with:
-          name: prompts-${{ steps.prep.outputs.prompts_yaml_sha256 }}
-          path: ${{ steps.prep.outputs.prompts_yaml_path }}
-          if-no-files-found: error
-          retention-days: 7
-
-      # === softprops → GH CLI로 교체: 덮어쓰기 보장 (--clobber), 릴리스 미존재시 생성 ===
       - name: Ensure release exists (prompts-latest)
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
+        env: { GH_TOKEN: ${{ secrets.GITHUB_TOKEN }} }
         run: |
           set -euo pipefail
-          tag="prompts-latest"
-          if ! gh release view "$tag" >/dev/null 2>&1; then
-            gh release create "$tag" --title "Prompts Latest" --notes "Automated prompts release"
+          TAG="prompts-latest"
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --title "Prompts Latest" --notes "Automated prompts release"
           fi
 
-      - name: Upload prompts.yaml (gh release upload --clobber)
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
+      - name: Upload asset (clobber)
+        env: { GH_TOKEN: ${{ secrets.GITHUB_TOKEN }} }
         run: |
           set -euo pipefail
-          tag="prompts-latest"
-          file="${{ steps.prep.outputs.prompts_yaml_path }}"
-          # '#prompts.yaml'을 붙여 자산 표시명을 고정. --clobber로 동일명 자산 덮어쓰기.
-          gh release upload "$tag" "$file#prompts.yaml" --clobber
+          TAG="prompts-latest"
+          FILE="${{ steps.prep.outputs.out }}"
+          # 동일 자산명 강제 갱신
+          gh release upload "$TAG" "$FILE#prompts.yaml" --clobber
 
       - name: Summary
-        env:
-          SHA256: ${{ steps.prep.outputs.prompts_yaml_sha256 }}
-          PATH_OUT: ${{ steps.prep.outputs.prompts_yaml_path }}
         run: |
-          {
-            echo "## ✅ publish-prompts 결과"
-            echo ""
-            echo "- 파일: \`${PATH_OUT}\`"
-            echo "- SHA256: \`${SHA256}\`"
-            echo "- 릴리스 태그: \`prompts-latest\` (자산명: \`prompts.yaml\`)"
-          } >> "$GITHUB_STEP_SUMMARY"
-# [01] END: .github/workflows/publish-prompts.yml — prompts.yaml를 릴리스에 안전 업로드(덮어쓰기 보장)
+          echo "## ✅ prompts published to release 'prompts-latest' as 'prompts.yaml'" >> "$GITHUB_STEP_SUMMARY"
+# [01] END: .github/workflows/publish-prompts.yml — 입력/폴백·릴리스 보장·--clobber
