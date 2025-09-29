@@ -297,45 +297,48 @@ def _repository_dispatch(owner: str, repo: str, token: str, yaml_text: str,
         return {"status": r.status_code, "detail": "ok(repository_dispatch)"}
     raise RuntimeError(f"repository_dispatch 실패(status={r.status_code}): {r.text}")
 
+# [01] START: src/ui/admin_prompt.py — _dispatch_workflow (422는 즉시 예외, 재시도 금지)
 def _dispatch_workflow(owner: str, repo: str, workflow: str, ref: str,
                        token: str, yaml_text: str, input_key: Optional[str]) -> Dict[str, Any]:
     """
-    1) workflow_dispatch
-    2) 422 'does not have workflow_dispatch' → repository_dispatch 폴백
-    3) 422 'Unexpected inputs' → 입력 없이 재시도
+    디스패치 정책:
+    1) workflow_dispatch (+inputs) 시도
+    2) 422: "does not have 'workflow_dispatch'" → repository_dispatch 폴백
+    3) 422: "Unexpected inputs" → ❌ 입력키 불일치 → 즉시 예외로 올려 UI에서 error 상태로 전환
     """
     url = f"https://api.github.com/repos/{owner}/{repo}/actions/workflows/{workflow}/dispatches"
     headers = _gh_headers(token)
 
-    def _post(payload): 
-        return req.post(url, headers=headers, json=payload, timeout=15)
-
     payload: Dict[str, Any] = {"ref": ref}
     if input_key:
         payload["inputs"] = {input_key: yaml_text}
-    r = _post(payload)
 
+    r = req.post(url, headers=headers, json=payload, timeout=15)
     if 200 <= r.status_code < 300:
-        return {"status": r.status_code, "detail": "ok"}
+        return {"status": r.status_code, "detail": "ok", "dispatched_via": "workflow_dispatch"}
 
-    # 422 처리
+    # 422 상세 판단
     try:
         js = r.json() if r.content else {}
-        msg = (js.get("message") or "").lower()
+        msg = (js.get("message") or "")
+        low = msg.lower()
     except Exception:
-        js = {}
-        msg = ""
+        js, msg, low = {}, "", ""
 
-    if r.status_code == 422 and "does not have 'workflow_dispatch'" in (js.get("message") or ""):
-        return _repository_dispatch(owner, repo, token, yaml_text, event_type="publish-prompts")
+    if r.status_code == 422 and "does not have 'workflow_dispatch'" in msg:
+        # repository_dispatch로 폴백 (입력은 client_payload에 실음)
+        res = _repository_dispatch(owner, repo, token, yaml_text, event_type="publish-prompts")
+        return res
 
-    if r.status_code == 422 and "unexpected" in msg:
-        r2 = _post({"ref": ref})
-        if 200 <= r2.status_code < 300:
-            return {"status": r2.status_code, "detail": "ok (fallback: no inputs)"}
-        raise RuntimeError(f"workflow dispatch 실패(status={r2.status_code}): {r2.text}")
+    if r.status_code == 422 and "unexpected" in low:
+        raise RuntimeError(
+            f"workflow_dispatch 입력키 불일치: 현재 설정된 key='{input_key}'. "
+            f"워크플로의 inputs 스키마와 일치하도록 'GITHUB_WORKFLOW_INPUT_KEY' 시크릿을 교정하세요."
+        )
 
     raise RuntimeError(f"workflow dispatch 실패(status={r.status_code}): {js or r.text}")
+# [01] END: src/ui/admin_prompt.py — _dispatch_workflow (422는 즉시 예외, 재시도 금지)
+
 
 def _iso_to_epoch(s: str) -> float:
     try:
@@ -381,25 +384,51 @@ def _poll_run_by_id(owner: str, repo: str, run_id: int, token: Optional[str]) ->
         return "done", url
     return "error", url
 
+# [02] START: src/ui/admin_prompt.py — _find_recent_run_after_dispatch (URL 세팅 버그 수정)
 def _find_recent_run_after_dispatch(owner: str, repo: str, workflow: str, ref: str,
                                     token: Optional[str], since_ts: float) -> Optional[Dict[str, Any]]:
     runs = _list_runs(owner, repo, workflow, ref, token)
     if not runs:
         return None
+
+    ref_str = str(ref or "").strip()
+    expected_branch = ""
+    if ref_str:
+        if ref_str.startswith("refs/heads/"):
+            expected_branch = ref_str.rsplit("/", 1)[-1]
+        elif not ref_str.startswith("refs/"):
+            expected_branch = ref_str
+
+    allowed_events = {"workflow_dispatch", "repository_dispatch"}
     threshold = max(0.0, float(since_ts or 0.0) - 30.0)
     cands: List[Tuple[int, Dict[str, Any]]] = []
     for r in runs:
         try:
             created = _iso_to_epoch(str(r.get("created_at") or ""))
+            if created < threshold:
+                continue
+            event = str(r.get("event") or "").lower()
+            if event and event not in allowed_events:
+                continue
+            head_branch = str(r.get("head_branch") or "").strip()
+            # repository_dispatch의 branch 없음(head_branch="")도 허용
+            if expected_branch and head_branch and head_branch != expected_branch:
+                continue
             rid = int(r.get("id"))
-            if created >= threshold:
-                cands.append((rid, r))
+            cands.append((rid, r))
         except Exception:
             continue
     if not cands:
         return None
     cands.sort(key=lambda x: x[0], reverse=True)
-    return cands[0][1]
+    chosen = cands[0][1]
+    # 🔧 여기서 URL을 그대로 저장할 수 있도록 문자열 여부만 검사
+    url = chosen.get("html_url")
+    if isinstance(url, str) and url:  # ← () 제거
+        st.session_state[S_PUB_RUN_URL] = url
+    return chosen
+# [02] END: src/ui/admin_prompt.py — _find_recent_run_after_dispatch (URL 세팅 버그 수정)
+
 
 # ---- 상태 버튼 UI ------------------------------------------------------------
 def _inject_status_css_once() -> None:
