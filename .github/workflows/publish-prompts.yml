@@ -1,3 +1,4 @@
+# [01] START: .github/workflows/publish-prompts.yml — prompts.yaml를 릴리스에 안전 업로드(덮어쓰기 보장)
 name: publish-prompts
 
 on:
@@ -10,12 +11,12 @@ on:
     types: [publish-prompts]
 
 permissions:
-  contents: write
+  contents: write   # 릴리스/자산 쓰기 필수 (softprops/GH CLI 공통). Ref: action-gh-release docs
   actions: read
 
 concurrency:
-  group: publish-prompts-${{ github.ref }}
-  cancel-in-progress: true
+  group: publish-prompts
+  cancel-in-progress: false
 
 jobs:
   publish:
@@ -30,19 +31,19 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+        with: { fetch-depth: 0 }
 
-      - name: Ensure tools
+      - name: Ensure tools (jq/gh)
         shell: bash
         run: |
           set -euo pipefail
-          command -v jq >/dev/null || sudo apt-get update && sudo apt-get install -y jq
+          command -v jq >/dev/null 2>&1 || sudo apt-get update -y && sudo apt-get install -y jq
+          gh --version || true
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.x"
+          python-version: "3.11"
 
       - name: Install deps (pyyaml)
         run: |
@@ -54,7 +55,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           out="${RUNNER_TEMP}/prompts.yaml"
           have=""
 
@@ -76,19 +76,19 @@ jobs:
             fi
           fi
 
-          # 3) 리포 SSOT 폴백
+          # 3) 레포 SSOT 폴백
           if [[ -z "${have}" ]]; then
             if [[ -f "docs/_gpt/prompts.yaml" ]]; then
-              cp "docs/_gpt/prompts.yaml" "$out"
-              have="1"
+              cp "docs/_gpt/prompts.yaml" "$out"; have="1"
+            elif [[ -f "docs/_gpt/prompts.yml" ]]; then
+              cp "docs/_gpt/prompts.yml" "$out"; have="1"
             elif [[ -f "docs/_gpt/prompts.sample.yaml" ]]; then
-              cp "docs/_gpt/prompts.sample.yaml" "$out"
-              have="1"
+              cp "docs/_gpt/prompts.sample.yaml" "$out"; have="1"
             fi
           fi
 
           if [[ -z "${have}" ]]; then
-            echo "Error: No prompts_yaml provided and no fallback file found." >&2
+            echo "Error: No prompts.yaml provided and no fallback file found." >&2
             exit 1
           fi
 
@@ -109,32 +109,26 @@ jobs:
           import os, sys, yaml
           p = os.environ.get("PROMPTS_YAML_PATH")
           if not p:
-            print("PROMPTS_YAML_PATH not set", file=sys.stderr); sys.exit(1)
+              print("PROMPTS_YAML_PATH missing", file=sys.stderr); sys.exit(1)
           try:
-            with open(p, "r", encoding="utf-8") as f:
-              data = yaml.safe_load(f) or {}
+              with open(p, "r", encoding="utf-8") as f:
+                  data = yaml.safe_load(f)
           except FileNotFoundError:
-            print(f"File not found: {p}", file=sys.stderr); sys.exit(1)
-
+              print(f"File not found: {p}", file=sys.stderr); sys.exit(1)
           if not isinstance(data, dict):
-            print("[schema] root must be a mapping(dict)", file=sys.stderr); sys.exit(1)
-
-          # 최소 필수키
+              print("[schema] root must be a mapping(dict)", file=sys.stderr); sys.exit(1)
           for key in ("version", "modes"):
-            if key not in data:
-              print(f"[schema] missing required key: {key}", file=sys.stderr); sys.exit(1)
-
+              if key not in data:
+                  print(f"[schema] missing required key: {key}", file=sys.stderr); sys.exit(1)
           modes = data.get("modes")
           if not isinstance(modes, dict):
-            print("[schema] 'modes' must be a mapping", file=sys.stderr); sys.exit(1)
-
+              print("[schema] 'modes' must be a mapping", file=sys.stderr); sys.exit(1)
           for k in ("grammar", "sentence", "passage"):
-            if k not in modes:
-              print(f"[schema] modes.{k}: required", file=sys.stderr); sys.exit(1)
-            v = modes.get(k)
-            if v is None or (isinstance(v, str) and not v.strip()):
-              print(f"[schema] modes.{k}: empty value", file=sys.stderr); sys.exit(1)
-
+              if k not in modes:
+                  print(f"[schema] modes.{k}: required", file=sys.stderr); sys.exit(1)
+              v = modes.get(k)
+              if v is None or (isinstance(v, str) and not v.strip()):
+                  print(f"[schema] modes.{k}: empty value", file=sys.stderr); sys.exit(1)
           print("[ok] schema validation passed")
           PY
 
@@ -146,18 +140,28 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      - name: Publish release (prompts-latest)
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: "prompts-latest"
-          name: "Prompts Latest"
-          make_latest: true
-          generate_release_notes: false
-          fail_on_unmatched_files: true
-          files: |
-            ${{ steps.prep.outputs.prompts_yaml_path }}
+      # === softprops → GH CLI로 교체: 덮어쓰기 보장 (--clobber), 릴리스 미존재시 생성 ===
+      - name: Ensure release exists (prompts-latest)
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="prompts-latest"
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" --title "Prompts Latest" --notes "Automated prompts release"
+          fi
+
+      - name: Upload prompts.yaml (gh release upload --clobber)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="prompts-latest"
+          file="${{ steps.prep.outputs.prompts_yaml_path }}"
+          # '#prompts.yaml'을 붙여 자산 표시명을 고정. --clobber로 동일명 자산 덮어쓰기.
+          gh release upload "$tag" "$file#prompts.yaml" --clobber
 
       - name: Summary
         env:
@@ -171,3 +175,4 @@ jobs:
             echo "- SHA256: \`${SHA256}\`"
             echo "- 릴리스 태그: \`prompts-latest\` (자산명: \`prompts.yaml\`)"
           } >> "$GITHUB_STEP_SUMMARY"
+# [01] END: .github/workflows/publish-prompts.yml — prompts.yaml를 릴리스에 안전 업로드(덮어쓰기 보장)
