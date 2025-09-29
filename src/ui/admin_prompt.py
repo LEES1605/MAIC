@@ -1,4 +1,4 @@
-# [01] START: src/ui/admin_prompt.py — publish 오버사이즈 폴백/422 분류/상태버튼 고착 수정(전체 교체)
+# [01] START: src/ui/admin_prompt.py — publish 오버사이즈 폴백/422 분류/상태버튼 고착+자산검증(전체 교체)
 from __future__ import annotations
 
 import os
@@ -13,27 +13,27 @@ import yaml
 import requests as req
 import streamlit as st
 
-# ✅ SSOT 사이드바(정본 경로 고정: docs/_gpt/)  :contentReference[oaicite:3]{index=3}
+# ✅ SSOT 사이드바(정본 경로 고정: docs/_gpt/)
 try:
     from .utils.sider import render_sidebar  # official
 except Exception:
     from src.ui.utils.sider import render_sidebar  # fallback
 
 # ---- UI Widget Keys ----------------------------------------------------------
-K_PERSONA  = "persona_text"
-K_GRAMMAR  = "grammar_prompt"
+K_PERSONA = "persona_text"
+K_GRAMMAR = "grammar_prompt"
 K_SENTENCE = "sentence_prompt"
-K_PASSAGE  = "passage_prompt"
+K_PASSAGE = "passage_prompt"
 
 # ---- Publish State Keys ------------------------------------------------------
-S_PUB_STATE          = "_PUBLISH_STATE"          # "idle" | "running" | "done" | "error"
-S_PUB_LAST_STATE     = "_PUBLISH_LAST_STATE"
-S_PUB_DISPATCH_AT    = "_PUBLISH_DISPATCH_AT"
-S_PUB_DISPATCH_KIND  = "_PUBLISH_DISPATCH_KIND"
-S_PUB_RUN_ID         = "_PUBLISH_RUN_ID"
-S_PUB_RUN_URL        = "_PUBLISH_RUN_URL"
-S_PUB_NEXT_POLL      = "_PUBLISH_NEXT_POLL"
-S_PUB_INPUT_KEY      = "_publish_input_key"      # workflow_dispatch.inputs 키
+S_PUB_STATE = "_PUBLISH_STATE"  # "idle" | "running" | "done" | "error"
+S_PUB_LAST_STATE = "_PUBLISH_LAST_STATE"
+S_PUB_DISPATCH_AT = "_PUBLISH_DISPATCH_AT"
+S_PUB_DISPATCH_KIND = "_PUBLISH_DISPATCH_KIND"
+S_PUB_RUN_ID = "_PUBLISH_RUN_ID"
+S_PUB_RUN_URL = "_PUBLISH_RUN_URL"
+S_PUB_NEXT_POLL = "_PUBLISH_NEXT_POLL"
+S_PUB_INPUT_KEY = "_publish_input_key"  # workflow_dispatch.inputs 키
 
 # ---- dispatch payload 크기 한계(안전 마진) -----------------------------------
 # GitHub workflow_dispatch inputs는 ≈65KB 한계. 60KB에서 repository_dispatch로 우회.
@@ -57,15 +57,40 @@ def _norm_token(x: Any) -> str:
 
 _SYNONYMS = {
     "grammar": {
-        "grammar", "pt", "문법", "문법설명", "문법해설", "문법규칙", "품사", "문장성분", "문법검사"
+        "grammar",
+        "pt",
+        "문법",
+        "문법설명",
+        "문법해설",
+        "문법규칙",
+        "품사",
+        "문장성분",
+        "문법검사",
     },
     "sentence": {
-        "sentence", "sent", "문장", "문장분석", "문장해석", "문장구조", "문장구조분석", "문장완성", "문장성분분석"
+        "sentence",
+        "sent",
+        "문장",
+        "문장분석",
+        "문장해석",
+        "문장구조",
+        "문장구조분석",
+        "문장완성",
+        "문장성분분석",
     },
     "passage": {
-        "passage", "para", "지문", "지문분석", "독해", "독해지문", "독해분석", "지문해석", "장문독해"
+        "passage",
+        "para",
+        "지문",
+        "지문분석",
+        "독해",
+        "독해지문",
+        "독해분석",
+        "지문해석",
+        "장문독해",
     },
 }
+
 
 def _canon_mode_key(label_or_key: Any) -> str:
     t = _norm_token(label_or_key)
@@ -73,6 +98,7 @@ def _canon_mode_key(label_or_key: Any) -> str:
         if any(_norm_token(n) == t for n in names):
             return key
     return ""
+
 
 def _coerce_yaml_to_text(v: Any) -> str:
     if v is None:
@@ -88,6 +114,7 @@ def _coerce_yaml_to_text(v: Any) -> str:
     if isinstance(v, (list, tuple)):
         return "\n".join(str(x) for x in v)
     return str(v)
+
 
 def _resolve_release_prompts_file() -> Path | None:
     """
@@ -107,6 +134,7 @@ def _resolve_release_prompts_file() -> Path | None:
         except Exception:
             continue
     return None
+
 
 def _extract_prompts(doc: Dict[str, Any]) -> Dict[str, str]:
     """
@@ -185,6 +213,7 @@ def _extract_prompts(doc: Dict[str, Any]) -> Dict[str, str]:
 
     return out
 
+
 def _load_prompts_from_release() -> tuple[Dict[str, str], Path]:
     p = _resolve_release_prompts_file()
     if not p:
@@ -192,6 +221,7 @@ def _load_prompts_from_release() -> tuple[Dict[str, str], Path]:
     with p.open("r", encoding="utf-8") as f:
         y = yaml.safe_load(f) or {}
     return _extract_prompts(y), p
+
 
 def _apply_pending_prefill() -> None:
     ss = st.session_state
@@ -202,6 +232,7 @@ def _apply_pending_prefill() -> None:
         ss[K_SENTENCE] = data.get(K_SENTENCE, "")
         ss[K_PASSAGE] = data.get(K_PASSAGE, "")
 
+
 # =============================================================================
 # Local Save — per-mode(4개 파일: persona + 3모드) 저장
 # =============================================================================
@@ -211,6 +242,7 @@ def _effective_persist_dir() -> Path:
         return Path(effective_persist_dir()).expanduser()
     except Exception:
         return Path.home() / ".maic" / "persist"
+
 
 def _save_local_per_mode(persona: str, g: str, s: str, psg: str) -> Dict[str, Path]:
     root = _effective_persist_dir()
@@ -227,6 +259,7 @@ def _save_local_per_mode(persona: str, g: str, s: str, psg: str) -> Dict[str, Pa
     out["passage.txt"].write_text(psg or "", encoding="utf-8")
     return out
 
+
 # =============================================================================
 # YAML(출판용 내부 자동 병합) + 사전검증
 # =============================================================================
@@ -241,6 +274,7 @@ def _build_yaml_for_publish() -> str:
         },
     }
     return yaml.safe_dump(doc, allow_unicode=True, sort_keys=False)
+
 
 def _validate_yaml_text(text: str) -> tuple[bool, List[str]]:
     msgs: List[str] = []
@@ -265,6 +299,7 @@ def _validate_yaml_text(text: str) -> tuple[bool, List[str]]:
             msgs.append(f"'modes'에 허용되지 않은 키: {extras}")
     return (len(msgs) == 0), msgs
 
+
 # =============================================================================
 # GitHub Actions — 입력 자동탐지 + 디스패치 + 폴백/폴링
 # =============================================================================
@@ -273,6 +308,7 @@ def _gh_headers(token: Optional[str]) -> Dict[str, str]:
     if token:
         h["Authorization"] = f"Bearer {token}"
     return h
+
 
 def _fetch_workflow_yaml(owner: str, repo: str, workflow: str, ref: str, token: Optional[str]) -> Optional[str]:
     headers = _gh_headers(token)
@@ -306,6 +342,7 @@ def _fetch_workflow_yaml(owner: str, repo: str, workflow: str, ref: str, token: 
         pass
     return None
 
+
 def _discover_inputs(owner: str, repo: str, workflow: str, ref: str, token: Optional[str]) -> List[str]:
     yml = _fetch_workflow_yaml(owner, repo, workflow, ref, token) or ""
     try:
@@ -323,17 +360,26 @@ def _discover_inputs(owner: str, repo: str, workflow: str, ref: str, token: Opti
         return []
     return []
 
-def _repository_dispatch(owner: str, repo: str, token: str, yaml_text: str, event_type: str = "publish-prompts") -> Dict[str, Any]:
+
+def _repository_dispatch(
+    owner: str, repo: str, token: str, yaml_text: str, event_type: str = "publish-prompts"
+) -> Dict[str, Any]:
     url = f"https://api.github.com/repos/{owner}/{repo}/dispatches"
     headers = _gh_headers(token)
     payload = {"event_type": event_type, "client_payload": {"prompts_yaml": yaml_text, "via": "admin-ui"}}
     r = req.post(url, headers=headers, json=payload, timeout=15)
     if 200 <= r.status_code < 300:
-        return {"status": r.status_code, "detail": "ok(repository_dispatch)", "dispatched_via": "repository_dispatch"}
+        return {
+            "status": r.status_code,
+            "detail": "ok(repository_dispatch)",
+            "dispatched_via": "repository_dispatch",
+        }
     raise RuntimeError(f"repository_dispatch 실패(status={r.status_code}): {r.text}")
 
-def _dispatch_workflow(owner: str, repo: str, workflow: str, ref: str,
-                       token: str, yaml_text: str, input_key: Optional[str]) -> Dict[str, Any]:
+
+def _dispatch_workflow(
+    owner: str, repo: str, workflow: str, ref: str, token: str, yaml_text: str, input_key: Optional[str]
+) -> Dict[str, Any]:
     """
     디스패치 정책:
     1) 입력 크기 사전 검사(>= LIMIT) → 즉시 repository_dispatch (client_payload로 전달)
@@ -344,7 +390,7 @@ def _dispatch_workflow(owner: str, repo: str, workflow: str, ref: str,
        - "unexpected inputs" → 입력키 불일치 → 즉시 예외(관리자에게 교정 가이드)
        - 그 외 → 예외(상태 버튼 error)
     """
-    url = f"https://api.github.com/repos/{owner}/{repo}/actions/workflows/{workflow}/dispatches"  # ← 여분 '}' 제거됨
+    url = f"https://api.github.com/repos/{owner}/{repo}/actions/workflows/{workflow}/dispatches"
     headers = _gh_headers(token)
 
     # 0) 사전 크기 검사 → 큰 페이로드는 바로 repository_dispatch
@@ -403,11 +449,13 @@ def _dispatch_workflow(owner: str, repo: str, workflow: str, ref: str,
     # 3) 기타 실패
     raise RuntimeError(f"workflow dispatch 실패(status={r.status_code}): {js or r.text}")
 
+
 def _iso_to_epoch(s: str) -> float:
     try:
         return dt.datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp()
     except Exception:
         return 0.0
+
 
 def _list_runs(owner: str, repo: str, workflow: str, ref: str, token: Optional[str]) -> List[Dict[str, Any]]:
     """
@@ -453,6 +501,7 @@ def _list_runs(owner: str, repo: str, workflow: str, ref: str, token: Optional[s
             return runs
     return _fetch(params)
 
+
 def _poll_run_by_id(owner: str, repo: str, run_id: int, token: Optional[str]) -> Tuple[str, Optional[str]]:
     headers = _gh_headers(token)
     url = f"https://api.github.com/repos/{owner}/{repo}/actions/runs/{run_id}"
@@ -464,8 +513,8 @@ def _poll_run_by_id(owner: str, repo: str, run_id: int, token: Optional[str]) ->
     except Exception:
         return "running", None
 
-    status = (run.get("status") or "").lower()         # queued | in_progress | completed
-    conclusion = (run.get("conclusion") or "").lower() # success | failure | cancelled ...
+    status = (run.get("status") or "").lower()  # queued | in_progress | completed
+    conclusion = (run.get("conclusion") or "").lower()  # success | failure | cancelled ...
     url = run.get("html_url")
 
     if status != "completed":
@@ -474,8 +523,10 @@ def _poll_run_by_id(owner: str, repo: str, run_id: int, token: Optional[str]) ->
         return "done", url
     return "error", url
 
-def _find_recent_run_after_dispatch(owner: str, repo: str, workflow: str, ref: str,
-                                    token: Optional[str], since_ts: float) -> Optional[Dict[str, Any]]:
+
+def _find_recent_run_after_dispatch(
+    owner: str, repo: str, workflow: str, ref: str, token: Optional[str], since_ts: float
+) -> Optional[Dict[str, Any]]:
     runs = _list_runs(owner, repo, workflow, ref, token)
     if not runs:
         return None
@@ -517,6 +568,24 @@ def _find_recent_run_after_dispatch(owner: str, repo: str, workflow: str, ref: s
         st.session_state[S_PUB_RUN_URL] = url
     return chosen
 
+
+# ---- 릴리스 자산 검증(성공 판정 고정: 자산 존재) --------------------------------
+def _asset_exists(owner: str, repo: str, tag: str, name: str, token: Optional[str]) -> bool:
+    try:
+        url = f"https://api.github.com/repos/{owner}/{repo}/releases/tags/{tag}"
+        r = req.get(url, headers=_gh_headers(token), timeout=10)
+        if not r.ok:
+            return False
+        j = r.json()
+        assets = j.get("assets") or []
+        for a in assets:
+            if a.get("name") == name and int(a.get("size") or 0) > 0:
+                return True
+        return False
+    except Exception:
+        return False
+
+
 # ---- 상태 버튼 UI ------------------------------------------------------------
 def _inject_status_css_once() -> None:
     if st.session_state.get("_status_css_v2"):
@@ -534,6 +603,7 @@ def _inject_status_css_once() -> None:
 </style>""",
         unsafe_allow_html=True,
     )
+
 
 def _render_status_button() -> None:
     _inject_status_css_once()
@@ -557,6 +627,7 @@ def _render_status_button() -> None:
         unsafe_allow_html=True,
     )
 
+
 def _tick_auto_poll(interval: float = 6.0) -> None:
     now = time.time()
     nxt = float(st.session_state.get(S_PUB_NEXT_POLL, 0.0) or 0.0)
@@ -572,19 +643,30 @@ def _tick_auto_poll(interval: float = 6.0) -> None:
         except Exception:
             pass
 
+
 def _handle_publish_state(owner: str, repo: str, workflow: str, ref: str, token: Optional[str]) -> None:
     ss = st.session_state
     ss.setdefault(S_PUB_STATE, "idle")
     cur = ss[S_PUB_STATE]
     prev = ss.get(S_PUB_LAST_STATE)
+
+    # 상태 변화 알림 + "완료" 시 릴리스 자산 검증(없으면 즉시 error로 강등)
     if prev and prev != cur:
         if cur == "done":
-            st.toast("출판 완료!", icon="✅")
-        if cur == "error":
+            ok = _asset_exists(owner, repo, tag="prompts-latest", name="prompts.yaml", token=token)
+            if not ok:
+                ss[S_PUB_STATE] = "error"
+                st.toast(
+                    "Actions는 성공했지만 릴리스 자산을 찾지 못했습니다. Actions의 'Verify asset' 단계를 확인하세요.",
+                    icon="❌",
+                )
+            else:
+                st.toast("출판 완료!", icon="✅")
+        elif cur == "error":
             st.toast("출판 실패. Actions 로그를 확인하세요.", icon="❌")
-    ss[S_PUB_LAST_STATE] = cur
+    ss[S_PUB_LAST_STATE] = ss[S_PUB_STATE]
 
-    if cur != "running":
+    if ss[S_PUB_STATE] != "running":
         return
 
     run_id = ss.get(S_PUB_RUN_ID)
@@ -610,6 +692,7 @@ def _handle_publish_state(owner: str, repo: str, workflow: str, ref: str, token:
         if isinstance(url, str) and url:
             ss[S_PUB_RUN_URL] = url
     _tick_auto_poll(6.0)
+
 
 # =============================================================================
 # Page
@@ -778,4 +861,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-# [01] END: src/ui/admin_prompt.py — publish 오버사이즈 폴백/422 분류/상태버튼 고착 수정(전체 교체)
+# [01] END: src/ui/admin_prompt.py — publish 오버사이즈 폴백/422 분류/상태버튼 고착+자산검증(전체 교체)
