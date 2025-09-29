@@ -1,0 +1,54 @@
+# [01] START: .github/workflows/publish-index.yml — index 빌드/업로드/자산검증(신규)
+name: publish-index
+
+on:
+  workflow_dispatch:
+    inputs:
+      index_dir:
+        description: "Path to index directory (optional)"
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    if: ${{ github.event_name != 'pull_request' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build & Publish via script
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MAIC_INDEX_DIR: ${{ github.event.inputs.index_dir }}
+        run: |
+          set -euo pipefail
+          python scripts/build_and_publish.py --mode index
+
+      - name: ✅ Verify index asset exists (hard gate)
+        id: verify
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="index-latest"
+          SIZE=$(gh release view "$TAG" --json assets --jq '.assets[]? | select(.name=="index.tar.gz") | .size // 0')
+          if [[ -z "$SIZE" || "$SIZE" -le 0 ]]; then
+            echo "::error ::index.tar.gz not found or size=0 on release '$TAG'"
+            exit 1
+          fi
+          echo "size=$SIZE" >> "$GITHUB_OUTPUT"
+          echo "## ✅ index.tar.gz uploaded (size=${SIZE} bytes) to release '$TAG'" >> "$GITHUB_STEP_SUMMARY"
+# [01] END: .github/workflows/publish-index.yml — index 빌드/업로드/자산검증(신규)
