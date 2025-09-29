@@ -1,4 +1,4 @@
-# [01] START: .github/workflows/publish-prompts.yml — 입력/폴백·릴리스 보장·--clobber(전체 교체)
+# [01] START: .github/workflows/publish-prompts.yml — 입력/폴백→업로드→자산검증(전체 교체)
 name: publish-prompts
 
 on:
@@ -11,11 +11,11 @@ on:
     types: [publish-prompts]
 
 permissions:
-  contents: write  # release/asset 쓰기 권한
+  contents: write
 
 jobs:
   publish:
-    if: ${{ github.event_name != 'pull_request' }}  # fork PR 컨텍스트 회피
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
 
     steps:
@@ -29,7 +29,7 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install jq and check gh
+      - name: Install jq & gh
         shell: bash
         run: |
           set -euo pipefail
@@ -61,7 +61,7 @@ jobs:
             fi
           fi
 
-          # 3) SSOT fallback (docs/_gpt/)
+          # 3) SSOT fallback
           if [[ -z "${HAVE}" ]]; then
             if [[ -f docs/_gpt/prompts.yaml ]]; then
               cp docs/_gpt/prompts.yaml "$OUT"; HAVE=1
@@ -96,11 +96,21 @@ jobs:
           set -euo pipefail
           TAG="prompts-latest"
           FILE="${{ steps.prep.outputs.out }}"
-          # 동일 자산명 강제 갱신
           gh release upload "$TAG" "$FILE#prompts.yaml" --clobber
 
-      - name: Summary
+      - name: ✅ Verify asset exists (hard gate)
+        id: verify
         shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "## ✅ prompts published to release 'prompts-latest' as 'prompts.yaml'" >> "$GITHUB_STEP_SUMMARY"
-# [01] END: .github/workflows/publish-prompts.yml — 입력/폴백·릴리스 보장·--clobber(전체 교체)
+          set -euo pipefail
+          TAG="prompts-latest"
+          SIZE=$(gh release view "$TAG" --json assets --jq '.assets[]? | select(.name=="prompts.yaml") | .size // 0')
+          if [[ -z "$SIZE" || "$SIZE" -le 0 ]]; then
+            echo "::error ::prompts.yaml not found or size=0 on release '$TAG'"
+            exit 1
+          fi
+          echo "size=$SIZE" >> "$GITHUB_OUTPUT"
+          echo "## ✅ prompts.yaml uploaded (size=${SIZE} bytes) to release '$TAG'" >> "$GITHUB_STEP_SUMMARY"
+# [01] END: .github/workflows/publish-prompts.yml — 입력/폴백→업로드→자산검증(전체 교체)
