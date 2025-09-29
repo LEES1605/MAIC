@@ -105,15 +105,52 @@
 
 ---
 
+<!-- [02] START: CONVENTIONS §8 PR/커밋 가이드(교체) -->
 ## 8) PR/커밋 가이드(체크리스트)
-- [ ] 숫자구획 전체 교체로 패치했는가? (START/END, 번호 연속) :contentReference[oaicite:18]{index=18}  
-- [ ] ruff/mypy/pytest/게이트(CI) 그린인가? (E501/B904 등 해결)  
-- [ ] SSOT(_canon.yaml/스키마)·문서·코드가 일관적인가?  
-- [ ] 보안(시크릿/토큰/PII) 노출 위험이 없는가?  
-- [ ] CHANGELOG에 사용자 가시 변경이 반영됐는가? :contentReference[oaicite:19]{index=19}
+- [ ] **숫자구획 전체 교체**로 패치했는가? (START/END, 번호 연속) :contentReference[oaicite:9]{index=9}
+- [ ] **ruff/mypy/pytest/게이트(CI)**가 Green인가? (E501/B904 등 해결) :contentReference[oaicite:10]{index=10}
+- [ ] **SSOT**(_canon.yaml/스키마)·문서·코드가 일관적인가? :contentReference[oaicite:11]{index=11}
+- [ ] **보안**(시크릿/토큰/PII) 노출 위험이 없는가?
+- [ ] **CHANGELOG**에 사용자 가시 변경이 반영됐는가?
+- [ ] **Inventory(전수점검) 요약**을 PR 본문 또는 `docs/pr/PR-*.md`에 첨부했는가? (레포 구조/핵심 파일/도구 버전)  
+- [ ] **실제 파일 기준**으로 패치를 제시했는가? (가상의 파일명·경로·심볼 사용 금지)
+- [ ] **SSOT/MASTERPLAN/CONVENTIONS/Workspace Pointer**를 인용·동기화했는가? 
+- [ ] 변경이 **H1/S1 수용기준**에 미치는 영향(있다면)을 평가·기재했는가? :contentReference[oaicite:13]{index=13}
+<!-- [02] END: CONVENTIONS §8 PR/커밋 가이드(교체) -->
+
 
 ---
 
 ## 9) 부칙
 - 본 규약은 **SSOT**로 관리한다. 예외는 반드시 문서화·승인 후 반영.  
 - 본 문서와 충돌하는 관행/코드는 **본 문서를 우선**한다.
+<!-- [01] START: CONVENTIONS §10 운영 프로토콜 — "코드 전수 숙지 → 실제 파일 기준 패치" -->
+
+## 10) 운영 프로토콜 — “코드 전수 숙지 → 실제 파일 기준 패치”
+
+**목적**  
+- 문서·코드·릴리스의 **단일 진실 원천(SSOT)** 정합을 보장하고, 가상의 스캐폴드 제안으로 인한 혼선을 금지한다.  
+  - SSOT Root: `docs/_gpt/` (Workspace Pointer 참조). :contentReference[oaicite:1]{index=1}
+
+**핵심 원칙**  
+1. **전수 숙지(Inventory) 우선**: 패치 제안 전, 레포의 **실제 파일/경로/심볼**을 전수 점검한다(구조·언어·워크플로·도구 버전 포함).  
+2. **실파일 기준 패치**: 예시/가이드/코드는 반드시 **현재 리포에 존재하는 파일**을 기준으로 제시한다.  
+   - 가상의 파일명/경로/심볼을 사용한 패치 지시는 **금지**.  
+3. **SSOT 동기화**: 모든 패치는 `MASTERPLAN_vNext`와 본 **CONVENTIONS**를 **인용·정합**한다. (H1/S1 등 수용기준은 MASTERPLAN 기준을 따른다.) :contentReference[oaicite:2]{index=2}  
+4. **숫자구획 전체 교체**: 문서/코드/워크플로 변경안은 **[NN] START/END** 구획 단위로만 제시한다(라인 부분 수정 금지). :contentReference[oaicite:3]{index=3}  
+5. **CI 우선**: 로컬 실행 지시는 금지하고, **CI/PR 기반**으로 재현·검증한다. :contentReference[oaicite:4]{index=4}
+
+**절차(체크리스트)**  
+- (A) **Inventory 요약**을 PR 본문 또는 `docs/pr/PR-*.md`에 첨부한다(트리/도구/버전/핵심 엔트리).  
+- (B) **실존 파일 경로로 패치**를 제시한다(파일 경로·섹션·기능명 정확 표기).  
+- (C) **SSOT 동기화**: `docs/_gpt/MASTERPLAN_vNext.md`·`docs/_gpt/CONVENTIONS.md`·Workspace Pointer를 인용한다.   
+- (D) **품질 게이트**: `ruff`/`mypy`/`pytest`/보안 스캔이 Green인지 확인한다. :contentReference[oaicite:6]{index=6}  
+- (E) **릴리스 일관성**: 변경이 H1(헤더 3단계)·S1(타이핑/스트리밍) 수용기준에 영향 주는지 평가·기재한다. :contentReference[oaicite:7]{index=7}
+
+**금지/예외**  
+- **금지**: 존재하지 않는 파일/경로/심볼에 대한 패치 지시, 로컬-only 지시. :contentReference[oaicite:8]{index=8}  
+- **예외**: 긴급 Hotfix 등은 사전 고지 후 문서화·승인하고, 머지 직후 본 조항에 맞춰 회수 문서를 남긴다.
+
+**산출물 표준**  
+- PR 본문에 **Inventory 링크**, **구획 패치 블록**, **SSOT 인용**, **품질·보안 체크 결과**를 포함한다.
+<!-- [01] END: CONVENTIONS §10 운영 프로토콜 — "코드 전수 숙지 → 실제 파일 기준 패치" -->
