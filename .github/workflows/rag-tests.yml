@@ -1,4 +1,4 @@
-# [01] START: .github/workflows/rag-tests.yml — RAG 서브셋 테스트 (pytest 설치 보장)
+# [01] START: .github/workflows/rag-tests.yml — RAG 서브셋 테스트 (requirements-dev.txt 사용)
 name: rag-tests
 
 on:
@@ -25,20 +25,15 @@ jobs:
           python-version: "3.11"
           cache: "pip"
 
-      - name: Install dependencies (robust)
+      - name: Install deps (prod + dev)
         shell: bash
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
-          # 있는 파일부터 설치: dev -> prod -> editable project
-          if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-          if [ -f pyproject.toml ]; then pip install -e . || true; fi
-          # 최후방어: pytest/pytest-cov/PyYAML을 강제 설치
-          pip install "pytest>=7" "pytest-cov>=4" "pyyaml>=6"
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
 
-      - name: Run subset tests for RAG
+      - name: Run pytest (subset or full)
         run: |
           python -m pytest -q -k "rag_engine_toggle or rag_engine_bm25"
-
-# [01] END: .github/workflows/rag-tests.yml
+# [01] END: .github/workflows/rag-tests.yml — RAG 서브셋 테스트 (requirements-dev.txt 사용)
