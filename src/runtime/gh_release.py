@@ -9,8 +9,6 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 from urllib import error, request
 
-# 협의규약/보안: 토큰은 환경변수/Secrets만, 로그에 토큰/PII 금지. :contentReference[oaicite:2]{index=2}
-
 class GHError(RuntimeError):
     pass
 
@@ -27,7 +25,6 @@ class GHReleases:
             "Authorization": f"Bearer {self.token}",
         }
         if accept_upload:
-            # uploads.github.com 도 JSON Accept 허용
             h["Accept"] = "application/vnd.github+json"
         return h
 
@@ -38,13 +35,11 @@ class GHReleases:
                 body = resp.read()
                 if not body:
                     return {}
-                # JSON이 아니면 빈 dict 반환
                 try:
                     return json.loads(body.decode("utf-8"))
                 except Exception:
                     return {}
         except error.HTTPError as e:
-            # GitHub 에러 메시지 표준화
             try:
                 err_json = json.loads(e.read().decode("utf-8"))
             except Exception:
@@ -54,22 +49,16 @@ class GHReleases:
         except error.URLError as e:
             raise GHError(f"{method} {url} -> URLError: {e.reason}") from e
 
-    # --------- Releases ---------
     def _get_release_by_tag(self, tag: str) -> Optional[Dict[str, Any]]:
         url = f"https://api.github.com/repos/{self.owner}/{self.repo}/releases/tags/{tag}"
         try:
             return self._http("GET", url, headers=self._headers())
         except GHError as e:
-            # 404면 None
             if " 404:" in str(e):
                 return None
             raise
 
     def ensure_release(self, tag: str, *, title: Optional[str] = None, notes: Optional[str] = None) -> Dict[str, Any]:
-        """
-        태그로 릴리스를 조회하고, 없으면 생성해 반환한다.
-        반환 dict에는 id/upload_url/assets 등이 포함된다.
-        """
         rel = self._get_release_by_tag(tag)
         if rel:
             return rel
@@ -94,27 +83,21 @@ class GHReleases:
 
     def _delete_asset(self, asset_id: int) -> None:
         url = f"https://api.github.com/repos/{self.owner}/{self.repo}/releases/assets/{asset_id}"
-        # 일부 응답은 본문 없음 → 성공 시 예외 없음
         self._http("DELETE", url, headers=self._headers())
 
     def upload_asset(self, *, tag: str, file_path: str | Path, asset_name: Optional[str] = None, clobber: bool = True) -> Dict[str, Any]:
-        """
-        지정 릴리스(tag)에 자산을 업로드한다. 같은 이름이 있으면 clobber=True일 때 삭제 후 업로드한다.
-        """
         p = Path(file_path).expanduser().resolve()
         if not p.exists() or not p.is_file():
             raise GHError(f"asset file not found: {p}")
 
         rel = self.ensure_release(tag)
         rel_id = int(rel["id"])
-        # 같은 이름 삭제
         name = asset_name or p.name
         if clobber:
             for a in self._list_assets(rel_id):
                 if a.get("name") == name:
                     self._delete_asset(int(a["id"]))
 
-        # 업로드
         mime, _ = mimetypes.guess_type(name)
         ctype = mime or "application/octet-stream"
         upload_url = f"https://uploads.github.com/repos/{self.owner}/{self.repo}/releases/{rel_id}/assets?name={request.quote(name)}"
@@ -137,13 +120,7 @@ class GHReleases:
             msg = err_json.get("message") or str(e)
             raise GHError(f"upload asset failed: {e.code}: {msg}") from e
 
-
 def from_env() -> GHReleases:
-    """
-    환경변수에서 owner/repo/token을 추출해 GHReleases를 생성한다.
-    - MAIC_GH_OWNER/MAIC_GH_REPO 우선, 없으면 GITHUB_REPOSITORY(owner/repo) 파싱
-    - 토큰: GITHUB_TOKEN → GH_TOKEN → GITHUB_ADMIN_TOKEN
-    """
     owner = os.getenv("MAIC_GH_OWNER", "")
     repo = os.getenv("MAIC_GH_REPO", "")
     if not (owner and repo):
