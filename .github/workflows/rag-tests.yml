@@ -1,0 +1,39 @@
+# [01] START: .github/workflows/rag-tests.yml — RAG 서브셋 테스트 (requirements-dev.txt 사용)
+name: rag-tests
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "docs/_gpt/**"
+      - ".github/workflows/rag-tests.yml"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install deps (prod + dev)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Run pytest (subset or full)
+        run: |
+          python -m pytest -q -k "rag_engine_toggle or rag_engine_bm25"
+# [01] END: .github/workflows/rag-tests.yml — RAG 서브셋 테스트 (requirements-dev.txt 사용)

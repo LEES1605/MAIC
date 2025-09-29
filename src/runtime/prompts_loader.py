@@ -1,374 +1,210 @@
+# [01] START: src/runtime/prompts_loader.py — SSOT 로더(문자열/객체 동시 허용 + permissive 보강)
 from __future__ import annotations
 
-import importlib
+import base64
 import json
-import logging
 import os
-import re
 import time
 from dataclasses import dataclass
-from hashlib import sha256
 from pathlib import Path
 from typing import Any, Dict, Optional
+from urllib import request, error
 
-__all__ = ["PromptsLoader", "load_prompts"]
+# 지연 임포트: PyYAML 없을 때 테스트 수집 단계 즉사 방지
+try:
+    import yaml  # type: ignore
+except Exception:
+    yaml = None
 
+# ---- SSOT/환경 기본값 ---------------------------------------------------------
+# SSOT Root: docs/_gpt/ (Workspace Pointer/Conventions)  
+OWNER = os.getenv("MAIC_GH_OWNER", "LEES1605")
+REPO = os.getenv("MAIC_GH_REPO", "MAIC")
+REF = os.getenv("MAIC_GH_REF", "main")
+PATH_ = os.getenv("MAIC_GH_PATH", "docs/_gpt/prompts.yaml")
+TOKEN = os.getenv("GITHUB_TOKEN", "")
 
-@dataclass(frozen=True)
-class LoaderConfig:
-    owner: str
-    repo: str
-    tag: str = "prompts-latest"
-    asset_name: str = "prompts.yaml"
-    token: Optional[str] = None
-    cache_dir: Path = Path.home() / ".cache" / "maic" / "prompts"
-    schema_path: Optional[Path] = None  # default = repo_root/schemas/prompts.schema.json
-    timeout_sec: int = 15
+TIMEOUT = float(os.getenv("MAIC_PROMPTS_TIMEOUT_SEC", "5"))
+TTL_SEC = int(os.getenv("MAIC_PROMPTS_TTL_SEC", "600"))
 
+CACHE_DIR = Path(os.getenv("MAIC_PROMPTS_CACHE_DIR", ".maic_cache"))
+CACHE_DIR.mkdir(parents=True, exist_ok=True)
+CACHE_FILE = CACHE_DIR / "prompts.yaml"
+META_FILE = CACHE_DIR / "prompts.meta.json"
 
-class PromptsLoadError(RuntimeError):
-    pass
+_REQUIRED = ("grammar", "sentence", "passage")
+PASSAGE_SKELETON_TEXT = (
+    "[지문] 작성 규칙:\n"
+    "- \"요지/주제\"를 1~2문장으로 요약합니다.\n"
+    "- \"쉬운 예시/비유\"로 학생 수준에 맞춘 설명을 제공합니다.\n"
+    "- \"제목\"을 1개 제안합니다.\n"
+    "- \"오답 포인트\"가 있으면 1~2개만 짚습니다.\n"
+    "- \"근거/출처\"에 본문/사전/문법서 등 최소 1건을 남깁니다.\n"
+)
 
+_last_load_ts: Optional[float] = None
+_last_status: Dict[str, Any] = {
+    "source": "init", "reason": "not_loaded", "etag": "", "sha": "",
+    "ref": REF, "path": PATH_, "ts": 0, "schema_ok": False,
+}
 
-class PromptsLoader:
+# ---- 파싱 유틸 ----------------------------------------------------------------
+def _yaml_load(text: str) -> Dict[str, Any]:
+    """PyYAML 있으면 YAML, 없으면 JSON 파싱(모든 JSON은 YAML로도 유효)."""
+    if yaml is not None:
+        return yaml.safe_load(text)
+    try:
+        return json.loads(text)
+    except Exception as e:
+        raise RuntimeError("YAML 파서(PyYAML)가 없습니다. 의존성에 'pyyaml>=6'을 추가하세요.") from e
+
+def _is_non_empty_str(x: Any) -> bool:
+    return isinstance(x, str) and bool(x.strip())
+
+def _is_non_empty_mapping(x: Any) -> bool:
+    return isinstance(x, dict) and len(x) > 0
+
+def _ensure_required_modes(data: Dict[str, Any], *, permissive: bool = False) -> Dict[str, Any]:
     """
-    GitHub Releases에서 prompts 번들을 읽어와 캐시/검증/롤백하는 로더.
-
-    - 오프라인/테스트: local_path로 바로 로드(네트워크 불필요)
-    - 온라인: ETag/sha256 검증 + 캐시/롤백
+    필수 모드 보장 + 타입 완화:
+    - grammar/sentence/passage 는 **문자열 또는 매핑(dict)** 둘 다 허용.
+    - permissive=True (로컬/샘플 로딩 등)일 때 passage가 비어있으면 최소 스켈레톤으로 보강.
     """
+    if not isinstance(data, dict):
+        raise ValueError("root must be mapping(dict)")
+    modes = data.get("modes")
+    if not isinstance(modes, dict):
+        raise ValueError("missing 'modes' mapping")
 
-    def __init__(self, cfg: LoaderConfig) -> None:
-        self.cfg = cfg
-        self.cache_dir = cfg.cache_dir
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
-        self.meta_path = self.cache_dir / "meta.json"
-        self.yaml_path = self.cache_dir / "prompts.yaml"
-        self.sha_path = self.cache_dir / "sha256.txt"
-        self._session: Optional[Any] = None  # requests.Session, 지연 생성
+    # 필요 시 passage 보강(객체 스키마와의 일관성을 위해 template 필드로 넣음)
+    if permissive:
+        p = modes.get("passage")
+        if not (_is_non_empty_str(p) or _is_non_empty_mapping(p)):
+            modes["passage"] = {"template": PASSAGE_SKELETON_TEXT}
 
-        if cfg.schema_path is None:
-            # src/runtime/prompts_loader.py → repo_root
-            repo_root = Path(__file__).resolve().parents[2]
-            self.schema_path = repo_root / "schemas" / "prompts.schema.json"
-        else:
-            self.schema_path = cfg.schema_path
+    # 최종 검증: 각 모드는 문자열(비어있지 않음) 또는 매핑(비어있지 않음) 허용
+    for k in _REQUIRED:
+        v = modes.get(k)
+        if not (_is_non_empty_str(v) or _is_non_empty_mapping(v)):
+            raise ValueError(f"'modes.{k}' must be non-empty (string or mapping)")
+    if "version" not in data:
+        data["version"] = "1"
+    return data
 
-    # ------------------------------- public API -------------------------------
+def _gh_headers() -> Dict[str, str]:
+    h = {"Accept": "application/vnd.github+json", "User-Agent": "maic-runtime/1"}
+    if TOKEN:
+        h["Authorization"] = f"Bearer {TOKEN}"
+    return h
 
-    def load(
-        self,
-        *,
-        local_path: Optional[Path] = None,
-        force_refresh: bool = False,
-    ) -> Dict[str, Any]:
-        """
-        Releases 또는 local_path에서 prompts를 로드한다.
+@dataclass
+class FetchResult:
+    text: str
+    sha: str
+    etag: str
+    status: int
 
-        Returns parsed mapping(dict). 원격 실패 시 검증된 캐시로 폴백한다.
-        """
-        if local_path is not None:
-            data = self._read_prompts_file(local_path)
-            self._validate_schema(data)
-            return data
-
-        try:
-            return self._load_remote(force_refresh=force_refresh)
-        except Exception as exc:  # noqa: BLE001
-            cached = self._load_cache()
-            if cached is not None:
-                logging.warning("prompts: remote load failed, using cached copy: %r", exc)
-                return cached
-            raise PromptsLoadError(f"prompts load failed and no cache: {exc!r}") from exc
-
-    # ------------------------------ remote loading ----------------------------
-
-    def _ensure_session(self) -> Any:
-        """requests.Session을 지연 생성한다(원격 접근시에만 필요)."""
-        if self._session is None:
-            try:
-                requests = importlib.import_module("requests")
-            except Exception as exc:  # noqa: BLE001
-                msg = "requests is required for remote loading (pip install requests)"
-                raise PromptsLoadError(msg) from exc
-            sess = requests.Session()
-            sess.headers.update(
-                {
-                    "Accept": "application/vnd.github+json",
-                    "User-Agent": "MAIC-PromptsLoader/1.0",
-                }
-            )
-            if self.cfg.token:
-                sess.headers["Authorization"] = f"Bearer {self.cfg.token}"
-            self._session = sess
-        return self._session
-
-    def _load_remote(self, *, force_refresh: bool) -> Dict[str, Any]:
-        rel = self._get_release_by_tag(self.cfg.tag)
-        assets = rel.get("assets") or []
-        yaml_asset = self._find_asset(assets, self.cfg.asset_name)
-        sha_asset = self._find_asset(assets, "sha256.txt")
-
-        if yaml_asset is None:
-            raise PromptsLoadError(f"asset not found: {self.cfg.asset_name}")
-
-        etag_cached = self._read_meta().get("etag") if not force_refresh else None
-        etag, content = self._download_asset(yaml_asset, etag=etag_cached)
-        if content is None:
-            # 304 Not Modified: use cache
-            cached = self._load_cache()
-            if cached is None:
-                raise PromptsLoadError("ETag says not modified, but cache is missing")
-            return cached
-
-        # write temp → atomic replace
-        tmp_yaml = self.yaml_path.with_suffix(".yaml.tmp")
-        tmp_sha = self.sha_path.with_suffix(".txt.tmp")
-        tmp_yaml.write_bytes(content)
-
-        # validate checksum if present
-        if sha_asset is not None:
-            sha_txt = self._download_asset_text(sha_asset)
-            tmp_sha.write_text(sha_txt, encoding="utf-8")
-            expected = self._parse_sha256(sha_txt)
-            actual = sha256(content).hexdigest()
-            if expected and expected.lower() != actual.lower():
-                raise PromptsLoadError(
-                    f"sha256 mismatch: expected {expected}, got {actual}"
-                )
-
-        # parse + schema validation
-        asset_name = str(yaml_asset.get("name") or self.cfg.asset_name)
-        data = self._parse_bytes(content, ext_hint=Path(asset_name).suffix.lower())
-        self._validate_schema(data)
-
-        # commit
-        tmp_yaml.replace(self.yaml_path)
-        if tmp_sha.exists():
-            tmp_sha.replace(self.sha_path)
-        self._write_meta({"etag": etag, "ts": int(time.time())})
-
-        return data
-
-    def _get_release_by_tag(self, tag: str) -> Dict[str, Any]:
-        url = (
-            f"https://api.github.com/repos/{self.cfg.owner}/"
-            f"{self.cfg.repo}/releases/tags/{tag}"
-        )
-        r = self._ensure_session().get(url, timeout=self.cfg.timeout_sec)
-        if r.status_code == 404:
-            raise PromptsLoadError(f"release tag not found: {tag!r}")
-        r.raise_for_status()
-        return r.json()
-
-    def _find_asset(
-        self,
-        assets: list[dict[str, Any]],
-        name: str,
-    ) -> Optional[dict[str, Any]]:
-        for a in assets:
-            if a.get("name") == name:
-                return a
-        return None
-
-    def _download_asset(
-        self,
-        asset: dict[str, Any],
-        *,
-        etag: Optional[str],
-    ) -> tuple[Optional[str], Optional[bytes]]:
-        """
-        Return (etag, content). content=None when 304 Not Modified.
-        """
-        url = asset.get("browser_download_url")
-        if not url:
-            raise PromptsLoadError("asset has no browser_download_url")
-
-        headers = {"Accept": "application/octet-stream"}
-        if etag:
-            headers["If-None-Match"] = etag
-
-        r = self._ensure_session().get(url, headers=headers, timeout=self.cfg.timeout_sec)
-        if r.status_code == 304:
-            return (etag, None)
-        r.raise_for_status()
-        new_etag = r.headers.get("ETag", "").strip('"')
-        return (new_etag, r.content)
-
-    def _download_asset_text(self, asset: dict[str, Any]) -> str:
-        url = asset.get("browser_download_url")
-        if not url:
-            raise PromptsLoadError("sha asset has no download url")
-        r = self._ensure_session().get(
-            url, headers={"Accept": "text/plain"}, timeout=self.cfg.timeout_sec
-        )
-        r.raise_for_status()
-        return r.text
-
-    # --------------------------------- cache/local -----------------------------
-
-    def _load_cache(self) -> Optional[Dict[str, Any]]:
-        if not self.yaml_path.exists():
+def _fetch_repo_file(owner: str, repo: str, ref: str, path: str, *, etag: Optional[str], send_etag: bool) -> Optional[FetchResult]:
+    url = f"https://api.github.com/repos/{owner}/{repo}/contents/{path}?ref={ref}"
+    req = request.Request(url, headers=_gh_headers())
+    if send_etag and etag:
+        req.add_header("If-None-Match", etag)
+    try:
+        with request.urlopen(req, timeout=TIMEOUT) as resp:
+            body = resp.read().decode("utf-8")
+            j = json.loads(body)
+            text = base64.b64decode(j.get("content", "")).decode("utf-8")
+            return FetchResult(text=text, sha=j.get("sha", ""), etag=resp.headers.get("ETag", ""), status=resp.status)
+    except error.HTTPError as e:
+        if e.code == 304:
             return None
-        data = self._read_prompts_file(self.yaml_path)
-        try:
-            self._validate_schema(data)
-        except Exception as exc:  # noqa: BLE001
-            logging.warning("prompts: cached schema validation failed: %r", exc)
-            return None
-        return data
+        raise
 
-    def _read_prompts_file(self, path: Path) -> Dict[str, Any]:
-        """
-        로컬 파일을 확장자에 따라 읽는다. (.yaml/.yml 또는 .json)
-        YAML 파서는 필요할 때만 동적 임포트한다.
-        """
-        suffix = path.suffix.lower()
-        text = path.read_text(encoding="utf-8")
-        return self._parse_text(text, ext_hint=suffix)
+def debug_status() -> Dict[str, Any]:
+    return dict(_last_status)
 
-    # --------------------------------- parsing --------------------------------
-
-    def _parse_bytes(self, content: bytes, *, ext_hint: str) -> Dict[str, Any]:
-        text = content.decode("utf-8")
-        return self._parse_text(text, ext_hint=ext_hint)
-
-    def _parse_text(self, text: str, *, ext_hint: str) -> Dict[str, Any]:
-        ext = ext_hint.lower().lstrip(".")
-        if ext in {"json"}:
-            obj = json.loads(text)
-            if not isinstance(obj, dict):
-                raise PromptsLoadError("JSON prompts must be an object at root")
-            return obj
-
-        # default: YAML
-        try:
-            yaml_mod = importlib.import_module("yaml")
-        except Exception as exc:  # noqa: BLE001
-            msg = (
-                "PyYAML is required for YAML prompts "
-                "(pip install pyyaml)"
-            )
-            raise PromptsLoadError(msg) from exc
-
-        obj = yaml_mod.safe_load(text)
-        if not isinstance(obj, dict):
-            raise PromptsLoadError("YAML prompts must be a mapping at root")
-        return obj
-
-    # --------------------------------- utils ----------------------------------
-
-    def _read_meta(self) -> Dict[str, Any]:
-        if self.meta_path.exists():
-            try:
-                return json.loads(self.meta_path.read_text(encoding="utf-8"))
-            except Exception:  # noqa: BLE001
-                return {}
-        return {}
-
-    def _write_meta(self, meta: Dict[str, Any]) -> None:
-        tmp = self.meta_path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp.replace(self.meta_path)
-
-    def _validate_schema(self, data: Dict[str, Any]) -> None:
-        """
-        JSON Schema가 있으면 엄격 검증, 없으면 미니멀 검증으로 폴백.
-        - 엄격 모드 강제: MAIC_PROMPTS_REQUIRE_SCHEMA=1
-        """
-        require = os.getenv("MAIC_PROMPTS_REQUIRE_SCHEMA", "0") == "1"
-
-        # 1) jsonschema 사용 가능하면 정식 검증
-        try:
-            js = importlib.import_module("jsonschema")
-        except Exception as exc:  # noqa: BLE001
-            if require:
-                msg = (
-                    "jsonschema is required "
-                    "(set MAIC_PROMPTS_REQUIRE_SCHEMA=0 to allow fallback)"
-                )
-                # B904: except 절에서 재발생은 원인 예외 연결
-                raise PromptsLoadError(msg) from exc
-
-            # 2) 미니멀 검증(테스트/경량 환경)
-            self._minimal_validate(data)
-            logging.warning("prompts: jsonschema unavailable; minimal validation was applied")
-            return
-
-        schema_text = self.schema_path.read_text(encoding="utf-8")
-        schema = json.loads(schema_text)
-
-        validator_cls: Any = getattr(js, "Draft202012Validator", None)
-        if validator_cls is None:
-            if require:
-                # except 블록이 아니므로 from None 사용(B904 회피)
-                raise PromptsLoadError("jsonschema.Draft202012Validator not found") from None
-            self._minimal_validate(data)
-            logging.warning(
-                "prompts: jsonschema has no Draft202012Validator; "
-                "minimal validation applied"
-            )
-            return
-
-        validator = validator_cls(schema)
-        validator.validate(data)
-
-    @staticmethod
-    def _minimal_validate(data: Dict[str, Any]) -> None:
-        """스키마가 없을 때 수행하는 간단한 구조 검증."""
-        if not isinstance(data, dict):
-            raise PromptsLoadError("prompts must be a mapping at root")
-        if "modes" not in data or not isinstance(data["modes"], dict):
-            raise PromptsLoadError("prompts must contain 'modes' as a mapping")
-        # 각 모드가 dict인지 정도만 확인(필드 상세는 빌더/런타임에서 추가 검증됨)
-        for key, entry in data["modes"].items():
-            if not isinstance(entry, dict):
-                raise PromptsLoadError(f"mode '{key}' must be a mapping")
-
-    @staticmethod
-    def _parse_sha256(text: str) -> Optional[str]:
-        # accept "sha256:HEX" or plain HEX in file
-        m = re.search(r"([A-Fa-f0-9]{64})", text)
-        return m.group(1) if m else None
-
-
+# ---- 공개 API -----------------------------------------------------------------
 def load_prompts(
+    force: bool = False,
     *,
     owner: Optional[str] = None,
     repo: Optional[str] = None,
-    token: Optional[str] = None,
-    tag: str = "prompts-latest",
-    asset_name: str = "prompts.yaml",
-    cache_dir: Optional[Path] = None,
-    local_path: Optional[Path] = None,
-    force_refresh: bool = False,
+    ref: Optional[str] = None,
+    path: Optional[str] = None,
+    local_path: Optional[str | Path] = None,
 ) -> Dict[str, Any]:
     """
-    편의 함수. 환경변수로 기본값을 채워 호출할 수 있다.
-
-    Env:
-      MAIC_GH_OWNER / MAIC_GH_REPO / MAIC_GH_TOKEN
-      MAIC_PROMPTS_TAG / MAIC_PROMPTS_ASSET
-      MAIC_PROMPTS_CACHE_DIR / MAIC_PROMPTS_LOCAL_PATH
+    SSOT 프롬프트 로더.
+    우선순위: (1) local_path → (2) GitHub Contents(ETag/TTL) → (3) 캐시 → (4) 내장 샘플.
+    - 각 모드는 문자열/객체 둘 다 허용. 로컬/샘플에서는 passage 자동 보강(permissive=True).
+    반환: {'version': '1', 'modes': {...}}
     """
-    default_cache_dir = str(LoaderConfig.cache_dir)
-    env_cache_dir = os.getenv("MAIC_PROMPTS_CACHE_DIR", default_cache_dir)
+    global _last_load_ts, _last_status
+    now = time.time()
 
-    owner_str: str = owner if owner is not None else os.getenv("MAIC_GH_OWNER", "")
-    repo_str: str = repo if repo is not None else os.getenv("MAIC_GH_REPO", "")
+    eff_owner = owner or OWNER
+    eff_repo = repo or REPO
+    eff_ref = ref or REF
+    eff_path = path or PATH_
 
-    cfg = LoaderConfig(
-        owner=owner_str,
-        repo=repo_str,
-        tag=os.getenv("MAIC_PROMPTS_TAG", tag),
-        asset_name=os.getenv("MAIC_PROMPTS_ASSET", asset_name),
-        token=token or os.getenv("MAIC_GH_TOKEN") or None,
-        cache_dir=cache_dir or Path(env_cache_dir),
-    )
-    if not cfg.owner or not cfg.repo:
-        raise PromptsLoadError("missing owner/repo (set params or MAIC_GH_OWNER/MAIC_GH_REPO)")
+    # 1) 로컬 경로 우선(테스트 픽스처: docs/_gpt/prompts.sample.json)
+    if local_path is not None:
+        p = Path(local_path)
+        if not p.exists():
+            raise FileNotFoundError(f"local_path not found: {p}")
+        text = p.read_text(encoding="utf-8")
+        data = _yaml_load(text)
+        data = _ensure_required_modes(data, permissive=True)
+        _last_status.update({"source": "local", "reason": "file", "path": str(p), "ts": now, "schema_ok": True})
+        _last_load_ts = now
+        return {"version": str(data.get("version", "1")), "modes": data["modes"]}
 
-    loader = PromptsLoader(cfg)
-    env_local = os.getenv("MAIC_PROMPTS_LOCAL_PATH")
-    lp = local_path or (Path(env_local) if env_local else None)
-    return loader.load(local_path=lp, force_refresh=force_refresh)
+    # TTL 캐시
+    if (not force) and _last_load_ts and (now - _last_load_ts) < TTL_SEC and CACHE_FILE.exists():
+        data = _yaml_load(CACHE_FILE.read_text(encoding="utf-8"))
+        data = _ensure_required_modes(data)  # 엄격
+        _last_status.update({"source": "cache", "reason": "ttl_hit", "ts": now, "schema_ok": True})
+        return {"version": str(data.get("version", "1")), "modes": data["modes"]}
+
+    # 2) 원격 시도
+    etag = ""
+    if META_FILE.exists():
+        try:
+            etag = json.loads(META_FILE.read_text(encoding="utf-8")).get("etag", "")
+        except Exception:
+            etag = ""
+    try:
+        fr = _fetch_repo_file(eff_owner, eff_repo, eff_ref, eff_path, etag=etag or None, send_etag=not force)
+        if fr is not None:  # 200
+            CACHE_FILE.write_text(fr.text, encoding="utf-8")
+            META_FILE.write_text(json.dumps({"etag": fr.etag, "sha": fr.sha}), encoding="utf-8")
+            data = _yaml_load(fr.text)
+            data = _ensure_required_modes(data)  # 엄격
+            _last_status.update({"source": "repo", "reason": "200", "etag": fr.etag, "sha": fr.sha,
+                                 "ref": eff_ref, "path": eff_path, "ts": now, "schema_ok": True})
+            _last_load_ts = now
+            return {"version": str(data.get("version", "1")), "modes": data["modes"]}
+    except Exception as e:
+        _last_status.update({"source": "repo", "reason": f"error:{e.__class__.__name__}", "ref": eff_ref,
+                             "path": eff_path, "ts": now, "schema_ok": False})
+
+    # 3) 캐시 폴백
+    if CACHE_FILE.exists():
+        data = _yaml_load(CACHE_FILE.read_text(encoding="utf-8"))
+        data = _ensure_required_modes(data)  # 엄격
+        _last_status.update({"source": "cache", "reason": "fallback", "ts": now, "schema_ok": True})
+        _last_load_ts = now
+        return {"version": str(data.get("version", "1")), "modes": data["modes"]}
+
+    # 4) 내장 샘플(.yaml → .json 순서)
+    for fb in (Path("docs/_gpt/prompts.sample.yaml"), Path("docs/_gpt/prompts.sample.json")):
+        if fb.exists():
+            data = _yaml_load(fb.read_text(encoding="utf-8"))
+            data = _ensure_required_modes(data, permissive=True)
+            _last_status.update({"source": "builtin", "reason": "fallback", "path": str(fb), "ts": now, "schema_ok": True})
+            _last_load_ts = now
+            return {"version": str(data.get("version", "1")), "modes": data["modes"]}
+
+    _last_status.update({"source": "none", "reason": "no_source", "ts": now, "schema_ok": False})
+    raise RuntimeError("No prompts available (remote/cache/fallback all failed)")
+# [01] END: src/runtime/prompts_loader.py
