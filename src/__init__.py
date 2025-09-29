@@ -1,5 +1,3 @@
-# Package marker for 'src' (kept intentionally empty)
-# ============== [01] package marker — START ==============
-"""MAIC internal packages."""
-__all__ = ["core", "rag", "services", "ui", "agents", "llm", "vision"]
-# ============== [01] package marker — END ================
+# [01] START: src/__init__.py — namespace marker
+"""MAIC application source root."""
+# [01] END: src/__init__.py
