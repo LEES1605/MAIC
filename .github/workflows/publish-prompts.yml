@@ -1,4 +1,4 @@
-# [01] START: .github/workflows/publish-prompts.yml — 입력/폴백·릴리스 보장·--clobber(안전한 block-style)
+# [01] START: .github/workflows/publish-prompts.yml — 입력/폴백·릴리스 보장·--clobber(전체 교체)
 name: publish-prompts
 
 on:
@@ -61,7 +61,7 @@ jobs:
             fi
           fi
 
-          # 3) SSOT fallback
+          # 3) SSOT fallback (docs/_gpt/)
           if [[ -z "${HAVE}" ]]; then
             if [[ -f docs/_gpt/prompts.yaml ]]; then
               cp docs/_gpt/prompts.yaml "$OUT"; HAVE=1
@@ -103,4 +103,4 @@ jobs:
         shell: bash
         run: |
           echo "## ✅ prompts published to release 'prompts-latest' as 'prompts.yaml'" >> "$GITHUB_STEP_SUMMARY"
-# [01] END: .github/workflows/publish-prompts.yml — 입력/폴백·릴리스 보장·--clobber(안전한 block-style)
+# [01] END: .github/workflows/publish-prompts.yml — 입력/폴백·릴리스 보장·--clobber(전체 교체)
