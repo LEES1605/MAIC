@@ -1,3 +1,3 @@
-# [01] START: src/__init__.py — namespace marker
-"""MAIC application source root."""
-# [01] END: src/__init__.py
+# [01] START: src/runtime/__init__.py — runtime package marker
+"""Runtime utilities (prompts loader, orchestration, etc.)."""
+# [01] END: src/runtime/__init__.py
