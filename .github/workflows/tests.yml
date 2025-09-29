@@ -1,0 +1,33 @@
+# [02] START: .github/workflows/tests.yml — PyYAML 설치 보장 + 표준 설치 루틴
+name: python-tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # 패키징 방식별 설치 (존재 검사)
+          if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          if [ -f pyproject.toml ]; then pip install -e .; fi
+          # 최후방어: PyYAML을 강제 설치(상단 파일에 이미 있다면 동버전/상위로 만족)
+          pip install "pyyaml>=6.0.1,<7"
+
+      - name: Run tests (selected)
+        run: |
+          pytest -q -k "rag_engine_toggle or rag_engine_bm25"
+# [02] END: .github/workflows/tests.yml
