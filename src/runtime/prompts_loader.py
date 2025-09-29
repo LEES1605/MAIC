@@ -1,4 +1,4 @@
-# [01] START: src/runtime/prompts_loader.py — SSOT(prompts.yaml) 로더/강제 리로드/캐시/가시성
+# [03] START: src/runtime/prompts_loader.py — SSOT(prompts.yaml) 로더 (지연 임포트/캐시/강제리로드)
 from __future__ import annotations
 
 import base64
@@ -10,21 +10,21 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 from urllib import request, error
 
+# yaml은 지연 임포트(테스트 수집 단계 즉사 방지)
 try:
-    import yaml  # PyYAML
-except Exception as e:  # ruff: B904 - re-raise with context
-    raise RuntimeError("PyYAML가 필요합니다. 의존성에 pyyaml을 추가하세요.") from e
+    import yaml  # type: ignore
+except Exception:
+    yaml = None  # 런타임에서 필요 시 친절한 에러로 전환
 
-# --- 환경설정(SSOT 기준) -------------------------------------------------------
-# SSOT는 docs/_gpt/ 아래에 존재(Workspace Pointer·Conventions). 
+# --- SSOT/환경설정 -------------------------------------------------------------
 OWNER = os.getenv("MAIC_GH_OWNER", "LEES1605")
 REPO = os.getenv("MAIC_GH_REPO", "MAIC")
-REF = os.getenv("MAIC_GH_REF", "main")  # 브랜치 또는 태그
-PATH_ = os.getenv("MAIC_GH_PATH", "docs/_gpt/prompts.yaml")  # SSOT 경로
-TOKEN = os.getenv("GITHUB_TOKEN", "")  # 읽기전용이면 충분(레이트리밋 완화)
+REF = os.getenv("MAIC_GH_REF", "main")
+PATH_ = os.getenv("MAIC_GH_PATH", "docs/_gpt/prompts.yaml")  # SSOT 파일 경로(고정) :contentReference[oaicite:4]{index=4}
+TOKEN = os.getenv("GITHUB_TOKEN", "")
 
 TIMEOUT = float(os.getenv("MAIC_PROMPTS_TIMEOUT_SEC", "5"))
-TTL_SEC = int(os.getenv("MAIC_PROMPTS_TTL_SEC", "600"))  # 캐시 TTL 10분
+TTL_SEC = int(os.getenv("MAIC_PROMPTS_TTL_SEC", "600"))
 
 CACHE_DIR = Path(os.getenv("MAIC_PROMPTS_CACHE_DIR", ".maic_cache"))
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -34,14 +34,8 @@ META_FILE = CACHE_DIR / "prompts.meta.json"
 _REQUIRED = ("grammar", "sentence", "passage")
 _last_load_ts: Optional[float] = None
 _last_status: Dict[str, Any] = {
-    "source": "init",
-    "reason": "not_loaded",
-    "etag": "",
-    "sha": "",
-    "ref": REF,
-    "path": PATH_,
-    "ts": 0,
-    "schema_ok": False,
+    "source": "init", "reason": "not_loaded", "etag": "", "sha": "",
+    "ref": REF, "path": PATH_, "ts": 0, "schema_ok": False,
 }
 
 # --- 유틸 ----------------------------------------------------------------------
@@ -55,6 +49,19 @@ def _validate_schema(data: Dict[str, Any]) -> None:
         v = modes.get(k)
         if not isinstance(v, str) or not v.strip():
             raise ValueError(f"'modes.{k}' required and non-empty")
+
+def _yaml_load(text: str) -> Dict[str, Any]:
+    """
+    1) PyYAML이 있으면 yaml.safe_load
+    2) 없으면 JSON 시도(모든 JSON은 YAML 유효 → 최소 폴백)
+    3) 여전히 안 되면 친절한 오류로 종료(설치 가이드)
+    """
+    if yaml is not None:
+        return yaml.safe_load(text)
+    try:
+        return json.loads(text)
+    except Exception as e:
+        raise RuntimeError("YAML 파서(PyYAML)가 없습니다. CI/의존성에 'pyyaml>=6'을 추가하세요.") from e
 
 def _gh_headers() -> Dict[str, str]:
     h = {"Accept": "application/vnd.github+json", "User-Agent": "maic-runtime/1"}
@@ -70,10 +77,6 @@ class FetchResult:
     status: int
 
 def _fetch_repo_file(etag: Optional[str], send_etag: bool) -> Optional[FetchResult]:
-    """
-    GitHub Contents API로 SSOT 파일을 조회.
-    force=True일 때는 send_etag=False로 내려 304를 회피(항상 200 유도).
-    """
     url = f"https://api.github.com/repos/{OWNER}/{REPO}/contents/{PATH_}?ref={REF}"
     req = request.Request(url, headers=_gh_headers())
     if send_etag and etag:
@@ -84,39 +87,32 @@ def _fetch_repo_file(etag: Optional[str], send_etag: bool) -> Optional[FetchResu
             j = json.loads(body)
             text = base64.b64decode(j.get("content", "")).decode("utf-8")
             return FetchResult(
-                text=text,
-                sha=j.get("sha", ""),
-                etag=resp.headers.get("ETag", ""),
-                status=resp.status,
+                text=text, sha=j.get("sha", ""), etag=resp.headers.get("ETag", ""), status=resp.status
             )
     except error.HTTPError as e:
-        if e.code == 304:  # Not Modified
+        if e.code == 304:
             return None
         raise
 
 # --- 공개 API -----------------------------------------------------------------
 def debug_status() -> Dict[str, Any]:
-    """마지막 로드의 출처/사유/sha/etag 등을 반환(관리자 패널에서 노출)."""
     return dict(_last_status)
 
 def load_prompts(force: bool = False) -> Dict[str, Any]:
     """
-    SSOT(prompts.yaml)를 로드한다.
-    1) 원격(GitHub Contents API; ETag) → 2) 캐시 → 3) 내장 샘플
-    - force=True일 때는 ETag를 보내지 않아 200 강제(즉시 최신 반영).
-    - 반환값은 {'version': '...', 'modes': {...}} 딕셔너리.
+    SSOT(prompts.yaml)를 로드:
+    1) GitHub(ETag/If-None-Match; force=True면 미전송) → 2) 캐시 → 3) 내장 샘플
+    반환: {'version': '...', 'modes': {...}}
     """
     global _last_load_ts, _last_status
     now = time.time()
 
-    # 1) TTL 범위 내면 캐시 사용
     if (not force) and _last_load_ts and (now - _last_load_ts) < TTL_SEC and CACHE_FILE.exists():
-        data = yaml.safe_load(CACHE_FILE.read_text(encoding="utf-8"))
+        data = _yaml_load(CACHE_FILE.read_text(encoding="utf-8"))
         _validate_schema(data)
         _last_status.update({"source": "cache", "reason": "ttl_hit", "ts": now, "schema_ok": True})
         return {"version": str(data.get("version", "1")), "modes": data["modes"]}
 
-    # 2) 원격 조회 시도
     etag = ""
     if META_FILE.exists():
         try:
@@ -126,32 +122,28 @@ def load_prompts(force: bool = False) -> Dict[str, Any]:
 
     try:
         fr = _fetch_repo_file(etag=etag or None, send_etag=not force)
-        if fr is not None:  # 200
+        if fr is not None:
             CACHE_FILE.write_text(fr.text, encoding="utf-8")
             META_FILE.write_text(json.dumps({"etag": fr.etag, "sha": fr.sha}), encoding="utf-8")
-            data = yaml.safe_load(fr.text)
+            data = _yaml_load(fr.text)
             _validate_schema(data)
-            _last_status.update(
-                {"source": "repo", "reason": "200", "etag": fr.etag, "sha": fr.sha, "ts": now, "schema_ok": True}
-            )
+            _last_status.update({"source": "repo", "reason": "200", "etag": fr.etag, "sha": fr.sha,
+                                 "ts": now, "schema_ok": True})
             _last_load_ts = now
             return {"version": str(data.get("version", "1")), "modes": data["modes"]}
-        # 304 → 캐시 폴백
     except Exception as e:
         _last_status.update({"source": "repo", "reason": f"error:{e.__class__.__name__}", "ts": now, "schema_ok": False})
 
-    # 3) 캐시 폴백
     if CACHE_FILE.exists():
-        data = yaml.safe_load(CACHE_FILE.read_text(encoding="utf-8"))
+        data = _yaml_load(CACHE_FILE.read_text(encoding="utf-8"))
         _validate_schema(data)
         _last_status.update({"source": "cache", "reason": "fallback", "ts": now, "schema_ok": True})
         _last_load_ts = now
         return {"version": str(data.get("version", "1")), "modes": data["modes"]}
 
-    # 4) 내장 샘플 폴백
     fb = Path("docs/_gpt/prompts.sample.yaml")
     if fb.exists():
-        data = yaml.safe_load(fb.read_text(encoding="utf-8"))
+        data = _yaml_load(fb.read_text(encoding="utf-8"))
         _validate_schema(data)
         _last_status.update({"source": "builtin", "reason": "fallback", "ts": now, "schema_ok": True})
         _last_load_ts = now
@@ -159,4 +151,4 @@ def load_prompts(force: bool = False) -> Dict[str, Any]:
 
     _last_status.update({"source": "none", "reason": "no_source", "ts": now, "schema_ok": False})
     raise RuntimeError("No prompts available (remote/cache/fallback all failed)")
-# [01] END: src/runtime/prompts_loader.py
+# [03] END: src/runtime/prompts_loader.py
