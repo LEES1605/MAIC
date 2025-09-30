@@ -109,6 +109,18 @@ def main():
     
     print("\n작업 종료 완료!")
     print("모든 변경사항이 원격 저장소에 업로드되었습니다.")
+    
+    # Cursor 설정 백업 옵션
+    backup_choice = input("\nCursor 설정을 백업하시겠습니까? (y/n): ").strip().lower()
+    if backup_choice == 'y':
+        try:
+            from sync_cursor_settings import backup_cursor_settings
+            if backup_cursor_settings():
+                print("Cursor 설정 백업 완료! Git에 커밋하세요.")
+        except ImportError:
+            print("Cursor 설정 동기화 스크립트를 찾을 수 없습니다.")
+        except Exception as e:
+            print(f"Cursor 설정 백업 실패: {e}")
 
 if __name__ == "__main__":
     main()
