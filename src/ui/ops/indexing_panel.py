@@ -10,7 +10,7 @@ import sys
 try:
     import streamlit as st
 except Exception:  # pragma: no cover
-    st = None  # type: ignore[assignment]
+    st = None
 
 from src.services.index_state import render_index_steps
 from src.services.index_actions import (
@@ -31,21 +31,21 @@ def _resolve_app_attr(name: str):
 # prepared용 동적 API 로더
 def _load_prepared_lister():
     try:
-        from src.services.index_actions import _load_prepared_lister as _lp  # type: ignore[attr-defined]
+        from src.services.index_actions import _load_prepared_lister as _lp
         return _lp()
     except Exception:
         return None, []
 
 def _load_prepared_api():
     try:
-        from src.services.index_actions import _load_prepared_api as _la  # type: ignore[attr-defined]
+        from src.services.index_actions import _load_prepared_api as _la
         return _la()
     except Exception:
         return None, None, []
 # ================================ [02] module imports — END ===========================
 
 # 에러 로깅 함수
-def _log_error(error_type: str, message: str, traceback_str: str = None):
+def _log_error(error_type: str, message: str, traceback_str: str | None = None):
     """에러를 세션 상태에 로깅"""
     try:
         if "st" in globals() and st is not None:
@@ -187,42 +187,42 @@ def render_orchestrator_header() -> None:
                     # 강제 복원 플래그 설정
                     st.session_state["_FORCE_RESTORE"] = True
                 
-                # 복원 전 상태 기록
-                pre_restore_state = {
-                    "chunks_exists": cj.exists(),
-                    "chunks_size": cj.stat().st_size if cj.exists() else 0,
-                    "ready_exists": rf.exists(),
-                    "ready_content": rf.read_text(encoding="utf-8") if rf.exists() else "",
-                    "persist_files": [str(f) for f in persist.iterdir()] if persist.exists() else []
-                }
-                
-                fn = _resolve_app_attr("_boot_auto_restore_index")
-                if callable(fn):
-                    try:
-                        fn()
-                    except Exception as restore_error:
-                        st.error(f"복원 중 오류 발생: {restore_error}")
-                        import traceback
-                        st.code(traceback.format_exc())
-                        raise
-                
-                # 복원 후 상태 기록
-                post_restore_state = {
-                    "chunks_exists": cj.exists(),
-                    "chunks_size": cj.stat().st_size if cj.exists() else 0,
-                    "ready_exists": rf.exists(),
-                    "ready_content": rf.read_text(encoding="utf-8") if rf.exists() else "",
-                    "persist_files": [str(f) for f in persist.iterdir()] if persist.exists() else []
-                }
-                
-                # 복원 결과 저장
-                st.session_state["_RESTORE_DEBUG"] = {
-                    "pre_restore": pre_restore_state,
-                    "post_restore": post_restore_state,
-                    "timestamp": int(time.time())
-                }
-                
-                st.success("Release 복원을 시도했습니다. 상태를 확인하세요.")
+                    # 복원 전 상태 기록
+                    pre_restore_state = {
+                        "chunks_exists": cj.exists(),
+                        "chunks_size": cj.stat().st_size if cj.exists() else 0,
+                        "ready_exists": rf.exists(),
+                        "ready_content": rf.read_text(encoding="utf-8") if rf.exists() else "",
+                        "persist_files": [str(f) for f in persist.iterdir()] if persist.exists() else []
+                    }
+                    
+                    fn = _resolve_app_attr("_boot_auto_restore_index")
+                    if callable(fn):
+                        try:
+                            fn()
+                        except Exception as restore_error:
+                            st.error(f"복원 중 오류 발생: {restore_error}")
+                            import traceback
+                            st.code(traceback.format_exc())
+                            raise
+                    
+                    # 복원 후 상태 기록
+                    post_restore_state = {
+                        "chunks_exists": cj.exists(),
+                        "chunks_size": cj.stat().st_size if cj.exists() else 0,
+                        "ready_exists": rf.exists(),
+                        "ready_content": rf.read_text(encoding="utf-8") if rf.exists() else "",
+                        "persist_files": [str(f) for f in persist.iterdir()] if persist.exists() else []
+                    }
+                    
+                    # 복원 결과 저장
+                    st.session_state["_RESTORE_DEBUG"] = {
+                        "pre_restore": pre_restore_state,
+                        "post_restore": post_restore_state,
+                        "timestamp": int(time.time())
+                    }
+                    
+                    st.success("Release 복원을 시도했습니다. 상태를 확인하세요.")
                 except Exception as e:
                     st.error(f"복원 실행 실패: {e}")
                     st.session_state["_FORCE_RESTORE"] = False  # 플래그 리셋
@@ -238,6 +238,7 @@ def render_orchestrator_header() -> None:
                     from src.runtime.local_restore import find_local_backups, restore_from_local_backup
                     
                     # 로컬 백업 찾기
+                    from pathlib import Path
                     backup_base = Path.home() / ".maic"
                     backups = find_local_backups(backup_base)
                     
@@ -316,66 +317,66 @@ def render_orchestrator_header() -> None:
             if st.button("✅ 검증", use_container_width=True):
                 try:
                     # 실시간으로 파일 상태 재확인 (세션 상태와 무관하게)
-                cj_exists = cj.exists()
-                cj_size = cj.stat().st_size if cj_exists else 0
-                cj_valid = cj_exists and cj_size > 0
-                
-                rf_exists = rf.exists()
-                try:
-                    current_ready_txt = rf.read_text(encoding="utf-8") if rf_exists else ""
-                except Exception as e:
-                    current_ready_txt = f"<읽기오류: {e}>"
-                
-                ready_valid = is_ready_text(current_ready_txt)
-                current_local_ready = cj_valid and ready_valid
-                
-                # 상세 디버그 정보
-                debug_info = {
-                    "chunks.jsonl": {
-                        "exists": cj_exists,
-                        "size": cj_size,
-                        "valid": cj_valid,
-                        "path": str(cj)
-                    },
-                    ".ready": {
-                        "exists": rf_exists,
-                        "content": repr(current_ready_txt),
-                        "normalized": repr(norm_ready_text(current_ready_txt)),
-                        "valid": ready_valid,
-                        "path": str(rf)
-                    },
-                    "validation": {
-                        "chunks_ok": cj_valid,
-                        "ready_ok": ready_valid,
-                        "overall": current_local_ready
+                    cj_exists = cj.exists()
+                    cj_size = cj.stat().st_size if cj_exists else 0
+                    cj_valid = cj_exists and cj_size > 0
+                    
+                    rf_exists = rf.exists()
+                    try:
+                        current_ready_txt = rf.read_text(encoding="utf-8") if rf_exists else ""
+                    except Exception as e:
+                        current_ready_txt = f"<읽기오류: {e}>"
+                    
+                    ready_valid = is_ready_text(current_ready_txt)
+                    current_local_ready = cj_valid and ready_valid
+                    
+                    # 상세 디버그 정보
+                    debug_info = {
+                        "chunks.jsonl": {
+                            "exists": cj_exists,
+                            "size": cj_size,
+                            "valid": cj_valid,
+                            "path": str(cj)
+                        },
+                        ".ready": {
+                            "exists": rf_exists,
+                            "content": repr(current_ready_txt),
+                            "normalized": repr(norm_ready_text(current_ready_txt)),
+                            "valid": ready_valid,
+                            "path": str(rf)
+                        },
+                        "validation": {
+                            "chunks_ok": cj_valid,
+                            "ready_ok": ready_valid,
+                            "overall": current_local_ready
+                        }
                     }
-                }
-                
-                ok = current_local_ready
-                rec = {
-                    "result": "성공" if ok else "실패",
-                    "chunk": str(cj),
-                    "ready": current_ready_txt.strip() or "(없음)",
-                    "persist": str(persist),
-                    "latest_tag": latest_tag,
-                    "is_latest": is_latest,
-                    "ts": int(time.time()),
-                    "debug": debug_info
-                }
-                st.session_state["_LAST_RESTORE_CHECK"] = rec
+                    
+                    ok = current_local_ready
+                    rec = {
+                        "result": "성공" if ok else "실패",
+                        "chunk": str(cj),
+                        "ready": current_ready_txt.strip() or "(없음)",
+                        "persist": str(persist),
+                        "latest_tag": latest_tag,
+                        "is_latest": is_latest,
+                        "ts": int(time.time()),
+                        "debug": debug_info
+                    }
+                    st.session_state["_LAST_RESTORE_CHECK"] = rec
 
-                if ok:
-                    st.success("검증 성공: chunks.jsonl 존재 & .ready 유효")
-                else:
-                    st.error("검증 실패: 산출물/ready 상태가 불일치")
-                    with st.expander("🔍 상세 디버그 정보", expanded=True):
-                        st.json(debug_info)
-            except Exception as e:
-                st.error(f"검증 실행 실패: {e}")
-                import traceback
-                traceback_str = traceback.format_exc()
-                st.code(traceback_str)
-                _log_error("검증 실패", str(e), traceback_str)
+                    if ok:
+                        st.success("검증 성공: chunks.jsonl 존재 & .ready 유효")
+                    else:
+                        st.error("검증 실패: 산출물/ready 상태가 불일치")
+                        with st.expander("🔍 상세 디버그 정보", expanded=True):
+                            st.json(debug_info)
+                except Exception as e:
+                    st.error(f"검증 실행 실패: {e}")
+                    import traceback
+                    traceback_str = traceback.format_exc()
+                    st.code(traceback_str)
+                    _log_error("검증 실패", str(e), traceback_str)
 
         with st.expander("최근 검증/복원 기록", expanded=False):
             rec = st.session_state.get("_LAST_RESTORE_CHECK")
