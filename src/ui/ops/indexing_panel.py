@@ -255,30 +255,10 @@ def render_prepared_scan_panel() -> None:
     }
 # ================================ [04] prepared scan — END ============================
 
-# =============================== [05] indexing panel — START ==========================
-def _consume_admin_index_request() -> None:
-    """세션의 _IDX_REQ를 소비하여 인덱싱 잡을 실행한다."""
-    if st is None:
-        return
-    try:
-        req = st.session_state.pop("_IDX_REQ", None)
-    except Exception:
-        req = None
-    if req:
-        try:
-            run_admin_index_job(req)
-        except Exception as e:
-            from src.services.index_state import log as _log
-            _log(f"인덱싱 소비 실패: {e}", "err")
-
-
 def render_index_panel() -> None:
     """관리자 인덱싱 패널 본문."""
     if st is None:
         return
-
-    # 1) 렌더 초입: 요청 소비
-    _consume_admin_index_request()
 
     st.markdown("### 🔧 관리자 인덱싱 패널 (prepared 전용)")
 
@@ -308,16 +288,11 @@ def render_index_panel() -> None:
     # 4) 강제 인덱싱 실행 버튼
     if st.button("🚀 강제 재인덱싱(HQ, prepared)", type="primary",
                  use_container_width=True, key="idx_run_btn"):
+        params = {"auto_up": bool(auto_zip), "debug": bool(show_debug)}
         try:
-            st.session_state["_IDX_REQ"] = {"auto_up": bool(auto_zip), "debug": bool(show_debug)}
-        except Exception:
-            st.session_state["_IDX_REQ"] = {"auto_up": False}
-        try:
-            _sr = _resolve_app_attr("_safe_rerun")
-            if callable(_sr):
-                _sr("idx_run", ttl=0.3)
-        except Exception:
-            pass
+            run_admin_index_job(params)
+        except Exception as e:
+            st.error(f"강제 인덱싱 실패: {e}")
 
     # 5) 마지막으로 한 번 더 진행/상태 렌더(있으면 갱신)
     try:
