@@ -24,9 +24,10 @@ class SequentialReleaseManager:
         self.gh = gh_client
     
     def get_next_number(self, prefix: str) -> int:
-        """다음 릴리스 번호를 자동으로 계산"""
+        """다음 릴리스 번호를 자동으로 계산 (하이브리드: 순차번호 우선)"""
         releases = self.gh.list_releases(per_page=100)
-        max_num = 0
+        max_sequential = 0
+        max_timestamp = 0
         
         for release in releases:
             tag = release.get('tag_name', '')
@@ -35,17 +36,29 @@ class SequentialReleaseManager:
                     # prefix-123 형태에서 숫자 추출
                     num_str = tag[len(prefix) + 1:]  # prefix- 제거
                     num = int(num_str)
-                    max_num = max(max_num, num)
+                    
+                    # 순차번호 시스템 (1, 2, 3, ...) 우선
+                    if num <= 1000:  # 순차번호로 가정
+                        max_sequential = max(max_sequential, num)
+                    else:
+                        # 타임스탬프 시스템 (1759256021 등)
+                        max_timestamp = max(max_timestamp, num)
                 except (ValueError, IndexError):
                     continue
         
-        return max_num + 1
+        # 순차번호가 있으면 순차번호 사용, 없으면 타임스탬프 기반으로 시작
+        if max_sequential > 0:
+            return max_sequential + 1
+        else:
+            # 타임스탬프가 있으면 1부터 시작, 없으면 1부터 시작
+            return 1
     
     def find_latest_by_number(self, prefix: str) -> Optional[Dict[str, Any]]:
-        """숫자 기반으로 최신 릴리스 찾기"""
+        """숫자 기반으로 최신 릴리스 찾기 (하이브리드: 순차번호 + 타임스탬프)"""
         releases = self.gh.list_releases(per_page=100)
         latest_num = 0
         latest_release = None
+        latest_timestamp = 0
         
         for release in releases:
             tag = release.get('tag_name', '')
@@ -53,9 +66,18 @@ class SequentialReleaseManager:
                 try:
                     num_str = tag[len(prefix) + 1:]
                     num = int(num_str)
-                    if num > latest_num:
-                        latest_num = num
-                        latest_release = release
+                    
+                    # 순차번호 시스템 (1, 2, 3, ...) 우선
+                    if num <= 1000:  # 순차번호로 가정
+                        if num > latest_num:
+                            latest_num = num
+                            latest_release = release
+                    else:
+                        # 타임스탬프 시스템 (1759256021 등) 폴백
+                        if num > latest_timestamp:
+                            latest_timestamp = num
+                            if latest_release is None:  # 순차번호가 없을 때만
+                                latest_release = release
                 except (ValueError, IndexError):
                     continue
         
