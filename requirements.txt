@@ -3,3 +3,7 @@ openai>=1.0.0
 google-generativeai>=0.7.2
 PyYAML>=6.0.1, <7
 # ===== [REQ-LANGMODEL] END =====
+
+# ===== [REQ-WORKFLOW] 자동화 워크플로우 =====
+psutil>=5.9.0
+# ===== [REQ-WORKFLOW] END =====

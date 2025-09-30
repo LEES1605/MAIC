@@ -104,7 +104,76 @@ def main():
         try:
             from sync_cursor_settings import restore_cursor_settings
             if restore_cursor_settings():
-                print("Cursor 설정 복원 완료! Cursor를 재시작하세요.")
+                print("Cursor 설정 복원 완료!")
+                
+                # Cursor 자동 재시작 옵션
+                restart_choice = input("Cursor를 자동으로 재시작하시겠습니까? (y/n): ").strip().lower()
+                if restart_choice == 'y':
+                    print("Cursor를 재시작합니다...")
+                    try:
+                        # Cursor 프로세스 찾기 및 재시작
+                        import psutil
+                        import time
+                        
+                        # Cursor 프로세스 찾기
+                        cursor_processes = []
+                        for proc in psutil.process_iter(['pid', 'name', 'exe']):
+                            try:
+                                if proc.info['name'] and 'cursor' in proc.info['name'].lower():
+                                    cursor_processes.append(proc)
+                            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                                continue
+                        
+                        if cursor_processes:
+                            print(f"Cursor 프로세스 {len(cursor_processes)}개 발견")
+                            
+                            # Cursor 프로세스 종료
+                            for proc in cursor_processes:
+                                try:
+                                    proc.terminate()
+                                    print(f"프로세스 {proc.pid} 종료 중...")
+                                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                                    continue
+                            
+                            # 잠시 대기
+                            time.sleep(2)
+                            
+                            # Cursor 재시작
+                            import subprocess
+                            import os
+                            
+                            # Cursor 실행 파일 경로 찾기
+                            cursor_paths = [
+                                r"C:\Users\%USERNAME%\AppData\Local\Programs\cursor\Cursor.exe",
+                                r"C:\Program Files\Cursor\Cursor.exe",
+                                r"C:\Program Files (x86)\Cursor\Cursor.exe"
+                            ]
+                            
+                            cursor_exe = None
+                            for path in cursor_paths:
+                                expanded_path = os.path.expandvars(path)
+                                if os.path.exists(expanded_path):
+                                    cursor_exe = expanded_path
+                                    break
+                            
+                            if cursor_exe:
+                                # 현재 작업 디렉토리에서 Cursor 시작
+                                subprocess.Popen([cursor_exe, str(Path.cwd())], 
+                                               cwd=str(Path.cwd()))
+                                print("✅ Cursor가 자동으로 재시작되었습니다!")
+                            else:
+                                print("❌ Cursor 실행 파일을 찾을 수 없습니다. 수동으로 재시작하세요.")
+                        else:
+                            print("❌ 실행 중인 Cursor 프로세스를 찾을 수 없습니다.")
+                            
+                    except ImportError:
+                        print("❌ psutil 모듈이 없습니다. 수동으로 재시작하세요.")
+                        print("설치: pip install psutil")
+                    except Exception as e:
+                        print(f"❌ 자동 재시작 실패: {e}")
+                        print("수동으로 Cursor를 재시작하세요.")
+                else:
+                    print("수동으로 Cursor를 재시작하세요.")
         except ImportError:
             print("Cursor 설정 동기화 스크립트를 찾을 수 없습니다.")
         except Exception as e:
