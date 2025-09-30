@@ -460,6 +460,7 @@ def _boot_auto_restore_index() -> None:
 
     UI 연동(진행표시 훅): 플레이스홀더 생성은 [19]에서만 수행
     """
+    import os
     # 멱등 보호 (UI 버튼 클릭 시에는 강제 재시도 허용)
     try:
         if "st" in globals() and st is not None:
