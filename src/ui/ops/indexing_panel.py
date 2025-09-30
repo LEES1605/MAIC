@@ -51,7 +51,7 @@ def render_orchestrator_header() -> None:
 
     # 공용 판정기(역호환 허용)
     try:
-        from src.core.readiness import is_ready_text
+        from src.core.readiness import is_ready_text, norm_ready_text
     except Exception:
         def _norm(x: str | bytes | None) -> str:
             if x is None:
@@ -61,6 +61,8 @@ def render_orchestrator_header() -> None:
             return x.replace("\ufeff", "").strip().lower()
         def is_ready_text(x):  # type: ignore
             return _norm(x) in {"ready", "ok", "true", "1", "on", "yes", "y", "green"}
+        def norm_ready_text(x):  # type: ignore
+            return _norm(x)
 
     st.markdown("### 🧪 인덱스 오케스트레이터")
     persist = _persist_dir_safe()
@@ -127,13 +129,40 @@ def render_orchestrator_header() -> None:
         if cols[1].button("✅ 로컬 구조 검증", use_container_width=True):
             try:
                 # 실시간으로 파일 상태 재확인 (세션 상태와 무관하게)
-                cj_exists = cj.exists() and cj.stat().st_size > 0
+                cj_exists = cj.exists()
+                cj_size = cj.stat().st_size if cj_exists else 0
+                cj_valid = cj_exists and cj_size > 0
+                
                 rf_exists = rf.exists()
                 try:
                     current_ready_txt = rf.read_text(encoding="utf-8") if rf_exists else ""
-                except Exception:
-                    current_ready_txt = ""
-                current_local_ready = cj_exists and is_ready_text(current_ready_txt)
+                except Exception as e:
+                    current_ready_txt = f"<읽기오류: {e}>"
+                
+                ready_valid = is_ready_text(current_ready_txt)
+                current_local_ready = cj_valid and ready_valid
+                
+                # 상세 디버그 정보
+                debug_info = {
+                    "chunks.jsonl": {
+                        "exists": cj_exists,
+                        "size": cj_size,
+                        "valid": cj_valid,
+                        "path": str(cj)
+                    },
+                    ".ready": {
+                        "exists": rf_exists,
+                        "content": repr(current_ready_txt),
+                        "normalized": repr(norm_ready_text(current_ready_txt)),
+                        "valid": ready_valid,
+                        "path": str(rf)
+                    },
+                    "validation": {
+                        "chunks_ok": cj_valid,
+                        "ready_ok": ready_valid,
+                        "overall": current_local_ready
+                    }
+                }
                 
                 ok = current_local_ready
                 rec = {
@@ -144,6 +173,7 @@ def render_orchestrator_header() -> None:
                     "latest_tag": latest_tag,
                     "is_latest": is_latest,
                     "ts": int(time.time()),
+                    "debug": debug_info
                 }
                 st.session_state["_LAST_RESTORE_CHECK"] = rec
 
@@ -151,8 +181,12 @@ def render_orchestrator_header() -> None:
                     st.success("검증 성공: chunks.jsonl 존재 & .ready 유효")
                 else:
                     st.error("검증 실패: 산출물/ready 상태가 불일치")
+                    with st.expander("🔍 상세 디버그 정보", expanded=True):
+                        st.json(debug_info)
             except Exception as e:
                 st.error(f"검증 실행 실패: {e}")
+                import traceback
+                st.code(traceback.format_exc())
 
         with st.expander("최근 검증/복원 기록", expanded=False):
             rec = st.session_state.get("_LAST_RESTORE_CHECK")
