@@ -138,7 +138,19 @@ def main():
         try:
             from sync_cursor_settings import backup_cursor_settings
             if backup_cursor_settings():
-                print("Cursor 설정 백업 완료! Git에 커밋하세요.")
+                print("Cursor 설정 백업 완료! 자동으로 Git에 커밋합니다.")
+                
+                # Cursor 설정 백업 파일들을 자동으로 커밋
+                if run_command("git add .cursor_settings/", "Cursor 설정 파일 추가"):
+                    if run_command('git commit -m "Cursor 설정 백업"', "Cursor 설정 커밋"):
+                        if run_command("git push origin main", "Cursor 설정 푸시"):
+                            print("✅ Cursor 설정이 자동으로 백업되고 동기화되었습니다!")
+                        else:
+                            print("❌ Cursor 설정 푸시 실패")
+                    else:
+                        print("❌ Cursor 설정 커밋 실패")
+                else:
+                    print("❌ Cursor 설정 파일 추가 실패")
         except ImportError:
             print("Cursor 설정 동기화 스크립트를 찾을 수 없습니다.")
         except Exception as e:
