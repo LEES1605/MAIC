@@ -645,14 +645,14 @@ def _boot_auto_restore_index() -> None:
         return
 
     # --- 최신 복원 강제 ---
-    try:
-        import datetime as _dt
-        this_year = _dt.datetime.utcnow().year
-        dyn_tags = [f"index-{y}-latest" for y in range(this_year, this_year - 5, -1)]
-    except Exception:
-        dyn_tags = []
-    tag_candidates = ["indices-latest", "index-latest"] + dyn_tags + ["latest"]
-    asset_candidates = ["indices.zip", "persist.zip", "hq_index.zip", "prepared.zip", "index.tar.gz"]
+    tag_candidates = ["index-latest", "indices-latest", "latest"]
+    asset_candidates = [
+        "index.tar.gz",
+        "indices.zip",
+        "persist.zip",
+        "hq_index.zip",
+        "prepared.zip",
+    ]
 
     _idx("step_set", 2, "run", "최신 인덱스 복원 중...")
     _idx("log", "릴리스 자산 다운로드/복원 시작...")

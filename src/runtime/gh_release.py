@@ -217,46 +217,32 @@ class GHReleases:
 
         tag_candidates = list(tag_candidates or [])
 
-        # 1) 특정 태그 직접 조회(py번째에서 실패해도 계속 진행)
+        # 1) 명시된 태그 우선 탐색
         for t in tag_candidates:
-            try:
-                rel = self.get_release_by_tag(t)
-            except Exception:
-                continue
+            rel = self.get_release_by_tag(t)
             if rel and isinstance(rel, dict) and rel.get("id"):
                 chosen_rel = rel
                 chosen_tag = rel.get("tag_name") or t
                 break
 
-        # 2) latest 태그를 사용하여 index-* 우선 탐색
+        # 2) 최신 릴리스/최근 릴리스 중 index-* 우선 탐색
         if not chosen_rel:
-            try:
-                rel_latest = self.get_latest_release()
-            except Exception:
-                rel_latest = None
-            if rel_latest and rel_latest.get("id"):
-                tag = rel_latest.get("tag_name", "") or rel_latest.get("name", "")
+            rel_latest = self.get_latest_release()
+            releases = [rel_latest] + self.list_releases(per_page=30)
+            for rel in releases:
+                if not rel or not rel.get("id"):
+                    continue
+                tag = str(rel.get("tag_name") or rel.get("name") or "")
                 if tag.startswith("index-"):
-                    chosen_rel = rel_latest
+                    chosen_rel = rel
                     chosen_tag = tag
-                    used_latest = True
-                else:
-                    # 최근 릴리스 목록 중 index- 태그를 우선 탐색
-                    for rel in self.list_releases(per_page=30):
-                        rt = str(rel.get("tag_name") or rel.get("name") or "")
-                        if rt.startswith("index-") and rel.get("id"):
-                            chosen_rel = rel
-                            chosen_tag = rt
-                            used_latest = True
-                            break
+                    used_latest = used_latest or (rel is rel_latest)
+                    break
 
-        # 3) 그래도 못 찾으면 원래 후보와 최신 릴리스 순으로 탐색
+        # 3) 마지막으로 latest 자체를 포함한 재시도
         if not chosen_rel:
             for t in tag_candidates + ["latest"]:
-                try:
-                    rel = self.get_latest_release() if t == "latest" else self.get_release_by_tag(t)
-                except Exception:
-                    continue
+                rel = self.get_latest_release() if t == "latest" else self.get_release_by_tag(t)
                 if rel and isinstance(rel, dict) and rel.get("id"):
                     chosen_rel = rel
                     chosen_tag = rel.get("tag_name") or t
