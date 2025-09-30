@@ -136,6 +136,11 @@ class GHReleases:
         assets = j if isinstance(j, list) else j.get("assets", [])
         return assets or []
 
+    def _list_releases(self, per_page: int = 30) -> list[dict]:
+        url = f"https://api.github.com/repos/{self.owner}/{self.repo}/releases?per_page={int(per_page)}"
+        j = self._http("GET", url, headers=self._headers())
+        return j if isinstance(j, list) else []
+
     def _delete_asset(self, asset_id: int) -> None:
         url = f"https://api.github.com/repos/{self.owner}/{self.repo}/releases/assets/{asset_id}"
         self._http("DELETE", url, headers=self._headers())
@@ -229,7 +234,7 @@ class GHReleases:
             # fetch via assets API if not embedded
             assets = self._list_assets(rel_id)
 
-        # 2) choose asset
+        # 2) choose asset on chosen_rel
         chosen_asset: Optional[Dict[str, Any]] = None
         for cand in asset_candidates or []:
             for a in assets:
@@ -239,8 +244,35 @@ class GHReleases:
             if chosen_asset:
                 break
 
+        # Fallback: scan recent releases for first one that has a matching asset
         if not chosen_asset:
-            raise GHError("no matching asset in release for index restore")
+            for rel in self._list_releases(per_page=50):
+                rid = rel.get("id")
+                if not rid:
+                    continue
+                tag = str(rel.get("tag_name") or rel.get("name") or "")
+                # prefer tags starting with "index-"
+                prefer = tag.startswith("index-")
+                rel_assets = rel.get("assets") or []
+                if not rel_assets:
+                    rel_assets = self._list_assets(int(rid))
+                for cand in asset_candidates or []:
+                    hit = next((a for a in rel_assets if str(a.get("name") or "").lower() == cand.lower()), None)
+                    if hit:
+                        chosen_rel = rel
+                        chosen_tag = tag or chosen_tag
+                        chosen_asset = hit
+                        rel_id = int(rid)
+                        assets = rel_assets
+                        used_latest = used_latest  # unchanged
+                        # if multiple, break early but prefer index-*; here we break on first hit
+                        break
+                if chosen_asset:
+                    # if we didn't prefer index-* and can continue to find better, we could, but keep simple
+                    break
+
+        if not chosen_asset:
+            raise GHError("no matching asset in any recent release for index restore")
 
         name = chosen_asset.get("name")
         bdl = chosen_asset.get("browser_download_url") or ""

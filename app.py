@@ -652,7 +652,7 @@ def _boot_auto_restore_index() -> None:
     except Exception:
         dyn_tags = []
     tag_candidates = ["indices-latest", "index-latest"] + dyn_tags + ["latest"]
-    asset_candidates = ["indices.zip", "persist.zip", "hq_index.zip", "prepared.zip"]
+    asset_candidates = ["indices.zip", "persist.zip", "hq_index.zip", "prepared.zip", "index.tar.gz"]
 
     _idx("step_set", 2, "run", "최신 인덱스 복원 중...")
     _idx("log", "릴리스 자산 다운로드/복원 시작...")

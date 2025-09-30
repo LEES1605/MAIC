@@ -40,6 +40,7 @@ def main() -> int:
             "persist.zip",
             "hq_index.zip",
             "prepared.zip",
+            "index.tar.gz",
         ],
     )
     args = ap.parse_args()
