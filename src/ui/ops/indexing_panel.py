@@ -113,11 +113,25 @@ def render_orchestrator_header() -> None:
         pass
 
     if bool(st.session_state.get("admin_mode", False)):
-        cols = st.columns([1, 1, 2])
-        if cols[0].button("⬇️ Release에서 최신 인덱스 복원", use_container_width=True):
-            try:
-                # 강제 복원 플래그 설정
-                st.session_state["_FORCE_RESTORE"] = True
+        # 3단계 복원 시스템
+        st.markdown("#### 🔄 인덱스 복원 시스템")
+        
+        # 1단계: 자동 복원 상태 표시
+        auto_restore_done = st.session_state.get("_BOOT_RESTORE_DONE", False)
+        if auto_restore_done:
+            st.success("✅ 1단계: 자동 복원 완료")
+        else:
+            st.warning("⚠️ 1단계: 자동 복원 대기 중...")
+        
+        # 2-3단계: 수동 복원 버튼들
+        cols = st.columns([1, 1, 1])
+        
+        # 2단계: 릴리스에서 복원
+        with cols[0]:
+            if st.button("🔄 2단계: 릴리스에서 복원", use_container_width=True, type="primary"):
+                try:
+                    # 강제 복원 플래그 설정
+                    st.session_state["_FORCE_RESTORE"] = True
                 
                 # 복원 전 상태 기록
                 pre_restore_state = {
@@ -161,9 +175,53 @@ def render_orchestrator_header() -> None:
                 import traceback
                 st.code(traceback.format_exc())
 
-        if cols[1].button("✅ 로컬 구조 검증", use_container_width=True):
-            try:
-                # 실시간으로 파일 상태 재확인 (세션 상태와 무관하게)
+        # 3단계: 로컬 백업에서 복원
+        with cols[1]:
+            if st.button("💾 3단계: 로컬 백업에서 복원", use_container_width=True):
+                try:
+                    from src.runtime.local_restore import find_local_backups, restore_from_local_backup
+                    
+                    # 로컬 백업 찾기
+                    backup_base = Path.home() / ".maic"
+                    backups = find_local_backups(backup_base)
+                    
+                    if not backups:
+                        st.warning("로컬 백업을 찾을 수 없습니다.")
+                        st.info("백업 위치: ~/.maic/backup, ~/.maic/backups, ~/.maic/index_backup 등")
+                    else:
+                        st.write(f"**발견된 백업 ({len(backups)}개):**")
+                        
+                        # 백업 목록 표시
+                        for i, backup in enumerate(backups[:5]):  # 최대 5개만 표시
+                            backup_info = {
+                                "path": str(backup),
+                                "type": "디렉터리" if backup.is_dir() else "압축파일",
+                                "size": f"{backup.stat().st_size / 1024 / 1024:.1f}MB" if backup.is_file() else "N/A"
+                            }
+                            st.write(f"{i+1}. {backup_info['type']}: {backup.name}")
+                        
+                        # 첫 번째 백업으로 복원 시도
+                        success, message = restore_from_local_backup(backups[0], persist)
+                        
+                        if success:
+                            st.success(f"✅ {message}")
+                            # 세션 상태 업데이트
+                            st.session_state["_INDEX_LOCAL_READY"] = True
+                            st.session_state["_INDEX_IS_LATEST"] = False  # 로컬 복원이므로 최신 아님
+                            st.rerun()
+                        else:
+                            st.error(f"❌ {message}")
+                
+                except Exception as e:
+                    st.error(f"로컬 복원 실패: {e}")
+                    import traceback
+                    st.code(traceback.format_exc())
+
+        # 검증 버튼
+        with cols[2]:
+            if st.button("✅ 로컬 구조 검증", use_container_width=True):
+                try:
+                    # 실시간으로 파일 상태 재확인 (세션 상태와 무관하게)
                 cj_exists = cj.exists()
                 cj_size = cj.stat().st_size if cj_exists else 0
                 cj_valid = cj_exists and cj_size > 0
