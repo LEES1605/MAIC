@@ -87,18 +87,39 @@ def main():
         work_description = "작업 완료"
     
     # 1. 변경사항 확인
-    run_command("git status", "변경사항 확인")
+    print("[변경사항 확인] 실행 중...")
+    try:
+        result = subprocess.run("git status --porcelain", shell=True, capture_output=True, text=True, 
+                              cwd=Path.cwd(), encoding='utf-8', errors='ignore')
+        if result.returncode == 0:
+            print("[변경사항 확인] 완료")
+            if result.stdout and result.stdout.strip():
+                print(f"   {result.stdout.strip()}")
+                has_changes = True
+            else:
+                print("   변경사항 없음")
+                has_changes = False
+        else:
+            print(f"[변경사항 확인] 실패: {result.stderr.strip() if result.stderr else 'Unknown error'}")
+            has_changes = False
+    except Exception as e:
+        print(f"[변경사항 확인] 오류: {e}")
+        has_changes = False
     
-    # 2. 변경사항 추가
-    if not run_command("git add .", "변경사항 추가"):
-        print("Git add 실패. 작업을 중단합니다.")
-        return
-    
-    # 3. 커밋
-    commit_message = f"작업 완료: {work_description} ({datetime.now().strftime('%Y-%m-%d %H:%M')})"
-    if not run_command(f'git commit -m "{commit_message}"', "커밋"):
-        print("Git commit 실패. 작업을 중단합니다.")
-        return
+    # 2. 변경사항이 있을 때만 커밋
+    if has_changes:
+        # 변경사항 추가
+        if not run_command("git add .", "변경사항 추가"):
+            print("Git add 실패. 작업을 중단합니다.")
+            return
+        
+        # 커밋
+        commit_message = f"작업 완료: {work_description} ({datetime.now().strftime('%Y-%m-%d %H:%M')})"
+        if not run_command(f'git commit -m "{commit_message}"', "커밋"):
+            print("Git commit 실패. 작업을 중단합니다.")
+            return
+    else:
+        print("변경사항이 없어서 커밋을 건너뜁니다.")
     
     # 4. 원격 저장소에 업로드
     if not run_command("git push origin main", "원격 저장소 업로드"):
