@@ -13,9 +13,15 @@ st.markdown(
 )
 
 try:
-    from src.ui.index_status import main as _render
-    _render()
-except Exception:
+    from src.ui.widgets.index_status import render_index_status_panel
+    from src.core.persist import effective_persist_dir
+    
     st.header("관리자: 인덱스 상태")
-    st.info("index_status 모듈을 찾지 못했습니다.")
+    persist_dir = effective_persist_dir()
+    render_index_status_panel(dest_dir=persist_dir)
+except Exception as e:
+    st.header("관리자: 인덱스 상태")
+    st.error(f"index_status 모듈 로드 실패: {e}")
+    import traceback
+    st.code(traceback.format_exc())
 # [F5] END

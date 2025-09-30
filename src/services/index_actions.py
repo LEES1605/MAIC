@@ -164,27 +164,25 @@ def make_index_backup_zip(persist_dir: Path, *, raw: bool = False) -> Path:
 
 
 def upload_index_backup(zip_path: Path, *, tag: str | None = None) -> str:
-    """인덱스 백업 자산을 GitHub Release에 업로드."""
+    """인덱스 백업 자산을 GitHub Release에 업로드 (순차번호 시스템)."""
     owner, repo, tok = _resolve_owner_repo_and_token()
     if not (owner and repo and tok):
         raise RuntimeError("시크릿/리포 정보가 부족합니다(GITHUB_REPO/GITHUB_TOKEN 등)." )
     try:
-        from src.runtime.gh_release import GHConfig, GHReleases
+        from src.runtime.sequential_release import create_sequential_manager
     except Exception as exc:
-        raise RuntimeError(f"릴리스 클라이언트 로드 실패: {exc}") from exc
+        raise RuntimeError(f"순차번호 릴리스 관리자 로드 실패: {exc}") from exc
 
-    if tag is None:
-        tag = f"index-{int(time.time())}"
-    pointer_tag = "index-latest"
-
-    client = GHReleases(GHConfig(owner=owner, repo=repo, token=tok))
-
-    client.ensure_release(tag, title=tag, notes="Index snapshot")
-    client.upload_asset(tag=tag, file_path=zip_path, asset_name=os.path.basename(zip_path), clobber=True)
-
-    client.ensure_release(pointer_tag, title="Index Latest", notes=f"Tracks {tag}")
-    client.upload_asset(tag=pointer_tag, file_path=zip_path, asset_name="index.tar.gz", clobber=True)
-    return f"OK: {zip_path.name} → {owner}/{repo} tag={tag} (pointer updated)"
+    # 순차번호 관리자 생성
+    seq_manager = create_sequential_manager(owner, repo, tok)
+    
+    # 순차번호 기반 릴리스 생성
+    release_tag, release_info = seq_manager.create_index_release(
+        zip_path,
+        notes=f"Sequential index release - {zip_path.name}"
+    )
+    
+    return f"OK: {zip_path.name} → {owner}/{repo} tag={release_tag} (sequential release)"
 
 
 def collect_prepared_files() -> tuple[list[dict], list[str]]:

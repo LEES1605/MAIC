@@ -32,13 +32,11 @@ def _pick_asset(assets: list[dict], candidates: Iterable[str]) -> Optional[dict]
 def render_index_status_panel(
     *,
     dest_dir: Path,
-    tag_candidates: Iterable[str],
-    asset_candidates: Iterable[str],
     repo_full: Optional[str] = None,
     token: Optional[str] = None,
 ) -> None:
     """
-    Release 상태/복원 위젯.
+    Release 상태/복원 위젯 (순차번호 시스템).
     - '복원' 버튼: 최신 인덱스 복원 → .ready 표준화 → restore_meta 저장 → 세션 플래그 갱신 → 헤더 즉시 반영
     - '파일 수 갱신' 버튼: 로컬 persist 파일 개수 새로 고침
     """
@@ -52,21 +50,16 @@ def render_index_status_panel(
         return
 
     owner, repo = str(repo_full).split("/", 1)
-    gh = GHReleases(GHConfig(owner=owner, repo=repo, token=token))
+    
+    # 순차번호 관리자 사용
+    from src.runtime.sequential_release import create_sequential_manager
+    seq_manager = create_sequential_manager(owner, repo, token)
 
-    # 메타 표시
-    rel = None
-    chosen_tag = None
-    for t in list(tag_candidates) + ["latest"]:
-        try:
-            rel = gh.get_latest_release() if t == "latest" else gh.get_release_by_tag(t)
-            chosen_tag = t
-            break
-        except Exception:
-            continue
-
+    # 최신 인덱스 릴리스 정보 조회
+    rel = seq_manager.find_latest_by_number("index")
+    chosen_tag = rel.get('tag_name') if rel else None
     assets = (rel or {}).get("assets") or []
-    asset = _pick_asset(assets, asset_candidates) if rel else None
+    asset = _pick_asset(assets, ["index.tar.gz", "index.zip"]) if rel else None
 
     left, mid, right = st.columns(3)
     left.metric("Release Tag", chosen_tag or "(none)")
@@ -85,20 +78,15 @@ def render_index_status_panel(
     with c1:
         if st.button("🔄 Release에서 최신 인덱스 복원", use_container_width=True):
             try:
-                res = gh.restore_latest_index(
-                    tag_candidates=tag_candidates,
-                    asset_candidates=asset_candidates,
+                res = seq_manager.restore_latest_index(
                     dest=dest_dir,
                     clean_dest=True,
                 )
 
-                # RestoreLog 계약 준수(후방호환 보강)
-                if isinstance(res, RestoreLog):
-                    rtag, rid, detail = res.tag, res.release_id, res.detail
-                else:
-                    rtag = getattr(res, "tag", None)
-                    rid = getattr(res, "release_id", None)
-                    detail = str(getattr(res, "detail", res))
+                # 순차번호 시스템 결과 처리
+                rtag = res.get("tag")
+                rid = res.get("release_id")
+                detail = res.get("detail", str(res))
 
                 # (1) ready 표준화
                 try:

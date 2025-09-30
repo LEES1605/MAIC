@@ -645,37 +645,34 @@ def _boot_auto_restore_index() -> None:
             pass
         return
 
-    # --- 최신 복원 강제 ---
-    # 동적으로 태그 후보 생성 (현재 시간 기반 + 일반적인 태그들)
-    import time
-    current_timestamp = int(time.time())
-    recent_timestamps = [current_timestamp - i * 3600 for i in range(24)]  # 최근 24시간
-    tag_candidates = [f"index-{ts}" for ts in recent_timestamps] + ["index-latest", "indices-latest", "latest"]
-    
-    asset_candidates = [
-        "index.tar.gz",
-        "indices.zip",
-        "persist.zip",
-        "hq_index.zip",
-        "prepared.zip",
-    ]
-
+    # --- 최신 복원 강제 (순차번호 시스템) ---
     _idx("step_set", 2, "run", "최신 인덱스 복원 중...")
-    _idx("log", "릴리스 자산 다운로드/복원 시작...")
+    _idx("log", "순차번호 기반 릴리스 복원 시작...")
     try:
-        result = gh.restore_latest_index(
-            tag_candidates=tag_candidates,
-            asset_candidates=asset_candidates,
-            dest=p,
-            clean_dest=True,
-        )
+        from src.runtime.sequential_release import create_sequential_manager
+        
+        # GitHub 설정
+        import os
+        repo_full = st.secrets.get("GITHUB_REPO", os.getenv("GITHUB_REPO", ""))
+        token = st.secrets.get("GITHUB_TOKEN", os.getenv("GITHUB_TOKEN"))
+        
+        if "/" not in str(repo_full):
+            raise RuntimeError("GitHub 설정이 필요합니다 (GITHUB_REPO/GITHUB_TOKEN)")
+        
+        owner, repo = str(repo_full).split("/", 1)
+        
+        # 순차번호 관리자 생성
+        seq_manager = create_sequential_manager(owner, repo, token)
+        
+        # 최신 인덱스 복원
+        result = seq_manager.restore_latest_index(p, clean_dest=True)
 
         _idx("step_set", 3, "run", "메타 저장/정리...")
         normalize_ready_file(p)
         saved_meta = _safe_save_meta(
             p,
-            tag=(getattr(result, "tag", None) or remote_tag),
-            release_id=(getattr(result, "release_id", None) or remote_release_id),
+            tag=result.get("tag") if result else None,
+            release_id=int(result.get("release_id")) if result and result.get("release_id") else None,
         )
 
         try:
