@@ -215,16 +215,40 @@ class GHReleases:
         chosen_tag: Optional[str] = None
         used_latest = False
 
-        for t in list(tag_candidates or []) + ["latest"]:
-            if t == "latest":
-                rel = self.get_latest_release()
-                used_latest = True
-            else:
-                rel = self.get_release_by_tag(t)
-            if rel and isinstance(rel, dict) and rel.get("id"):
-                chosen_rel = rel
-                chosen_tag = rel.get("tag_name") or t
-                break
+        # First, try to find index-* tags specifically
+        for t in list(tag_candidates or []):
+            if t.startswith("index-") or t == "latest":
+                if t == "latest":
+                    # For latest, scan recent releases to find index-* tags
+                    recent_releases = self._list_releases(per_page=20)
+                    for rel in recent_releases:
+                        tag = rel.get("tag_name", "")
+                        if tag.startswith("index-"):
+                            chosen_rel = rel
+                            chosen_tag = tag
+                            used_latest = True
+                            break
+                    if chosen_rel:
+                        break
+                else:
+                    rel = self.get_release_by_tag(t)
+                    if rel and isinstance(rel, dict) and rel.get("id"):
+                        chosen_rel = rel
+                        chosen_tag = rel.get("tag_name") or t
+                        break
+
+        # Fallback to original logic if no index-* tag found
+        if not chosen_rel:
+            for t in list(tag_candidates or []) + ["latest"]:
+                if t == "latest":
+                    rel = self.get_latest_release()
+                    used_latest = True
+                else:
+                    rel = self.get_release_by_tag(t)
+                if rel and isinstance(rel, dict) and rel.get("id"):
+                    chosen_rel = rel
+                    chosen_tag = rel.get("tag_name") or t
+                    break
 
         if not chosen_rel:
             raise GHError("no matching release found for index restore")
