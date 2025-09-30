@@ -60,27 +60,36 @@ class SequentialReleaseManager:
         latest_release = None
         latest_timestamp = 0
         
+        print(f"[DEBUG] Searching for releases with prefix '{prefix}-'")
+        print(f"[DEBUG] Found {len(releases)} total releases")
+        
         for release in releases:
             tag = release.get('tag_name', '')
+            print(f"[DEBUG] Checking release tag: {tag}")
             if tag.startswith(f"{prefix}-"):
                 try:
                     num_str = tag[len(prefix) + 1:]
                     num = int(num_str)
+                    print(f"[DEBUG] Tag {tag} -> number {num}")
                     
                     # 순차번호 시스템 (1, 2, 3, ...) 우선
                     if num <= 1000:  # 순차번호로 가정
                         if num > latest_num:
                             latest_num = num
                             latest_release = release
+                            print(f"[DEBUG] New sequential latest: {tag} (num={num})")
                     else:
                         # 타임스탬프 시스템 (1759256021 등) 폴백
                         if num > latest_timestamp:
                             latest_timestamp = num
                             if latest_release is None:  # 순차번호가 없을 때만
                                 latest_release = release
-                except (ValueError, IndexError):
+                                print(f"[DEBUG] New timestamp latest: {tag} (num={num})")
+                except (ValueError, IndexError) as e:
+                    print(f"[DEBUG] Failed to parse tag {tag}: {e}")
                     continue
         
+        print(f"[DEBUG] Final result: latest_release={latest_release.get('tag_name') if latest_release else None}")
         return latest_release
     
     def create_index_release(self, zip_path: Path, *, title: Optional[str] = None, notes: Optional[str] = None) -> Tuple[str, Dict[str, Any]]:
