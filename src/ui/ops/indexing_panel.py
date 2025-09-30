@@ -82,8 +82,8 @@ def render_orchestrator_header() -> None:
     is_latest = bool(st.session_state.get("_INDEX_IS_LATEST", False))
     latest_tag = st.session_state.get("_LATEST_RELEASE_TAG")
 
-    # 칩 계산
-    if is_latest:
+    # 칩 계산 (실제 파일 상태와 세션 상태 모두 고려)
+    if is_latest and local_ready:
         badge = "🟩 준비완료"
         badge_code = "READY"
         badge_desc = f"최신 릴리스 적용됨 (tag={latest_tag})" if latest_tag else "최신 릴리스 적용됨"
@@ -91,6 +91,10 @@ def render_orchestrator_header() -> None:
         badge = "🟨 준비중(로컬 인덱스 감지)"
         badge_code = "MISSING"
         badge_desc = "로컬 인덱스는 있으나 최신 릴리스와 불일치 또는 미확인"
+    elif is_latest and not local_ready:
+        badge = "🟧 세션 불일치"
+        badge_code = "MISSING"
+        badge_desc = "세션에서는 최신이지만 실제 파일이 없거나 손상됨"
     else:
         badge = "🟧 없음"
         badge_code = "MISSING"
