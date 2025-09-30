@@ -607,11 +607,12 @@ def render_index_panel() -> None:
         except Exception as e:
             st.error(f"강제 인덱싱 실패: {e}")
 
-    # 5) 마지막으로 한 번 더 진행/상태 렌더(있으면 갱신)
-    try:
-        render_index_steps()
-    except Exception:
-        pass
+    # 5) 마지막으로 한 번 더 진행/상태 렌더(관리자 모드에서만)
+    if bool(st.session_state.get("admin_mode", False)):
+        try:
+            render_index_steps()
+        except Exception:
+            pass
 # ================================ [05] indexing panel — END ===========================
 
 # =============================== [06] indexed sources — START =========================

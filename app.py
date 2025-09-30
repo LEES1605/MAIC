@@ -361,11 +361,12 @@ def _header() -> None:
     if st is None:
         return
 
-    # 0) Tri-state readiness chip (always try first)
+    # 0) Tri-state readiness chip (관리자 모드에서만 표시)
     try:
-        # 지연 import로 CI/비-Streamlit 환경에서도 안전
-        from src.ui.utils.readiness import render_readiness_header  # type: ignore
-        render_readiness_header(compact=True)
+        # 관리자 모드일 때만 readiness 헤더 표시
+        if st.session_state.get("admin_mode", False):
+            from src.ui.utils.readiness import render_readiness_header  # type: ignore
+            render_readiness_header(compact=True)
     except Exception:
         # 배지 렌더 실패는 치명적이지 않으므로 조용히 계속 진행
         pass
