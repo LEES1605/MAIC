@@ -215,39 +215,52 @@ class GHReleases:
         chosen_tag: Optional[str] = None
         used_latest = False
 
-        # First, try to find index-* tags specifically
-        for t in list(tag_candidates or []):
-            if t.startswith("index-") or t == "latest":
-                if t == "latest":
-                    # For latest, scan recent releases to find index-* tags
-                    recent_releases = self._list_releases(per_page=20)
-                    for rel in recent_releases:
-                        tag = rel.get("tag_name", "")
-                        if tag.startswith("index-"):
-                            chosen_rel = rel
-                            chosen_tag = tag
-                            used_latest = True
-                            break
-                    if chosen_rel:
-                        break
-                else:
-                    rel = self.get_release_by_tag(t)
-                    if rel and isinstance(rel, dict) and rel.get("id"):
-                        chosen_rel = rel
-                        chosen_tag = rel.get("tag_name") or t
-                        break
+        tag_candidates = list(tag_candidates or [])
 
-        # Fallback to original logic if no index-* tag found
+        # 1) 특정 태그 직접 조회(py번째에서 실패해도 계속 진행)
+        for t in tag_candidates:
+            try:
+                rel = self.get_release_by_tag(t)
+            except Exception:
+                continue
+            if rel and isinstance(rel, dict) and rel.get("id"):
+                chosen_rel = rel
+                chosen_tag = rel.get("tag_name") or t
+                break
+
+        # 2) latest 태그를 사용하여 index-* 우선 탐색
         if not chosen_rel:
-            for t in list(tag_candidates or []) + ["latest"]:
-                if t == "latest":
-                    rel = self.get_latest_release()
+            try:
+                rel_latest = self.get_latest_release()
+            except Exception:
+                rel_latest = None
+            if rel_latest and rel_latest.get("id"):
+                tag = rel_latest.get("tag_name", "") or rel_latest.get("name", "")
+                if tag.startswith("index-"):
+                    chosen_rel = rel_latest
+                    chosen_tag = tag
                     used_latest = True
                 else:
-                    rel = self.get_release_by_tag(t)
+                    # 최근 릴리스 목록 중 index- 태그를 우선 탐색
+                    for rel in self.list_releases(per_page=30):
+                        rt = str(rel.get("tag_name") or rel.get("name") or "")
+                        if rt.startswith("index-") and rel.get("id"):
+                            chosen_rel = rel
+                            chosen_tag = rt
+                            used_latest = True
+                            break
+
+        # 3) 그래도 못 찾으면 원래 후보와 최신 릴리스 순으로 탐색
+        if not chosen_rel:
+            for t in tag_candidates + ["latest"]:
+                try:
+                    rel = self.get_latest_release() if t == "latest" else self.get_release_by_tag(t)
+                except Exception:
+                    continue
                 if rel and isinstance(rel, dict) and rel.get("id"):
                     chosen_rel = rel
                     chosen_tag = rel.get("tag_name") or t
+                    used_latest = used_latest or (t == "latest")
                     break
 
         if not chosen_rel:
@@ -283,7 +296,7 @@ class GHReleases:
 
         # Fallback: scan recent releases for first one that has a matching asset
         if not chosen_asset:
-            for rel in self._list_releases(per_page=50):
+            for rel in self.list_releases(per_page=50):
                 rid = rel.get("id")
                 if not rid:
                     continue
