@@ -646,7 +646,12 @@ def _boot_auto_restore_index() -> None:
         return
 
     # --- 최신 복원 강제 ---
-    tag_candidates = ["index-1759255677", "index-latest", "indices-latest", "latest"]
+    # 동적으로 태그 후보 생성 (현재 시간 기반 + 일반적인 태그들)
+    import time
+    current_timestamp = int(time.time())
+    recent_timestamps = [current_timestamp - i * 3600 for i in range(24)]  # 최근 24시간
+    tag_candidates = [f"index-{ts}" for ts in recent_timestamps] + ["index-latest", "indices-latest", "latest"]
+    
     asset_candidates = [
         "index.tar.gz",
         "indices.zip",
