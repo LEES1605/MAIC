@@ -52,7 +52,7 @@ def main() -> int:
     owner, repo = repo_full.split("/", 1)
     token = args.token or os.getenv("GITHUB_TOKEN")
 
-    client = GHReleases(GHConfig(owner=owner, repo=repo, token=token))
+    client = GHReleases(owner=owner, repo=repo, token=token)
     try:
         log = client.restore_latest_index(
             tag_candidates=args.tags,

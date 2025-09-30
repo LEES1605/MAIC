@@ -11,7 +11,7 @@ from dataclasses import dataclass
 import re
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence, Tuple
-from urllib import error, request
+from urllib import error, request, parse
 
 
 class GHError(RuntimeError):
@@ -161,7 +161,7 @@ class GHReleases:
 
         mime, _ = mimetypes.guess_type(name)
         ctype = mime or "application/octet-stream"
-        upload_url = f"https://uploads.github.com/repos/{self.owner}/{self.repo}/releases/{rel_id}/assets?name={request.quote(name)}"
+        upload_url = f"https://uploads.github.com/repos/{self.owner}/{self.repo}/releases/{rel_id}/assets?name={parse.quote(name)}"
         headers = self._headers(accept_upload=True)
         headers["Content-Type"] = ctype
         data = p.read_bytes()
