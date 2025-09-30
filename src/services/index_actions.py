@@ -310,20 +310,16 @@ def run_admin_index_job(req: Dict[str, Any]) -> None:
         prog.progress(85)
 
         # 5) ZIP/Release 업로드(선택)
-        auto_up = bool(req.get("auto_up"))
-        if auto_up:
-            status.update(label="⏫ ZIP 생성 및 Release 업로드...", state="running")
-            _step_set(5, "run", "ZIP/Release 업로드")
-            try:
-                z = make_index_backup_zip(used_persist)
-                msg = upload_index_zip_to_release(z, tag=f"index-{int(time.time())}")
-                _step_set(5, "ok", "업로드 완료")
-                _log(msg)
-            except Exception as e:
-                _step_set(5, "fail", f"upload_error: {e}")
-                _log(f"업로드 실패: {e}", "err")
-        else:
-            _step_set(5, "skip", "건너뜀(자동 업로드 OFF)")
+        status.update(label="⏫ ZIP 생성 및 Release 업로드...", state="running")
+        _step_set(5, "run", "ZIP/Release 업로드")
+        try:
+            z = make_index_backup_zip(used_persist)
+            msg = upload_index_backup(z, tag=f"index-{int(time.time())}")
+            _step_set(5, "ok", "업로드 완료")
+            _log(msg)
+        except Exception as e:
+            _step_set(5, "fail", f"upload_error: {e}")
+            _log(f"업로드 실패: {e}", "err")
         prog.progress(100)
 
         status.update(label="✅ 강제 재인덱싱 완료", state="complete")

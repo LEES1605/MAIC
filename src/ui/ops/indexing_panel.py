@@ -269,14 +269,11 @@ def render_index_panel() -> None:
         pass
 
     # 3) 옵션/버튼 영역
-    colA, colB, colC = st.columns([1, 1, 1])
+    colA, colB = st.columns([1, 1])
     with colA:
-        auto_zip = st.toggle("인덱싱 후 ZIP/Release 업로드", value=False, key="idx_auto_zip",
-                             help="GH_TOKEN/GITHUB_REPO 필요")
-    with colB:
         show_debug = st.toggle("디버그 로그 표시", value=True, key="idx_show_debug")
-    with colC:
-        if st.button("📤 인덱싱 산출물 업로드(Release)", use_container_width=True, key="idx_manual_upload"):
+    with colB:
+        if st.button("📤 Release로 업로드", use_container_width=True, key="idx_manual_upload"):
             try:
                 used_persist = _persist_dir_safe()
                 z = make_index_backup_zip(used_persist)
@@ -288,7 +285,7 @@ def render_index_panel() -> None:
     # 4) 강제 인덱싱 실행 버튼
     if st.button("🚀 강제 재인덱싱(HQ, prepared)", type="primary",
                  use_container_width=True, key="idx_run_btn"):
-        params = {"auto_up": bool(auto_zip), "debug": bool(show_debug)}
+        params = {"auto_up": True, "debug": bool(show_debug)}
         try:
             run_admin_index_job(params)
         except Exception as e:
