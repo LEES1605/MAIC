@@ -8,6 +8,7 @@ import os
 import tarfile
 import zipfile
 from dataclasses import dataclass
+import re
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence, Tuple
 from urllib import error, request
@@ -244,6 +245,18 @@ class GHReleases:
             if chosen_asset:
                 break
 
+        # 2-1) heuristic match (e.g., index_1758719923.zip)
+        if not chosen_asset:
+            patts = [
+                re.compile(r"^index[_-].+\.(zip|tar\.gz)$", re.IGNORECASE),
+                re.compile(r"^(indices|persist|hq_index|prepared)\.(zip|tar\.gz)$", re.IGNORECASE),
+            ]
+            for a in assets:
+                nm = str(a.get("name") or "")
+                if any(p.search(nm) for p in patts):
+                    chosen_asset = a
+                    break
+
         # Fallback: scan recent releases for first one that has a matching asset
         if not chosen_asset:
             for rel in self._list_releases(per_page=50):
@@ -256,6 +269,7 @@ class GHReleases:
                 rel_assets = rel.get("assets") or []
                 if not rel_assets:
                     rel_assets = self._list_assets(int(rid))
+                # exact-match by candidate list
                 for cand in asset_candidates or []:
                     hit = next((a for a in rel_assets if str(a.get("name") or "").lower() == cand.lower()), None)
                     if hit:
@@ -264,9 +278,18 @@ class GHReleases:
                         chosen_asset = hit
                         rel_id = int(rid)
                         assets = rel_assets
-                        used_latest = used_latest  # unchanged
-                        # if multiple, break early but prefer index-*; here we break on first hit
                         break
+                # heuristic fallback
+                if not chosen_asset:
+                    for a in rel_assets:
+                        nm = str(a.get("name") or "")
+                        if any(p.search(nm) for p in patts):
+                            chosen_rel = rel
+                            chosen_tag = tag or chosen_tag
+                            chosen_asset = a
+                            rel_id = int(rid)
+                            assets = rel_assets
+                            break
                 if chosen_asset:
                     # if we didn't prefer index-* and can continue to find better, we could, but keep simple
                     break
