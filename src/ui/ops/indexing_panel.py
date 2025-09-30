@@ -122,11 +122,20 @@ def render_orchestrator_header() -> None:
 
         if cols[1].button("✅ 로컬 구조 검증", use_container_width=True):
             try:
-                ok = local_ready
+                # 실시간으로 파일 상태 재확인 (세션 상태와 무관하게)
+                cj_exists = cj.exists() and cj.stat().st_size > 0
+                rf_exists = rf.exists()
+                try:
+                    current_ready_txt = rf.read_text(encoding="utf-8") if rf_exists else ""
+                except Exception:
+                    current_ready_txt = ""
+                current_local_ready = cj_exists and is_ready_text(current_ready_txt)
+                
+                ok = current_local_ready
                 rec = {
                     "result": "성공" if ok else "실패",
                     "chunk": str(cj),
-                    "ready": ready_txt.strip() or "(없음)",
+                    "ready": current_ready_txt.strip() or "(없음)",
                     "persist": str(persist),
                     "latest_tag": latest_tag,
                     "is_latest": is_latest,
