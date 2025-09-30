@@ -193,16 +193,31 @@ class GHReleases:
         dest.mkdir(parents=True, exist_ok=True)
         lower = name.lower()
         bio = io.BytesIO(data)
-        if lower.endswith(".zip"):
-            with zipfile.ZipFile(bio) as zf:
-                zf.extractall(path=dest)
-            return
-        if lower.endswith(".tar.gz") or lower.endswith(".tgz"):
-            with tarfile.open(fileobj=bio, mode="r:gz") as tf:
-                tf.extractall(path=dest)
-            return
-        # fallback: write raw
-        (dest / name).write_bytes(data)
+        
+        try:
+            if lower.endswith(".zip"):
+                print(f"[DEBUG] Extracting ZIP file: {name}")
+                with zipfile.ZipFile(bio) as zf:
+                    file_list = zf.namelist()
+                    print(f"[DEBUG] ZIP contains {len(file_list)} files: {file_list[:10]}...")
+                    zf.extractall(path=dest)
+                print(f"[DEBUG] ZIP extraction completed")
+                return
+            if lower.endswith(".tar.gz") or lower.endswith(".tgz"):
+                print(f"[DEBUG] Extracting TAR.GZ file: {name}")
+                with tarfile.open(fileobj=bio, mode="r:gz") as tf:
+                    file_list = tf.getnames()
+                    print(f"[DEBUG] TAR.GZ contains {len(file_list)} files: {file_list[:10]}...")
+                    tf.extractall(path=dest)
+                print(f"[DEBUG] TAR.GZ extraction completed")
+                return
+            # fallback: write raw
+            print(f"[DEBUG] Writing raw file: {name}")
+            (dest / name).write_bytes(data)
+            print(f"[DEBUG] Raw file write completed")
+        except Exception as e:
+            print(f"[DEBUG] Extraction failed: {e}")
+            raise GHError(f"Failed to extract {name}: {e}") from e
 
     def restore_latest_index(
         self,
@@ -354,7 +369,17 @@ class GHReleases:
             except Exception as e:
                 raise GHError(f"failed to clean destination '{dest}': {e}") from e
         data = self._download_asset(bdl)
+        
+        # 다운로드 성공 로그
+        print(f"[DEBUG] Downloaded {len(data)} bytes from {name}")
+        
+        # 압축 해제 전 상태
+        print(f"[DEBUG] Before extraction - dest exists: {dest.exists()}, files: {list(dest.iterdir()) if dest.exists() else 'N/A'}")
+        
         self._extract_bytes_to(dest, str(name), data)
+        
+        # 압축 해제 후 상태
+        print(f"[DEBUG] After extraction - dest exists: {dest.exists()}, files: {list(dest.iterdir()) if dest.exists() else 'N/A'}")
 
         # 4) 복원 후 검증: chunks.jsonl 파일이 실제로 생성되었는지 확인
         chunks_file = dest / "chunks.jsonl"
