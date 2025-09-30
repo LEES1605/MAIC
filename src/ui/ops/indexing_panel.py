@@ -44,6 +44,26 @@ def _load_prepared_api():
         return None, None, []
 # ================================ [02] module imports — END ===========================
 
+# 에러 로깅 함수
+def _log_error(error_type: str, message: str, traceback_str: str = None):
+    """에러를 세션 상태에 로깅"""
+    try:
+        if "st" in globals() and st is not None:
+            import time
+            error_logs = st.session_state.get("_ERROR_LOGS", [])
+            error_logs.append({
+                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "type": error_type,
+                "message": message,
+                "traceback": traceback_str
+            })
+            # 최대 50개 에러만 유지
+            if len(error_logs) > 50:
+                error_logs = error_logs[-50:]
+            st.session_state["_ERROR_LOGS"] = error_logs
+    except Exception:
+        pass
+
 # =============================== [03] orchestrator header — START =====================
 def render_orchestrator_header() -> None:
     if st is None:
@@ -113,6 +133,39 @@ def render_orchestrator_header() -> None:
         pass
 
     if bool(st.session_state.get("admin_mode", False)):
+        # 자동 스캔 상태 표시 (관리자 전용)
+        boot_scan_done = st.session_state.get("_BOOT_SCAN_DONE", False)
+        has_new_files = st.session_state.get("_PREPARED_HAS_NEW", False)
+        new_files_count = st.session_state.get("_PREPARED_NEW_FILES", 0)
+        total_files_count = st.session_state.get("_PREPARED_TOTAL_FILES", 0)
+        
+        st.markdown("#### 📊 시스템 상태")
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            if boot_scan_done:
+                if has_new_files:
+                    st.warning(f"🆕 새 파일 {new_files_count}개", icon="⚠️")
+                else:
+                    st.success(f"✅ 스캔 완료 ({total_files_count}개)", icon="✅")
+            else:
+                st.info("⏳ 스캔 대기 중", icon="⏳")
+        
+        with col2:
+            if local_ready and is_latest:
+                st.success("✅ 최신 인덱스", icon="✅")
+            elif local_ready:
+                st.warning("⚠️ 로컬 인덱스", icon="⚠️")
+            else:
+                st.error("❌ 인덱스 없음", icon="❌")
+        
+        with col3:
+            latest_tag = st.session_state.get("_LATEST_RELEASE_TAG")
+            if latest_tag:
+                st.info(f"🏷️ {latest_tag}", icon="🏷️")
+            else:
+                st.warning("🏷️ 릴리스 없음", icon="🏷️")
+        
         # 3단계 복원 시스템
         st.markdown("#### 🔄 인덱스 복원 시스템")
         
@@ -123,12 +176,13 @@ def render_orchestrator_header() -> None:
         else:
             st.warning("⚠️ 1단계: 자동 복원 대기 중...")
         
-        # 2-3단계: 수동 복원 버튼들
-        cols = st.columns([1, 1, 1])
+        # 복원 및 스캔 버튼들
+        st.markdown("#### 🔧 관리 도구")
+        cols = st.columns([1, 1, 1, 1])
         
         # 2단계: 릴리스에서 복원
         with cols[0]:
-            if st.button("🔄 2단계: 릴리스에서 복원", use_container_width=True, type="primary"):
+            if st.button("🔄 릴리스 복원", use_container_width=True, type="primary"):
                 try:
                     # 강제 복원 플래그 설정
                     st.session_state["_FORCE_RESTORE"] = True
@@ -169,15 +223,17 @@ def render_orchestrator_header() -> None:
                 }
                 
                 st.success("Release 복원을 시도했습니다. 상태를 확인하세요.")
-            except Exception as e:
-                st.error(f"복원 실행 실패: {e}")
-                st.session_state["_FORCE_RESTORE"] = False  # 플래그 리셋
-                import traceback
-                st.code(traceback.format_exc())
+                except Exception as e:
+                    st.error(f"복원 실행 실패: {e}")
+                    st.session_state["_FORCE_RESTORE"] = False  # 플래그 리셋
+                    import traceback
+                    traceback_str = traceback.format_exc()
+                    st.code(traceback_str)
+                    _log_error("복원 실패", str(e), traceback_str)
 
         # 3단계: 로컬 백업에서 복원
         with cols[1]:
-            if st.button("💾 3단계: 로컬 백업에서 복원", use_container_width=True):
+            if st.button("💾 로컬 복원", use_container_width=True):
                 try:
                     from src.runtime.local_restore import find_local_backups, restore_from_local_backup
                     
@@ -215,11 +271,49 @@ def render_orchestrator_header() -> None:
                 except Exception as e:
                     st.error(f"로컬 복원 실패: {e}")
                     import traceback
-                    st.code(traceback.format_exc())
+                    traceback_str = traceback.format_exc()
+                    st.code(traceback_str)
+                    _log_error("로컬 복원 실패", str(e), traceback_str)
 
-        # 검증 버튼
+        # 스캔 버튼
         with cols[2]:
-            if st.button("✅ 로컬 구조 검증", use_container_width=True):
+            if st.button("🔍 파일 스캔", use_container_width=True):
+                try:
+                    # 수동 스캔 실행
+                    lister, _ = _load_prepared_lister()
+                    if lister:
+                        files_list = lister() or []
+                        chk, _mark, _ = _load_prepared_api()
+                        new_files = []
+                        if callable(chk):
+                            try:
+                                persist_dir = _persist_dir_safe()
+                                info = chk(persist_dir, files_list) or {}
+                                new_files = list(info.get("files") or info.get("new") or [])
+                            except Exception as e:
+                                st.error(f"스캔 실행 실패: {e}")
+                                return
+                        
+                        total_files = len(files_list)
+                        new_count = len(new_files)
+                        
+                        if new_count > 0:
+                            st.warning(f"🆕 새 파일 {new_count}개 발견! (총 {total_files}개 파일)")
+                            st.session_state["_PREPARED_HAS_NEW"] = True
+                            st.session_state["_PREPARED_NEW_FILES"] = new_count
+                        else:
+                            st.success(f"✅ 새 파일 없음 (총 {total_files}개 파일)")
+                            st.session_state["_PREPARED_HAS_NEW"] = False
+                    else:
+                        st.error("prepared 폴더 접근 불가")
+                except Exception as e:
+                    st.error(f"스캔 실패: {e}")
+                    import traceback
+                    _log_error("스캔 실패", str(e), traceback.format_exc())
+        
+        # 검증 버튼
+        with cols[3]:
+            if st.button("✅ 검증", use_container_width=True):
                 try:
                     # 실시간으로 파일 상태 재확인 (세션 상태와 무관하게)
                 cj_exists = cj.exists()
@@ -279,7 +373,9 @@ def render_orchestrator_header() -> None:
             except Exception as e:
                 st.error(f"검증 실행 실패: {e}")
                 import traceback
-                st.code(traceback.format_exc())
+                traceback_str = traceback.format_exc()
+                st.code(traceback_str)
+                _log_error("검증 실패", str(e), traceback_str)
 
         with st.expander("최근 검증/복원 기록", expanded=False):
             rec = st.session_state.get("_LAST_RESTORE_CHECK")
@@ -299,6 +395,37 @@ def render_orchestrator_header() -> None:
         if restore_debug:
             with st.expander("🔧 복원 디버그 정보", expanded=True):
                 st.json(restore_debug)
+        
+        # 에러 패널 추가
+        st.markdown("#### 🚨 에러 로그")
+        error_logs = st.session_state.get("_ERROR_LOGS", [])
+        
+        if error_logs:
+            # 최근 에러 5개만 표시
+            recent_errors = error_logs[-5:]
+            for i, error in enumerate(reversed(recent_errors)):
+                with st.expander(f"에러 {len(error_logs) - i}: {error.get('timestamp', 'Unknown')}", expanded=(i == 0)):
+                    st.error(f"**타입**: {error.get('type', 'Unknown')}")
+                    st.error(f"**메시지**: {error.get('message', 'No message')}")
+                    if error.get('traceback'):
+                        st.code(error['traceback'], language='python')
+                    
+                    # 복사 버튼
+                    if st.button(f"📋 에러 {len(error_logs) - i} 복사", key=f"copy_error_{i}"):
+                        error_text = f"에러 타입: {error.get('type', 'Unknown')}\n"
+                        error_text += f"에러 메시지: {error.get('message', 'No message')}\n"
+                        if error.get('traceback'):
+                            error_text += f"스택 트레이스:\n{error['traceback']}"
+                        st.code(error_text, language='text')
+                        st.success("에러 내용이 위에 표시되었습니다. 복사하여 사용하세요.")
+        else:
+            st.info("에러 로그가 없습니다.")
+        
+        # 에러 로그 초기화 버튼
+        if st.button("🗑️ 에러 로그 초기화", use_container_width=True):
+            st.session_state["_ERROR_LOGS"] = []
+            st.success("에러 로그가 초기화되었습니다.")
+            st.rerun()
         
         # 릴리스 자산 정보 확인 버튼 추가
         if st.button("🔍 릴리스 자산 정보 확인", use_container_width=True):
@@ -343,23 +470,19 @@ def render_orchestrator_header() -> None:
         except Exception:
             pass
 
-    # 자동 스캔 상태 표시
-    boot_scan_done = st.session_state.get("_BOOT_SCAN_DONE", False)
-    has_new_files = st.session_state.get("_PREPARED_HAS_NEW", False)
-    new_files_count = st.session_state.get("_PREPARED_NEW_FILES", 0)
-    total_files_count = st.session_state.get("_PREPARED_TOTAL_FILES", 0)
+    # 학생 화면에서는 간단한 상태만 표시
+    local_ready = st.session_state.get("_INDEX_LOCAL_READY", False)
+    is_latest = st.session_state.get("_INDEX_IS_LATEST", False)
     
-    if boot_scan_done:
-        if has_new_files:
-            st.warning(f"🆕 새 파일 {new_files_count}개 발견! 재인덱싱을 권장합니다.", icon="⚠️")
-        else:
-            st.success(f"✅ prepared 폴더 스캔 완료: 총 {total_files_count}개 파일, 새 파일 없음", icon="✅")
+    if local_ready and is_latest:
+        st.success("✅ 시스템 준비 완료", icon="✅")
+    elif local_ready:
+        st.warning("⚠️ 로컬 인덱스 사용 중 (최신 아님)", icon="⚠️")
     else:
-        st.info("⏳ prepared 폴더 자동 스캔 대기 중...", icon="⏳")
-
+        st.error("❌ 인덱스 없음 - 관리자 모드에서 복원하세요", icon="❌")
+    
     st.info(
-        "강제 인덱싱(HQ, 느림)·백업과 인덱싱 파일 미리보기는 **관리자 인덱싱 패널**에서 합니다. "
-        "관리자 모드 진입 후 아래 섹션으로 이동하세요.",
+        "관리자 모드에서 인덱스 관리, 스캔, 재인덱싱을 수행할 수 있습니다.",
         icon="ℹ️",
     )
     st.markdown("<span id='idx-admin-panel'></span>", unsafe_allow_html=True)
