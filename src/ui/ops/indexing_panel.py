@@ -118,13 +118,42 @@ def render_orchestrator_header() -> None:
             try:
                 # 강제 복원 플래그 설정
                 st.session_state["_FORCE_RESTORE"] = True
+                
+                # 복원 전 상태 기록
+                pre_restore_state = {
+                    "chunks_exists": cj.exists(),
+                    "chunks_size": cj.stat().st_size if cj.exists() else 0,
+                    "ready_exists": rf.exists(),
+                    "ready_content": rf.read_text(encoding="utf-8") if rf.exists() else "",
+                    "persist_files": [str(f) for f in persist.iterdir()] if persist.exists() else []
+                }
+                
                 fn = _resolve_app_attr("_boot_auto_restore_index")
                 if callable(fn):
                     fn()
+                
+                # 복원 후 상태 기록
+                post_restore_state = {
+                    "chunks_exists": cj.exists(),
+                    "chunks_size": cj.stat().st_size if cj.exists() else 0,
+                    "ready_exists": rf.exists(),
+                    "ready_content": rf.read_text(encoding="utf-8") if rf.exists() else "",
+                    "persist_files": [str(f) for f in persist.iterdir()] if persist.exists() else []
+                }
+                
+                # 복원 결과 저장
+                st.session_state["_RESTORE_DEBUG"] = {
+                    "pre_restore": pre_restore_state,
+                    "post_restore": post_restore_state,
+                    "timestamp": int(time.time())
+                }
+                
                 st.success("Release 복원을 시도했습니다. 상태를 확인하세요.")
             except Exception as e:
                 st.error(f"복원 실행 실패: {e}")
                 st.session_state["_FORCE_RESTORE"] = False  # 플래그 리셋
+                import traceback
+                st.code(traceback.format_exc())
 
         if cols[1].button("✅ 로컬 구조 검증", use_container_width=True):
             try:
@@ -200,6 +229,12 @@ def render_orchestrator_header() -> None:
                 "is_latest": is_latest,
                 "local_ready": local_ready,
             })
+            
+        # 복원 디버그 정보 표시
+        restore_debug = st.session_state.get("_RESTORE_DEBUG")
+        if restore_debug:
+            with st.expander("🔧 복원 디버그 정보", expanded=True):
+                st.json(restore_debug)
 
         try:
             _dbg = _resolve_app_attr("_render_release_candidates_debug")
