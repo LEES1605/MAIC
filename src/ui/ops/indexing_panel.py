@@ -262,13 +262,7 @@ def render_index_panel() -> None:
 
     st.markdown("### 🔧 관리자 인덱싱 패널 (prepared 전용)")
 
-    # 2) 진행/상태 패널을 '먼저' 강제 생성
-    try:
-        render_index_steps()
-    except Exception:
-        pass
-
-    # 3) 옵션/버튼 영역
+    # 2) 옵션/버튼 영역
     colA, colB = st.columns([1, 1])
     with colA:
         show_debug = st.toggle("디버그 로그 표시", value=True, key="idx_show_debug")
