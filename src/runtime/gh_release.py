@@ -219,7 +219,10 @@ class GHReleases:
 
         # 1) 명시된 태그 우선 탐색
         for t in tag_candidates:
-            rel = self.get_release_by_tag(t)
+            try:
+                rel = self.get_release_by_tag(t)
+            except Exception:
+                continue
             if rel and isinstance(rel, dict) and rel.get("id"):
                 chosen_rel = rel
                 chosen_tag = rel.get("tag_name") or t
@@ -227,8 +230,12 @@ class GHReleases:
 
         # 2) 최신 릴리스/최근 릴리스 중 index-* 우선 탐색
         if not chosen_rel:
-            rel_latest = self.get_latest_release()
-            releases = [rel_latest] + self.list_releases(per_page=30)
+            try:
+                rel_latest = self.get_latest_release()
+            except Exception:
+                rel_latest = None
+            releases = [rel_latest] if rel_latest else []
+            releases.extend(self.list_releases(per_page=30))
             for rel in releases:
                 if not rel or not rel.get("id"):
                     continue
@@ -243,6 +250,10 @@ class GHReleases:
         if not chosen_rel:
             for t in tag_candidates + ["latest"]:
                 rel = self.get_latest_release() if t == "latest" else self.get_release_by_tag(t)
+                try:
+                    rel = self.get_latest_release() if t == "latest" else self.get_release_by_tag(t)
+                except Exception:
+                    continue
                 if rel and isinstance(rel, dict) and rel.get("id"):
                     chosen_rel = rel
                     chosen_tag = rel.get("tag_name") or t

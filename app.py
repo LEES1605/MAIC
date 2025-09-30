@@ -645,7 +645,7 @@ def _boot_auto_restore_index() -> None:
         return
 
     # --- 최신 복원 강제 ---
-    tag_candidates = ["index-latest", "indices-latest", "latest"]
+    tag_candidates = ["index-1759255677", "index-latest", "indices-latest", "latest"]
     asset_candidates = [
         "index.tar.gz",
         "indices.zip",
