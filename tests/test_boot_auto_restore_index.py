@@ -12,7 +12,7 @@ def test_boot_restore_calls_ghrestore(monkeypatch, tmp_path):
     )
     sys.modules["streamlit"] = fake_st_mod
 
-    # 2) GH Releases 더블
+    # 2) GH Releases 및 SequentialReleaseManager 더블
     called = {"latest": 0, "restore": 0}
 
     class GHConfig:  # pragma: no cover
@@ -34,8 +34,20 @@ def test_boot_restore_calls_ghrestore(monkeypatch, tmp_path):
                 used_latest_endpoint = True
             return R()
 
+    class SequentialReleaseManager:  # pragma: no cover
+        def __init__(self, gh_client): pass
+        def restore_latest_index(self, dest, clean_dest=False):
+            called["restore"] += 1
+            return {"tag": "index-1", "release_id": 123}
+
+    def create_sequential_manager(owner, repo, token):  # pragma: no cover
+        return SequentialReleaseManager(None)
+
     sys.modules["src.runtime.gh_release"] = types.SimpleNamespace(
         GHConfig=GHConfig, GHReleases=GHReleases
+    )
+    sys.modules["src.runtime.sequential_release"] = types.SimpleNamespace(
+        create_sequential_manager=create_sequential_manager
     )
 
     # 3) app import 및 persist 경로 덮어쓰기
