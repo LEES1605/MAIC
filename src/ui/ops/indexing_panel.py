@@ -343,6 +343,20 @@ def render_orchestrator_header() -> None:
         except Exception:
             pass
 
+    # 자동 스캔 상태 표시
+    boot_scan_done = st.session_state.get("_BOOT_SCAN_DONE", False)
+    has_new_files = st.session_state.get("_PREPARED_HAS_NEW", False)
+    new_files_count = st.session_state.get("_PREPARED_NEW_FILES", 0)
+    total_files_count = st.session_state.get("_PREPARED_TOTAL_FILES", 0)
+    
+    if boot_scan_done:
+        if has_new_files:
+            st.warning(f"🆕 새 파일 {new_files_count}개 발견! 재인덱싱을 권장합니다.", icon="⚠️")
+        else:
+            st.success(f"✅ prepared 폴더 스캔 완료: 총 {total_files_count}개 파일, 새 파일 없음", icon="✅")
+    else:
+        st.info("⏳ prepared 폴더 자동 스캔 대기 중...", icon="⏳")
+
     st.info(
         "강제 인덱싱(HQ, 느림)·백업과 인덱싱 파일 미리보기는 **관리자 인덱싱 패널**에서 합니다. "
         "관리자 모드 진입 후 아래 섹션으로 이동하세요.",
@@ -461,8 +475,8 @@ def render_index_panel() -> None:
             except Exception as e:
                 st.error(f"업로드 실패: {e}")
 
-    # 4) 강제 인덱싱 실행 버튼
-    if st.button("🚀 강제 재인덱싱(HQ, prepared)", type="primary",
+    # 4) 재인덱싱 및 릴리스 업로드 버튼
+    if st.button("🚀 재인덱싱 및 릴리스 업로드(HQ, prepared)", type="primary",
                  use_container_width=True, key="idx_run_btn"):
         params = {"auto_up": True, "debug": bool(show_debug)}
         try:

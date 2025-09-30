@@ -784,7 +784,78 @@ def _auto_start_once() -> None:
             st.success("자동 복원 완료")
         _set_brain_status("READY", "자동 복원 완료", "release", attached=True)
         _safe_rerun("auto_start", ttl=1)
-# ================================= [11] boot hooks — END ==============================
+# =============================== [12] auto-scan prepared — START ====================
+def _boot_auto_scan_prepared() -> None:
+    """
+    부팅 시 prepared 폴더 자동 스캔.
+    - 새 파일 발견 시 세션 상태에 기록
+    - 사용자에게 알림 표시
+    """
+    try:
+        if "st" in globals() and st is not None:
+            # 이미 스캔했으면 스킵
+            if st.session_state.get("_BOOT_SCAN_DONE"):
+                return
+    except Exception:
+        pass
+
+    def _idx(name: str, *args, **kwargs):
+        try:
+            mod = importlib.import_module("src.services.index_state")
+            fn = getattr(mod, name, None)
+            if callable(fn):
+                return fn(*args, **kwargs)
+        except Exception:
+            return None
+
+    _idx("log", "부팅: prepared 폴더 스캔 중...")
+
+    try:
+        # prepared 파일 목록 조회
+        lister, _ = _load_prepared_lister()
+        if not lister:
+            _idx("log", "prepared 폴더 접근 불가", "warn")
+            return
+
+        files_list = lister() or []
+        total_files = len(files_list)
+
+        # 새 파일 확인
+        chk, _mark, _ = _load_prepared_api()
+        new_files = []
+        if callable(chk):
+            try:
+                persist_dir = effective_persist_dir()
+                info = chk(persist_dir, files_list) or {}
+                new_files = list(info.get("files") or info.get("new") or [])
+            except Exception as e:
+                _idx("log", f"새 파일 확인 실패: {e}", "warn")
+                return
+
+        new_count = len(new_files)
+        
+        # 결과를 세션 상태에 저장
+        try:
+            if "st" in globals() and st is not None:
+                st.session_state["_BOOT_SCAN_DONE"] = True
+                st.session_state["_PREPARED_TOTAL_FILES"] = total_files
+                st.session_state["_PREPARED_NEW_FILES"] = new_count
+                st.session_state["_PREPARED_NEW_FILES_LIST"] = new_files[:10]  # 최대 10개만 저장
+                
+                # 새 파일이 있으면 알림
+                if new_count > 0:
+                    st.session_state["_PREPARED_HAS_NEW"] = True
+                    _idx("log", f"새 파일 {new_count}개 발견! 재인덱싱을 권장합니다.", "warn")
+                else:
+                    st.session_state["_PREPARED_HAS_NEW"] = False
+                    _idx("log", f"prepared 폴더 스캔 완료: 총 {total_files}개 파일, 새 파일 없음")
+        except Exception:
+            pass
+
+    except Exception as e:
+        _idx("log", f"prepared 폴더 스캔 실패: {e}", "err")
+
+# ================================= [12] auto-scan prepared — END ======================
 
 
 # ============================ [12] reserved — START (no-op) ===========================
@@ -1104,6 +1175,7 @@ def _render_body() -> None:
     if not st.session_state.get("_boot_checked"):
         try:
             _boot_auto_restore_index()
+            _boot_auto_scan_prepared()  # 새로 추가: 자동 스캔
             _boot_autoflow_hook()
         except Exception as e:
             _errlog(f"boot check failed: {e}", where="[render_body.boot]", exc=e)
