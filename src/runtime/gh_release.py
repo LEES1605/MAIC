@@ -356,6 +356,33 @@ class GHReleases:
         data = self._download_asset(bdl)
         self._extract_bytes_to(dest, str(name), data)
 
+        # 4) 복원 후 검증: chunks.jsonl 파일이 실제로 생성되었는지 확인
+        chunks_file = dest / "chunks.jsonl"
+        if not chunks_file.exists() or chunks_file.stat().st_size == 0:
+            # chunks.jsonl이 없으면 하위 디렉터리에서 찾기
+            found_chunks = None
+            for subdir in dest.iterdir():
+                if subdir.is_dir():
+                    candidate = subdir / "chunks.jsonl"
+                    if candidate.exists() and candidate.stat().st_size > 0:
+                        found_chunks = candidate
+                        break
+            
+            if found_chunks:
+                # 하위 디렉터리의 chunks.jsonl을 상위로 이동
+                import shutil
+                shutil.move(str(found_chunks), str(chunks_file))
+                # 하위 디렉터리의 다른 파일들도 상위로 이동
+                for item in found_chunks.parent.iterdir():
+                    if item != found_chunks:
+                        target = dest / item.name
+                        if item.is_file():
+                            shutil.move(str(item), str(target))
+                        elif item.is_dir() and not target.exists():
+                            shutil.move(str(item), str(target))
+            else:
+                raise GHError(f"복원 후 chunks.jsonl 파일을 찾을 수 없습니다. 압축 파일 구조를 확인하세요: {name}")
+
         return RestoreLog(
             tag=chosen_tag,
             release_id=rel_id,
