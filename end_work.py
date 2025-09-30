@@ -13,13 +13,14 @@ def run_command(cmd, description):
     """명령어 실행 및 결과 출력"""
     print(f"[{description}] 실행 중...")
     try:
-        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, cwd=Path.cwd())
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, 
+                              cwd=Path.cwd(), encoding='utf-8', errors='ignore')
         if result.returncode == 0:
             print(f"[{description}] 완료")
-            if result.stdout.strip():
+            if result.stdout and result.stdout.strip():
                 print(f"   {result.stdout.strip()}")
         else:
-            print(f"[{description}] 실패: {result.stderr.strip()}")
+            print(f"[{description}] 실패: {result.stderr.strip() if result.stderr else 'Unknown error'}")
             return False
     except Exception as e:
         print(f"[{description}] 오류: {e}")
