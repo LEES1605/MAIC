@@ -5,6 +5,7 @@ import io
 import json
 import mimetypes
 import os
+import shutil
 import tarfile
 import zipfile
 from dataclasses import dataclass
@@ -209,6 +210,7 @@ class GHReleases:
         tag_candidates: Sequence[str],
         asset_candidates: Sequence[str],
         dest: Path,
+        clean_dest: bool = False,
     ) -> RestoreLog:
         # 1) find release by tag candidates or latest
         chosen_rel: Optional[Dict[str, Any]] = None
@@ -337,6 +339,20 @@ class GHReleases:
             raise GHError("asset has no browser_download_url")
 
         # 3) download and extract
+        if clean_dest:
+            try:
+                dest.mkdir(parents=True, exist_ok=True)
+                for child in list(dest.iterdir()):
+                    if child.is_dir():
+                        shutil.rmtree(child)
+                    else:
+                        child.unlink()
+            except FileNotFoundError:
+                dest.mkdir(parents=True, exist_ok=True)
+            except PermissionError as e:
+                raise GHError(f"failed to clean destination '{dest}': permission denied: {e}") from e
+            except Exception as e:
+                raise GHError(f"failed to clean destination '{dest}': {e}") from e
         data = self._download_asset(bdl)
         self._extract_bytes_to(dest, str(name), data)
 

@@ -460,10 +460,11 @@ def _boot_auto_restore_index() -> None:
 
     UI 연동(진행표시 훅): 플레이스홀더 생성은 [19]에서만 수행
     """
-    # 멱등 보호
+    # 멱등 보호 (UI 버튼 클릭 시에는 강제 재시도 허용)
     try:
         if "st" in globals() and st is not None:
-            if st.session_state.get("_BOOT_RESTORE_DONE"):
+            # UI에서 명시적으로 호출된 경우에는 멱등 보호 무시
+            if st.session_state.get("_BOOT_RESTORE_DONE") and not st.session_state.get("_FORCE_RESTORE", False):
                 return
     except Exception:
         pass
@@ -687,14 +688,18 @@ def _boot_auto_restore_index() -> None:
         _idx("step_set", 3, "ok", "메타 저장 완료")
         _idx("step_set", 4, "ok", "마무리 정리")
         _idx("log", "✅ 최신 인덱스 복원 완료")
-    except Exception:
+    except Exception as e:
         _idx("step_set", 2, "err", "복원 실패")
-        _idx("log", "❌ 최신 인덱스 복원 실패", "err")
+        _idx("log", f"❌ 최신 인덱스 복원 실패: {e}", "err")
         try:
             if "st" in globals() and st is not None:
                 st.session_state["_BOOT_RESTORE_DONE"] = True
                 st.session_state.setdefault("_PERSIST_DIR", p.resolve())
                 st.session_state["_INDEX_IS_LATEST"] = False
+                # UI에서 호출된 경우 오류 메시지 표시
+                if st.session_state.get("_FORCE_RESTORE", False):
+                    st.error(f"복원 실패: {e}")
+                    st.session_state["_FORCE_RESTORE"] = False  # 플래그 리셋
         except Exception:
             pass
         return

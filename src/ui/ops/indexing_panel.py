@@ -110,12 +110,15 @@ def render_orchestrator_header() -> None:
         cols = st.columns([1, 1, 2])
         if cols[0].button("⬇️ Release에서 최신 인덱스 복원", use_container_width=True):
             try:
+                # 강제 복원 플래그 설정
+                st.session_state["_FORCE_RESTORE"] = True
                 fn = _resolve_app_attr("_boot_auto_restore_index")
                 if callable(fn):
                     fn()
                 st.success("Release 복원을 시도했습니다. 상태를 확인하세요.")
             except Exception as e:
                 st.error(f"복원 실행 실패: {e}")
+                st.session_state["_FORCE_RESTORE"] = False  # 플래그 리셋
 
         if cols[1].button("✅ 로컬 구조 검증", use_container_width=True):
             try:
