@@ -4,11 +4,14 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Sequence, Tuple
 from urllib import request, error
+
+from src.runtime.gh_release import GHReleases, GHError
 
 # 지연 임포트: PyYAML 없을 때 테스트 수집 단계 즉사 방지
 try:
@@ -31,6 +34,7 @@ CACHE_DIR = Path(os.getenv("MAIC_PROMPTS_CACHE_DIR", ".maic_cache"))
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 CACHE_FILE = CACHE_DIR / "prompts.yaml"
 META_FILE = CACHE_DIR / "prompts.meta.json"
+FROM_RELEASE = bool(int(os.getenv("MAIC_PROMPTS_FROM_RELEASE", "1")))
 
 _REQUIRED = ("grammar", "sentence", "passage")
 PASSAGE_SKELETON_TEXT = (
@@ -104,6 +108,100 @@ class FetchResult:
     etag: str
     status: int
 
+
+def _download_url(url: str, *, token: Optional[str] = None, timeout: float = TIMEOUT) -> bytes:
+    headers = _gh_headers()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = request.Request(url, headers=headers)
+    with request.urlopen(req, timeout=timeout) as resp:
+        return resp.read()
+
+
+def _fetch_release_asset(
+    owner: str,
+    repo: str,
+    *,
+    token: Optional[str],
+    tag_candidates: Sequence[str],
+    asset_candidates: Sequence[str],
+) -> Optional[Tuple[str, str]]:
+    try:
+        gh = GHReleases(owner=owner, repo=repo, token=token or "")
+    except Exception:
+        return None
+
+    # Attempt pointer tags first, then fallback to scanning releases
+    chosen_rel = None
+    chosen_tag = None
+    chosen_asset = None
+
+    patterns = [
+        re.compile(r"^prompts[-_].+\.(yaml|yml)$", re.IGNORECASE),
+        re.compile(r"^prompts\.(yaml|yml)$", re.IGNORECASE),
+    ]
+
+    for tag in tag_candidates:
+        rel = gh.get_release_by_tag(tag) if tag != "latest" else gh.get_latest_release()
+        if rel and rel.get("id"):
+            assets = rel.get("assets") or []
+            for cand in asset_candidates:
+                hit = next((a for a in assets if str(a.get("name") or "").lower() == cand.lower()), None)
+                if hit:
+                    chosen_rel = rel
+                    chosen_tag = rel.get("tag_name") or tag
+                    chosen_asset = hit
+                    break
+            if not chosen_asset:
+                for asset in assets:
+                    nm = str(asset.get("name") or "")
+                    if any(p.search(nm) for p in patterns):
+                        chosen_rel = rel
+                        chosen_tag = rel.get("tag_name") or tag
+                        chosen_asset = asset
+                        break
+            if chosen_asset:
+                break
+
+    if not chosen_asset:
+        # fallback: scan recent releases for first matching asset
+        try:
+            for rel in gh.list_releases(per_page=30):
+                assets = rel.get("assets") or []
+                for cand in asset_candidates:
+                    hit = next((a for a in assets if str(a.get("name") or "").lower() == cand.lower()), None)
+                    if hit:
+                        chosen_rel = rel
+                        chosen_tag = rel.get("tag_name") or rel.get("name")
+                        chosen_asset = hit
+                        break
+                if not chosen_asset:
+                    for asset in assets:
+                        nm = str(asset.get("name") or "")
+                        if any(p.search(nm) for p in patterns):
+                            chosen_rel = rel
+                            chosen_tag = rel.get("tag_name") or rel.get("name")
+                            chosen_asset = asset
+                            break
+                if chosen_asset:
+                    break
+        except GHError:
+            pass
+
+    if not chosen_asset:
+        return None
+
+    url = chosen_asset.get("browser_download_url") or ""
+    if not url:
+        return None
+
+    try:
+        data = _download_url(url, token=token)
+        text = data.decode("utf-8")
+        return text, chosen_tag or ""
+    except Exception:
+        return None
+
 def _fetch_repo_file(owner: str, repo: str, ref: str, path: str, *, etag: Optional[str], send_etag: bool) -> Optional[FetchResult]:
     url = f"https://api.github.com/repos/{owner}/{repo}/contents/{path}?ref={ref}"
     req = request.Request(url, headers=_gh_headers())
@@ -166,7 +264,33 @@ def load_prompts(
         _last_status.update({"source": "cache", "reason": "ttl_hit", "ts": now, "schema_ok": True})
         return {"version": str(data.get("version", "1")), "modes": data["modes"]}
 
-    # 2) 원격 시도
+    # 2) 릴리스 자산 우선 시도 (prompts)
+    if FROM_RELEASE:
+        release_try = _fetch_release_asset(
+            eff_owner,
+            eff_repo,
+            token=TOKEN,
+            tag_candidates=("prompts-latest", "latest"),
+            asset_candidates=("prompts.yaml", "prompts.yml"),
+        )
+        if release_try is not None:
+            text, tag = release_try
+            CACHE_FILE.write_text(text, encoding="utf-8")
+            META_FILE.write_text(json.dumps({"release_tag": tag}), encoding="utf-8")
+            data = _yaml_load(text)
+            data = _ensure_required_modes(data)
+            _last_status.update({
+                "source": "release",
+                "reason": "download",
+                "ref": tag,
+                "path": "release/prompts.yaml",
+                "ts": now,
+                "schema_ok": True,
+            })
+            _last_load_ts = now
+            return {"version": str(data.get("version", "1")), "modes": data["modes"]}
+
+    # 3) GitHub Contents API 시도
     etag = ""
     if META_FILE.exists():
         try:
@@ -188,7 +312,7 @@ def load_prompts(
         _last_status.update({"source": "repo", "reason": f"error:{e.__class__.__name__}", "ref": eff_ref,
                              "path": eff_path, "ts": now, "schema_ok": False})
 
-    # 3) 캐시 폴백
+    # 4) 캐시 폴백
     if CACHE_FILE.exists():
         data = _yaml_load(CACHE_FILE.read_text(encoding="utf-8"))
         data = _ensure_required_modes(data)  # 엄격
@@ -196,7 +320,7 @@ def load_prompts(
         _last_load_ts = now
         return {"version": str(data.get("version", "1")), "modes": data["modes"]}
 
-    # 4) 내장 샘플(.yaml → .json 순서)
+    # 5) 내장 샘플(.yaml → .json 순서)
     for fb in (Path("docs/_gpt/prompts.sample.yaml"), Path("docs/_gpt/prompts.sample.json")):
         if fb.exists():
             data = _yaml_load(fb.read_text(encoding="utf-8"))

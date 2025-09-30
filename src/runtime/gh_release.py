@@ -137,7 +137,7 @@ class GHReleases:
         assets = j if isinstance(j, list) else j.get("assets", [])
         return assets or []
 
-    def _list_releases(self, per_page: int = 30) -> list[dict]:
+    def list_releases(self, per_page: int = 30) -> list[dict]:
         url = f"https://api.github.com/repos/{self.owner}/{self.repo}/releases?per_page={int(per_page)}"
         j = self._http("GET", url, headers=self._headers())
         return j if isinstance(j, list) else []

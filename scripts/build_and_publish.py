@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import datetime
 import os
 import sys
 import tarfile
@@ -72,9 +73,24 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     mode = args.mode
-    tag = args.tag or ("prompts-latest" if mode == "prompts" else "index-latest")
-    title = args.title or ("Prompts Latest" if mode == "prompts" else "Index Latest")
-    notes = args.notes or ""
+
+    stamp = datetime.datetime.utcnow().strftime("%Y%m%d%H%M%S")
+
+    if mode == "index":
+        version_tag = args.tag or f"index-{stamp}"
+        pointer_tag = "index-latest"
+        pointer_title = "Index Latest"
+        pointer_asset_name = "index.tar.gz"
+        version_asset_name = args.asset_name or f"{version_tag}.tar.gz"
+    else:
+        version_tag = args.tag or f"prompts-{stamp}"
+        pointer_tag = "prompts-latest"
+        pointer_title = "Prompts Latest"
+        pointer_asset_name = "prompts.yaml"
+        version_asset_name = args.asset_name or f"{version_tag}.yaml"
+
+    title = args.title or ("Prompts Release" if mode == "prompts" else "Index Release")
+    notes = args.notes or f"Published at {stamp} UTC"
 
     try:
         gh = gh_from_env()
@@ -82,17 +98,25 @@ def main(argv: list[str] | None = None) -> int:
         _fail(f"GH env error: {e}", 2)
 
     asset_path, default_name = _build_asset(mode, args.asset)
-    name = args.asset_name or default_name
-    _info(f"asset: {asset_path} (as {name})")
-    _info(f"tag: {tag} | title: {title}")
+    if args.asset_name is None:
+        version_asset = version_asset_name
+    else:
+        version_asset = args.asset_name
+    _info(f"asset: {asset_path} (as {version_asset})")
+    _info(f"version tag: {version_tag} | title: {title}")
 
     try:
-        gh.ensure_release(tag, title=title, notes=notes)
-        gh.upload_asset(tag=tag, file_path=asset_path, asset_name=name, clobber=True)
+        gh.ensure_release(version_tag, title=title, notes=notes)
+        gh.upload_asset(tag=version_tag, file_path=asset_path, asset_name=version_asset, clobber=True)
+
+        # pointer release update
+        gh.ensure_release(pointer_tag, title=pointer_title, notes=f"Tracks {version_tag}")
+        gh.upload_asset(tag=pointer_tag, file_path=asset_path, asset_name=pointer_asset_name, clobber=True)
     except GHError as e:
         _fail(f"release publish failed: {e}", 5)
 
-    print(f"::notice ::Published '{name}' to release '{tag}'")
+    print(f"::notice ::Published '{version_asset}' to release '{version_tag}'")
+    print(f"::notice ::Updated pointer '{pointer_tag}'")
     return 0
 
 if __name__ == "__main__":
