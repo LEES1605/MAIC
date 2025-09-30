@@ -310,15 +310,33 @@ def run_admin_index_job(req: Dict[str, Any]) -> None:
         # 5) ZIP/Release 업로드(선택)
         status.update(label="⏫ ZIP 생성 및 Release 업로드...", state="running")
         _step_set(5, "run", "ZIP/Release 업로드")
+        uploaded_tag = None
         try:
             z = make_index_backup_zip(used_persist)
             msg = upload_index_backup(z, tag=f"index-{int(time.time())}")
             _step_set(5, "ok", "업로드 완료")
             _log(msg)
+            
+            # 업로드된 태그 추출 (순차번호 시스템 사용)
+            if "tag=" in msg:
+                uploaded_tag = msg.split("tag=")[1].split()[0]
+                # 괄호 제거 (sequential release) 부분 제거
+                if "(" in uploaded_tag:
+                    uploaded_tag = uploaded_tag.split("(")[0]
         except Exception as e:
             _step_set(5, "fail", f"upload_error: {e}")
             _log(f"업로드 실패: {e}", "err")
         prog.progress(100)
+        
+        # 6) 세션 상태 업데이트 (최신 릴리스 적용됨으로 표시)
+        try:
+            if uploaded_tag:
+                st.session_state["_INDEX_IS_LATEST"] = True
+                st.session_state["_LATEST_RELEASE_TAG"] = uploaded_tag
+                st.session_state["_PERSIST_DIR"] = used_persist.resolve()
+                _log(f"세션 상태 업데이트: 최신 릴리스 {uploaded_tag} 적용됨")
+        except Exception as e:
+            _log(f"세션 상태 업데이트 실패: {e}", "warn")
 
         status.update(label="✅ 강제 재인덱싱 완료", state="complete")
         if hasattr(st, "success"):
