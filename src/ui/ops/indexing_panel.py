@@ -130,7 +130,13 @@ def render_orchestrator_header() -> None:
                 
                 fn = _resolve_app_attr("_boot_auto_restore_index")
                 if callable(fn):
-                    fn()
+                    try:
+                        fn()
+                    except Exception as restore_error:
+                        st.error(f"복원 중 오류 발생: {restore_error}")
+                        import traceback
+                        st.code(traceback.format_exc())
+                        raise
                 
                 # 복원 후 상태 기록
                 post_restore_state = {
@@ -235,6 +241,42 @@ def render_orchestrator_header() -> None:
         if restore_debug:
             with st.expander("🔧 복원 디버그 정보", expanded=True):
                 st.json(restore_debug)
+        
+        # 릴리스 자산 정보 확인 버튼 추가
+        if st.button("🔍 릴리스 자산 정보 확인", use_container_width=True):
+            try:
+                from src.runtime.gh_release import GHConfig, GHReleases
+                import os
+                
+                # GitHub 설정
+                repo_full = st.secrets.get("GITHUB_REPO", os.getenv("GITHUB_REPO", ""))
+                token = st.secrets.get("GITHUB_TOKEN", os.getenv("GITHUB_TOKEN"))
+                
+                if "/" not in str(repo_full):
+                    st.error("GITHUB_REPO 설정이 필요합니다.")
+                    return
+                
+                owner, repo = str(repo_full).split("/", 1)
+                gh = GHReleases(GHConfig(owner=owner, repo=repo, token=token))
+                
+                # 최신 릴리스 정보 조회
+                latest_rel = gh.get_latest_release()
+                if latest_rel:
+                    st.success(f"최신 릴리스: {latest_rel.get('tag_name')}")
+                    assets = latest_rel.get("assets", [])
+                    if assets:
+                        st.write("**자산 목록:**")
+                        for asset in assets:
+                            st.write(f"- {asset.get('name')} ({asset.get('size', 0)} bytes)")
+                    else:
+                        st.warning("자산이 없습니다.")
+                else:
+                    st.error("릴리스를 찾을 수 없습니다.")
+                    
+            except Exception as e:
+                st.error(f"릴리스 정보 조회 실패: {e}")
+                import traceback
+                st.code(traceback.format_exc())
 
         try:
             _dbg = _resolve_app_attr("_render_release_candidates_debug")
