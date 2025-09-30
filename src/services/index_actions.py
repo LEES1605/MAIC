@@ -4,14 +4,17 @@ from __future__ import annotations
 # ================================ [01] future import — END ============================
 
 # =============================== [02] module imports — START ==========================
-from typing import Any, Dict, List, Tuple, Optional
-from pathlib import Path
-import zipfile
-import traceback
+import datetime
 import importlib
-import time
 import os
 import sys
+import tarfile
+import tempfile
+import time
+import traceback
+import zipfile
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 try:
     import streamlit as st
 except Exception:  # pragma: no cover
@@ -132,23 +135,36 @@ def _errlog(msg: str, where: str = "", exc: Exception | None = None) -> None:
 # ============================== [03] local helpers — END ==============================
 
 # ============================= [04] public API — START ================================
-def make_index_backup_zip(persist_dir: Path) -> Path:
-    """persist 내용을 backups/index_<ts>.zip으로 압축."""
+def make_index_backup_zip(persist_dir: Path, *, raw: bool = False) -> Path:
+    """persist 내용을 압축.
+
+    raw=True 일 때는 zip(zip)으로, raw=False(default)는 tar.gz.
+    """
     backup_dir = persist_dir / "backups"
     backup_dir.mkdir(parents=True, exist_ok=True)
-    zpath = backup_dir / f"index_{int(time.time())}.zip"
-    with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as zf:
+    ts = datetime.datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    if raw:
+        zpath = backup_dir / f"index_{ts}.zip"
+        with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as zf:
+            for root, _d, files in os.walk(str(persist_dir)):
+                for fn in files:
+                    pth = Path(root) / fn
+                    if pth.is_file() and not pth.name.endswith(('.zip', '.tar.gz')):
+                        zf.write(str(pth), arcname=str(pth.relative_to(persist_dir)))
+        return zpath
+
+    tar_path = backup_dir / f"index_{ts}.tar.gz"
+    with tarfile.open(tar_path, "w:gz") as tf:
         for root, _d, files in os.walk(str(persist_dir)):
             for fn in files:
                 pth = Path(root) / fn
-                # backups/ 내부의 오래된 zip은 제외(자기 자신 포함)
-                if pth.is_file() and pth.suffix != ".zip":
-                    zf.write(str(pth), arcname=str(pth.relative_to(persist_dir)))
-    return zpath
+                if pth.is_file():
+                    tf.add(str(pth), arcname=str(pth.relative_to(persist_dir)))
+    return tar_path
 
 
-def upload_index_zip_to_release(zip_path: Path, *, tag: str | None = None) -> str:
-    """ZIP을 GitHub Release에 업로드(태그 없으면 index-<ts>). 실패시 예외."""
+def upload_index_backup(zip_path: Path, *, tag: str | None = None) -> str:
+    """인덱스 백업 자산을 GitHub Release에 업로드."""
     owner, repo, tok = _resolve_owner_repo_and_token()
     if not (owner and repo and tok):
         raise RuntimeError("시크릿/리포 정보가 부족합니다(GITHUB_REPO/GITHUB_TOKEN 등)." )
@@ -159,10 +175,16 @@ def upload_index_zip_to_release(zip_path: Path, *, tag: str | None = None) -> st
 
     if tag is None:
         tag = f"index-{int(time.time())}"
+    pointer_tag = "index-latest"
+
     client = GHReleases(GHConfig(owner=owner, repo=repo, token=tok))
-    rel = client.ensure_release(tag, name=tag)
-    client.upload_asset(rel, zip_path)
-    return f"OK: {zip_path.name} → {owner}/{repo} tag={tag}"
+
+    client.ensure_release(tag, title=tag, notes="Index snapshot")
+    client.upload_asset(tag=tag, file_path=zip_path, asset_name=os.path.basename(zip_path), clobber=True)
+
+    client.ensure_release(pointer_tag, title="Index Latest", notes=f"Tracks {tag}")
+    client.upload_asset(tag=pointer_tag, file_path=zip_path, asset_name="index.tar.gz", clobber=True)
+    return f"OK: {zip_path.name} → {owner}/{repo} tag={tag} (pointer updated)"
 
 
 def collect_prepared_files() -> tuple[list[dict], list[str]]:

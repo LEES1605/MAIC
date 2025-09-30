@@ -16,7 +16,7 @@ from src.services.index_state import render_index_steps
 from src.services.index_actions import (
     persist_dir_safe as _persist_dir_safe,
     make_index_backup_zip,
-    upload_index_zip_to_release,
+    upload_index_backup,
     run_admin_index_job,
 )
 
@@ -300,7 +300,7 @@ def render_index_panel() -> None:
             try:
                 used_persist = _persist_dir_safe()
                 z = make_index_backup_zip(used_persist)
-                msg = upload_index_zip_to_release(z, tag=f"index-{int(time.time())}")
+                msg = upload_index_backup(z, tag=f"index-{int(time.time())}")
                 st.success(f"업로드 완료: {msg}")
             except Exception as e:
                 st.error(f"업로드 실패: {e}")
