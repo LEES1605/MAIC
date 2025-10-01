@@ -30,25 +30,21 @@ def _hide_default_pages_nav() -> None:
 
 # --- internal: page switching helpers ----------------------------------------
 def _switch_to(target: str) -> bool:
-    """Streamlit 페이지 네비게이션: switch_page → page_link → query params 순 폴백."""
+    """빠른 Streamlit 페이지 네비게이션: switch_page 우선 사용."""
     if st is None:
         return False
     try:
-        st.switch_page(target)  # e.g., "app.py" / "pages/10_admin_prompt.py"
+        # 가장 빠른 방법: switch_page 직접 사용
+        st.switch_page(target)
         return True
     except Exception:
-        pass
-    try:
-        st.sidebar.page_link(target, label="열기")
-        return True
-    except Exception:
-        pass
-    try:
-        st.query_params["goto"] = "home"
-        if hasattr(st, "rerun"):
+        # 폴백: 쿼리 파라미터로 페이지 전환
+        try:
+            st.query_params["page"] = target
             st.rerun()
-    except Exception:
-        pass
+            return True
+        except Exception:
+            pass
     return False
 
 def _logout_to_student() -> None:
@@ -152,14 +148,14 @@ def render_sidebar(*, back_page: str | None = "app.py", icon_only: bool = False)
     except Exception:
         pass
     
-    # iOS 스타일 탭 시스템 적용 (작동하는 버전)
+    # 통합된 iOS 스타일 탭 시스템 적용
     try:
-        from ..components.ios_tabs_working import render_ios_tabs_working, create_admin_tabs_working
+        from ..components.ios_tabs_unified import render_ios_tabs_unified, create_admin_tabs_unified
         
-        tabs = create_admin_tabs_working()
-        active_tab = render_ios_tabs_working(tabs, key="admin_tabs")
+        tabs = create_admin_tabs_unified()
+        active_tab = render_ios_tabs_unified(tabs, key="admin_tabs")
         
-        # 탭에 따른 페이지 라우팅
+        # 탭에 따른 페이지 라우팅 (빠른 전환)
         if active_tab == "management":
             # 관리 탭 - 오케스트레이터로 이동
             if back_page != "app.py":
