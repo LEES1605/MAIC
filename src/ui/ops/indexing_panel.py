@@ -122,15 +122,8 @@ def render_orchestrator_header() -> None:
         badge_code = "MISSING"
         badge_desc = "인덱스 없음"
 
-    st.markdown(f"**상태**\n\n{badge}")
-
-    # 상단 글로벌 배지 동기화 (앱 함수가 있으면 사용)
-    try:
-        _set = _resolve_app_attr("_set_brain_status")
-        if callable(_set):
-            _set(badge_code, badge_desc, "index", attached=(badge_code == "READY"))
-    except Exception:
-        pass
+    # 중복된 준비완료 상태 표시 제거 (미니멀리즘)
+    # 상태 정보는 아래 시스템 상태 카드에서만 표시
 
     if bool(st.session_state.get("admin_mode", False)):
         # 자동 스캔 상태 표시 (관리자 전용) - 모바일 친화적
@@ -206,7 +199,7 @@ def render_orchestrator_header() -> None:
         # 스캔 상태 (간소화)
         if boot_scan_done:
             if has_new_files:
-                status_html += '<div class="status-card warning">🆕 새파일</div>'
+                status_html += f'<div class="status-card warning">🆕 새파일<br>{new_files_count}개</div>'
             else:
                 status_html += '<div class="status-card success">✅ 최신</div>'
         else:
@@ -215,242 +208,176 @@ def render_orchestrator_header() -> None:
         status_html += '</div>'
         st.markdown(status_html, unsafe_allow_html=True)
         
-        # 복원 상태 (한 줄로 간소화)
-        auto_restore_done = st.session_state.get("_BOOT_RESTORE_DONE", False)
-        if auto_restore_done:
-            st.success("✅ 복원완료", icon="✅")
-        else:
-            st.warning("⚠️ 복원대기", icon="⚠️")
+        # 복원 상태 표시 제거 (미니멀리즘)
+        # 복원 상태는 시스템 상태 카드에서 충분히 표시됨
         
-        # 관리 도구 - 모바일 친화적 버튼 레이아웃
-        st.markdown("#### 🔧 관리도구")
+        # 인덱싱 관련 도구
+        st.markdown("#### 🔍 인덱싱 관련")
         
-        # 모바일에서 2x2 그리드, 데스크톱에서 4x1 레이아웃
-        st.markdown("""
-        <style>
-        .mobile-tool-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 8px;
-            margin: 12px 0;
-        }
-        @media (min-width: 768px) {
-            .mobile-tool-grid {
-                grid-template-columns: repeat(4, 1fr);
-            }
-        }
-        .tool-button {
-            width: 100%;
-            height: 40px;
-            border-radius: 8px;
-            font-size: 12px;
-            font-weight: 600;
-        }
-        </style>
-        """, unsafe_allow_html=True)
+        idx_col1, idx_col2 = st.columns([1, 1])
         
-        # 버튼 컨테이너 - 모바일에서 2x2, 데스크톱에서 4x1
-        button_container = st.container()
-        with button_container:
-            # 모바일: 2x2 그리드
-            col1, col2 = st.columns([1, 1])
-            
-            with col1:
-                if st.button("🔄 릴리스복원", use_container_width=True, type="primary"):
-                    try:
-                        # 강제 복원 플래그 설정
-                        st.session_state["_FORCE_RESTORE"] = True
-                    
-                        # 복원 전 상태 기록
-                        pre_restore_state = {
-                            "chunks_exists": cj.exists(),
-                            "chunks_size": cj.stat().st_size if cj.exists() else 0,
-                            "ready_exists": rf.exists(),
-                            "ready_content": rf.read_text(encoding="utf-8") if rf.exists() else "",
-                            "persist_files": [str(f) for f in persist.iterdir()] if persist.exists() else []
-                        }
-                        
-                        fn = _resolve_app_attr("_boot_auto_restore_index")
-                        if callable(fn):
+        with idx_col1:
+            if st.button("🔍 파일스캔", use_container_width=True):
+                try:
+                    # 수동 스캔 실행
+                    lister, _ = _load_prepared_lister()
+                    if lister:
+                        files_list = lister() or []
+                        chk, _mark, _ = _load_prepared_api()
+                        new_files = []
+                        if callable(chk):
                             try:
-                                fn()
-                            except Exception as restore_error:
-                                st.error(f"복원 중 오류 발생: {restore_error}")
-                                import traceback
-                                st.code(traceback.format_exc())
-                                raise
+                                persist_dir = _persist_dir_safe()
+                                info = chk(persist_dir, files_list) or {}
+                                new_files = list(info.get("files") or info.get("new") or [])
+                            except Exception as e:
+                                st.error(f"스캔 실행 실패: {e}")
+                                return
                         
-                        # 복원 후 상태 기록
-                        post_restore_state = {
-                            "chunks_exists": cj.exists(),
-                            "chunks_size": cj.stat().st_size if cj.exists() else 0,
-                            "ready_exists": rf.exists(),
-                            "ready_content": rf.read_text(encoding="utf-8") if rf.exists() else "",
-                            "persist_files": [str(f) for f in persist.iterdir()] if persist.exists() else []
-                        }
+                        total_files = len(files_list)
+                        new_count = len(new_files)
                         
-                        # 복원 결과 저장
-                        st.session_state["_RESTORE_DEBUG"] = {
-                            "pre_restore": pre_restore_state,
-                            "post_restore": post_restore_state,
-                            "timestamp": int(time.time())
-                        }
-                        
-                        st.success("Release 복원을 시도했습니다. 상태를 확인하세요.")
-                    except Exception as e:
-                        st.error(f"복원 실행 실패: {e}")
-                        st.session_state["_FORCE_RESTORE"] = False  # 플래그 리셋
-                        import traceback
-                        traceback_str = traceback.format_exc()
-                        st.code(traceback_str)
-                        _log_error("복원 실패", str(e), traceback_str)
-
-            with col2:
-                if st.button("💾 로컬복원", use_container_width=True):
-                    try:
-                        from src.runtime.local_restore import find_local_backups, restore_from_local_backup
-                        
-                        # 로컬 백업 찾기
-                        from pathlib import Path
-                        backup_base = Path.home() / ".maic"
-                        backups = find_local_backups(backup_base)
-                        
-                        if not backups:
-                            st.warning("로컬 백업을 찾을 수 없습니다.")
-                            st.info("백업 위치: ~/.maic/backup, ~/.maic/backups, ~/.maic/index_backup 등")
+                        if new_count > 0:
+                            st.warning(f"🆕 새 파일 {new_count}개 발견! (총 {total_files}개 파일)")
+                            st.session_state["_PREPARED_HAS_NEW"] = True
+                            st.session_state["_PREPARED_NEW_FILES"] = new_count
                         else:
-                            st.write(f"**발견된 백업 ({len(backups)}개):**")
-                            
-                            # 백업 목록 표시
-                            for i, backup in enumerate(backups[:5]):  # 최대 5개만 표시
-                                backup_info = {
-                                    "path": str(backup),
-                                    "type": "디렉터리" if backup.is_dir() else "압축파일",
-                                    "size": f"{backup.stat().st_size / 1024 / 1024:.1f}MB" if backup.is_file() else "N/A"
-                                }
-                                st.write(f"{i+1}. {backup_info['type']}: {backup.name}")
-                            
-                            # 첫 번째 백업으로 복원 시도
-                            success, message = restore_from_local_backup(backups[0], persist)
-                            
-                            if success:
-                                st.success(f"✅ {message}")
-                                # 세션 상태 업데이트
-                                st.session_state["_INDEX_LOCAL_READY"] = True
-                                st.session_state["_INDEX_IS_LATEST"] = False  # 로컬 복원이므로 최신 아님
-                                st.rerun()
-                            else:
-                                st.error(f"❌ {message}")
-                    
-                    except Exception as e:
-                        st.error(f"로컬 복원 실패: {e}")
-                        import traceback
-                        traceback_str = traceback.format_exc()
-                        st.code(traceback_str)
-                        _log_error("로컬 복원 실패", str(e), traceback_str)
-
-            # 두 번째 행 - 스캔과 검증 버튼
-            col3, col4 = st.columns([1, 1])
-            
-            with col3:
-                if st.button("🔍 파일스캔", use_container_width=True):
-                    try:
-                        # 수동 스캔 실행
-                        lister, _ = _load_prepared_lister()
-                        if lister:
-                            files_list = lister() or []
-                            chk, _mark, _ = _load_prepared_api()
-                            new_files = []
-                            if callable(chk):
-                                try:
-                                    persist_dir = _persist_dir_safe()
-                                    info = chk(persist_dir, files_list) or {}
-                                    new_files = list(info.get("files") or info.get("new") or [])
-                                except Exception as e:
-                                    st.error(f"스캔 실행 실패: {e}")
-                                    return
-                            
-                            total_files = len(files_list)
-                            new_count = len(new_files)
-                            
-                            if new_count > 0:
-                                st.warning(f"🆕 새 파일 {new_count}개 발견! (총 {total_files}개 파일)")
-                                st.session_state["_PREPARED_HAS_NEW"] = True
-                                st.session_state["_PREPARED_NEW_FILES"] = new_count
-                            else:
-                                st.success(f"✅ 새 파일 없음 (총 {total_files}개 파일)")
-                                st.session_state["_PREPARED_HAS_NEW"] = False
-                        else:
-                            st.error("prepared 폴더 접근 불가")
-                    except Exception as e:
-                        st.error(f"스캔 실패: {e}")
-                        import traceback
-                        _log_error("스캔 실패", str(e), traceback.format_exc())
+                            st.success(f"✅ 새 파일 없음 (총 {total_files}개 파일)")
+                            st.session_state["_PREPARED_HAS_NEW"] = False
+                    else:
+                        st.error("prepared 폴더 접근 불가")
+                except Exception as e:
+                    st.error(f"스캔 실패: {e}")
+                    import traceback
+                    _log_error("스캔 실패", str(e), traceback.format_exc())
         
-            with col4:
-                if st.button("✅ 검증", use_container_width=True, key="validation_btn"):
+        with idx_col2:
+            if st.button("✅ 검증", use_container_width=True, key="validation_btn"):
+                try:
+                    # 실시간으로 파일 상태 재확인 (세션 상태와 무관하게)
+                    cj_exists = cj.exists()
+                    cj_size = cj.stat().st_size if cj_exists else 0
+                    cj_valid = cj_exists and cj_size > 0
+                    
+                    rf_exists = rf.exists()
                     try:
-                        # 실시간으로 파일 상태 재확인 (세션 상태와 무관하게)
-                        cj_exists = cj.exists()
-                        cj_size = cj.stat().st_size if cj_exists else 0
-                        cj_valid = cj_exists and cj_size > 0
-                        
-                        rf_exists = rf.exists()
-                        try:
-                            current_ready_txt = rf.read_text(encoding="utf-8") if rf_exists else ""
-                        except Exception as e:
-                            current_ready_txt = f"<읽기오류: {e}>"
-                        
-                        ready_valid = is_ready_text(current_ready_txt)
-                        current_local_ready = cj_valid and ready_valid
-                        
-                        # 상세 디버그 정보
-                        debug_info = {
-                            "chunks.jsonl": {
-                                "exists": cj_exists,
-                                "size": cj_size,
-                                "valid": cj_valid,
-                                "path": str(cj)
-                            },
-                            ".ready": {
-                                "exists": rf_exists,
-                                "content": repr(current_ready_txt),
-                                "normalized": repr(norm_ready_text(current_ready_txt)),
-                                "valid": ready_valid,
-                                "path": str(rf)
-                            },
-                            "validation": {
-                                "chunks_ok": cj_valid,
-                                "ready_ok": ready_valid,
-                                "overall": current_local_ready
-                            }
-                        }
-                        
-                        ok = current_local_ready
-                        rec = {
-                            "result": "성공" if ok else "실패",
-                            "chunk": str(cj),
-                            "ready": current_ready_txt.strip() or "(없음)",
-                            "persist": str(persist),
-                            "latest_tag": latest_tag,
-                            "is_latest": is_latest,
-                            "ts": int(time.time()),
-                            "debug": debug_info
-                        }
-                        st.session_state["_LAST_RESTORE_CHECK"] = rec
-
-                        if ok:
-                            st.success("검증 성공: chunks.jsonl 존재 & .ready 유효")
-                        else:
-                            st.error("검증 실패: 산출물/ready 상태가 불일치")
-                            with st.expander("🔍 상세 디버그 정보", expanded=True):
-                                st.json(debug_info)
+                        current_ready_txt = rf.read_text(encoding="utf-8") if rf_exists else ""
                     except Exception as e:
-                        st.error(f"검증 실행 실패: {e}")
-                        import traceback
-                        traceback_str = traceback.format_exc()
-                        st.code(traceback_str)
-                        _log_error("검증 실패", str(e), traceback_str)
+                        current_ready_txt = f"<읽기오류: {e}>"
+                    
+                    ready_valid = is_ready_text(current_ready_txt)
+                    current_local_ready = cj_valid and ready_valid
+                    
+                    ok = current_local_ready
+                    if ok:
+                        st.success("검증 성공: chunks.jsonl 존재 & .ready 유효")
+                    else:
+                        st.error("검증 실패: 산출물/ready 상태가 불일치")
+                except Exception as e:
+                    st.error(f"검증 실행 실패: {e}")
+                    import traceback
+                    traceback_str = traceback.format_exc()
+                    st.code(traceback_str)
+                    _log_error("검증 실패", str(e), traceback_str)
+        
+        # 릴리스 관련 도구
+        st.markdown("#### 📤 릴리스 관련")
+        
+        rel_col1, rel_col2 = st.columns([1, 1])
+        
+        with rel_col1:
+            if st.button("🔄 릴리스복원", use_container_width=True, type="primary"):
+                try:
+                    # 강제 복원 플래그 설정
+                    st.session_state["_FORCE_RESTORE"] = True
+                
+                    # 복원 전 상태 기록
+                    pre_restore_state = {
+                        "chunks_exists": cj.exists(),
+                        "chunks_size": cj.stat().st_size if cj.exists() else 0,
+                        "ready_exists": rf.exists(),
+                        "ready_content": rf.read_text(encoding="utf-8") if rf.exists() else "",
+                        "persist_files": [str(f) for f in persist.iterdir()] if persist.exists() else []
+                    }
+                    
+                    fn = _resolve_app_attr("_boot_auto_restore_index")
+                    if callable(fn):
+                        try:
+                            fn()
+                        except Exception as restore_error:
+                            st.error(f"복원 중 오류 발생: {restore_error}")
+                            import traceback
+                            st.code(traceback.format_exc())
+                            raise
+                    
+                    # 복원 후 상태 기록
+                    post_restore_state = {
+                        "chunks_exists": cj.exists(),
+                        "chunks_size": cj.stat().st_size if cj.exists() else 0,
+                        "ready_exists": rf.exists(),
+                        "ready_content": rf.read_text(encoding="utf-8") if rf.exists() else "",
+                        "persist_files": [str(f) for f in persist.iterdir()] if persist.exists() else []
+                    }
+                    
+                    # 복원 결과 저장
+                    st.session_state["_RESTORE_DEBUG"] = {
+                        "pre_restore": pre_restore_state,
+                        "post_restore": post_restore_state,
+                        "timestamp": int(time.time())
+                    }
+                    
+                    st.success("Release 복원을 시도했습니다. 상태를 확인하세요.")
+                except Exception as e:
+                    st.error(f"복원 실행 실패: {e}")
+                    st.session_state["_FORCE_RESTORE"] = False  # 플래그 리셋
+                    import traceback
+                    traceback_str = traceback.format_exc()
+                    st.code(traceback_str)
+                    _log_error("복원 실패", str(e), traceback_str)
+
+        with rel_col2:
+            if st.button("💾 로컬복원", use_container_width=True):
+                try:
+                    from src.runtime.local_restore import find_local_backups, restore_from_local_backup
+                    
+                    # 로컬 백업 찾기
+                    from pathlib import Path
+                    backup_base = Path.home() / ".maic"
+                    backups = find_local_backups(backup_base)
+                    
+                    if not backups:
+                        st.warning("로컬 백업을 찾을 수 없습니다.")
+                        st.info("백업 위치: ~/.maic/backup, ~/.maic/backups, ~/.maic/index_backup 등")
+                    else:
+                        st.write(f"**발견된 백업 ({len(backups)}개):**")
+                        
+                        # 백업 목록 표시
+                        for i, backup in enumerate(backups[:5]):  # 최대 5개만 표시
+                            backup_info = {
+                                "path": str(backup),
+                                "type": "디렉터리" if backup.is_dir() else "압축파일",
+                                "size": f"{backup.stat().st_size / 1024 / 1024:.1f}MB" if backup.is_file() else "N/A"
+                            }
+                            st.write(f"{i+1}. {backup_info['type']}: {backup.name}")
+                        
+                        # 첫 번째 백업으로 복원 시도
+                        success, message = restore_from_local_backup(backups[0], persist)
+                        
+                        if success:
+                            st.success(f"✅ {message}")
+                            # 세션 상태 업데이트
+                            st.session_state["_INDEX_LOCAL_READY"] = True
+                            st.session_state["_INDEX_IS_LATEST"] = False  # 로컬 복원이므로 최신 아님
+                            st.rerun()
+                        else:
+                            st.error(f"❌ {message}")
+                
+                except Exception as e:
+                    st.error(f"로컬 복원 실패: {e}")
+                    import traceback
+                    traceback_str = traceback.format_exc()
+                    st.code(traceback_str)
+                    _log_error("로컬 복원 실패", str(e), traceback_str)
 
         with st.expander("최근 검증/복원 기록", expanded=False):
             rec = st.session_state.get("_LAST_RESTORE_CHECK")
@@ -673,14 +600,28 @@ def render_index_panel() -> None:
             except Exception as e:
                 st.error(f"업로드 실패: {e}")
 
-    # 4) 재인덱싱 및 릴리스 업로드 버튼
-    if st.button("🚀 재인덱싱 및 릴리스 업로드(HQ, prepared)", type="primary",
-                 use_container_width=True, key="idx_run_btn"):
-        params = {"auto_up": True, "debug": bool(show_debug)}
-        try:
-            run_admin_index_job(params)
-        except Exception as e:
-            st.error(f"강제 인덱싱 실패: {e}")
+    # 4) 인덱싱 및 업로드 버튼들 (나란히 배열)
+    col1, col2 = st.columns([1, 1])
+    
+    with col1:
+        if st.button("🚀 인덱싱 및 업로드", type="primary",
+                     use_container_width=True, key="idx_run_btn"):
+            params = {"auto_up": True, "debug": bool(show_debug)}
+            try:
+                run_admin_index_job(params)
+            except Exception as e:
+                st.error(f"강제 인덱싱 실패: {e}")
+    
+    with col2:
+        if st.button("📤 Release 업로드", type="secondary",
+                     use_container_width=True, key="release_upload_btn"):
+            try:
+                used_persist = _persist_dir_safe()
+                z = make_index_backup_zip(used_persist)
+                msg = upload_index_backup(z, tag=f"index-{int(time.time())}")
+                st.success(f"Release 업로드 완료: {msg}")
+            except Exception as e:
+                st.error(f"Release 업로드 실패: {e}")
 
     # 5) 마지막으로 한 번 더 진행/상태 렌더(관리자 모드에서만)
     if bool(st.session_state.get("admin_mode", False)):
@@ -698,7 +639,7 @@ def render_indexed_sources_panel() -> None:
     chunks_path = _persist_dir_safe() / "chunks.jsonl"
     with st.container(border=True):
         st.subheader("📄 인덱싱된 파일 목록 (읽기 전용)")
-        st.caption(f"경로: `{str(chunks_path)}`")
+        # persist Dir 경로 표시 제거 (미니멀리즘)
 
         if not chunks_path.exists():
             st.info("아직 인덱스가 없습니다. 먼저 인덱싱을 수행해 주세요.")
