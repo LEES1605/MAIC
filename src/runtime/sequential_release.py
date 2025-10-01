@@ -55,7 +55,9 @@ class SequentialReleaseManager:
     
     def find_latest_by_number(self, prefix: str) -> Optional[Dict[str, Any]]:
         """숫자 기반으로 최신 릴리스 찾기 (하이브리드: 순차번호 + 타임스탬프)"""
+        print(f"[DEBUG] find_latest_by_number called with prefix: '{prefix}'")
         releases = self.gh.list_releases(per_page=100)
+        print(f"[DEBUG] Found {len(releases)} releases in find_latest_by_number: {[r.get('tag_name') for r in releases]}")
         latest_num = 0
         latest_release = None
         latest_timestamp = 0
