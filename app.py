@@ -931,16 +931,26 @@ def _auto_start_once() -> None:
             ok = False
 
     if ok:
-        try:
-            core_mark_ready(used_persist)
-        except Exception:
-            pass
-        if hasattr(st, "toast"):
-            st.toast("자동 복원 완료")
+        # 실제 복원 성공 여부를 다시 확인
+        chunks_ready_path = used_persist / "chunks.jsonl.ready"
+        if chunks_ready_path.exists():
+            try:
+                core_mark_ready(used_persist)
+            except Exception:
+                pass
+            if hasattr(st, "toast"):
+                st.toast("자동 복원 완료")
+            else:
+                st.success("자동 복원 완료")
+            _set_brain_status("READY", "자동 복원 완료", "release", attached=True)
+            _safe_rerun("auto_start", ttl=1)
         else:
-            st.success("자동 복원 완료")
-        _set_brain_status("READY", "자동 복원 완료", "release", attached=True)
-        _safe_rerun("auto_start", ttl=1)
+            # 복원 함수는 성공했지만 실제 파일이 없음
+            _errlog("복원 함수 성공했지만 chunks.jsonl.ready 파일이 없음", where="[auto_start]")
+            if hasattr(st, "toast"):
+                st.toast("복원 실패: 파일이 생성되지 않음")
+            else:
+                st.error("복원 실패: 파일이 생성되지 않음")
 # =============================== [12] auto-scan prepared — START ====================
 def _boot_auto_scan_prepared() -> None:
     """
