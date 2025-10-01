@@ -1183,6 +1183,12 @@ def _render_body() -> None:
             st.session_state["_INDEX_IS_LATEST"] = False
             print(f"[DEBUG] Reset restore state - forcing restore")
             
+            # persist 디렉토리 상태 확인
+            persist_dir = effective_persist_dir()
+            print(f"[DEBUG] Persist directory: {persist_dir}")
+            print(f"[DEBUG] Persist exists: {persist_dir.exists()}")
+            print(f"[DEBUG] Persist writable: {os.access(persist_dir.parent, os.W_OK) if persist_dir.parent.exists() else False}")
+            
             _boot_auto_restore_index()
             _boot_auto_scan_prepared()  # 새로 추가: 자동 스캔
             _boot_autoflow_hook()

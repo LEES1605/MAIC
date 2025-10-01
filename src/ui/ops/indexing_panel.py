@@ -312,71 +312,70 @@ def render_orchestrator_header() -> None:
                     import traceback
                     _log_error("스캔 실패", str(e), traceback.format_exc())
         
-        # 검증 버튼
-        with cols[3]:
-            if st.button("✅ 검증", use_container_width=True):
+        # 검증 버튼 (별도 행으로 이동)
+        if st.button("✅ 검증", use_container_width=True, key="validation_btn"):
+            try:
+                # 실시간으로 파일 상태 재확인 (세션 상태와 무관하게)
+                cj_exists = cj.exists()
+                cj_size = cj.stat().st_size if cj_exists else 0
+                cj_valid = cj_exists and cj_size > 0
+                
+                rf_exists = rf.exists()
                 try:
-                    # 실시간으로 파일 상태 재확인 (세션 상태와 무관하게)
-                    cj_exists = cj.exists()
-                    cj_size = cj.stat().st_size if cj_exists else 0
-                    cj_valid = cj_exists and cj_size > 0
-                    
-                    rf_exists = rf.exists()
-                    try:
-                        current_ready_txt = rf.read_text(encoding="utf-8") if rf_exists else ""
-                    except Exception as e:
-                        current_ready_txt = f"<읽기오류: {e}>"
-                    
-                    ready_valid = is_ready_text(current_ready_txt)
-                    current_local_ready = cj_valid and ready_valid
-                    
-                    # 상세 디버그 정보
-                    debug_info = {
-                        "chunks.jsonl": {
-                            "exists": cj_exists,
-                            "size": cj_size,
-                            "valid": cj_valid,
-                            "path": str(cj)
-                        },
-                        ".ready": {
-                            "exists": rf_exists,
-                            "content": repr(current_ready_txt),
-                            "normalized": repr(norm_ready_text(current_ready_txt)),
-                            "valid": ready_valid,
-                            "path": str(rf)
-                        },
-                        "validation": {
-                            "chunks_ok": cj_valid,
-                            "ready_ok": ready_valid,
-                            "overall": current_local_ready
-                        }
-                    }
-                    
-                    ok = current_local_ready
-                    rec = {
-                        "result": "성공" if ok else "실패",
-                        "chunk": str(cj),
-                        "ready": current_ready_txt.strip() or "(없음)",
-                        "persist": str(persist),
-                        "latest_tag": latest_tag,
-                        "is_latest": is_latest,
-                        "ts": int(time.time()),
-                        "debug": debug_info
-                    }
-                    st.session_state["_LAST_RESTORE_CHECK"] = rec
-
-                    if ok:
-                        st.success("검증 성공: chunks.jsonl 존재 & .ready 유효")
-                    else:
-                        st.error("검증 실패: 산출물/ready 상태가 불일치")
-                        with st.expander("🔍 상세 디버그 정보", expanded=True):
-                            st.json(debug_info)
+                    current_ready_txt = rf.read_text(encoding="utf-8") if rf_exists else ""
                 except Exception as e:
-                    st.error(f"검증 실행 실패: {e}")
-                    import traceback
-                    traceback_str = traceback.format_exc()
-                    st.code(traceback_str)
-                    _log_error("검증 실패", str(e), traceback_str)
+                    current_ready_txt = f"<읽기오류: {e}>"
+                
+                ready_valid = is_ready_text(current_ready_txt)
+                current_local_ready = cj_valid and ready_valid
+                
+                # 상세 디버그 정보
+                debug_info = {
+                    "chunks.jsonl": {
+                        "exists": cj_exists,
+                        "size": cj_size,
+                        "valid": cj_valid,
+                        "path": str(cj)
+                    },
+                    ".ready": {
+                        "exists": rf_exists,
+                        "content": repr(current_ready_txt),
+                        "normalized": repr(norm_ready_text(current_ready_txt)),
+                        "valid": ready_valid,
+                        "path": str(rf)
+                    },
+                    "validation": {
+                        "chunks_ok": cj_valid,
+                        "ready_ok": ready_valid,
+                        "overall": current_local_ready
+                    }
+                }
+                
+                ok = current_local_ready
+                rec = {
+                    "result": "성공" if ok else "실패",
+                    "chunk": str(cj),
+                    "ready": current_ready_txt.strip() or "(없음)",
+                    "persist": str(persist),
+                    "latest_tag": latest_tag,
+                    "is_latest": is_latest,
+                    "ts": int(time.time()),
+                    "debug": debug_info
+                }
+                st.session_state["_LAST_RESTORE_CHECK"] = rec
+
+                if ok:
+                    st.success("검증 성공: chunks.jsonl 존재 & .ready 유효")
+                else:
+                    st.error("검증 실패: 산출물/ready 상태가 불일치")
+                    with st.expander("🔍 상세 디버그 정보", expanded=True):
+                        st.json(debug_info)
+            except Exception as e:
+                st.error(f"검증 실행 실패: {e}")
+                import traceback
+                traceback_str = traceback.format_exc()
+                st.code(traceback_str)
+                _log_error("검증 실패", str(e), traceback_str)
 
         with st.expander("최근 검증/복원 기록", expanded=False):
             rec = st.session_state.get("_LAST_RESTORE_CHECK")
