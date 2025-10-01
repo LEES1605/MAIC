@@ -185,12 +185,12 @@ def main() -> None:
     col1, col2 = st.columns(2)
     
     with col1:
-        linear_alert("정보 알림입니다. 중요한 정보를 전달합니다.", variant="info")
+        linear_alert("정보 알림! 중요한 정보를 전달합니다.", variant="info")
         linear_alert("성공! 작업이 완료되었습니다.", variant="success")
     
     with col2:
         linear_alert("경고! 확인이 필요한 항목이 있습니다.", variant="warning")
-        linear_alert("오류가 발생했습니다. 다시 시도해주세요.", variant="danger")
+        linear_alert("오류 발생! 다시 시도해주세요.", variant="danger")
     
     linear_divider()
     
