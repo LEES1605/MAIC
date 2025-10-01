@@ -41,11 +41,19 @@ def linear_button(
         font-size: var(--linear-font-size-regular) !important;
         line-height: var(--linear-line-height-normal) !important;
         border-radius: var(--linear-radius-{size}) !important;
-        border: 1px solid {_get_button_color(variant)} !important;
+        border: 2px solid {_get_button_color(variant)} !important;
         background: {_get_button_bg(variant)} !important;
         color: {_get_button_color(variant)} !important;
         padding: {_get_button_padding(size)} !important;
         transition: all 0.2s ease !important;
+        box-shadow: none !important;
+    }}
+    
+    .stButton > button.linear-button-{variant} {{
+        border: 2px solid {_get_button_color(variant)} !important;
+        background: {_get_button_bg(variant)} !important;
+        color: {_get_button_color(variant)} !important;
+        box-shadow: none !important;
     }}
     
     .linear-button-{variant}:hover {{
@@ -96,8 +104,8 @@ def linear_card(
     card_css = f"""
     <style>
     .linear-card-{variant} {{
-        background: var(--linear-bg-secondary) !important;
-        border: 1px solid var(--linear-border-primary) !important;
+        background: {_get_card_bg(variant)} !important;
+        border: 1px solid {_get_card_border(variant)} !important;
         border-radius: var(--linear-radius-large) !important;
         padding: var(--linear-padding-{padding}) !important;
         margin: 8px 0 !important;
@@ -671,29 +679,27 @@ def linear_carousel(
         
         st.markdown('<div class="linear-carousel-container">', unsafe_allow_html=True)
         
-        # 화살표 (이전)
-        if show_arrows and len(items) > 1:
-            if st.button("‹", key=f"{carousel_key}_prev", help="이전"):
-                st.session_state[f"{carousel_key}_current"] = (current_index - 1) % len(items)
-                st.rerun()
-        
-        # 화살표 (다음)
-        if show_arrows and len(items) > 1:
-            if st.button("›", key=f"{carousel_key}_next", help="다음"):
-                st.session_state[f"{carousel_key}_current"] = (current_index + 1) % len(items)
-                st.rerun()
-        
         # 현재 아이템 표시
         if items:
             current_item = items[current_index]
             
+            # 화살표와 아이템을 함께 배치
             col1, col2, col3 = st.columns([1, 8, 1])
+            
+            # 화살표 (이전)
+            with col1:
+                if show_arrows and len(items) > 1:
+                    if st.button("‹", key=f"{carousel_key}_prev", help="이전"):
+                        st.session_state[f"{carousel_key}_current"] = (current_index - 1) % len(items)
+                        st.rerun()
+            
+            # 현재 아이템
             with col2:
                 st.markdown('<div class="linear-carousel-item">', unsafe_allow_html=True)
                 
                 # 이미지
                 if "image" in current_item and current_item["image"]:
-                    st.image(current_item["image"], use_column_width=True)
+                    st.image(current_item["image"], use_container_width=True)
                 
                 # 제목
                 if "title" in current_item:
@@ -711,6 +717,13 @@ def linear_carousel(
                             current_item["action_callback"]()
                 
                 st.markdown('</div>', unsafe_allow_html=True)
+            
+            # 화살표 (다음)
+            with col3:
+                if show_arrows and len(items) > 1:
+                    if st.button("›", key=f"{carousel_key}_next", help="다음"):
+                        st.session_state[f"{carousel_key}_current"] = (current_index + 1) % len(items)
+                        st.rerun()
         
         st.markdown('</div>', unsafe_allow_html=True)
         
@@ -813,7 +826,7 @@ def linear_card_with_image(
         if image_position == "top":
             # 이미지가 위에
             if image_url:
-                st.image(image_url, caption=image_alt, use_column_width=True)
+                st.image(image_url, caption=image_alt, use_container_width=True)
             st.markdown(f'<div class="linear-image-card-title">{title}</div>', unsafe_allow_html=True)
             st.markdown(f'<div class="linear-image-card-content">{content}</div>', unsafe_allow_html=True)
             
@@ -822,7 +835,7 @@ def linear_card_with_image(
             col1, col2 = st.columns([1, 2])
             with col1:
                 if image_url:
-                    st.image(image_url, caption=image_alt, use_column_width=True)
+                    st.image(image_url, caption=image_alt, use_container_width=True)
             with col2:
                 st.markdown(f'<div class="linear-image-card-title">{title}</div>', unsafe_allow_html=True)
                 st.markdown(f'<div class="linear-image-card-content">{content}</div>', unsafe_allow_html=True)
@@ -835,14 +848,14 @@ def linear_card_with_image(
                 st.markdown(f'<div class="linear-image-card-content">{content}</div>', unsafe_allow_html=True)
             with col2:
                 if image_url:
-                    st.image(image_url, caption=image_alt, use_column_width=True)
+                    st.image(image_url, caption=image_alt, use_container_width=True)
                     
         elif image_position == "bottom":
             # 이미지가 아래에
             st.markdown(f'<div class="linear-image-card-title">{title}</div>', unsafe_allow_html=True)
             st.markdown(f'<div class="linear-image-card-content">{content}</div>', unsafe_allow_html=True)
             if image_url:
-                st.image(image_url, caption=image_alt, use_column_width=True)
+                st.image(image_url, caption=image_alt, use_container_width=True)
         
         # 액션 버튼
         if action_button:
@@ -1042,3 +1055,80 @@ def linear_navbar(
     
     st.markdown('</div>', unsafe_allow_html=True)
     st.markdown('</nav>', unsafe_allow_html=True)
+
+
+# 헬퍼 함수들
+def _get_button_color(variant: str) -> str:
+    """버튼 색상 반환"""
+    colors = {
+        "primary": "var(--linear-brand)",
+        "secondary": "var(--linear-text-secondary)",
+        "danger": "var(--linear-error)",
+        "success": "var(--linear-success)",
+        "warning": "var(--linear-warning)"
+    }
+    return colors.get(variant, "var(--linear-text-primary)")
+
+
+def _get_button_bg(variant: str) -> str:
+    """버튼 배경색 반환"""
+    backgrounds = {
+        "primary": "transparent",
+        "secondary": "var(--linear-bg-tertiary)",
+        "danger": "transparent",
+        "success": "transparent",
+        "warning": "transparent"
+    }
+    return backgrounds.get(variant, "transparent")
+
+
+def _get_button_hover_bg(variant: str) -> str:
+    """버튼 호버 배경색 반환"""
+    hover_bgs = {
+        "primary": "rgba(94, 106, 210, 0.1)",
+        "secondary": "var(--linear-bg-quaternary)",
+        "danger": "rgba(239, 68, 68, 0.1)",
+        "success": "rgba(34, 197, 94, 0.1)",
+        "warning": "rgba(245, 158, 11, 0.1)"
+    }
+    return hover_bgs.get(variant, "var(--linear-bg-tertiary)")
+
+
+def _get_button_padding(size: str) -> str:
+    """버튼 패딩 반환"""
+    paddings = {
+        "small": "6px 12px",
+        "medium": "8px 16px",
+        "large": "12px 24px"
+    }
+    return paddings.get(size, "8px 16px")
+
+
+def _get_card_bg(variant: str) -> str:
+    """카드 배경색 반환"""
+    backgrounds = {
+        "default": "var(--linear-bg-secondary)",
+        "elevated": "var(--linear-bg-primary)",
+        "outlined": "transparent"
+    }
+    return backgrounds.get(variant, "var(--linear-bg-secondary)")
+
+
+def _get_card_border(variant: str) -> str:
+    """카드 테두리색 반환"""
+    borders = {
+        "default": "var(--linear-border-primary)",
+        "elevated": "var(--linear-border-secondary)",
+        "outlined": "var(--linear-border-primary)"
+    }
+    return borders.get(variant, "var(--linear-border-primary)")
+
+
+def _get_card_shadow(variant: str) -> str:
+    """카드 그림자 반환"""
+    shadows = {
+        "default": "var(--linear-shadow-sm)",
+        "elevated": "var(--linear-shadow-md)",
+        "outlined": "none"
+    }
+    return shadows.get(variant, "var(--linear-shadow-sm)")
