@@ -1352,11 +1352,15 @@ def _render_debug_panel():
                             "find_latest_result": latest.get('tag_name') if latest else None,
                             "find_latest_full": latest
                         }
+                        
+                        # 결과를 세션 상태에 저장
+                        st.session_state["debug_seq_manager_test"] = test_result
                         st.json(test_result)
                     else:
                         st.warning("GitHub 설정이 없습니다")
                 except Exception as e:
                     st.error(f"SequentialReleaseManager 테스트 실패: {e}")
+                    st.session_state["debug_seq_manager_test"] = {"error": str(e)}
         
         with col5:
             if st.button("🔄 수동 복원 테스트", use_container_width=True):
@@ -1372,13 +1376,29 @@ def _render_debug_panel():
                         persist_dir = effective_persist_dir()
                         result = seq_manager.restore_latest_index(persist_dir, clean_dest=True)
                         
+                        # 결과를 세션 상태에 저장
+                        st.session_state["debug_manual_restore"] = {"success": True, "result": result}
                         st.success(f"복원 성공: {result}")
                     else:
                         st.warning("GitHub 설정이 없습니다")
                 except Exception as e:
-                    st.error(f"수동 복원 테스트 실패: {e}")
                     import traceback
+                    error_info = {"error": str(e), "traceback": traceback.format_exc()}
+                    st.session_state["debug_manual_restore"] = error_info
+                    st.error(f"수동 복원 테스트 실패: {e}")
                     st.code(traceback.format_exc())
+        
+        # 모든 테스트 결과 표시
+        if "debug_seq_manager_test" in st.session_state or "debug_manual_restore" in st.session_state:
+            st.markdown("### 📊 모든 테스트 결과")
+            
+            if "debug_seq_manager_test" in st.session_state:
+                st.markdown("**🔍 SequentialReleaseManager 테스트 결과:**")
+                st.json(st.session_state["debug_seq_manager_test"])
+            
+            if "debug_manual_restore" in st.session_state:
+                st.markdown("**🔄 수동 복원 테스트 결과:**")
+                st.json(st.session_state["debug_manual_restore"])
 
 def _render_body() -> None:
     if st is None:
