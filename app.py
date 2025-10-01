@@ -692,6 +692,23 @@ def _boot_auto_restore_index() -> None:
         result = seq_manager.restore_latest_index(p, clean_dest=True)
         print(f"[DEBUG] restore_latest_index result: {result}")
         st.success(f"✅ [DEBUG] restore_latest_index result: {result}")
+        
+        # 복원 후 파일 상태 재확인
+        print(f"[DEBUG] Post-restore check: cj.exists()={cj.exists()}, rf.exists()={rf.exists()}")
+        st.info(f"🔍 [DEBUG] Post-restore check: cj.exists()={cj.exists()}, rf.exists()={rf.exists()}")
+        
+        if cj.exists():
+            print(f"[DEBUG] Post-restore cj.size(): {cj.stat().st_size}")
+            st.info(f"🔍 [DEBUG] Post-restore cj.size(): {cj.stat().st_size}")
+        
+        # persist 디렉토리 전체 내용 확인
+        try:
+            persist_files = list(p.iterdir()) if p.exists() else []
+            print(f"[DEBUG] Persist directory contents: {[f.name for f in persist_files]}")
+            st.info(f"🔍 [DEBUG] Persist directory contents: {[f.name for f in persist_files]}")
+        except Exception as e:
+            print(f"[DEBUG] Error listing persist directory: {e}")
+            st.error(f"❌ [DEBUG] Error listing persist directory: {e}")
 
         _idx("step_set", 3, "run", "메타 저장/정리...")
         normalize_ready_file(p)
