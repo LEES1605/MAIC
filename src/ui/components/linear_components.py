@@ -303,6 +303,37 @@ def linear_input(
         background: var(--linear-bg-tertiary) !important;
     }
     
+    /* 숫자 입력 필드 스타일 */
+    .stNumberInput > div > div > input {
+        border: 2px solid var(--linear-border-secondary) !important;
+        background: #2a2a2a !important;
+        color: var(--linear-text-primary) !important;
+        border-radius: var(--linear-radius-medium) !important;
+        padding: 8px 12px !important;
+        font-family: var(--linear-font-primary) !important;
+        box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.3) !important;
+    }
+    
+    .stNumberInput > div > div > input:focus {
+        border-color: var(--linear-brand) !important;
+        box-shadow: 0 0 0 2px rgba(94, 106, 210, 0.2), inset 0 1px 3px rgba(0, 0, 0, 0.3) !important;
+        outline: none !important;
+        background: #2a2a2a !important;
+    }
+    
+    /* 숫자 입력 버튼 스타일 */
+    .stNumberInput button {
+        background: var(--linear-bg-tertiary) !important;
+        border: 1px solid var(--linear-border-secondary) !important;
+        color: var(--linear-text-primary) !important;
+    }
+    
+    .stNumberInput button:hover {
+        background: var(--linear-brand) !important;
+        border-color: var(--linear-brand) !important;
+        color: white !important;
+    }
+    
     .linear-input:focus {
         border-color: var(--linear-brand) !important;
         box-shadow: 0 0 0 2px rgba(94, 106, 210, 0.2) !important;
@@ -1048,7 +1079,7 @@ def linear_navbar(
     navbar_css = f"""
     <style>
     .linear-navbar {{
-        background: var(--linear-bg-tertiary) !important;
+        background: #000000 !important;
         border-bottom: 2px solid var(--linear-brand) !important;
         border-top: 1px solid var(--linear-border-primary) !important;
         padding: 0 !important;
@@ -1058,7 +1089,7 @@ def linear_navbar(
         top: 0 !important;
         z-index: 1000 !important;
         backdrop-filter: blur(10px) !important;
-        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3) !important;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5) !important;
     }}
     
     .linear-navbar-container {{
@@ -1073,7 +1104,7 @@ def linear_navbar(
         flex-wrap: nowrap !important;
     }}
     
-    /* 네비게이션 바 내 모든 요소 수직 정렬 */
+    /* 네비게이션 바 내 모든 요소 수직 정렬 강화 */
     .linear-navbar * {{
         vertical-align: middle !important;
         line-height: 1 !important;
@@ -1083,12 +1114,27 @@ def linear_navbar(
         vertical-align: middle !important;
         display: inline-flex !important;
         align-items: center !important;
+        height: 64px !important;
     }}
     
     .linear-navbar [data-testid="column"] > div {{
         vertical-align: middle !important;
         display: flex !important;
         align-items: center !important;
+        height: 64px !important;
+    }}
+    
+    /* 브랜드와 메뉴 텍스트 정렬 강제 */
+    .linear-navbar-brand, .linear-navbar-nav, .linear-navbar-user {{
+        display: flex !important;
+        align-items: center !important;
+        height: 64px !important;
+        line-height: 1 !important;
+    }}
+    
+    .linear-navbar-brand-name, .linear-navbar-nav-link, .linear-navbar-user-name {{
+        line-height: 1 !important;
+        vertical-align: middle !important;
     }}
     
     /* Streamlit 기본 스타일 오버라이드 */
