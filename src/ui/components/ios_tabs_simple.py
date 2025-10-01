@@ -75,12 +75,12 @@ def create_admin_tabs_simple() -> List[Dict[str, Any]]:
         {
             "id": "management",
             "label": "관리",
-            "icon": "○"
+            "icon": ""
         },
         {
             "id": "prompt",
             "label": "프롬프트", 
-            "icon": "○"
+            "icon": ""
         }
     ]
 

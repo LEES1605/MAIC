@@ -204,7 +204,7 @@ def render_prompt_content() -> None:
             
             st.text_area("지문 모드", placeholder="지문 모드 지시/규칙...")
         
-        if st.button("프롬프트 저장", type="primary"):
+        if st.button("저장", type="primary"):
             st.success("프롬프트가 저장되었습니다!")
             
     except Exception as e:
