@@ -1742,7 +1742,14 @@ def main() -> None:
     if st is None:
         print("Streamlit 환경이 아닙니다.")
         return
-    
+
+    # Linear 다크 테마 적용 (전체 앱에 적용)
+    try:
+        from src.ui.components.linear_theme import apply_theme
+        apply_theme()
+    except Exception:
+        pass
+
     # 관리자 모드일 때는 사이드바를 가장 먼저 렌더링 (헤더보다 먼저)
     try:
         adm = bool(st.session_state.get("admin_mode", False))
@@ -1751,7 +1758,7 @@ def main() -> None:
             render_sidebar(back_page="app.py", icon_only=True)
     except Exception:
         pass
-    
+
     _render_body()
 
 
