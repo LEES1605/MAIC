@@ -125,10 +125,7 @@ def render_ios_tabs(
                 
                 # HTML로 탭 버튼 생성
                 tab_html = f'''
-                <button class="{tab_class}" onclick="
-                    const event = new CustomEvent('tab_change', {{detail: '{tab["id"]}'}});
-                    window.dispatchEvent(event);
-                ">
+                <button class="{tab_class}" data-tab-id="{tab["id"]}">
                     <span class="ios-tab-icon">{tab.get("icon", "")}</span>
                     {tab["label"]}
                 </button>
@@ -136,25 +133,36 @@ def render_ios_tabs(
                 
                 st.markdown(tab_html, unsafe_allow_html=True)
         
-        # JavaScript로 탭 변경 처리
-        st.markdown("""
+        # JavaScript로 탭 변경 처리 (Streamlit 호환)
+        st.markdown(f"""
         <script>
-        window.addEventListener('tab_change', function(event) {
+        // 탭 변경 이벤트 리스너
+        window.addEventListener('tab_change', function(event) {{
             const tabId = event.detail;
-            // Streamlit에 탭 변경 알림
-            const input = document.createElement('input');
-            input.type = 'hidden';
-            input.name = 'tab_change';
-            input.value = tabId;
-            document.body.appendChild(input);
             
-            // 페이지 새로고침 대신 상태 업데이트
-            const form = document.createElement('form');
-            form.method = 'post';
-            form.innerHTML = '<input type="hidden" name="tab_change" value="' + tabId + '">';
-            document.body.appendChild(form);
-            form.submit();
-        });
+            // Streamlit 세션 상태 업데이트
+            const event = new CustomEvent('streamlit:setComponentValue', {{
+                detail: {{key: '{key}_active', value: tabId}}
+            }});
+            window.dispatchEvent(event);
+            
+            // 페이지 새로고침
+            window.location.reload();
+        }});
+        
+        // 탭 버튼 클릭 이벤트 추가
+        document.addEventListener('DOMContentLoaded', function() {{
+            const tabButtons = document.querySelectorAll('.ios-tab');
+            tabButtons.forEach(button => {{
+                button.addEventListener('click', function() {{
+                    const tabId = this.getAttribute('data-tab-id');
+                    if (tabId) {{
+                        const event = new CustomEvent('tab_change', {{detail: tabId}});
+                        window.dispatchEvent(event);
+                    }}
+                }});
+            }});
+        }});
         </script>
         """, unsafe_allow_html=True)
     
