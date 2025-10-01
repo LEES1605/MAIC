@@ -64,30 +64,18 @@ def linear_button(
         width: 100% !important;
         box-sizing: border-box !important;
         position: relative !important;
-        overflow: visible !important;
         margin: 0 !important;
         outline: none !important;
-    }}
-    
-    .stButton > button::after {{
-        content: '' !important;
-        position: absolute !important;
-        bottom: -2px !important;
-        left: 0 !important;
-        right: 0 !important;
-        height: 2px !important;
-        background: {_get_button_color(variant)} !important;
-        border-radius: 0 0 var(--linear-radius-{size}) var(--linear-radius-{size}) !important;
+        /* Streamlit의 기본 스타일 완전 제거 */
+        border-style: solid !important;
+        border-width: 2px !important;
+        border-color: {_get_button_color(variant)} !important;
     }}
     
     .stButton > button:hover {{
         background: {_get_button_hover_bg(variant)} !important;
         border-color: var(--linear-brand) !important;
         transform: translateY(-1px) !important;
-    }}
-    
-    .stButton > button:hover::after {{
-        background: var(--linear-brand) !important;
     }}
     
     .linear-button-{variant}:hover {{
@@ -111,29 +99,46 @@ def linear_button(
         width: 100% !important;
         box-sizing: border-box !important;
         position: relative !important;
-        overflow: visible !important;
         margin: 0 !important;
         outline: none !important;
-    }}
-    
-    div[data-testid="stButton"] > button::after {{
-        content: '' !important;
-        position: absolute !important;
-        bottom: -2px !important;
-        left: 0 !important;
-        right: 0 !important;
-        height: 2px !important;
-        background: {_get_button_color(variant)} !important;
-        border-radius: 0 0 var(--linear-radius-{size}) var(--linear-radius-{size}) !important;
-    }}
-    
-    div[data-testid="stButton"] > button:hover::after {{
-        background: var(--linear-brand) !important;
+        /* Streamlit의 기본 스타일 완전 제거 */
+        border-style: solid !important;
+        border-width: 2px !important;
+        border-color: {_get_button_color(variant)} !important;
     }}
     
     .linear-button-{variant}:disabled {{
         opacity: 0.5 !important;
         cursor: not-allowed !important;
+    }}
+    
+    /* Streamlit 기본 버튼 스타일 완전 무력화 */
+    .stButton button {{
+        border: 2px solid {_get_button_color(variant)} !important;
+        border-style: solid !important;
+        border-width: 2px !important;
+        border-color: {_get_button_color(variant)} !important;
+        background: {_get_button_bg(variant)} !important;
+        color: {_get_button_color(variant)} !important;
+        box-shadow: none !important;
+        font-family: var(--linear-font-primary) !important;
+        font-weight: var(--linear-font-weight-medium) !important;
+        border-radius: var(--linear-radius-{size}) !important;
+        padding: {_get_button_padding(size)} !important;
+        transition: all 0.2s ease !important;
+        min-height: 44px !important;
+        display: block !important;
+        width: 100% !important;
+        box-sizing: border-box !important;
+        position: relative !important;
+        margin: 0 !important;
+        outline: none !important;
+    }}
+    
+    .stButton button:hover {{
+        border-color: var(--linear-brand) !important;
+        background: {_get_button_hover_bg(variant)} !important;
+        transform: translateY(-1px) !important;
     }}
     </style>
     """
