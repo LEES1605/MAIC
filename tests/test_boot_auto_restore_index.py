@@ -9,6 +9,11 @@ def test_boot_restore_calls_ghrestore(monkeypatch, tmp_path):
         rerun=lambda: None,
         experimental_rerun=lambda: None,
         secrets={"GITHUB_REPO": "owner/repo", "GITHUB_TOKEN": "x"},
+        # 디버깅용 streamlit 메서드들 추가
+        info=lambda msg: print(f"[ST_INFO] {msg}"),
+        success=lambda msg: print(f"[ST_SUCCESS] {msg}"),
+        error=lambda msg: print(f"[ST_ERROR] {msg}"),
+        warning=lambda msg: print(f"[ST_WARNING] {msg}"),
     )
     sys.modules["streamlit"] = fake_st_mod
 
