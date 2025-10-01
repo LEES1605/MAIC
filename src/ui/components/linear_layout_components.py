@@ -179,7 +179,8 @@ def linear_hero(
         width: calc(100% + 2rem) !important;
         position: relative !important;
         overflow: hidden !important;
-        border-bottom: 1px solid var(--linear-border-primary) !important;
+        border-top: 2px solid #ffffff !important;
+        border-bottom: 2px solid #ffffff !important;
     }}
     
     .linear-hero::before {{
