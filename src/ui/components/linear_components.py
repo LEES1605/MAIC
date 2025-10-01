@@ -49,11 +49,22 @@ def linear_button(
         box-shadow: none !important;
     }}
     
-    .stButton > button.linear-button-{variant} {{
+    .stButton > button {{
         border: 2px solid {_get_button_color(variant)} !important;
         background: {_get_button_bg(variant)} !important;
         color: {_get_button_color(variant)} !important;
         box-shadow: none !important;
+        font-family: var(--linear-font-primary) !important;
+        font-weight: var(--linear-font-weight-medium) !important;
+        border-radius: var(--linear-radius-{size}) !important;
+        padding: {_get_button_padding(size)} !important;
+        transition: all 0.2s ease !important;
+    }}
+    
+    .stButton > button:hover {{
+        background: {_get_button_hover_bg(variant)} !important;
+        border-color: var(--linear-brand) !important;
+        transform: translateY(-1px) !important;
     }}
     
     .linear-button-{variant}:hover {{
@@ -897,15 +908,17 @@ def linear_navbar(
     navbar_css = f"""
     <style>
     .linear-navbar {{
-        background: var(--linear-bg-secondary) !important;
-        border-bottom: 1px solid var(--linear-border-primary) !important;
+        background: var(--linear-bg-tertiary) !important;
+        border-bottom: 2px solid var(--linear-brand) !important;
+        border-top: 1px solid var(--linear-border-primary) !important;
         padding: 0 !important;
-        margin: -1rem -1rem 1rem -1rem !important;
+        margin: -1rem -1rem 2rem -1rem !important;
         width: calc(100% + 2rem) !important;
         position: {'sticky' if sticky else 'relative'} !important;
         top: 0 !important;
         z-index: 1000 !important;
         backdrop-filter: blur(10px) !important;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3) !important;
     }}
     
     .linear-navbar-container {{

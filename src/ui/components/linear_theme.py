@@ -12,23 +12,23 @@ LINEAR_THEME = {
             "accentHover": "#828fff"
         },
         "background": {
-            "primary": "#08090a",
-            "secondary": "#1c1c1f", 
-            "tertiary": "#232326",
-            "quaternary": "#28282c",
-            "translucent": "rgba(255,255,255,.05)"
+            "primary": "#1a1a1a",
+            "secondary": "#2a2a2a", 
+            "tertiary": "#3a3a3a",
+            "quaternary": "#4a4a4a",
+            "translucent": "rgba(255,255,255,.1)"
         },
         "text": {
-            "primary": "#f7f8f8",
-            "secondary": "#d0d6e0",
-            "tertiary": "#8a8f98",
-            "quaternary": "#62666d"
+            "primary": "#e0e0e0",
+            "secondary": "#b0b0b0",
+            "tertiary": "#808080",
+            "quaternary": "#606060"
         },
         "border": {
-            "primary": "#23252a",
-            "secondary": "#34343a",
-            "tertiary": "#3e3e44",
-            "translucent": "rgba(255,255,255,.05)"
+            "primary": "#404040",
+            "secondary": "#505050",
+            "tertiary": "#606060",
+            "translucent": "rgba(255,255,255,.1)"
         },
         "semantic": {
             "blue": "#4ea7fc",

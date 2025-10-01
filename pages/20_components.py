@@ -255,7 +255,7 @@ def main() -> None:
     linear_hero(
         title="Linear 스타일 컴포넌트",
         subtitle="Linear.app에서 영감을 받은 모던하고 재사용 가능한 UI 컴포넌트 라이브러리입니다. 다크 테마와 세련된 디자인으로 사용자 경험을 향상시킵니다.",
-        background_image="https://images.unsplash.com/photo-1558618047-3c8c76ca7d13?w=1200&h=400&fit=crop",
+        background_image=None,
         cta_button=cta_button,
         features=hero_features,
         variant="centered",
@@ -271,19 +271,19 @@ def main() -> None:
         {
             "title": "첫 번째 슬라이드",
             "content": "Linear 스타일의 첫 번째 캐러셀 아이템입니다. 세련된 디자인과 부드러운 애니메이션을 제공합니다.",
-            "image": "https://images.unsplash.com/photo-1558618047-3c8c76ca7d13?w=400",
+            "image": "https://picsum.photos/400/250?random=3",
             "action": "자세히 보기"
         },
         {
             "title": "두 번째 슬라이드", 
             "content": "이미지와 텍스트가 조화롭게 배치된 두 번째 슬라이드입니다. 모바일 친화적인 레이아웃을 지원합니다.",
-            "image": "https://images.unsplash.com/photo-1558618047-3c8c76ca7d13?w=400",
+            "image": "https://picsum.photos/400/250?random=3",
             "action": "시작하기"
         },
         {
             "title": "세 번째 슬라이드",
             "content": "마지막 슬라이드입니다. 모든 기능이 완벽하게 작동하며 사용자 경험을 향상시킵니다.",
-            "image": "https://images.unsplash.com/photo-1558618047-3c8c76ca7d13?w=400",
+            "image": "https://picsum.photos/400/250?random=3",
             "action": "완료"
         }
     ]
@@ -305,7 +305,7 @@ def main() -> None:
     linear_card_with_image(
         title="Linear 스타일 이미지 카드",
         content="이미지가 카드 상단에 배치된 예제입니다. 제목과 내용이 이미지 아래에 표시됩니다.",
-        image_url="https://images.unsplash.com/photo-1558618047-3c8c76ca7d13?w=400",
+        image_url="https://picsum.photos/400/300?random=1",
         image_alt="Linear 스타일 이미지",
         variant="elevated",
         image_position="top",
@@ -316,7 +316,7 @@ def main() -> None:
     linear_card_with_image(
         title="좌측 이미지 레이아웃",
         content="이미지가 왼쪽에, 텍스트가 오른쪽에 배치된 레이아웃입니다. 더 많은 텍스트를 표시할 수 있습니다.",
-        image_url="https://images.unsplash.com/photo-1558618047-3c8c76ca7d13?w=300",
+        image_url="https://picsum.photos/300/200?random=2",
         image_alt="좌측 이미지",
         variant="default",
         image_position="left",
@@ -327,7 +327,7 @@ def main() -> None:
     linear_card_with_image(
         title="우측 이미지 레이아웃",
         content="텍스트가 왼쪽에, 이미지가 오른쪽에 배치된 레이아웃입니다.",
-        image_url="https://images.unsplash.com/photo-1558618047-3c8c76ca7d13?w=300",
+        image_url="https://picsum.photos/300/200?random=2",
         image_alt="우측 이미지",
         variant="outlined",
         image_position="right",
