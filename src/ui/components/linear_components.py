@@ -1143,30 +1143,32 @@ def linear_navbar(
     st.markdown('<nav class="linear-navbar">', unsafe_allow_html=True)
     st.markdown('<div class="linear-navbar-container">', unsafe_allow_html=True)
     
-    # 네비게이션 바 내용을 HTML로 직접 렌더링
-    navbar_html = f'''
-    <div class="linear-navbar-brand">
-        {"<img src='" + brand_logo + "' class='linear-navbar-logo' alt='Logo'>" if brand_logo else ""}
-        <span class="linear-navbar-brand-name">{brand_name}</span>
-    </div>
+    # 브랜드 섹션
+    st.markdown('<div class="linear-navbar-brand">', unsafe_allow_html=True)
+    if brand_logo:
+        st.markdown(f'<img src="{brand_logo}" class="linear-navbar-logo" alt="Logo">', unsafe_allow_html=True)
+    st.markdown(f'<span class="linear-navbar-brand-name">{brand_name}</span>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
     
-    <ul class="linear-navbar-nav">
-        {''.join([f'''
-        <li class="linear-navbar-nav-item">
-            <a href="{item.get("href", "#")}" class="linear-navbar-nav-link{' active' if item.get("active", False) else ''}">{item["label"]}</a>
-        </li>
-        ''' for item in (nav_items or [])])}
-    </ul>
+    # 네비게이션 메뉴
+    if nav_items:
+        st.markdown('<ul class="linear-navbar-nav">', unsafe_allow_html=True)
+        for item in nav_items:
+            st.markdown('<li class="linear-navbar-nav-item">', unsafe_allow_html=True)
+            link_class = "linear-navbar-nav-link"
+            if item.get("active", False):
+                link_class += " active"
+            st.markdown(f'<a href="{item.get("href", "#")}" class="{link_class}">{item["label"]}</a>', unsafe_allow_html=True)
+            st.markdown('</li>', unsafe_allow_html=True)
+        st.markdown('</ul>', unsafe_allow_html=True)
     
-    {f'''
-    <div class="linear-navbar-user">
-        {"<img src='" + user_menu["avatar"] + "' class='linear-navbar-user-avatar' alt='Avatar'>" if user_menu.get("avatar") else ""}
-        <span class="linear-navbar-user-name">{user_menu["name"]}</span>
-    </div>
-    ''' if user_menu else ''}
-    '''
-    
-    st.markdown(navbar_html, unsafe_allow_html=True)
+    # 사용자 메뉴
+    if user_menu:
+        st.markdown('<div class="linear-navbar-user">', unsafe_allow_html=True)
+        if user_menu.get("avatar"):
+            st.markdown(f'<img src="{user_menu["avatar"]}" class="linear-navbar-user-avatar" alt="Avatar">', unsafe_allow_html=True)
+        st.markdown(f'<span class="linear-navbar-user-name">{user_menu["name"]}</span>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
     
     st.markdown('</div>', unsafe_allow_html=True)
     st.markdown('</nav>', unsafe_allow_html=True)
