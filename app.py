@@ -698,7 +698,7 @@ def _boot_auto_restore_index() -> None:
             # 릴리스 목록 직접 확인
             from src.runtime.gh_release import GHReleases
             gh = GHReleases(owner=owner, repo=repo, token=token)
-            releases = gh.list_releases(owner, repo)
+            releases = gh.list_releases()
             print(f"[DEBUG] Found {len(releases)} releases: {[r.get('tag_name') for r in releases]}")
             st.info(f"🔍 [DEBUG] Found {len(releases)} releases: {[r.get('tag_name') for r in releases]}")
             
