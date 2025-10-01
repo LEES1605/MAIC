@@ -230,7 +230,9 @@ def linear_badge(
     .linear-badge-{variant} {{
         display: inline-flex;
         align-items: center;
+        justify-content: center;
         padding: {_get_badge_padding(size)};
+        min-height: {_get_badge_height(size)};
         border-radius: var(--linear-radius-full);
         font-family: var(--linear-font-primary);
         font-weight: var(--linear-font-weight-medium);
@@ -238,6 +240,7 @@ def linear_badge(
         background: {_get_badge_bg(variant)};
         color: {_get_badge_color(variant)};
         border: 1px solid {_get_badge_border(variant)};
+        line-height: 1;
     }}
     </style>
     """
@@ -526,11 +529,11 @@ def _get_badge_border(variant: str) -> str:
 def _get_badge_padding(size: str) -> str:
     """배지 패딩 반환"""
     sizes = {
-        "small": "2px 8px",
-        "medium": "4px 12px",
-        "large": "6px 16px"
+        "small": "4px 8px",
+        "medium": "6px 12px",
+        "large": "8px 16px"
     }
-    return sizes.get(size, "4px 12px")
+    return sizes.get(size, "6px 12px")
 
 
 def _get_badge_font_size(size: str) -> str:
@@ -541,6 +544,16 @@ def _get_badge_font_size(size: str) -> str:
         "large": "var(--linear-font-size-regular)"
     }
     return sizes.get(size, "var(--linear-font-size-small)")
+
+
+def _get_badge_height(size: str) -> str:
+    """배지 높이 반환"""
+    sizes = {
+        "small": "20px",
+        "medium": "24px",
+        "large": "28px"
+    }
+    return sizes.get(size, "24px")
 
 
 def _get_alert_border(variant: str) -> str:
