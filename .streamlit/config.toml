@@ -15,3 +15,7 @@ enableXsrfProtection = false
 [browser]
 # 브라우저 설정
 gatherUsageStats = false
+
+[client]
+# 클라이언트 설정
+toolbarMode = "minimal"

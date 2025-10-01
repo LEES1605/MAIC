@@ -201,7 +201,7 @@ if st:
     except Exception:
         pass
 
-    # (B) 기본 멀티페이지 네비 전역 숨김(학생/관리자 공통)
+    # (B) 기본 멀티페이지 네비 전역 숨김(학생/관리자 공통) + 네비게이션 바 CSS 오버라이드
     try:
         st.markdown(
             "<style>"
@@ -209,6 +209,13 @@ if st:
             "div[data-testid='stSidebarNav']{display:none!important;}"
             "section[data-testid='stSidebar'] [data-testid='stSidebarNav']{display:none!important;}"
             "section[data-testid='stSidebar'] ul[role='list']{display:none!important;}"
+            
+            "/* 네비게이션 바 가로 레이아웃 강제 적용 */"
+            ".linear-navbar-container{display:flex!important;flex-direction:row!important;flex-wrap:nowrap!important;align-items:center!important;justify-content:space-between!important;}"
+            ".linear-navbar-container > *{display:inline-block!important;vertical-align:middle!important;}"
+            ".linear-navbar-nav{display:flex!important;flex-direction:row!important;flex-wrap:nowrap!important;align-items:center!important;list-style:none!important;margin:0!important;padding:0!important;}"
+            ".linear-navbar-nav li{display:inline-block!important;margin:0!important;padding:0!important;}"
+            ".linear-navbar-nav-item{display:inline-block!important;vertical-align:middle!important;}"
             "</style>",
             unsafe_allow_html=True,
         )
