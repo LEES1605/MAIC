@@ -936,7 +936,7 @@ def _auto_start_once() -> None:
         except Exception:
             pass
         if hasattr(st, "toast"):
-            st.toast("자동 복원 완료", icon="✅")
+            st.toast("자동 복원 완료")
         else:
             st.success("자동 복원 완료")
         _set_brain_status("READY", "자동 복원 완료", "release", attached=True)
@@ -1623,6 +1623,7 @@ def _render_body() -> None:
         st.session_state["_BOOT_RESTORE_DONE"] = False
         st.session_state["_INDEX_LOCAL_READY"] = False
         st.session_state["_INDEX_IS_LATEST"] = False
+        st.session_state["_auto_start_done"] = False  # 자동 복원 재실행 허용
         print(f"[DEBUG] Reset restore state - forcing restore")
         
         # persist 디렉토리 상태 확인
