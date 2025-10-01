@@ -686,6 +686,31 @@ def _boot_auto_restore_index() -> None:
         print(f"[DEBUG] Sequential manager created successfully")
         st.success("✅ [DEBUG] Sequential manager created successfully")
         
+        # GitHub 릴리스 상태 확인
+        try:
+            print(f"[DEBUG] Checking GitHub releases for {owner}/{repo}")
+            st.info(f"🔍 [DEBUG] Checking GitHub releases for {owner}/{repo}")
+            
+            # 릴리스 목록 직접 확인
+            from src.runtime.gh_release import GitHubRelease
+            gh = GitHubRelease(token)
+            releases = gh.list_releases(owner, repo)
+            print(f"[DEBUG] Found {len(releases)} releases: {[r.get('tag_name') for r in releases]}")
+            st.info(f"🔍 [DEBUG] Found {len(releases)} releases: {[r.get('tag_name') for r in releases]}")
+            
+            if releases:
+                latest_release = releases[0]
+                assets = latest_release.get('assets', [])
+                print(f"[DEBUG] Latest release assets: {[a.get('name') for a in assets]}")
+                st.info(f"🔍 [DEBUG] Latest release assets: {[a.get('name') for a in assets]}")
+            else:
+                print(f"[DEBUG] No releases found!")
+                st.warning("⚠️ [DEBUG] No releases found!")
+                
+        except Exception as e:
+            print(f"[DEBUG] Error checking releases: {e}")
+            st.error(f"❌ [DEBUG] Error checking releases: {e}")
+        
         # 최신 인덱스 복원
         print(f"[DEBUG] About to call restore_latest_index with p={p}, clean_dest=True")
         st.info(f"🔍 [DEBUG] About to call restore_latest_index with p={p}, clean_dest=True")
