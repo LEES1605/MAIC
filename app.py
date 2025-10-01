@@ -467,6 +467,7 @@ def _boot_auto_restore_index() -> None:
         if "st" in globals() and st is not None:
             # UI에서 명시적으로 호출된 경우에는 멱등 보호 무시
             if st.session_state.get("_BOOT_RESTORE_DONE") and not st.session_state.get("_FORCE_RESTORE", False):
+                print(f"[DEBUG] Skipping restore - already done: {st.session_state.get('_BOOT_RESTORE_DONE')}")
                 return
     except Exception:
         pass
@@ -482,6 +483,7 @@ def _boot_auto_restore_index() -> None:
 
     _idx("ensure_index_state")
     _idx("log", "부팅: 인덱스 복원 준비 중...")
+    print(f"[DEBUG] Starting restore process - persist_dir: {p}")
 
     p = effective_persist_dir()
     cj = p / "chunks.jsonl"
@@ -1175,6 +1177,12 @@ def _render_body() -> None:
     # 1) 부팅 훅
     if not st.session_state.get("_boot_checked"):
         try:
+            # 복원 상태 강제 리셋
+            st.session_state["_BOOT_RESTORE_DONE"] = False
+            st.session_state["_INDEX_LOCAL_READY"] = False
+            st.session_state["_INDEX_IS_LATEST"] = False
+            print(f"[DEBUG] Reset restore state - forcing restore")
+            
             _boot_auto_restore_index()
             _boot_auto_scan_prepared()  # 새로 추가: 자동 스캔
             _boot_autoflow_hook()
