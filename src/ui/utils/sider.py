@@ -5,7 +5,7 @@ from typing import Any
 try:
     import streamlit as st
 except Exception:
-    st = None  # type: ignore
+    st = None
 
 # --- internal: default "Pages" nav hiding ------------------------------------
 def _hide_default_pages_nav() -> None:
@@ -70,7 +70,7 @@ def _logout_to_student() -> None:
         except Exception:
             # 구버전 폴백
             try:
-                st.experimental_set_query_params(admin="0", goto="home")  # type: ignore[attr-defined]
+                st.experimental_set_query_params(admin="0", goto="home")
             except Exception:
                 pass
         # 홈으로 이동 시도 후, 최후엔 rerun
@@ -79,7 +79,7 @@ def _logout_to_student() -> None:
             st.rerun()
         except Exception:
             try:
-                st.experimental_rerun()  # type: ignore[attr-defined]
+                st.experimental_rerun()
             except Exception:
                 pass
     except Exception:
@@ -110,33 +110,54 @@ def apply_admin_chrome(*, back_page: str = "app.py", icon_only: bool = True) -> 
 
 def render_sidebar(*, back_page: str | None = "app.py", icon_only: bool = False) -> None:
     """
-    📌 '진짜' 사이드바의 공식 진입점.
-    - 기본 Pages 네비를 완전 숨김
-    - 기존 유틸(ensure_admin_sidebar/apply_admin_chrome)로 렌더
-    - 실패 시 안전한 최소 메뉴로 폴백
+    📌 iOS 스타일 탭 시스템으로 변경.
+    - 사이드바 제거하고 상단 탭으로 대체
+    - 모바일 우선 디자인 적용
     """
     if st is None:
         return
+    
+    # 기본 Pages 네비 숨김
     _hide_default_pages_nav()
-
+    
+    # 사이드바 완전 숨김
     try:
-        ensure_admin_sidebar()
+        st.markdown("""
+        <style>
+        .css-1d391kg { display: none !important; }
+        .css-1v0mbdj { display: none !important; }
+        [data-testid="stSidebar"] { display: none !important; }
+        </style>
+        """, unsafe_allow_html=True)
     except Exception:
         pass
+    
+    # iOS 스타일 탭 시스템 적용
     try:
-        apply_admin_chrome(back_page=back_page or "app.py", icon_only=icon_only)
-    except Exception:
-        st.sidebar.markdown("### 메뉴")
+        from ..components.ios_tabs import render_ios_tabs, create_admin_tabs
+        
+        tabs = create_admin_tabs()
+        active_tab = render_ios_tabs(tabs, key="admin_tabs")
+        
+        # 탭에 따른 페이지 라우팅
+        if active_tab == "management":
+            # 관리 탭 - 오케스트레이터로 이동
+            if back_page != "app.py":
+                _switch_to("app.py")
+        elif active_tab == "prompt":
+            # 프롬프트 탭 - 프롬프트 편집기로 이동
+            _switch_to("pages/10_admin_prompt.py")
+            
+    except Exception as e:
+        # 폴백: 기존 사이드바 사용
         try:
-            st.sidebar.page_link("app.py", label="채팅")
-            st.sidebar.page_link("pages/10_admin_prompt.py", label="관리자: 프롬프트")
-            st.sidebar.page_link("pages/15_index_status.py", label="관리자: 인덱스 상태")
+            ensure_admin_sidebar()
+            apply_admin_chrome(back_page=back_page or "app.py", icon_only=icon_only)
         except Exception:
             pass
 
-    st.sidebar.divider()
-    if st.sidebar.button("로그아웃", type="secondary", use_container_width=True):
-        _logout_to_student()
+    # 로그아웃 버튼은 헤더에 통합 (사이드바 제거로 인해)
+    # 실제 로그아웃 기능은 header.py에서 처리
 
 __all__ = ["render_sidebar", "ensure_admin_sidebar", "apply_admin_chrome", "show_sidebar"]
 # [S-ALL] END: FILE src/ui/utils/sider.py
