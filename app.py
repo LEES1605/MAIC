@@ -691,6 +691,10 @@ def _boot_auto_restore_index() -> None:
             print(f"[DEBUG] Checking GitHub releases for {owner}/{repo}")
             st.info(f"🔍 [DEBUG] Checking GitHub releases for {owner}/{repo}")
             
+            # 현재 실행 중인 코드 버전 확인
+            print(f"[DEBUG] Code version check: Using GHReleases import")
+            st.info(f"🔍 [DEBUG] Code version check: Using GHReleases import")
+            
             # 릴리스 목록 직접 확인
             from src.runtime.gh_release import GHReleases
             gh = GHReleases(owner=owner, repo=repo, token=token)
