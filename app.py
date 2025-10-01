@@ -28,6 +28,86 @@ def _persist_dir_safe() -> Path:
         return Path.home() / ".maic" / "persist"
 
 
+def _get_indexing_state_file() -> Path:
+    """인덱싱 상태 파일 경로"""
+    return _persist_dir_safe() / ".indexing_state.json"
+
+
+def _load_indexing_state() -> Dict[str, Any]:
+    """인덱싱 상태 로드"""
+    state_file = _get_indexing_state_file()
+    try:
+        if state_file.exists():
+            with open(state_file, 'r', encoding='utf-8') as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {"indexed_files": {}, "last_scan_time": None}
+
+
+def _save_indexing_state(state: Dict[str, Any]) -> None:
+    """인덱싱 상태 저장"""
+    try:
+        state_file = _get_indexing_state_file()
+        state_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(state_file, 'w', encoding='utf-8') as f:
+            json.dump(state, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def _get_file_hash(file_path: Path) -> str:
+    """파일 해시값 계산"""
+    try:
+        import hashlib
+        hash_md5 = hashlib.md5()
+        with open(file_path, "rb") as f:
+            for chunk in iter(lambda: f.read(4096), b""):
+                hash_md5.update(chunk)
+        return hash_md5.hexdigest()
+    except Exception:
+        return ""
+
+
+def _get_new_files_to_index(source_dir: Path) -> List[Path]:
+    """새로 인덱싱해야 할 파일들만 반환"""
+    state = _load_indexing_state()
+    indexed_files = state.get("indexed_files", {})
+    new_files = []
+    
+    try:
+        for file_path in source_dir.rglob("*"):
+            if file_path.is_file():
+                file_str = str(file_path)
+                file_hash = _get_file_hash(file_path)
+                
+                # 파일이 새로 추가되었거나 수정된 경우
+                if file_str not in indexed_files or indexed_files[file_str] != file_hash:
+                    new_files.append(file_path)
+                    
+        print(f"[DEBUG] Found {len(new_files)} new/modified files to index")
+        return new_files
+    except Exception as e:
+        print(f"[DEBUG] Error scanning for new files: {e}")
+        return []
+
+
+def _update_indexing_state(new_files: List[Path]) -> None:
+    """인덱싱 상태 업데이트"""
+    state = _load_indexing_state()
+    indexed_files = state.get("indexed_files", {})
+    
+    for file_path in new_files:
+        file_str = str(file_path)
+        file_hash = _get_file_hash(file_path)
+        indexed_files[file_str] = file_hash
+    
+    state["indexed_files"] = indexed_files
+    state["last_scan_time"] = time.time()
+    _save_indexing_state(state)
+    print(f"[DEBUG] Updated indexing state with {len(new_files)} files")
+
+
 def _load_prepared_lister():
     tried: List[str] = []
 
@@ -1388,8 +1468,57 @@ def _render_debug_panel():
                     st.error(f"수동 복원 테스트 실패: {e}")
                     st.code(traceback.format_exc())
         
+        # 인덱싱 상태 관리 버튼들
+        st.markdown("---")
+        col6, col7, col8 = st.columns(3)
+        
+        with col6:
+            if st.button("📊 인덱싱 상태 확인", use_container_width=True):
+                try:
+                    state = _load_indexing_state()
+                    indexed_count = len(state.get("indexed_files", {}))
+                    last_scan = state.get("last_scan_time")
+                    
+                    status_info = {
+                        "indexed_files_count": indexed_count,
+                        "last_scan_time": last_scan,
+                        "state_file_exists": _get_indexing_state_file().exists(),
+                        "sample_files": list(state.get("indexed_files", {}).keys())[:5]  # 처음 5개만 표시
+                    }
+                    st.session_state["debug_indexing_state"] = status_info
+                    st.json(status_info)
+                except Exception as e:
+                    st.error(f"인덱싱 상태 확인 실패: {e}")
+        
+        with col7:
+            if st.button("🔄 인덱싱 상태 초기화", use_container_width=True):
+                try:
+                    state_file = _get_indexing_state_file()
+                    if state_file.exists():
+                        state_file.unlink()
+                    st.success("인덱싱 상태가 초기화되었습니다")
+                except Exception as e:
+                    st.error(f"인덱싱 상태 초기화 실패: {e}")
+        
+        with col8:
+            if st.button("🔍 새 파일 스캔 테스트", use_container_width=True):
+                try:
+                    # 예시 소스 디렉토리 (실제 경로로 변경 필요)
+                    source_dir = Path("/mount/src/maic")  # 또는 실제 소스 디렉토리
+                    new_files = _get_new_files_to_index(source_dir)
+                    
+                    scan_result = {
+                        "source_dir": str(source_dir),
+                        "new_files_count": len(new_files),
+                        "sample_new_files": [str(f) for f in new_files[:5]]  # 처음 5개만 표시
+                    }
+                    st.session_state["debug_scan_test"] = scan_result
+                    st.json(scan_result)
+                except Exception as e:
+                    st.error(f"새 파일 스캔 테스트 실패: {e}")
+        
         # 모든 테스트 결과 표시
-        if "debug_seq_manager_test" in st.session_state or "debug_manual_restore" in st.session_state:
+        if any(key in st.session_state for key in ["debug_seq_manager_test", "debug_manual_restore", "debug_indexing_state", "debug_scan_test"]):
             st.markdown("### 📊 모든 테스트 결과")
             
             if "debug_seq_manager_test" in st.session_state:
@@ -1399,6 +1528,14 @@ def _render_debug_panel():
             if "debug_manual_restore" in st.session_state:
                 st.markdown("**🔄 수동 복원 테스트 결과:**")
                 st.json(st.session_state["debug_manual_restore"])
+            
+            if "debug_indexing_state" in st.session_state:
+                st.markdown("**📊 인덱싱 상태:**")
+                st.json(st.session_state["debug_indexing_state"])
+            
+            if "debug_scan_test" in st.session_state:
+                st.markdown("**🔍 새 파일 스캔 테스트 결과:**")
+                st.json(st.session_state["debug_scan_test"])
 
 def _render_body() -> None:
     if st is None:
