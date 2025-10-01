@@ -120,24 +120,44 @@ def render_sidebar(*, back_page: str | None = "app.py", icon_only: bool = False)
     # 기본 Pages 네비 숨김
     _hide_default_pages_nav()
     
-    # 사이드바 완전 숨김
+    # 사이드바 완전 숨김 (더 강력한 CSS)
     try:
         st.markdown("""
         <style>
+        /* Streamlit 사이드바 완전 제거 */
         .css-1d391kg { display: none !important; }
         .css-1v0mbdj { display: none !important; }
         [data-testid="stSidebar"] { display: none !important; }
+        section[data-testid="stSidebar"] { display: none !important; }
+        .css-1cypcdb { display: none !important; }
+        .css-1d391kg { display: none !important; }
+        
+        /* 메인 컨테이너 전체 너비 사용 */
+        .main .block-container { 
+            max-width: 100% !important; 
+            padding-left: 1rem !important;
+            padding-right: 1rem !important;
+        }
+        
+        /* 사이드바 공간 제거 */
+        .stApp > div:first-child {
+            padding-left: 0 !important;
+        }
+        
+        /* 추가 사이드바 숨김 */
+        div[data-testid="stSidebar"] { display: none !important; }
+        .stSidebar { display: none !important; }
         </style>
         """, unsafe_allow_html=True)
     except Exception:
         pass
     
-    # iOS 스타일 탭 시스템 적용 (간단한 버전)
+    # iOS 스타일 탭 시스템 적용 (최종 버전)
     try:
-        from ..components.ios_tabs_simple import render_ios_tabs_simple, create_admin_tabs_simple
+        from ..components.ios_tabs_final import render_ios_tabs_final, create_admin_tabs_final
         
-        tabs = create_admin_tabs_simple()
-        active_tab = render_ios_tabs_simple(tabs, key="admin_tabs")
+        tabs = create_admin_tabs_final()
+        active_tab = render_ios_tabs_final(tabs, key="admin_tabs")
         
         # 탭에 따른 페이지 라우팅
         if active_tab == "management":

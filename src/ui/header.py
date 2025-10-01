@@ -139,6 +139,15 @@ def render() -> None:
           .admin-login-narrow .stButton>button{
             width:100%; height:42px;
           }
+          /* 관리자 모드 강조 스타일 */
+          .admin-mode .brand-title {
+            color: #007aff !important;
+          }
+          .admin-mode .ready-chip {
+            background: #e3f2fd !important;
+            border-color: #007aff !important;
+            color: #007aff !important;
+          }
         </style>
         """,
         unsafe_allow_html=True,
@@ -151,8 +160,10 @@ def render() -> None:
             f'<span class="ready-chip">{label}'
             f'<span class="rd {dot_cls}"></span></span>'
         )
+        # 관리자 모드일 때 클래스 추가
+        wrapper_class = "brand-wrap admin-mode" if ss.get("admin_mode", False) else "brand-wrap"
         title_html = (
-            '<div class="brand-wrap">'
+            f'<div class="{wrapper_class}">'
             f'{chip_html}<span class="brand-title">LEES AI Teacher</span>'
             "</div>"
         )
