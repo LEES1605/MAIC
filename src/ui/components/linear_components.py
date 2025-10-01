@@ -63,6 +63,21 @@ def linear_button(
         display: block !important;
         width: 100% !important;
         box-sizing: border-box !important;
+        position: relative !important;
+        overflow: visible !important;
+        margin: 0 !important;
+        outline: none !important;
+    }}
+    
+    .stButton > button::after {{
+        content: '' !important;
+        position: absolute !important;
+        bottom: -2px !important;
+        left: 0 !important;
+        right: 0 !important;
+        height: 2px !important;
+        background: {_get_button_color(variant)} !important;
+        border-radius: 0 0 var(--linear-radius-{size}) var(--linear-radius-{size}) !important;
     }}
     
     .stButton > button:hover {{
@@ -71,9 +86,49 @@ def linear_button(
         transform: translateY(-1px) !important;
     }}
     
+    .stButton > button:hover::after {{
+        background: var(--linear-brand) !important;
+    }}
+    
     .linear-button-{variant}:hover {{
         background: {_get_button_hover_bg(variant)} !important;
         border-color: var(--linear-brand) !important;
+    }}
+    
+    /* Streamlit 버튼 완전 오버라이드 */
+    div[data-testid="stButton"] > button {{
+        border: 2px solid {_get_button_color(variant)} !important;
+        background: {_get_button_bg(variant)} !important;
+        color: {_get_button_color(variant)} !important;
+        box-shadow: none !important;
+        font-family: var(--linear-font-primary) !important;
+        font-weight: var(--linear-font-weight-medium) !important;
+        border-radius: var(--linear-radius-{size}) !important;
+        padding: {_get_button_padding(size)} !important;
+        transition: all 0.2s ease !important;
+        min-height: 44px !important;
+        display: block !important;
+        width: 100% !important;
+        box-sizing: border-box !important;
+        position: relative !important;
+        overflow: visible !important;
+        margin: 0 !important;
+        outline: none !important;
+    }}
+    
+    div[data-testid="stButton"] > button::after {{
+        content: '' !important;
+        position: absolute !important;
+        bottom: -2px !important;
+        left: 0 !important;
+        right: 0 !important;
+        height: 2px !important;
+        background: {_get_button_color(variant)} !important;
+        border-radius: 0 0 var(--linear-radius-{size}) var(--linear-radius-{size}) !important;
+    }}
+    
+    div[data-testid="stButton"] > button:hover::after {{
+        background: var(--linear-brand) !important;
     }}
     
     .linear-button-{variant}:disabled {{
