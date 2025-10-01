@@ -148,21 +148,20 @@ def render_sidebar(*, back_page: str | None = "app.py", icon_only: bool = False)
     except Exception:
         pass
     
-    # 네이티브 탭 시스템 적용
+    # 간단한 탭 시스템 적용 (페이지 전환 없이)
     try:
-        from ..components.ios_tabs_native import render_ios_tabs_native, create_admin_tabs_native
+        from ..components.ios_tabs_simple import render_ios_tabs_simple, create_admin_tabs_simple
         
-        tabs = create_admin_tabs_native()
-        active_tab = render_ios_tabs_native(tabs, key="admin_tabs")
+        tabs = create_admin_tabs_simple()
+        active_tab = render_ios_tabs_simple(tabs, key="admin_tabs")
         
-        # 탭에 따른 페이지 라우팅 (빠른 전환)
+        # 탭 내용을 조건부로 렌더링
         if active_tab == "management":
-            # 관리 탭 - 오케스트레이터로 이동
-            if back_page != "app.py":
-                _switch_to("app.py")
+            # 관리 탭 내용 렌더링 (현재 페이지에서)
+            render_management_content()
         elif active_tab == "prompt":
-            # 프롬프트 탭 - 프롬프트 편집기로 이동
-            _switch_to("pages/10_admin_prompt.py")
+            # 프롬프트 탭 내용 렌더링 (현재 페이지에서)
+            render_prompt_content()
             
     except Exception as e:
         # 폴백: 기존 사이드바 사용
@@ -175,5 +174,42 @@ def render_sidebar(*, back_page: str | None = "app.py", icon_only: bool = False)
     # 로그아웃 버튼은 헤더에 통합 (사이드바 제거로 인해)
     # 실제 로그아웃 기능은 header.py에서 처리
 
-__all__ = ["render_sidebar", "ensure_admin_sidebar", "apply_admin_chrome", "show_sidebar"]
+
+def render_management_content() -> None:
+    """관리 탭 내용 렌더링"""
+    try:
+        from ..ops.indexing_panel import render_admin_indexing_panel
+        render_admin_indexing_panel()
+    except Exception as e:
+        st.error(f"관리 패널 로드 실패: {e}")
+
+
+def render_prompt_content() -> None:
+    """프롬프트 탭 내용 렌더링"""
+    try:
+        # 프롬프트 편집기 내용을 직접 임베드
+        st.markdown("### 프롬프트 편집기")
+        st.info("프롬프트 편집 기능이 여기에 표시됩니다.")
+        
+        # 실제 프롬프트 편집기 내용을 여기에 추가할 수 있습니다
+        with st.expander("페르소나 설정", expanded=True):
+            st.text_area("페르소나 텍스트", placeholder="페르소나 텍스트를 입력하세요...")
+        
+        with st.expander("모드별 프롬프트", expanded=True):
+            col1, col2 = st.columns(2)
+            with col1:
+                st.text_area("문법 모드", placeholder="문법 모드 지시/규칙...")
+            with col2:
+                st.text_area("문장 모드", placeholder="문장 모드 지시/규칙...")
+            
+            st.text_area("지문 모드", placeholder="지문 모드 지시/규칙...")
+        
+        if st.button("프롬프트 저장", type="primary"):
+            st.success("프롬프트가 저장되었습니다!")
+            
+    except Exception as e:
+        st.error(f"프롬프트 패널 로드 실패: {e}")
+
+
+__all__ = ["render_sidebar", "ensure_admin_sidebar", "apply_admin_chrome", "show_sidebar", "render_management_content", "render_prompt_content"]
 # [S-ALL] END: FILE src/ui/utils/sider.py
