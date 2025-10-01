@@ -483,9 +483,9 @@ def _boot_auto_restore_index() -> None:
 
     _idx("ensure_index_state")
     _idx("log", "부팅: 인덱스 복원 준비 중...")
-    print(f"[DEBUG] Starting restore process - persist_dir: {p}")
-
+    
     p = effective_persist_dir()
+    print(f"[DEBUG] Starting restore process - persist_dir: {p}")
     cj = p / "chunks.jsonl"
     rf = p / ".ready"
 
