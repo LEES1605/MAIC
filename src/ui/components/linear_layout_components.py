@@ -170,7 +170,7 @@ def linear_hero(
     hero_css = f"""
     <style>
     .linear-hero {{
-        background: {'url(' + background_image + ')' if background_image else 'var(--linear-bg-primary)'} !important;
+        background: {'url(' + background_image + ')' if background_image else 'linear-gradient(135deg, var(--linear-bg-secondary) 0%, var(--linear-bg-tertiary) 100%)'} !important;
         background-size: cover !important;
         background-position: center !important;
         background-repeat: no-repeat !important;
@@ -179,6 +179,7 @@ def linear_hero(
         width: calc(100% + 2rem) !important;
         position: relative !important;
         overflow: hidden !important;
+        border-bottom: 1px solid var(--linear-border-primary) !important;
     }}
     
     .linear-hero::before {{
@@ -188,7 +189,7 @@ def linear_hero(
         left: 0 !important;
         right: 0 !important;
         bottom: 0 !important;
-        background: rgba(8, 9, 10, 0.8) !important;
+        background: {'rgba(26, 26, 26, 0.8)' if background_image else 'transparent'} !important;
         z-index: 1 !important;
     }}
     

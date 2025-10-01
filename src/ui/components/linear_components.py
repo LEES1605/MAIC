@@ -59,6 +59,10 @@ def linear_button(
         border-radius: var(--linear-radius-{size}) !important;
         padding: {_get_button_padding(size)} !important;
         transition: all 0.2s ease !important;
+        min-height: 44px !important;
+        display: block !important;
+        width: 100% !important;
+        box-sizing: border-box !important;
     }}
     
     .stButton > button:hover {{
@@ -213,10 +217,25 @@ def linear_input(
     .linear-input {
         font-family: var(--linear-font-primary) !important;
         background: var(--linear-bg-secondary) !important;
-        border: 1px solid var(--linear-border-primary) !important;
+        border: 2px solid var(--linear-border-primary) !important;
         border-radius: var(--linear-radius-medium) !important;
         color: var(--linear-text-primary) !important;
         padding: var(--linear-padding-medium) !important;
+    }
+    
+    .stTextInput > div > div > input {
+        border: 2px solid var(--linear-border-primary) !important;
+        background: var(--linear-bg-secondary) !important;
+        color: var(--linear-text-primary) !important;
+        border-radius: var(--linear-radius-medium) !important;
+        padding: 8px 12px !important;
+        font-family: var(--linear-font-primary) !important;
+    }
+    
+    .stTextInput > div > div > input:focus {
+        border-color: var(--linear-brand) !important;
+        box-shadow: 0 0 0 2px rgba(94, 106, 210, 0.2) !important;
+        outline: none !important;
     }
     
     .linear-input:focus {
@@ -661,20 +680,26 @@ def linear_carousel(
     }}
     
     .linear-carousel-dot {{
-        width: 8px;
-        height: 8px;
+        width: 12px;
+        height: 12px;
         border-radius: var(--linear-radius-full);
         background: var(--linear-border-primary);
         cursor: pointer;
         transition: all 0.2s ease;
+        border: 1px solid var(--linear-border-secondary);
     }}
     
     .linear-carousel-dot.active {{
         background: var(--linear-brand);
+        border-color: var(--linear-brand);
+        box-shadow: 0 0 8px rgba(94, 106, 210, 0.3);
+        transform: scale(1.2);
     }}
     
     .linear-carousel-dot:hover {{
-        background: var(--linear-accent);
+        background: var(--linear-text-secondary);
+        border-color: var(--linear-brand);
+        transform: scale(1.2);
     }}
     </style>
     """
@@ -695,14 +720,16 @@ def linear_carousel(
             current_item = items[current_index]
             
             # 화살표와 아이템을 함께 배치
-            col1, col2, col3 = st.columns([1, 8, 1])
+            col1, col2, col3 = st.columns([1, 6, 1])
             
             # 화살표 (이전)
             with col1:
                 if show_arrows and len(items) > 1:
-                    if st.button("‹", key=f"{carousel_key}_prev", help="이전"):
+                    st.markdown('<div style="display: flex; align-items: center; justify-content: center; height: 100%;">', unsafe_allow_html=True)
+                    if st.button("‹", key=f"{carousel_key}_prev", help="이전", use_container_width=True):
                         st.session_state[f"{carousel_key}_current"] = (current_index - 1) % len(items)
                         st.rerun()
+                    st.markdown('</div>', unsafe_allow_html=True)
             
             # 현재 아이템
             with col2:
@@ -732,19 +759,28 @@ def linear_carousel(
             # 화살표 (다음)
             with col3:
                 if show_arrows and len(items) > 1:
-                    if st.button("›", key=f"{carousel_key}_next", help="다음"):
+                    st.markdown('<div style="display: flex; align-items: center; justify-content: center; height: 100%;">', unsafe_allow_html=True)
+                    if st.button("›", key=f"{carousel_key}_next", help="다음", use_container_width=True):
                         st.session_state[f"{carousel_key}_current"] = (current_index + 1) % len(items)
                         st.rerun()
+                    st.markdown('</div>', unsafe_allow_html=True)
         
         st.markdown('</div>', unsafe_allow_html=True)
         
         # 하단 점들
         if show_dots and len(items) > 1:
-            st.markdown('<div class="linear-carousel-dots">', unsafe_allow_html=True)
-            for i in range(len(items)):
-                if st.button("●", key=f"{carousel_key}_dot_{i}", help=f"슬라이드 {i+1}"):
-                    st.session_state[f"{carousel_key}_current"] = i
-                    st.rerun()
+            st.markdown('<div class="linear-carousel-dots" style="text-align: center; margin-top: 1rem;">', unsafe_allow_html=True)
+            
+            # 점들을 가로로 배치
+            cols = st.columns(len(items), gap="small")
+            for i, col in enumerate(cols):
+                with col:
+                    if st.button("●" if i == current_index else "○", 
+                               key=f"{carousel_key}_dot_{i}",
+                               help=f"슬라이드 {i+1}로 이동"):
+                        st.session_state[f"{carousel_key}_current"] = i
+                        st.rerun()
+            
             st.markdown('</div>', unsafe_allow_html=True)
         
         st.markdown('</div>', unsafe_allow_html=True)
