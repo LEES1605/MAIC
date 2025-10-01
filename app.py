@@ -290,29 +290,8 @@ except Exception:
     pass
 
 
-def _errlog(msg: str, where: str = "", exc: Exception | None = None) -> None:
-    """에러 로그 + 필요 시 Streamlit에 자세한 스택 표시."""
-    try:
-        prefix = f"{where} " if where else ""
-        print(f"[ERR] {prefix}{msg}")
-        if exc:
-            traceback.print_exception(exc)
-        try:
-            import streamlit as _st
-            with _st.expander("자세한 오류 로그", expanded=False):
-                detail = ""
-                if exc:
-                    try:
-                        detail = "".join(
-                            traceback.format_exception(type(exc), exc, exc.__traceback__)
-                        )
-                    except Exception:
-                        detail = "traceback 사용 불가"
-                _st.code(f"{prefix}{msg}\n{detail}")
-        except Exception:
-            pass
-    except Exception:
-        pass
+# 공통 유틸리티 함수 import
+from src.common.utils import errlog as _errlog
 # ===================== [05] path & logger — END ========================
 
 # ======================== [06] admin gate — START ========================

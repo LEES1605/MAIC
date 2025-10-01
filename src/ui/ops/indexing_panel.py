@@ -17,7 +17,7 @@ try:
     from src.core.persist import effective_persist_dir
     from src.runtime.backup import make_index_backup_zip, upload_index_backup
     from src.runtime.ready import is_ready_text
-except Exception:
+    except Exception:
     # 폴백
     def run_admin_index_job(params): pass
     def effective_persist_dir(): return Path.home() / ".maic" / "persist"
@@ -26,12 +26,8 @@ except Exception:
     def is_ready_text(text): return "ready" in str(text).lower()
 
 
-def _persist_dir_safe() -> Path:
-    """안전한 persist 디렉터리 반환"""
-    try:
-        return effective_persist_dir()
-    except Exception:
-        return Path.home() / ".maic" / "persist"
+# 공통 유틸리티 함수 import
+from src.common.utils import persist_dir_safe as _persist_dir_safe
 
 
 def _load_prepared_lister():
@@ -61,7 +57,7 @@ def render_ios_admin_panel() -> None:
     """iOS 스타일 관리자 패널 렌더링"""
     if st is None or not bool(st.session_state.get("admin_mode", False)):
         return
-    
+
     # iOS 스타일 CSS
     st.markdown("""
     <style>
@@ -204,18 +200,18 @@ def render_ios_admin_panel() -> None:
     
     local_ready = cj.exists() and rf.exists()
     is_latest = st.session_state.get("_INDEX_IS_LATEST", False)
-    boot_scan_done = st.session_state.get("_BOOT_SCAN_DONE", False)
-    has_new_files = st.session_state.get("_PREPARED_HAS_NEW", False)
-    new_files_count = st.session_state.get("_PREPARED_NEW_FILES", 0)
-    total_files_count = st.session_state.get("_PREPARED_TOTAL_FILES", 0)
-    
+        boot_scan_done = st.session_state.get("_BOOT_SCAN_DONE", False)
+        has_new_files = st.session_state.get("_PREPARED_HAS_NEW", False)
+        new_files_count = st.session_state.get("_PREPARED_NEW_FILES", 0)
+        total_files_count = st.session_state.get("_PREPARED_TOTAL_FILES", 0)
+        
     # 시스템 상태 표시
     st.markdown('<div class="ios-section-title">시스템 상태</div>', unsafe_allow_html=True)
     
     status_html = '<div class="ios-status-grid">'
     
     # 인덱스 상태
-    if local_ready and is_latest:
+            if local_ready and is_latest:
         status_html += '''
         <div class="ios-status-card">
             <div class="ios-status-icon">●</div>
@@ -223,7 +219,7 @@ def render_ios_admin_panel() -> None:
             <div class="ios-status-text">최신 릴리스</div>
         </div>
         '''
-    elif local_ready:
+            elif local_ready:
         status_html += '''
         <div class="ios-status-card">
             <div class="ios-status-icon">○</div>
@@ -231,7 +227,7 @@ def render_ios_admin_panel() -> None:
             <div class="ios-status-text">복원 필요</div>
         </div>
         '''
-    else:
+            else:
         status_html += '''
         <div class="ios-status-card">
             <div class="ios-status-icon">○</div>
@@ -258,7 +254,7 @@ def render_ios_admin_panel() -> None:
                 <div class="ios-status-text">동기화 완료</div>
             </div>
             '''
-    else:
+            else:
         status_html += '''
         <div class="ios-status-card">
             <div class="ios-status-icon">◐</div>
@@ -290,7 +286,7 @@ def render_ios_admin_panel() -> None:
             try:
                 run_admin_index_job(params)
                 st.success("인덱싱 & 업로드 완료")
-            except Exception as e:
+                except Exception as e:
                 st.error(f"인덱싱 실패: {e}")
     
     with main_col2:
@@ -311,11 +307,11 @@ def render_ios_admin_panel() -> None:
     with tool_col1:
         if st.button("파일스캔", use_container_width=True):
             try:
-                lister, _ = _load_prepared_lister()
-                if lister:
-                    files_list = lister() or []
+                    lister, _ = _load_prepared_lister()
+                    if lister:
+                        files_list = lister() or []
                     chk, _, _ = _load_prepared_api()
-                    if callable(chk):
+                        if callable(chk):
                         info = chk(persist, files_list) or {}
                         new_files = list(info.get("files", []))
                         new_count = len(new_files)
@@ -332,9 +328,9 @@ def render_ios_admin_panel() -> None:
                         st.error("스캔 API 로드 실패")
                 else:
                     st.error("파일 리스터 로드 실패")
-            except Exception as e:
-                st.error(f"스캔 실패: {e}")
-    
+                except Exception as e:
+                    st.error(f"스캔 실패: {e}")
+        
     with tool_col2:
         if st.button("검증", use_container_width=True):
             try:
@@ -347,12 +343,12 @@ def render_ios_admin_panel() -> None:
                     try:
                         ready_txt = rf.read_text(encoding="utf-8")
                         ready_valid = is_ready_text(ready_txt)
-                    except Exception:
-                        pass
-                
+        except Exception:
+            pass
+
                 if cj_valid and ready_valid:
                     st.success("검증 성공: chunks.jsonl & .ready 유효")
-                else:
+    else:
                     st.error("검증 실패: 파일 상태 불일치")
             except Exception as e:
                 st.error(f"검증 실패: {e}")
@@ -367,7 +363,7 @@ def render_ios_admin_panel() -> None:
                 # 복원 로직은 app.py에서 처리
                 st.success("릴리스 복원을 시도했습니다")
                 st.rerun()
-            except Exception as e:
+        except Exception as e:
                 st.error(f"복원 실패: {e}")
     
     with restore_col2:
@@ -380,14 +376,14 @@ def render_ios_admin_panel() -> None:
                 
                 if not backups:
                     st.warning("로컬 백업을 찾을 수 없습니다")
-                else:
+            else:
                     success, message = restore_from_local_backup(backups[0], persist)
                     if success:
                         st.success(f"로컬 복원 완료: {message}")
                         st.session_state["_INDEX_LOCAL_READY"] = True
                         st.session_state["_INDEX_IS_LATEST"] = False
                         st.rerun()
-                    else:
+    else:
                         st.error(f"로컬 복원 실패: {message}")
             except Exception as e:
                 st.error(f"로컬 복원 실패: {e}")
