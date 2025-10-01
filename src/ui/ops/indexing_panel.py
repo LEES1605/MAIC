@@ -17,7 +17,7 @@ try:
     from src.core.persist import effective_persist_dir
     from src.runtime.backup import make_index_backup_zip, upload_index_backup
     from src.runtime.ready import is_ready_text
-except Exception:
+    except Exception:
     # 폴백
     def run_admin_index_job(params): pass
     def effective_persist_dir(): return Path.home() / ".maic" / "persist"
@@ -33,7 +33,7 @@ def render_admin_indexing_panel() -> None:
     """관리자 모드 인덱싱 패널 - Streamlit 네이티브 컴포넌트만 사용"""
     if st is None:
         return
-    
+
     # 시스템 상태 확인
     chunks_path = _persist_dir_safe() / "chunks.jsonl"
     chunks_ready_path = _persist_dir_safe() / "chunks.jsonl.ready"
@@ -45,7 +45,7 @@ def render_admin_indexing_panel() -> None:
     has_new_files = False
     new_files_count = 0
     
-    # 실제 인덱스 상태 확인
+    # 실제 인덱스 상태 확인 (파일이 존재하지 않으면 복원 필요)
     is_latest = False
     if local_ready:
         try:
@@ -53,8 +53,11 @@ def render_admin_indexing_panel() -> None:
                 ready_content = f.read().strip()
                 # ready 파일 내용으로 최신 여부 판단
                 is_latest = "ready" in ready_content.lower() and "latest" in ready_content.lower()
-        except Exception:
+    except Exception:
             is_latest = False
+    else:
+        # 파일이 존재하지 않으면 확실히 복원 필요
+        is_latest = False
     
     # 파일 수 확인 (정확한 수치로 수정)
     total_files_count = 233  # 실제 파일 수
@@ -69,7 +72,7 @@ def render_admin_indexing_panel() -> None:
                     new_files_count = 1  # 간단한 예시
     except Exception:
         pass
-    
+
     # 메인 컨테이너
     with st.container():
         # 시스템 상태 섹션
@@ -129,7 +132,7 @@ def render_admin_indexing_panel() -> None:
                         result = run_admin_index_job({})
                         if result:
                             st.success("인덱싱 완료!")
-                        else:
+                    else:
                             st.error("인덱싱 실패")
                 except Exception as e:
                     st.error(f"오류: {e}")
