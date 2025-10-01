@@ -303,22 +303,22 @@ def linear_input(
         background: var(--linear-bg-tertiary) !important;
     }
     
-    /* 숫자 입력 필드 스타일 */
+    /* 숫자 입력 필드 스타일 - 텍스트 입력과 동일하게 */
     .stNumberInput > div > div > input {
         border: 2px solid var(--linear-border-secondary) !important;
-        background: #2a2a2a !important;
+        background: var(--linear-bg-tertiary) !important;
         color: var(--linear-text-primary) !important;
         border-radius: var(--linear-radius-medium) !important;
         padding: 8px 12px !important;
         font-family: var(--linear-font-primary) !important;
-        box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.3) !important;
+        box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.2) !important;
     }
     
     .stNumberInput > div > div > input:focus {
         border-color: var(--linear-brand) !important;
-        box-shadow: 0 0 0 2px rgba(94, 106, 210, 0.2), inset 0 1px 3px rgba(0, 0, 0, 0.3) !important;
+        box-shadow: 0 0 0 2px rgba(94, 106, 210, 0.2), inset 0 1px 3px rgba(0, 0, 0, 0.2) !important;
         outline: none !important;
-        background: #2a2a2a !important;
+        background: var(--linear-bg-tertiary) !important;
     }
     
     /* 숫자 입력 버튼 스타일 */
@@ -1080,6 +1080,7 @@ def linear_navbar(
     <style>
     .linear-navbar {{
         background: #000000 !important;
+        background-color: #000000 !important;
         border-bottom: 2px solid var(--linear-brand) !important;
         border-top: 1px solid var(--linear-border-primary) !important;
         padding: 0 !important;
@@ -1090,6 +1091,14 @@ def linear_navbar(
         z-index: 1000 !important;
         backdrop-filter: blur(10px) !important;
         box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5) !important;
+    }}
+    
+    /* 더 강력한 블랙 배경 오버라이드 */
+    .linear-navbar,
+    .linear-navbar *,
+    .linear-navbar [data-testid="column"],
+    .linear-navbar [data-testid="column"] > div {{
+        background-color: #000000 !important;
     }}
     
     .linear-navbar-container {{
@@ -1104,37 +1113,63 @@ def linear_navbar(
         flex-wrap: nowrap !important;
     }}
     
-    /* 네비게이션 바 내 모든 요소 수직 정렬 강화 */
+    /* 네비게이션 바 내 모든 요소 수직 정렬 최대 강화 */
     .linear-navbar * {{
         vertical-align: middle !important;
         line-height: 1 !important;
+        margin: 0 !important;
+        padding: 0 !important;
     }}
     
     .linear-navbar [data-testid="column"] {{
         vertical-align: middle !important;
         display: inline-flex !important;
         align-items: center !important;
+        justify-content: center !important;
         height: 64px !important;
+        margin: 0 !important;
+        padding: 0 !important;
     }}
     
     .linear-navbar [data-testid="column"] > div {{
         vertical-align: middle !important;
         display: flex !important;
         align-items: center !important;
+        justify-content: center !important;
         height: 64px !important;
+        margin: 0 !important;
+        padding: 0 !important;
     }}
     
-    /* 브랜드와 메뉴 텍스트 정렬 강제 */
+    /* 브랜드와 메뉴 텍스트 정렬 최대 강제 */
     .linear-navbar-brand, .linear-navbar-nav, .linear-navbar-user {{
         display: flex !important;
         align-items: center !important;
+        justify-content: center !important;
         height: 64px !important;
         line-height: 1 !important;
+        margin: 0 !important;
+        padding: 0 !important;
     }}
     
     .linear-navbar-brand-name, .linear-navbar-nav-link, .linear-navbar-user-name {{
         line-height: 1 !important;
         vertical-align: middle !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        display: flex !important;
+        align-items: center !important;
+    }}
+    
+    /* Streamlit 기본 마진/패딩 완전 제거 */
+    .linear-navbar .stMarkdown {{
+        margin: 0 !important;
+        padding: 0 !important;
+    }}
+    
+    .linear-navbar .stMarkdown > div {{
+        margin: 0 !important;
+        padding: 0 !important;
     }}
     
     /* Streamlit 기본 스타일 오버라이드 */
@@ -1318,35 +1353,67 @@ def linear_navbar(
     
     st.markdown('</div>', unsafe_allow_html=True)
     
-    # JavaScript로 DOM 직접 조작하여 가로 레이아웃 강제 적용
+    # JavaScript로 DOM 직접 조작하여 레이아웃과 색상 강제 적용
     st.markdown(f"""
     <script>
     setTimeout(function() {{
-        const navbar = document.querySelector('.linear-navbar-container');
+        // 네비게이션 바 배경색 강제 적용
+        const navbar = document.querySelector('.linear-navbar');
         if (navbar) {{
-            navbar.style.display = 'flex';
-            navbar.style.flexDirection = 'row';
-            navbar.style.flexWrap = 'nowrap';
-            navbar.style.alignItems = 'center';
-            navbar.style.justifyContent = 'space-between';
+            navbar.style.backgroundColor = '#000000';
+            navbar.style.background = '#000000';
             
-            const navList = navbar.querySelector('.linear-navbar-nav');
-            if (navList) {{
-                navList.style.display = 'flex';
-                navList.style.flexDirection = 'row';
-                navList.style.flexWrap = 'nowrap';
-                navList.style.alignItems = 'center';
-                navList.style.listStyle = 'none';
-                navList.style.margin = '0';
-                navList.style.padding = '0';
+            // 모든 하위 요소도 블랙 배경 적용
+            const allElements = navbar.querySelectorAll('*');
+            allElements.forEach(function(el) {{
+                el.style.backgroundColor = '#000000';
+                el.style.background = '#000000';
+            }});
+        }}
+        
+        // 컨테이너 레이아웃 강제 적용
+        const container = document.querySelector('.linear-navbar-container');
+        if (container) {{
+            container.style.display = 'flex';
+            container.style.flexDirection = 'row';
+            container.style.flexWrap = 'nowrap';
+            container.style.alignItems = 'center';
+            container.style.justifyContent = 'space-between';
+            container.style.height = '64px';
+            
+            // 모든 컬럼 요소 정렬 강제
+            const columns = container.querySelectorAll('[data-testid="column"]');
+            columns.forEach(function(col) {{
+                col.style.display = 'inline-flex';
+                col.style.alignItems = 'center';
+                col.style.justifyContent = 'center';
+                col.style.height = '64px';
+                col.style.verticalAlign = 'middle';
+                col.style.margin = '0';
+                col.style.padding = '0';
                 
-                const navItems = navList.querySelectorAll('li');
-                navItems.forEach(function(item) {{
-                    item.style.display = 'inline-block';
-                    item.style.margin = '0';
-                    item.style.padding = '0';
-                }});
-            }}
+                const colDiv = col.querySelector('div');
+                if (colDiv) {{
+                    colDiv.style.display = 'flex';
+                    colDiv.style.alignItems = 'center';
+                    colDiv.style.justifyContent = 'center';
+                    colDiv.style.height = '64px';
+                    colDiv.style.verticalAlign = 'middle';
+                    colDiv.style.margin = '0';
+                    colDiv.style.padding = '0';
+                }}
+            }});
+            
+            // 텍스트 요소 정렬 강제
+            const textElements = container.querySelectorAll('span, a, div');
+            textElements.forEach(function(el) {{
+                el.style.verticalAlign = 'middle';
+                el.style.lineHeight = '1';
+                el.style.display = 'flex';
+                el.style.alignItems = 'center';
+                el.style.margin = '0';
+                el.style.padding = '0';
+            }});
         }}
     }}, 100);
     </script>
