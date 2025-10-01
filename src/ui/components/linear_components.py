@@ -1038,6 +1038,14 @@ def linear_navbar(
         align-items: center !important;
         justify-content: space-between !important;
         height: 64px !important;
+        flex-direction: row !important;
+        flex-wrap: nowrap !important;
+    }}
+    
+    /* Streamlit 기본 스타일 오버라이드 */
+    .linear-navbar-container > * {{
+        display: inline-block !important;
+        vertical-align: middle !important;
     }}
     
     .linear-navbar-brand {{
@@ -1066,6 +1074,14 @@ def linear_navbar(
         align-items: center !important;
         gap: 8px !important;
         list-style: none !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        flex-direction: row !important;
+        flex-wrap: nowrap !important;
+    }}
+    
+    .linear-navbar-nav li {{
+        display: inline-block !important;
         margin: 0 !important;
         padding: 0 !important;
     }}
