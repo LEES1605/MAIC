@@ -692,8 +692,8 @@ def _boot_auto_restore_index() -> None:
             st.info(f"🔍 [DEBUG] Checking GitHub releases for {owner}/{repo}")
             
             # 릴리스 목록 직접 확인
-            from src.runtime.gh_release import GitHubRelease
-            gh = GitHubRelease(token)
+            from src.runtime.gh_release import GHReleases
+            gh = GHReleases(owner=owner, repo=repo, token=token)
             releases = gh.list_releases(owner, repo)
             print(f"[DEBUG] Found {len(releases)} releases: {[r.get('tag_name') for r in releases]}")
             st.info(f"🔍 [DEBUG] Found {len(releases)} releases: {[r.get('tag_name') for r in releases]}")
