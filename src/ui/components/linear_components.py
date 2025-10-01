@@ -669,6 +669,10 @@ def linear_carousel(
         overflow: hidden;
         border-radius: var(--linear-radius-medium);
         background: var(--linear-bg-tertiary);
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        text-align: center !important;
     }}
     
     .linear-carousel-track {{
@@ -777,19 +781,20 @@ def linear_carousel(
     
     /* 캐러셀 화살표 버튼 스타일 */
     .linear-carousel [data-testid="stButton"] > button {{
-        font-size: 24px !important;
+        font-size: 32px !important;
         font-weight: bold !important;
         color: var(--linear-brand) !important;
         background: var(--linear-bg-tertiary) !important;
         border: 2px solid var(--linear-brand) !important;
         border-radius: var(--linear-radius-full) !important;
-        width: 48px !important;
-        height: 48px !important;
-        min-height: 48px !important;
+        width: 40px !important;
+        height: 40px !important;
+        min-height: 40px !important;
         display: flex !important;
         align-items: center !important;
         justify-content: center !important;
         transition: all 0.2s ease !important;
+        padding: 0 !important;
     }}
     
     .linear-carousel [data-testid="stButton"] > button:hover {{
@@ -1102,6 +1107,7 @@ def linear_navbar(
         padding: 0 !important;
         flex-direction: row !important;
         flex-wrap: nowrap !important;
+        justify-content: center !important;
     }}
     
     .linear-navbar-nav li {{
@@ -1113,6 +1119,17 @@ def linear_navbar(
     .linear-navbar-nav-item {{
         display: flex !important;
         align-items: center !important;
+    }}
+    
+    /* Streamlit columns 내에서 가로 배치 강제 */
+    .linear-navbar [data-testid="column"] {{
+        display: inline-block !important;
+        vertical-align: top !important;
+    }}
+    
+    .linear-navbar [data-testid="column"] > div {{
+        display: inline-block !important;
+        vertical-align: top !important;
     }}
     
     .linear-navbar-nav-link {{
@@ -1179,39 +1196,61 @@ def linear_navbar(
     
     st.markdown(navbar_css, unsafe_allow_html=True)
     
-    # 네비게이션 바 렌더링
-    st.markdown('<nav class="linear-navbar">', unsafe_allow_html=True)
-    st.markdown('<div class="linear-navbar-container">', unsafe_allow_html=True)
+    # 네비게이션 바 렌더링 - Streamlit columns 사용
+    st.markdown('<div class="linear-navbar">', unsafe_allow_html=True)
     
-    # 브랜드 섹션
-    st.markdown('<div class="linear-navbar-brand">', unsafe_allow_html=True)
-    if brand_logo:
-        st.markdown(f'<img src="{brand_logo}" class="linear-navbar-logo" alt="Logo">', unsafe_allow_html=True)
-    st.markdown(f'<span class="linear-navbar-brand-name">{brand_name}</span>', unsafe_allow_html=True)
+    # 전체 너비 컨테이너
+    with st.container():
+        # 브랜드, 메뉴, 사용자 메뉴를 가로로 배치
+        if nav_items and user_menu:
+            col1, col2, col3 = st.columns([2, 6, 2])
+        elif nav_items or user_menu:
+            col1, col2 = st.columns([3, 7])
+        else:
+            col1 = st.container()
+        
+        # 브랜드 섹션
+        with col1:
+            st.markdown('<div class="linear-navbar-brand">', unsafe_allow_html=True)
+            if brand_logo:
+                st.markdown(f'<img src="{brand_logo}" class="linear-navbar-logo" alt="Logo">', unsafe_allow_html=True)
+            st.markdown(f'<span class="linear-navbar-brand-name">{brand_name}</span>', unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
+        
+        # 네비게이션 메뉴
+        if nav_items:
+            nav_col = col2 if user_menu else col2 if 'col2' in locals() else st.container()
+            with nav_col:
+                st.markdown('<div class="linear-navbar-nav">', unsafe_allow_html=True)
+                # 메뉴 아이템들을 가로로 배치
+                if len(nav_items) <= 5:
+                    menu_cols = st.columns(len(nav_items))
+                    for i, item in enumerate(nav_items):
+                        with menu_cols[i]:
+                            link_class = "linear-navbar-nav-link"
+                            if item.get("active", False):
+                                link_class += " active"
+                            st.markdown(f'<a href="{item.get("href", "#")}" class="{link_class}">{item["label"]}</a>', unsafe_allow_html=True)
+                else:
+                    # 메뉴가 많으면 첫 번째 컬럼에 배치
+                    for item in nav_items:
+                        link_class = "linear-navbar-nav-link"
+                        if item.get("active", False):
+                            link_class += " active"
+                        st.markdown(f'<a href="{item.get("href", "#")}" class="{link_class}" style="margin-right: 16px;">{item["label"]}</a>', unsafe_allow_html=True)
+                st.markdown('</div>', unsafe_allow_html=True)
+        
+        # 사용자 메뉴
+        if user_menu:
+            user_col = col3 if nav_items else col2
+            with user_col:
+                st.markdown('<div class="linear-navbar-user">', unsafe_allow_html=True)
+                if user_menu.get("avatar"):
+                    st.markdown(f'<img src="{user_menu["avatar"]}" class="linear-navbar-user-avatar" alt="Avatar">', unsafe_allow_html=True)
+                st.markdown(f'<span class="linear-navbar-user-name">{user_menu["name"]}</span>', unsafe_allow_html=True)
+                st.markdown('</div>', unsafe_allow_html=True)
+    
     st.markdown('</div>', unsafe_allow_html=True)
-    
-    # 네비게이션 메뉴
-    if nav_items:
-        st.markdown('<ul class="linear-navbar-nav">', unsafe_allow_html=True)
-        for item in nav_items:
-            st.markdown('<li class="linear-navbar-nav-item">', unsafe_allow_html=True)
-            link_class = "linear-navbar-nav-link"
-            if item.get("active", False):
-                link_class += " active"
-            st.markdown(f'<a href="{item.get("href", "#")}" class="{link_class}">{item["label"]}</a>', unsafe_allow_html=True)
-            st.markdown('</li>', unsafe_allow_html=True)
-        st.markdown('</ul>', unsafe_allow_html=True)
-    
-    # 사용자 메뉴
-    if user_menu:
-        st.markdown('<div class="linear-navbar-user">', unsafe_allow_html=True)
-        if user_menu.get("avatar"):
-            st.markdown(f'<img src="{user_menu["avatar"]}" class="linear-navbar-user-avatar" alt="Avatar">', unsafe_allow_html=True)
-        st.markdown(f'<span class="linear-navbar-user-name">{user_menu["name"]}</span>', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-    
-    st.markdown('</div>', unsafe_allow_html=True)
-    st.markdown('</nav>', unsafe_allow_html=True)
     
     # JavaScript로 DOM 직접 조작하여 가로 레이아웃 강제 적용
     st.markdown(f"""
