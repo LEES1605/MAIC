@@ -1243,6 +1243,9 @@ def linear_navbar(
         border-radius: var(--linear-radius-medium) !important;
         transition: all 0.2s ease !important;
         border: 1px solid transparent !important;
+        white-space: nowrap !important;
+        display: inline-block !important;
+        margin-right: 16px !important;
     }}
     
     .linear-navbar-nav-link:hover {{
@@ -1302,11 +1305,11 @@ def linear_navbar(
     
     # 전체 너비 컨테이너
     with st.container():
-        # 브랜드, 메뉴, 사용자 메뉴를 가로로 배치
+        # 브랜드, 메뉴, 사용자 메뉴를 가로로 배치 - 더 넓은 비율 사용
         if nav_items and user_menu:
-            col1, col2, col3 = st.columns([2, 6, 2])
+            col1, col2, col3 = st.columns([1, 8, 1])
         elif nav_items or user_menu:
-            col1, col2 = st.columns([3, 7])
+            col1, col2 = st.columns([2, 8])
         else:
             col1 = st.container()
         
@@ -1323,22 +1326,12 @@ def linear_navbar(
             nav_col = col2 if user_menu else col2 if 'col2' in locals() else st.container()
             with nav_col:
                 st.markdown('<div class="linear-navbar-nav">', unsafe_allow_html=True)
-                # 메뉴 아이템들을 가로로 배치
-                if len(nav_items) <= 5:
-                    menu_cols = st.columns(len(nav_items))
-                    for i, item in enumerate(nav_items):
-                        with menu_cols[i]:
-                            link_class = "linear-navbar-nav-link"
-                            if item.get("active", False):
-                                link_class += " active"
-                            st.markdown(f'<a href="{item.get("href", "#")}" class="{link_class}">{item["label"]}</a>', unsafe_allow_html=True)
-                else:
-                    # 메뉴가 많으면 첫 번째 컬럼에 배치
-                    for item in nav_items:
-                        link_class = "linear-navbar-nav-link"
-                        if item.get("active", False):
-                            link_class += " active"
-                        st.markdown(f'<a href="{item.get("href", "#")}" class="{link_class}" style="margin-right: 16px;">{item["label"]}</a>', unsafe_allow_html=True)
+                # 모든 메뉴 아이템을 한 줄에 인라인으로 배치
+                for item in nav_items:
+                    link_class = "linear-navbar-nav-link"
+                    if item.get("active", False):
+                        link_class += " active"
+                    st.markdown(f'<a href="{item.get("href", "#")}" class="{link_class}" style="margin-right: 16px; white-space: nowrap; display: inline-block;">{item["label"]}</a>', unsafe_allow_html=True)
                 st.markdown('</div>', unsafe_allow_html=True)
         
         # 사용자 메뉴
@@ -1413,6 +1406,15 @@ def linear_navbar(
                 el.style.alignItems = 'center';
                 el.style.margin = '0';
                 el.style.padding = '0';
+                el.style.whiteSpace = 'nowrap';
+            }});
+            
+            // 네비게이션 링크 줄바꿈 방지
+            const navLinks = container.querySelectorAll('.linear-navbar-nav-link');
+            navLinks.forEach(function(link) {{
+                link.style.whiteSpace = 'nowrap';
+                link.style.display = 'inline-block';
+                link.style.marginRight = '16px';
             }});
         }}
     }}, 100);
