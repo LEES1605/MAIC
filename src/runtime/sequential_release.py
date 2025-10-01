@@ -58,6 +58,12 @@ class SequentialReleaseManager:
         print(f"[DEBUG] find_latest_by_number called with prefix: '{prefix}'")
         releases = self.gh.list_releases(per_page=100)
         print(f"[DEBUG] Found {len(releases)} releases in find_latest_by_number: {[r.get('tag_name') for r in releases]}")
+        
+        # 각 릴리스 태그 상세 분석
+        for i, release in enumerate(releases):
+            tag = release.get('tag_name', '')
+            print(f"[DEBUG] Release {i}: tag='{tag}', starts_with_{prefix}-={tag.startswith(f'{prefix}-')}")
+        
         latest_num = 0
         latest_release = None
         latest_timestamp = 0
