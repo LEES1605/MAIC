@@ -198,16 +198,44 @@ class SequentialReleaseManager:
             raise GHError(f"No suitable asset found in release {tag}")
         
         # 다운로드 및 압축 해제
-        data = self.gh._download_asset(chosen_asset.get('browser_download_url'))
+        try:
+            print(f"[DEBUG] Downloading asset: {chosen_asset.get('name')}")
+            data = self.gh._download_asset(chosen_asset.get('browser_download_url'))
+            print(f"[DEBUG] Download successful: {len(data)} bytes")
+        except Exception as e:
+            print(f"[DEBUG] Download failed: {e}")
+            raise GHError(f"Failed to download asset: {e}")
         
         # persist 디렉토리 생성 및 권한 확인
-        dest.mkdir(parents=True, exist_ok=True)
-        print(f"[DEBUG] Created/verified persist directory: {dest}")
+        try:
+            dest.mkdir(parents=True, exist_ok=True)
+            print(f"[DEBUG] Created/verified persist directory: {dest}")
+            
+            # 권한 확인
+            if not os.access(dest, os.W_OK):
+                print(f"[DEBUG] WARNING: No write permission to {dest}")
+                # 권한 문제 시 다른 경로 시도
+                alt_dest = Path.home() / "maic_persist"
+                alt_dest.mkdir(parents=True, exist_ok=True)
+                if os.access(alt_dest, os.W_OK):
+                    print(f"[DEBUG] Using alternative path: {alt_dest}")
+                    dest = alt_dest
+                else:
+                    raise PermissionError(f"Cannot write to {dest} or {alt_dest}")
+        except Exception as e:
+            print(f"[DEBUG] Directory creation failed: {e}")
+            raise
         
         if clean_dest:
             self._clean_destination(dest)
         
-        self.gh._extract_bytes_to(dest, chosen_asset.get('name'), data)
+        try:
+            print(f"[DEBUG] Extracting {chosen_asset.get('name')} to {dest}")
+            self.gh._extract_bytes_to(dest, chosen_asset.get('name'), data)
+            print(f"[DEBUG] Extraction completed")
+        except Exception as e:
+            print(f"[DEBUG] Extraction failed: {e}")
+            raise GHError(f"Failed to extract asset: {e}")
         
         # 복원 후 파일 존재 확인
         chunks_file = dest / 'chunks.jsonl'
@@ -215,15 +243,34 @@ class SequentialReleaseManager:
             print(f"[DEBUG] chunks.jsonl created successfully: {chunks_file.stat().st_size} bytes")
         else:
             print(f"[DEBUG] WARNING: chunks.jsonl not found after extraction")
+            # 디렉토리 내용 확인
+            try:
+                files = list(dest.rglob('*'))
+                print(f"[DEBUG] Files in destination: {[f.name for f in files]}")
+            except Exception as e:
+                print(f"[DEBUG] Failed to list files: {e}")
         
         # 복원 후 검증
         self._verify_restoration(dest, chosen_asset.get('name'))
+        
+        # 최종 검증
+        final_chunks = dest / 'chunks.jsonl'
+        if not final_chunks.exists():
+            print(f"[DEBUG] FINAL WARNING: chunks.jsonl still not found at {final_chunks}")
+            # 절대 경로로 다시 확인
+            abs_chunks = Path(final_chunks).resolve()
+            if abs_chunks.exists():
+                print(f"[DEBUG] Found chunks.jsonl at absolute path: {abs_chunks}")
+            else:
+                print(f"[DEBUG] chunks.jsonl not found at absolute path either")
         
         return {
             'tag': tag,
             'release_id': latest_release.get('id'),
             'asset_name': chosen_asset.get('name'),
-            'detail': f"restored {tag} to {dest}"
+            'detail': f"restored {tag} to {dest}",
+            'final_path': str(dest.resolve()),
+            'chunks_exists': final_chunks.exists()
         }
     
     def restore_latest_prompts(self, dest: Path) -> Dict[str, Any]:
