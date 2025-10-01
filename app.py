@@ -689,9 +689,20 @@ def _boot_auto_restore_index() -> None:
         # 최신 인덱스 복원
         print(f"[DEBUG] About to call restore_latest_index with p={p}, clean_dest=True")
         st.info(f"🔍 [DEBUG] About to call restore_latest_index with p={p}, clean_dest=True")
-        result = seq_manager.restore_latest_index(p, clean_dest=True)
-        print(f"[DEBUG] restore_latest_index result: {result}")
-        st.success(f"✅ [DEBUG] restore_latest_index result: {result}")
+        
+        try:
+            result = seq_manager.restore_latest_index(p, clean_dest=True)
+            print(f"[DEBUG] restore_latest_index result: {result}")
+            st.success(f"✅ [DEBUG] restore_latest_index result: {result}")
+        except Exception as e:
+            print(f"[DEBUG] restore_latest_index FAILED: {e}")
+            st.error(f"❌ [DEBUG] restore_latest_index FAILED: {e}")
+            import traceback
+            traceback_str = traceback.format_exc()
+            print(f"[DEBUG] Traceback: {traceback_str}")
+            st.error(f"❌ [DEBUG] Traceback: {traceback_str}")
+            # 예외 발생 시에도 계속 진행
+            result = None
         
         # 복원 후 파일 상태 재확인
         print(f"[DEBUG] Post-restore check: cj.exists()={cj.exists()}, rf.exists()={rf.exists()}")
