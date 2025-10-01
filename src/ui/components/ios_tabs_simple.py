@@ -60,7 +60,8 @@ def render_ios_tabs_simple(
         box-shadow: 0 1px 3px rgba(0,0,0,0.2);
     }
     
-    .stButton > button {
+    /* 탭 버튼 전용 스타일 */
+    .ios-tabs-wrapper .stButton > button {
         border-radius: 0 !important;
         border: none !important;
         box-shadow: none !important;
@@ -72,24 +73,30 @@ def render_ios_tabs_simple(
         transition: all 0.2s ease !important;
     }
     
-    .stButton > button[kind="primary"] {
+    .ios-tabs-wrapper .stButton > button[kind="primary"] {
         background: rgba(94, 106, 210, 0.1) !important;
         color: var(--linear-brand) !important;
         border-bottom: 3px solid var(--linear-brand) !important;
+        border-top: none !important;
+        border-left: none !important;
+        border-right: none !important;
     }
     
-    .stButton > button[kind="secondary"] {
+    .ios-tabs-wrapper .stButton > button[kind="secondary"] {
         background: transparent !important;
         color: var(--linear-text-tertiary) !important;
         border-bottom: 3px solid transparent !important;
+        border-top: none !important;
+        border-left: none !important;
+        border-right: none !important;
     }
     
-    .stButton > button[kind="secondary"]:hover {
+    .ios-tabs-wrapper .stButton > button[kind="secondary"]:hover {
         background: rgba(94, 106, 210, 0.05) !important;
         color: var(--linear-text-secondary) !important;
     }
     
-    .stButton > button[kind="primary"]:hover {
+    .ios-tabs-wrapper .stButton > button[kind="primary"]:hover {
         background: rgba(94, 106, 210, 0.15) !important;
     }
     </style>
