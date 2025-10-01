@@ -1660,6 +1660,13 @@ def _render_body() -> None:
 
     # 4) 관리자 패널 (외부 모듈 호출: src.ui.ops.indexing_panel)
     if _is_admin_view():
+        # 관리자 모드에서 헤더를 먼저 렌더링 (가장 위로)
+        try:
+            from src.ui.header import render as _render_header
+            _render_header()
+        except Exception:
+            pass
+        
         # 디버그 패널 추가
         _render_debug_panel()
         

@@ -17,7 +17,7 @@ try:
     from src.core.persist import effective_persist_dir
     from src.runtime.backup import make_index_backup_zip, upload_index_backup
     from src.runtime.ready import is_ready_text
-except Exception:
+    except Exception:
     # 폴백
     def run_admin_index_job(params): pass
     def effective_persist_dir(): return Path.home() / ".maic" / "persist"
@@ -33,7 +33,7 @@ def render_admin_indexing_panel() -> None:
     """관리자 모드 인덱싱 패널 - Streamlit 네이티브 컴포넌트만 사용"""
     if st is None:
         return
-    
+
     # 시스템 상태 확인
     chunks_path = _persist_dir_safe() / "chunks.jsonl"
     chunks_ready_path = _persist_dir_safe() / "chunks.jsonl.ready"
@@ -53,7 +53,7 @@ def render_admin_indexing_panel() -> None:
                 ready_content = f.read().strip()
                 # ready 파일 내용으로 최신 여부 판단
                 is_latest = "ready" in ready_content.lower() and "latest" in ready_content.lower()
-        except Exception:
+    except Exception:
             is_latest = False
     
     # 파일 수 확인 (정확한 수치로 수정)
@@ -69,7 +69,7 @@ def render_admin_indexing_panel() -> None:
                     new_files_count = 1  # 간단한 예시
     except Exception:
         pass
-    
+
     # 메인 컨테이너
     with st.container():
         # 시스템 상태 섹션
@@ -82,10 +82,10 @@ def render_admin_indexing_panel() -> None:
             # 인덱스 상태
             st.markdown("**인덱스 상태**")
             if local_ready and is_latest:
-                st.success("준비완료")
+                st.info("준비완료")
                 st.caption("최신 릴리스")
             elif local_ready:
-                st.warning("로컬사용")
+                st.info("로컬사용")
                 st.caption("복원 필요")
             else:
                 st.error("복원필요")
@@ -99,26 +99,38 @@ def render_admin_indexing_panel() -> None:
                     st.info(f"새파일 {new_files_count}개")
                     st.caption("업데이트 필요")
                 else:
-                    st.success("최신")
+                    st.info("최신")
                     st.caption("동기화 완료")
             else:
-                st.warning("스캔중")
+                st.info("스캔중")
                 st.caption("처리 중")
         
         with col3:
             # 신규파일만 표시
+            st.markdown("**신규파일**")
             if has_new_files:
-                st.markdown("**신규파일**")
-                st.metric("새파일", f"{new_files_count}개")
+                st.info(f"새파일 {new_files_count}개")
+                st.caption("업데이트 필요")
             else:
-                st.markdown("**신규파일**")
-                st.metric("새파일", "0개")
+                st.info("새파일 0개")
+                st.caption("동기화 완료")
         
         st.divider()
         
-        # 주요 작업 섹션
-        st.markdown("### 주요 작업")
+        # 관리 도구 섹션
+        st.markdown("### 관리 도구")
         
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            if st.button("복원", key="restore_index", use_container_width=True):
+                st.info("인덱스 복원 기능은 개발 중입니다.")
+        
+        with col2:
+            if st.button("통계", key="view_stats", use_container_width=True):
+                st.info("통계 보기 기능은 개발 중입니다.")
+        
+        # 추가 작업 버튼들
         col1, col2 = st.columns(2)
         
         with col1:
@@ -147,21 +159,6 @@ def render_admin_indexing_panel() -> None:
                             st.error("백업 파일 생성 실패")
                 except Exception as e:
                     st.error(f"오류: {e}")
-        
-        st.divider()
-        
-        # 관리 도구 섹션
-        st.markdown("### 관리 도구")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            if st.button("복원", key="restore_index", use_container_width=True):
-                st.info("인덱스 복원 기능은 개발 중입니다.")
-        
-        with col2:
-            if st.button("통계", key="view_stats", use_container_width=True):
-                st.info("통계 보기 기능은 개발 중입니다.")
 
 
 def render_orchestrator_header() -> None:
