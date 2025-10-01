@@ -1003,19 +1003,48 @@ def _boot_auto_scan_prepared() -> None:
         files_list = lister() or []
         total_files = len(files_list)
 
-        # 새 파일 확인
-        chk, _mark, _ = _load_prepared_api()
-        new_files = []
-        if callable(chk):
-            try:
-                persist_dir = effective_persist_dir()
-                info = chk(persist_dir, files_list) or {}
-                new_files = list(info.get("files") or info.get("new") or [])
-            except Exception as e:
-                _idx("log", f"새 파일 확인 실패: {e}", "warn")
-                return
+        # 상태 추적 기반 새 파일 확인
+        try:
+            # prepared 폴더 경로 추정 (실제 경로로 수정 필요)
+            prepared_dir = Path("/mount/src/maic/data/prepared")  # 또는 실제 prepared 폴더 경로
+            if prepared_dir.exists():
+                new_files = _get_new_files_to_index(prepared_dir)
+                print(f"[DEBUG] State-based scan: found {len(new_files)} new/modified files")
+            else:
+                # 기존 방식으로 폴백
+                chk, _mark, _ = _load_prepared_api()
+                new_files = []
+                if callable(chk):
+                    try:
+                        persist_dir = effective_persist_dir()
+                        info = chk(persist_dir, files_list) or {}
+                        new_files = list(info.get("files") or info.get("new") or [])
+                    except Exception as e:
+                        _idx("log", f"새 파일 확인 실패: {e}", "warn")
+                        return
+        except Exception as e:
+            print(f"[DEBUG] State-based scan failed, using fallback: {e}")
+            # 기존 방식으로 폴백
+            chk, _mark, _ = _load_prepared_api()
+            new_files = []
+            if callable(chk):
+                try:
+                    persist_dir = effective_persist_dir()
+                    info = chk(persist_dir, files_list) or {}
+                    new_files = list(info.get("files") or info.get("new") or [])
+                except Exception as e:
+                    _idx("log", f"새 파일 확인 실패: {e}", "warn")
+                    return
 
         new_count = len(new_files)
+        
+        # 인덱싱 상태 업데이트 (새 파일이 있을 때만)
+        if new_count > 0:
+            try:
+                _update_indexing_state(new_files)
+                print(f"[DEBUG] Updated indexing state with {new_count} new files")
+            except Exception as e:
+                print(f"[DEBUG] Failed to update indexing state: {e}")
         
         # 결과를 세션 상태에 저장
         try:
@@ -1541,36 +1570,33 @@ def _render_body() -> None:
     if st is None:
         return
 
-    # 1) 부팅 훅
-    if not st.session_state.get("_boot_checked"):
-        try:
-            # 복원 상태 강제 리셋
-            st.session_state["_BOOT_RESTORE_DONE"] = False
-            st.session_state["_INDEX_LOCAL_READY"] = False
-            st.session_state["_INDEX_IS_LATEST"] = False
-            print(f"[DEBUG] Reset restore state - forcing restore")
-            
-            # persist 디렉토리 상태 확인
-            persist_dir = effective_persist_dir()
-            print(f"[DEBUG] Persist directory: {persist_dir}")
-            print(f"[DEBUG] Persist exists: {persist_dir.exists()}")
-            print(f"[DEBUG] Persist writable: {os.access(persist_dir.parent, os.W_OK) if persist_dir.parent.exists() else False}")
-            
-            print(f"[DEBUG] About to call _boot_auto_restore_index()")
-            _boot_auto_restore_index()
-            print(f"[DEBUG] _boot_auto_restore_index() completed")
-            
-            print(f"[DEBUG] About to call _boot_auto_scan_prepared()")
-            _boot_auto_scan_prepared()  # 새로 추가: 자동 스캔
-            print(f"[DEBUG] _boot_auto_scan_prepared() completed")
-            
-            print(f"[DEBUG] About to call _boot_autoflow_hook()")
-            _boot_autoflow_hook()
-            print(f"[DEBUG] _boot_autoflow_hook() completed")
-        except Exception as e:
-            _errlog(f"boot check failed: {e}", where="[render_body.boot]", exc=e)
-        finally:
-            st.session_state["_boot_checked"] = True
+    # 1) 부팅 훅 - 항상 실행하도록 수정
+    try:
+        # 복원 상태 강제 리셋 (매번 실행)
+        st.session_state["_BOOT_RESTORE_DONE"] = False
+        st.session_state["_INDEX_LOCAL_READY"] = False
+        st.session_state["_INDEX_IS_LATEST"] = False
+        print(f"[DEBUG] Reset restore state - forcing restore")
+        
+        # persist 디렉토리 상태 확인
+        persist_dir = effective_persist_dir()
+        print(f"[DEBUG] Persist directory: {persist_dir}")
+        print(f"[DEBUG] Persist exists: {persist_dir.exists()}")
+        print(f"[DEBUG] Persist writable: {os.access(persist_dir.parent, os.W_OK) if persist_dir.parent.exists() else False}")
+        
+        print(f"[DEBUG] About to call _boot_auto_restore_index()")
+        _boot_auto_restore_index()
+        print(f"[DEBUG] _boot_auto_restore_index() completed")
+        
+        print(f"[DEBUG] About to call _boot_auto_scan_prepared()")
+        _boot_auto_scan_prepared()  # 새로 추가: 자동 스캔
+        print(f"[DEBUG] _boot_auto_scan_prepared() completed")
+        
+        print(f"[DEBUG] About to call _boot_autoflow_hook()")
+        _boot_autoflow_hook()
+        print(f"[DEBUG] _boot_autoflow_hook() completed")
+    except Exception as e:
+        _errlog(f"boot check failed: {e}", where="[render_body.boot]", exc=e)
 
     # 2) ✅ 상태 확정(자동 복원/READY 반영)을 헤더보다 먼저 수행
     try:
