@@ -53,11 +53,11 @@ def step_set(i: int, status: str, detail: str = "") -> None:
         steps[idx] = {"name": steps[idx]["name"], "status": status, "detail": detail}
         st.session_state["_IDX_STEPS"] = steps
         
-        # 변경 즉시 학생 진행바/로그를 갱신(관리자 여부에 상관없이 안전 호출)
+        # 변경 즉시 학생 진행바만 갱신 (로그는 표시하지 않음)
         try:
             render_stepper_safe(force=True)
-            # 로그 패널은 강제 생성까지는 하지 않음(학생 화면은 미니멀)
-            render_status(force=False)
+            # 로그 패널은 아예 표시하지 않음 (미니멀리즘)
+            # render_status(force=False)
         except Exception:
             pass
     except Exception:
@@ -95,10 +95,11 @@ def log(message: str, level: str = "info") -> None:
                 del logs[:-100]
             st.session_state["_IDX_LOGS"] = logs
             
-        # 학생 화면에도 최소 캡션은 유지, 관리자면 전체 로그 영역 생성
+        # 관리자 모드에서는 로그 표시하지 않음 (미니멀리즘)
         try:
             render_stepper_safe(force=True)
-            render_status(force=bool(st.session_state.get("admin_mode")))
+            # 관리자 모드에서도 로그 표시하지 않음 - 상태 카드로 충분
+            render_status(force=False)
         except Exception:
             pass
     except Exception:

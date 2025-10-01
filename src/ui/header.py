@@ -101,6 +101,11 @@ def render() -> None:
     dot_map = {"HIGH": "rd-high", "MID": "rd-mid", "LOW": "rd-low"}
     label = label_map.get(level, "문제발생")
     dot_cls = dot_map.get(level, "rd-low")
+    
+    # 관리자 모드에서는 헤더 상태 표시를 간소화
+    if ss.get("admin_mode", False):
+        label = "관리자"
+        dot_cls = "rd-high"
 
     # CSS (E501 회피: 속성 단위 개행)
     st.markdown(

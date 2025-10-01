@@ -195,42 +195,32 @@ def render_orchestrator_header() -> None:
         # 상태 카드들
         status_html = '<div class="mobile-status-grid">'
         
-        # 스캔 상태
+        # 핵심 상태만 표시 (미니멀리즘)
+        if local_ready and is_latest:
+            status_html += '<div class="status-card success">✅ 준비완료</div>'
+        elif local_ready:
+            status_html += '<div class="status-card warning">⚠️ 로컬사용</div>'
+        else:
+            status_html += '<div class="status-card error">❌ 복원필요</div>'
+        
+        # 스캔 상태 (간소화)
         if boot_scan_done:
             if has_new_files:
-                status_html += f'<div class="status-card warning">🆕 새파일<br>{new_files_count}개</div>'
+                status_html += '<div class="status-card warning">🆕 새파일</div>'
             else:
-                status_html += f'<div class="status-card success">✅ 스캔완료<br>{total_files_count}개</div>'
+                status_html += '<div class="status-card success">✅ 최신</div>'
         else:
-            status_html += '<div class="status-card info">⏳ 스캔대기</div>'
-        
-        # 인덱스 상태
-        if local_ready and is_latest:
-            status_html += '<div class="status-card success">✅ 최신인덱스</div>'
-        elif local_ready:
-            status_html += '<div class="status-card warning">⚠️ 로컬인덱스</div>'
-        else:
-            status_html += '<div class="status-card error">❌ 인덱스없음</div>'
-        
-        # 릴리스 태그
-        latest_tag = st.session_state.get("_LATEST_RELEASE_TAG")
-        if latest_tag:
-            status_html += f'<div class="status-card info">🏷️ {latest_tag}</div>'
-        else:
-            status_html += '<div class="status-card warning">🏷️ 릴리스없음</div>'
+            status_html += '<div class="status-card info">⏳ 스캔중</div>'
         
         status_html += '</div>'
         st.markdown(status_html, unsafe_allow_html=True)
         
-        # 3단계 복원 시스템 - 모바일 친화적
-        st.markdown("#### 🔄 인덱스 복원")
-        
-        # 복원 상태를 한 줄로 표시
+        # 복원 상태 (한 줄로 간소화)
         auto_restore_done = st.session_state.get("_BOOT_RESTORE_DONE", False)
         if auto_restore_done:
-            st.success("✅ 자동복원 완료", icon="✅")
+            st.success("✅ 복원완료", icon="✅")
         else:
-            st.warning("⚠️ 자동복원 대기중", icon="⚠️")
+            st.warning("⚠️ 복원대기", icon="⚠️")
         
         # 관리 도구 - 모바일 친화적 버튼 레이아웃
         st.markdown("#### 🔧 관리도구")
