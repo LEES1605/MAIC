@@ -131,13 +131,13 @@ def render_status(force: bool = False) -> None:
     st.markdown("""
     <style>
     .mobile-log-container {
-        max-height: 200px;
+        max-height: 80px;
         overflow-y: auto;
         background: #f8f9fa;
         border: 1px solid #e9ecef;
-        border-radius: 8px;
-        padding: 8px;
-        margin: 8px 0;
+        border-radius: 6px;
+        padding: 4px;
+        margin: 4px 0;
     }
     .log-entry {
         display: flex;
@@ -160,16 +160,16 @@ def render_status(force: bool = False) -> None:
     }
     @media (max-width: 768px) {
         .mobile-log-container {
-            max-height: 150px;
-            padding: 6px;
+            max-height: 60px;
+            padding: 2px;
         }
         .log-entry {
-            font-size: 11px;
-            padding: 3px 0;
+            font-size: 10px;
+            padding: 2px 0;
         }
         .log-icon {
-            font-size: 12px;
-            min-width: 16px;
+            font-size: 10px;
+            min-width: 14px;
         }
     }
     </style>
@@ -180,10 +180,10 @@ def render_status(force: bool = False) -> None:
             st.caption("로그가 없습니다.")
             return
         
-        # 최근 20개 로그만 표시 (모바일에서 성능 개선)
-        recent_logs = logs[-20:]
+        # 최근 3개 로그만 표시 (모바일에서 매우 컴팩트하게)
+        recent_logs = logs[-3:]
         
-        # HTML로 로그 표시 (더 컴팩트하고 스타일링 가능)
+        # HTML로 로그 표시 (매우 컴팩트하게)
         log_html = '<div class="mobile-log-container">'
         for entry in recent_logs:
             level = str(entry.get("level") or "info")
@@ -192,8 +192,8 @@ def render_status(force: bool = False) -> None:
             
             # 메시지 길이 제한 (모바일에서 가독성 향상)
             display_message = message
-            if len(message) > 60:
-                display_message = message[:57] + "..."
+            if len(message) > 40:
+                display_message = message[:37] + "..."
             
             log_html += f'''
             <div class="log-entry">
@@ -205,9 +205,9 @@ def render_status(force: bool = False) -> None:
         
         st.markdown(log_html, unsafe_allow_html=True)
         
-        # 로그 개수 표시
-        if len(logs) > 20:
-            st.caption(f"최근 20개 로그 표시 (총 {len(logs)}개)")
+        # 로그 개수 표시 (간단하게)
+        if len(logs) > 3:
+            st.caption(f"최근 3개 로그 (총 {len(logs)}개)")
 
 
 def render_stepper_safe(force: bool = False) -> None:
