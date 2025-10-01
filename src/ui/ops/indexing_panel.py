@@ -17,7 +17,7 @@ try:
     from src.core.persist import effective_persist_dir
     from src.runtime.backup import make_index_backup_zip, upload_index_backup
     from src.runtime.ready import is_ready_text
-    except Exception:
+except Exception:
     # 폴백
     def run_admin_index_job(params): pass
     def effective_persist_dir(): return Path.home() / ".maic" / "persist"
@@ -53,7 +53,7 @@ def render_admin_indexing_panel() -> None:
                 ready_content = f.read().strip()
                 # ready 파일 내용으로 최신 여부 판단
                 is_latest = "ready" in ready_content.lower() and "latest" in ready_content.lower()
-    except Exception:
+        except Exception:
             is_latest = False
     
     # 파일 수 확인 (정확한 수치로 수정)
@@ -72,6 +72,8 @@ def render_admin_indexing_panel() -> None:
 
     # 메인 컨테이너
     with st.container():
+        st.markdown("## 인덱스 오케스트레이터")
+        
         # 시스템 상태 섹션
         st.markdown("### 시스템 상태")
         
@@ -140,7 +142,7 @@ def render_admin_indexing_panel() -> None:
                         result = run_admin_index_job({})
                         if result:
                             st.success("인덱싱 완료!")
-                    else:
+                        else:
                             st.error("인덱싱 실패")
                 except Exception as e:
                     st.error(f"오류: {e}")
@@ -161,8 +163,5 @@ def render_admin_indexing_panel() -> None:
 
 
 def render_orchestrator_header() -> None:
-    """오케스트레이터 헤더 (호환성을 위한 래퍼)"""
+    """호환성을 위한 래퍼 함수"""
     render_admin_indexing_panel()
-
-
-__all__ = ["render_admin_indexing_panel", "render_orchestrator_header"]
