@@ -749,7 +749,7 @@ def _auto_start_once() -> None:
     except Exception:
         return
 
-    mode = (os.getenv("AUTO_START_MODE") or _secret_get("AUTO_START_MODE", "off") or "off").lower()
+    mode = (os.getenv("AUTO_START_MODE") or _secret_get("AUTO_START_MODE", "restore") or "restore").lower()
     if mode not in ("restore", "on"):
         return
 

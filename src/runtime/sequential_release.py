@@ -176,15 +176,23 @@ class SequentialReleaseManager:
             if release_id:
                 assets = self.gh._list_assets(int(release_id))
         
-        # 자산 선택 (index.tar.gz 우선, 그 다음 .zip)
+        # 디버깅: 사용 가능한 자산들 로그
+        print(f"[DEBUG] Available assets in release {tag}: {[a.get('name') for a in assets]}")
+        
+        # 자산 선택 (index*.tar.gz 우선, 그 다음 .zip)
         chosen_asset = None
         for asset in assets:
             name = asset.get('name', '').lower()
             if name == 'index.tar.gz':
                 chosen_asset = asset
+                print(f"[DEBUG] Selected exact match: {name}")
                 break
+            elif name.startswith('index') and name.endswith('.tar.gz') and not chosen_asset:
+                chosen_asset = asset
+                print(f"[DEBUG] Selected index pattern: {name}")
             elif name.endswith('.zip') and not chosen_asset:
                 chosen_asset = asset
+                print(f"[DEBUG] Selected zip fallback: {name}")
         
         if not chosen_asset:
             raise GHError(f"No suitable asset found in release {tag}")
@@ -192,10 +200,21 @@ class SequentialReleaseManager:
         # 다운로드 및 압축 해제
         data = self.gh._download_asset(chosen_asset.get('browser_download_url'))
         
+        # persist 디렉토리 생성 및 권한 확인
+        dest.mkdir(parents=True, exist_ok=True)
+        print(f"[DEBUG] Created/verified persist directory: {dest}")
+        
         if clean_dest:
             self._clean_destination(dest)
         
         self.gh._extract_bytes_to(dest, chosen_asset.get('name'), data)
+        
+        # 복원 후 파일 존재 확인
+        chunks_file = dest / 'chunks.jsonl'
+        if chunks_file.exists():
+            print(f"[DEBUG] chunks.jsonl created successfully: {chunks_file.stat().st_size} bytes")
+        else:
+            print(f"[DEBUG] WARNING: chunks.jsonl not found after extraction")
         
         # 복원 후 검증
         self._verify_restoration(dest, chosen_asset.get('name'))
