@@ -1111,6 +1111,7 @@ def linear_navbar(
         height: 64px !important;
         flex-direction: row !important;
         flex-wrap: nowrap !important;
+        width: 100% !important;
     }}
     
     /* 네비게이션 바 내 모든 요소 수직 정렬 최대 강화 */
@@ -1300,51 +1301,46 @@ def linear_navbar(
     
     st.markdown(navbar_css, unsafe_allow_html=True)
     
-    # 네비게이션 바 렌더링 - Streamlit columns 사용
-    st.markdown('<div class="linear-navbar">', unsafe_allow_html=True)
+    # 네비게이션 바 렌더링 - 완전한 HTML/CSS 방식
+    # 메뉴 아이템 HTML 생성
+    nav_html = ""
+    if nav_items:
+        for item in nav_items:
+            link_class = "linear-navbar-nav-link"
+            if item.get("active", False):
+                link_class += " active"
+            nav_html += f'<a href="{item.get("href", "#")}" class="{link_class}">{item["label"]}</a>'
     
-    # 전체 너비 컨테이너
-    with st.container():
-        # 브랜드, 메뉴, 사용자 메뉴를 가로로 배치 - 더 넓은 비율 사용
-        if nav_items and user_menu:
-            col1, col2, col3 = st.columns([1, 8, 1])
-        elif nav_items or user_menu:
-            col1, col2 = st.columns([2, 8])
-        else:
-            col1 = st.container()
-        
-        # 브랜드 섹션
-        with col1:
-            st.markdown('<div class="linear-navbar-brand">', unsafe_allow_html=True)
-            if brand_logo:
-                st.markdown(f'<img src="{brand_logo}" class="linear-navbar-logo" alt="Logo">', unsafe_allow_html=True)
-            st.markdown(f'<span class="linear-navbar-brand-name">{brand_name}</span>', unsafe_allow_html=True)
-            st.markdown('</div>', unsafe_allow_html=True)
-        
-        # 네비게이션 메뉴
-        if nav_items:
-            nav_col = col2 if user_menu else col2 if 'col2' in locals() else st.container()
-            with nav_col:
-                st.markdown('<div class="linear-navbar-nav">', unsafe_allow_html=True)
-                # 모든 메뉴 아이템을 한 줄에 인라인으로 배치
-                for item in nav_items:
-                    link_class = "linear-navbar-nav-link"
-                    if item.get("active", False):
-                        link_class += " active"
-                    st.markdown(f'<a href="{item.get("href", "#")}" class="{link_class}" style="margin-right: 16px; white-space: nowrap; display: inline-block;">{item["label"]}</a>', unsafe_allow_html=True)
-                st.markdown('</div>', unsafe_allow_html=True)
-        
-        # 사용자 메뉴
-        if user_menu:
-            user_col = col3 if nav_items else col2
-            with user_col:
-                st.markdown('<div class="linear-navbar-user">', unsafe_allow_html=True)
-                if user_menu.get("avatar"):
-                    st.markdown(f'<img src="{user_menu["avatar"]}" class="linear-navbar-user-avatar" alt="Avatar">', unsafe_allow_html=True)
-                st.markdown(f'<span class="linear-navbar-user-name">{user_menu["name"]}</span>', unsafe_allow_html=True)
-                st.markdown('</div>', unsafe_allow_html=True)
+    # 사용자 메뉴 HTML 생성
+    user_html = ""
+    if user_menu:
+        user_avatar = ""
+        if user_menu.get("avatar"):
+            user_avatar = f'<img src="{user_menu["avatar"]}" class="linear-navbar-user-avatar" alt="Avatar">'
+        user_html = f'<div class="linear-navbar-user">{user_avatar}<span class="linear-navbar-user-name">{user_menu["name"]}</span></div>'
     
-    st.markdown('</div>', unsafe_allow_html=True)
+    # 브랜드 로고 HTML 생성
+    brand_logo_html = ""
+    if brand_logo:
+        brand_logo_html = f'<img src="{brand_logo}" class="linear-navbar-logo" alt="Logo">'
+    
+    # 완전한 네비게이션 바 HTML
+    navbar_html = f"""
+    <div class="linear-navbar">
+        <div class="linear-navbar-container">
+            <div class="linear-navbar-brand">
+                {brand_logo_html}
+                <span class="linear-navbar-brand-name">{brand_name}</span>
+            </div>
+            <div class="linear-navbar-nav">
+                {nav_html}
+            </div>
+            {user_html}
+        </div>
+    </div>
+    """
+    
+    st.markdown(navbar_html, unsafe_allow_html=True)
     
     # JavaScript로 DOM 직접 조작하여 레이아웃과 색상 강제 적용
     st.markdown(f"""
@@ -1355,13 +1351,6 @@ def linear_navbar(
         if (navbar) {{
             navbar.style.backgroundColor = '#000000';
             navbar.style.background = '#000000';
-            
-            // 모든 하위 요소도 블랙 배경 적용
-            const allElements = navbar.querySelectorAll('*');
-            allElements.forEach(function(el) {{
-                el.style.backgroundColor = '#000000';
-                el.style.background = '#000000';
-            }});
         }}
         
         // 컨테이너 레이아웃 강제 적용
@@ -1373,50 +1362,40 @@ def linear_navbar(
             container.style.alignItems = 'center';
             container.style.justifyContent = 'space-between';
             container.style.height = '64px';
-            
-            // 모든 컬럼 요소 정렬 강제
-            const columns = container.querySelectorAll('[data-testid="column"]');
-            columns.forEach(function(col) {{
-                col.style.display = 'inline-flex';
-                col.style.alignItems = 'center';
-                col.style.justifyContent = 'center';
-                col.style.height = '64px';
-                col.style.verticalAlign = 'middle';
-                col.style.margin = '0';
-                col.style.padding = '0';
-                
-                const colDiv = col.querySelector('div');
-                if (colDiv) {{
-                    colDiv.style.display = 'flex';
-                    colDiv.style.alignItems = 'center';
-                    colDiv.style.justifyContent = 'center';
-                    colDiv.style.height = '64px';
-                    colDiv.style.verticalAlign = 'middle';
-                    colDiv.style.margin = '0';
-                    colDiv.style.padding = '0';
-                }}
-            }});
-            
-            // 텍스트 요소 정렬 강제
-            const textElements = container.querySelectorAll('span, a, div');
-            textElements.forEach(function(el) {{
-                el.style.verticalAlign = 'middle';
-                el.style.lineHeight = '1';
-                el.style.display = 'flex';
-                el.style.alignItems = 'center';
-                el.style.margin = '0';
-                el.style.padding = '0';
-                el.style.whiteSpace = 'nowrap';
-            }});
-            
-            // 네비게이션 링크 줄바꿈 방지
-            const navLinks = container.querySelectorAll('.linear-navbar-nav-link');
-            navLinks.forEach(function(link) {{
-                link.style.whiteSpace = 'nowrap';
-                link.style.display = 'inline-block';
-                link.style.marginRight = '16px';
-            }});
+            container.style.width = '100%';
         }}
+        
+        // 브랜드 정렬
+        const brand = document.querySelector('.linear-navbar-brand');
+        if (brand) {{
+            brand.style.display = 'flex';
+            brand.style.alignItems = 'center';
+            brand.style.height = '64px';
+        }}
+        
+        // 네비게이션 메뉴 정렬
+        const nav = document.querySelector('.linear-navbar-nav');
+        if (nav) {{
+            nav.style.display = 'flex';
+            nav.style.alignItems = 'center';
+            nav.style.height = '64px';
+            nav.style.gap = '16px';
+        }}
+        
+        // 사용자 메뉴 정렬
+        const user = document.querySelector('.linear-navbar-user');
+        if (user) {{
+            user.style.display = 'flex';
+            user.style.alignItems = 'center';
+            user.style.height = '64px';
+        }}
+        
+        // 모든 링크 줄바꿈 방지
+        const links = document.querySelectorAll('.linear-navbar-nav-link');
+        links.forEach(function(link) {{
+            link.style.whiteSpace = 'nowrap';
+            link.style.display = 'inline-block';
+        }});
     }}, 100);
     </script>
     """, unsafe_allow_html=True)
