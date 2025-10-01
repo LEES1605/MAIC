@@ -774,6 +774,30 @@ def linear_carousel(
         border-color: var(--linear-brand);
         transform: scale(1.2);
     }}
+    
+    /* 캐러셀 화살표 버튼 스타일 */
+    .linear-carousel [data-testid="stButton"] > button {{
+        font-size: 24px !important;
+        font-weight: bold !important;
+        color: var(--linear-brand) !important;
+        background: var(--linear-bg-tertiary) !important;
+        border: 2px solid var(--linear-brand) !important;
+        border-radius: var(--linear-radius-full) !important;
+        width: 48px !important;
+        height: 48px !important;
+        min-height: 48px !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        transition: all 0.2s ease !important;
+    }}
+    
+    .linear-carousel [data-testid="stButton"] > button:hover {{
+        background: var(--linear-brand) !important;
+        color: white !important;
+        transform: scale(1.1) !important;
+        box-shadow: 0 4px 12px rgba(94, 106, 210, 0.3) !important;
+    }}
     </style>
     """
     
@@ -793,12 +817,12 @@ def linear_carousel(
             current_item = items[current_index]
             
             # 화살표와 아이템을 함께 배치
-            col1, col2, col3 = st.columns([1, 6, 1])
+            col1, col2, col3 = st.columns([2, 6, 2])
             
             # 화살표 (이전)
             with col1:
                 if show_arrows and len(items) > 1:
-                    st.markdown('<div style="display: flex; align-items: center; justify-content: center; height: 100%;">', unsafe_allow_html=True)
+                    st.markdown('<div style="display: flex; align-items: center; justify-content: center; height: 100%; min-height: 200px;">', unsafe_allow_html=True)
                     if st.button("‹", key=f"{carousel_key}_prev", help="이전", use_container_width=True):
                         st.session_state[f"{carousel_key}_current"] = (current_index - 1) % len(items)
                         st.rerun()
@@ -832,7 +856,7 @@ def linear_carousel(
             # 화살표 (다음)
             with col3:
                 if show_arrows and len(items) > 1:
-                    st.markdown('<div style="display: flex; align-items: center; justify-content: center; height: 100%;">', unsafe_allow_html=True)
+                    st.markdown('<div style="display: flex; align-items: center; justify-content: center; height: 100%; min-height: 200px;">', unsafe_allow_html=True)
                     if st.button("›", key=f"{carousel_key}_next", help="다음", use_container_width=True):
                         st.session_state[f"{carousel_key}_current"] = (current_index + 1) % len(items)
                         st.rerun()
@@ -1188,6 +1212,40 @@ def linear_navbar(
     
     st.markdown('</div>', unsafe_allow_html=True)
     st.markdown('</nav>', unsafe_allow_html=True)
+    
+    # JavaScript로 DOM 직접 조작하여 가로 레이아웃 강제 적용
+    st.markdown(f"""
+    <script>
+    setTimeout(function() {{
+        const navbar = document.querySelector('.linear-navbar-container');
+        if (navbar) {{
+            navbar.style.display = 'flex';
+            navbar.style.flexDirection = 'row';
+            navbar.style.flexWrap = 'nowrap';
+            navbar.style.alignItems = 'center';
+            navbar.style.justifyContent = 'space-between';
+            
+            const navList = navbar.querySelector('.linear-navbar-nav');
+            if (navList) {{
+                navList.style.display = 'flex';
+                navList.style.flexDirection = 'row';
+                navList.style.flexWrap = 'nowrap';
+                navList.style.alignItems = 'center';
+                navList.style.listStyle = 'none';
+                navList.style.margin = '0';
+                navList.style.padding = '0';
+                
+                const navItems = navList.querySelectorAll('li');
+                navItems.forEach(function(item) {{
+                    item.style.display = 'inline-block';
+                    item.style.margin = '0';
+                    item.style.padding = '0';
+                }});
+            }}
+        }}
+    }}, 100);
+    </script>
+    """, unsafe_allow_html=True)
 
 
 # 헬퍼 함수들
