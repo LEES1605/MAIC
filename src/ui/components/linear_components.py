@@ -279,26 +279,28 @@ def linear_input(
     <style>
     .linear-input {
         font-family: var(--linear-font-primary) !important;
-        background: var(--linear-bg-secondary) !important;
-        border: 2px solid var(--linear-border-primary) !important;
+        background: var(--linear-bg-tertiary) !important;
+        border: 2px solid var(--linear-border-secondary) !important;
         border-radius: var(--linear-radius-medium) !important;
         color: var(--linear-text-primary) !important;
         padding: var(--linear-padding-medium) !important;
     }
     
     .stTextInput > div > div > input {
-        border: 2px solid var(--linear-border-primary) !important;
-        background: var(--linear-bg-secondary) !important;
+        border: 2px solid var(--linear-border-secondary) !important;
+        background: var(--linear-bg-tertiary) !important;
         color: var(--linear-text-primary) !important;
         border-radius: var(--linear-radius-medium) !important;
         padding: 8px 12px !important;
         font-family: var(--linear-font-primary) !important;
+        box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.2) !important;
     }
     
     .stTextInput > div > div > input:focus {
         border-color: var(--linear-brand) !important;
-        box-shadow: 0 0 0 2px rgba(94, 106, 210, 0.2) !important;
+        box-shadow: 0 0 0 2px rgba(94, 106, 210, 0.2), inset 0 1px 3px rgba(0, 0, 0, 0.2) !important;
         outline: none !important;
+        background: var(--linear-bg-tertiary) !important;
     }
     
     .linear-input:focus {
@@ -1069,6 +1071,24 @@ def linear_navbar(
         height: 64px !important;
         flex-direction: row !important;
         flex-wrap: nowrap !important;
+    }}
+    
+    /* 네비게이션 바 내 모든 요소 수직 정렬 */
+    .linear-navbar * {{
+        vertical-align: middle !important;
+        line-height: 1 !important;
+    }}
+    
+    .linear-navbar [data-testid="column"] {{
+        vertical-align: middle !important;
+        display: inline-flex !important;
+        align-items: center !important;
+    }}
+    
+    .linear-navbar [data-testid="column"] > div {{
+        vertical-align: middle !important;
+        display: flex !important;
+        align-items: center !important;
     }}
     
     /* Streamlit 기본 스타일 오버라이드 */
