@@ -34,22 +34,38 @@ def render_ios_tabs_simple(
     
     current_tab = st.session_state[session_key]
     
-    # iOS 스타일 탭 시스템 구현 (Streamlit 네이티브)
+    # Linear 스타일 탭 시스템 구현
     st.markdown("""
     <style>
+    /* Linear 테마 변수 */
+    :root {
+      --linear-bg-primary: #08090a;
+      --linear-bg-secondary: #1c1c1f;
+      --linear-bg-tertiary: #232326;
+      --linear-text-primary: #f7f8f8;
+      --linear-text-secondary: #d0d6e0;
+      --linear-text-tertiary: #8a8f98;
+      --linear-brand: #5e6ad2;
+      --linear-accent: #7170ff;
+      --linear-border: #23252a;
+      --linear-radius: 8px;
+      --linear-font: "Inter Variable", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    
     .ios-tabs-wrapper {
         margin: -1rem -1rem 1rem -1rem;
         padding: 0 1rem;
-        background: #ffffff;
-        border-bottom: 1px solid #e5e5e7;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        background: var(--linear-bg-primary);
+        border-bottom: 1px solid var(--linear-border);
+        box-shadow: 0 1px 3px rgba(0,0,0,0.2);
     }
     
     .stButton > button {
         border-radius: 0 !important;
         border: none !important;
         box-shadow: none !important;
-        font-weight: 500 !important;
+        font-family: var(--linear-font) !important;
+        font-weight: 510 !important;
         font-size: 16px !important;
         padding: 12px 16px !important;
         margin: 0 !important;
@@ -57,23 +73,24 @@ def render_ios_tabs_simple(
     }
     
     .stButton > button[kind="primary"] {
-        background: rgba(0, 122, 255, 0.05) !important;
-        color: #007aff !important;
-        border-bottom: 3px solid #007aff !important;
+        background: rgba(94, 106, 210, 0.1) !important;
+        color: var(--linear-brand) !important;
+        border-bottom: 3px solid var(--linear-brand) !important;
     }
     
     .stButton > button[kind="secondary"] {
         background: transparent !important;
-        color: #8e8e93 !important;
+        color: var(--linear-text-tertiary) !important;
         border-bottom: 3px solid transparent !important;
     }
     
     .stButton > button[kind="secondary"]:hover {
-        background: rgba(0, 0, 0, 0.05) !important;
+        background: rgba(94, 106, 210, 0.05) !important;
+        color: var(--linear-text-secondary) !important;
     }
     
     .stButton > button[kind="primary"]:hover {
-        background: rgba(0, 122, 255, 0.1) !important;
+        background: rgba(94, 106, 210, 0.15) !important;
     }
     </style>
     """, unsafe_allow_html=True)

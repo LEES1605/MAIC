@@ -17,7 +17,7 @@ try:
     from src.core.persist import effective_persist_dir
     from src.runtime.backup import make_index_backup_zip, upload_index_backup
     from src.runtime.ready import is_ready_text
-except Exception:
+    except Exception:
     # 폴백
     def run_admin_index_job(params): pass
     def effective_persist_dir(): return Path.home() / ".maic" / "persist"
@@ -33,6 +33,53 @@ def render_admin_indexing_panel() -> None:
     """관리자 모드 인덱싱 패널 - Streamlit 네이티브 컴포넌트만 사용"""
     if st is None:
         return
+
+    # Linear 테마 CSS 적용
+    st.markdown("""
+    <style>
+    /* Linear 테마 변수 */
+    :root {
+      --linear-bg-primary: #08090a;
+      --linear-bg-secondary: #1c1c1f;
+      --linear-bg-tertiary: #232326;
+      --linear-text-primary: #f7f8f8;
+      --linear-text-secondary: #d0d6e0;
+      --linear-text-tertiary: #8a8f98;
+      --linear-brand: #5e6ad2;
+      --linear-accent: #7170ff;
+      --linear-border: #23252a;
+      --linear-radius: 8px;
+      --linear-radius-lg: 12px;
+      --linear-font: "Inter Variable", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    
+    /* Streamlit 컴포넌트 Linear 스타일링 */
+    .stButton > button {
+      font-family: var(--linear-font) !important;
+      font-weight: 510 !important;
+      border-radius: var(--linear-radius) !important;
+      border: 1px solid var(--linear-border) !important;
+      background: var(--linear-bg-secondary) !important;
+      color: var(--linear-text-primary) !important;
+      transition: all 0.2s ease !important;
+    }
+    
+    .stButton > button:hover {
+      background: var(--linear-bg-tertiary) !important;
+      border-color: var(--linear-brand) !important;
+    }
+    
+    .stButton > button[kind="primary"] {
+      background: var(--linear-brand) !important;
+      color: white !important;
+      border-color: var(--linear-brand) !important;
+    }
+    
+    .stButton > button[kind="primary"]:hover {
+      background: var(--linear-accent) !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
 
     # 시스템 상태 확인
     chunks_path = _persist_dir_safe() / "chunks.jsonl"
@@ -67,8 +114,8 @@ def render_admin_indexing_panel() -> None:
                 if "new" in ready_content.lower():
                     has_new_files = True
                     new_files_count = 1  # 간단한 예시
-    except Exception:
-        pass
+        except Exception:
+            pass
 
     # 메인 컨테이너
     with st.container():
@@ -83,13 +130,13 @@ def render_admin_indexing_panel() -> None:
         with col1:
             # 인덱스 상태
             st.markdown("**인덱스 상태**")
-            if local_ready and is_latest:
+    if local_ready and is_latest:
                 st.info("준비완료")
                 st.caption("최신 릴리스")
-            elif local_ready:
+    elif local_ready:
                 st.info("로컬사용")
                 st.caption("복원 필요")
-            else:
+    else:
                 st.error("복원필요")
                 st.caption("인덱스 없음")
         
@@ -103,7 +150,7 @@ def render_admin_indexing_panel() -> None:
                 else:
                     st.info("최신")
                     st.caption("동기화 완료")
-            else:
+    else:
                 st.info("스캔중")
                 st.caption("처리 중")
         
@@ -112,7 +159,7 @@ def render_admin_indexing_panel() -> None:
             if has_new_files:
                 st.markdown("**신규파일**")
                 st.metric("새파일", f"{new_files_count}개")
-            else:
+    else:
                 st.markdown("**신규파일**")
                 st.metric("새파일", "0개")
         
@@ -144,7 +191,7 @@ def render_admin_indexing_panel() -> None:
                             st.success("인덱싱 완료!")
                         else:
                             st.error("인덱싱 실패")
-                except Exception as e:
+        except Exception as e:
                     st.error(f"오류: {e}")
         
         with col2:
@@ -158,7 +205,7 @@ def render_admin_indexing_panel() -> None:
                             st.success(f"업로드 완료: {result}")
                         else:
                             st.error("백업 파일 생성 실패")
-                except Exception as e:
+        except Exception as e:
                     st.error(f"오류: {e}")
 
 
