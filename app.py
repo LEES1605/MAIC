@@ -1177,9 +1177,82 @@ def _inject_chat_styles_once() -> None:
     font-weight:800; margin:6px 0 4px 0;
   }
 
+  /* 모바일 반응형 스타일 */
   @media (max-width:480px){
     .bubble{ max-width:96%; }
     .chip-src{ max-width:160px; }
+    
+    /* 관리자 모드 모바일 최적화 */
+    .mobile-status-grid {
+      grid-template-columns: 1fr 1fr !important;
+      gap: 6px !important;
+    }
+    .status-card {
+      font-size: 10px !important;
+      padding: 4px !important;
+    }
+    
+    /* 버튼 모바일 최적화 */
+    .stButton > button {
+      font-size: 12px !important;
+      padding: 8px 12px !important;
+    }
+    
+    /* 로그 컨테이너 모바일 최적화 */
+    .mobile-log-container {
+      max-height: 120px !important;
+      padding: 4px !important;
+    }
+    .log-entry {
+      font-size: 10px !important;
+      padding: 2px 0 !important;
+    }
+    
+    /* 진행바 모바일 최적화 */
+    .mobile-progress-container {
+      padding: 4px !important;
+    }
+    .progress-bar {
+      height: 14px !important;
+    }
+    .progress-text {
+      font-size: 9px !important;
+    }
+    .progress-label {
+      font-size: 10px !important;
+    }
+    
+    /* 헤더 모바일 최적화 */
+    .brand-title {
+      font-size: 180% !important;
+    }
+    .ready-chip {
+      font-size: 14px !important;
+      padding: 1px 8px !important;
+    }
+    
+    /* 사이드바 모바일 최적화 */
+    .css-1d391kg {
+      padding-top: 1rem !important;
+    }
+    
+    /* 메인 컨테이너 모바일 최적화 */
+    .main .block-container {
+      padding-top: 1rem !important;
+      padding-bottom: 1rem !important;
+    }
+  }
+  
+  /* 태블릿 반응형 (481px - 768px) */
+  @media (min-width: 481px) and (max-width: 768px) {
+    .mobile-status-grid {
+      grid-template-columns: repeat(3, 1fr) !important;
+      gap: 8px !important;
+    }
+    .status-card {
+      font-size: 11px !important;
+      padding: 6px !important;
+    }
   }
 </style>
         """,

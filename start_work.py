@@ -68,20 +68,28 @@ def main():
     print("작업 시작 자동화 스크립트")
     print("=" * 50)
     
-    # 0. Git 저장소 확인 및 자동 클론
+    # 0. 필요한 모듈 확인
+    try:
+        import psutil
+        print("[OK] psutil 모듈 확인 완료")
+    except ImportError:
+        print("[WARN] psutil 모듈이 없습니다. Cursor 자동 재시작 기능이 제한될 수 있습니다.")
+        print("   설치: pip install psutil")
+    
+    # 1. Git 저장소 확인 및 자동 클론
     if not check_git_repo():
         return
     
-    # 1. 최신 코드 가져오기
+    # 2. 최신 코드 가져오기
     if not run_command("git pull origin main", "최신 코드 가져오기"):
         print("Git pull 실패. 계속 진행하시겠습니까? (y/n): ", end="")
         if input().lower() != 'y':
             return
     
-    # 2. 현재 상태 확인
+    # 3. 현재 상태 확인
     run_command("git status", "현재 상태 확인")
     
-    # 3. 작업 로그 확인
+    # 4. 작업 로그 확인
     log_file = Path("WORK_SESSION_LOG.md")
     if log_file.exists():
         print("\n최근 작업 로그:")
@@ -91,7 +99,7 @@ def main():
             for line in lines[-10:]:
                 print(f"   {line.strip()}")
     
-    # 4. 오늘 날짜로 작업 시작 기록
+    # 5. 오늘 날짜로 작업 시작 기록
     today = datetime.now().strftime("%Y-%m-%d")
     print(f"\n오늘 날짜: {today}")
     
@@ -110,18 +118,37 @@ def main():
                 restart_choice = input("Cursor를 자동으로 재시작하시겠습니까? (y/n): ").strip().lower()
                 if restart_choice == 'y':
                     print("Cursor를 재시작합니다...")
+                    
+                    # psutil 모듈 확인 및 설치
                     try:
-                        # Cursor 프로세스 찾기 및 재시작
                         import psutil
+                    except ImportError:
+                        print("psutil 모듈이 없습니다. 자동으로 설치합니다...")
+                        try:
+                            subprocess.run([sys.executable, "-m", "pip", "install", "psutil"], 
+                                         check=True, capture_output=True)
+                            import psutil
+                            print("[OK] psutil 모듈 설치 완료!")
+                        except subprocess.CalledProcessError as e:
+                            print(f"[ERROR] psutil 설치 실패: {e}")
+                            print("수동으로 설치하세요: pip install psutil")
+                            print("수동으로 Cursor를 재시작하세요.")
+                            return
+                    
+                    try:
                         import time
+                        import os
                         
-                        # Cursor 프로세스 찾기
+                        # Cursor 프로세스 찾기 (더 정확한 방법)
                         cursor_processes = []
-                        for proc in psutil.process_iter(['pid', 'name', 'exe']):
+                        for proc in psutil.process_iter(['pid', 'name', 'exe', 'cmdline']):
                             try:
-                                if proc.info['name'] and 'cursor' in proc.info['name'].lower():
+                                proc_info = proc.info
+                                if proc_info['name'] and 'cursor' in proc_info['name'].lower():
                                     cursor_processes.append(proc)
-                            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                                elif proc_info['exe'] and 'cursor' in proc_info['exe'].lower():
+                                    cursor_processes.append(proc)
+                            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                                 continue
                         
                         if cursor_processes:
@@ -135,14 +162,52 @@ def main():
                                 except (psutil.NoSuchProcess, psutil.AccessDenied):
                                     continue
                             
-                            # 잠시 대기
-                            time.sleep(2)
+                            # 프로세스 완전 종료 대기
+                            print("프로세스 종료 대기 중...")
+                            time.sleep(3)
                             
                             # Cursor 재시작
-                            import subprocess
-                            import os
+                            # Cursor 실행 파일 경로 찾기 (더 많은 경로 포함)
+                            cursor_paths = [
+                                r"C:\Users\%USERNAME%\AppData\Local\Programs\cursor\Cursor.exe",
+                                r"C:\Program Files\Cursor\Cursor.exe",
+                                r"C:\Program Files (x86)\Cursor\Cursor.exe",
+                                r"C:\Users\%USERNAME%\AppData\Local\Programs\cursor\cursor.exe",
+                                r"C:\Program Files\cursor\cursor.exe",
+                                r"C:\Program Files (x86)\cursor\cursor.exe"
+                            ]
                             
-                            # Cursor 실행 파일 경로 찾기
+                            cursor_exe = None
+                            for path in cursor_paths:
+                                expanded_path = os.path.expandvars(path)
+                                if os.path.exists(expanded_path):
+                                    cursor_exe = expanded_path
+                                    print(f"Cursor 실행 파일 발견: {cursor_exe}")
+                                    break
+                            
+                            if cursor_exe:
+                                # 현재 작업 디렉토리에서 Cursor 시작
+                                try:
+                                    subprocess.Popen([cursor_exe, str(Path.cwd())], 
+                                                   cwd=str(Path.cwd()),
+                                                   creationflags=subprocess.CREATE_NEW_CONSOLE if os.name == 'nt' else 0)
+                                    print("[OK] Cursor가 자동으로 재시작되었습니다!")
+                                    print("새로운 Cursor 창이 열렸습니다.")
+                                except Exception as e:
+                                    print(f"[ERROR] Cursor 실행 실패: {e}")
+                                    print("수동으로 Cursor를 재시작하세요.")
+                            else:
+                                print("[ERROR] Cursor 실행 파일을 찾을 수 없습니다.")
+                                print("다음 경로들을 확인해보세요:")
+                                for path in cursor_paths:
+                                    expanded_path = os.path.expandvars(path)
+                                    print(f"  - {expanded_path}")
+                                print("수동으로 Cursor를 재시작하세요.")
+                        else:
+                            print("[ERROR] 실행 중인 Cursor 프로세스를 찾을 수 없습니다.")
+                            print("Cursor가 실행 중이 아닐 수 있습니다.")
+                            
+                            # Cursor 실행 파일만 찾아서 실행
                             cursor_paths = [
                                 r"C:\Users\%USERNAME%\AppData\Local\Programs\cursor\Cursor.exe",
                                 r"C:\Program Files\Cursor\Cursor.exe",
@@ -157,20 +222,20 @@ def main():
                                     break
                             
                             if cursor_exe:
-                                # 현재 작업 디렉토리에서 Cursor 시작
-                                subprocess.Popen([cursor_exe, str(Path.cwd())], 
-                                               cwd=str(Path.cwd()))
-                                print("✅ Cursor가 자동으로 재시작되었습니다!")
+                                try:
+                                    subprocess.Popen([cursor_exe, str(Path.cwd())], 
+                                                   cwd=str(Path.cwd()),
+                                                   creationflags=subprocess.CREATE_NEW_CONSOLE if os.name == 'nt' else 0)
+                                    print("[OK] Cursor가 시작되었습니다!")
+                                except Exception as e:
+                                    print(f"[ERROR] Cursor 실행 실패: {e}")
+                                    print("수동으로 Cursor를 시작하세요.")
                             else:
-                                print("❌ Cursor 실행 파일을 찾을 수 없습니다. 수동으로 재시작하세요.")
-                        else:
-                            print("❌ 실행 중인 Cursor 프로세스를 찾을 수 없습니다.")
+                                print("[ERROR] Cursor 실행 파일을 찾을 수 없습니다.")
+                                print("수동으로 Cursor를 시작하세요.")
                             
-                    except ImportError:
-                        print("❌ psutil 모듈이 없습니다. 수동으로 재시작하세요.")
-                        print("설치: pip install psutil")
                     except Exception as e:
-                        print(f"❌ 자동 재시작 실패: {e}")
+                        print(f"[ERROR] 자동 재시작 실패: {e}")
                         print("수동으로 Cursor를 재시작하세요.")
                 else:
                     print("수동으로 Cursor를 재시작하세요.")
