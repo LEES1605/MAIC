@@ -1655,19 +1655,20 @@ def _render_body() -> None:
     except Exception as e:
         _errlog(f"auto_start_once failed: {e}", where="[render_body.autostart]", exc=e)
 
-    # 3) 헤더 (관리자 모드에서는 사이드바에서 처리)
-    if not _is_admin_view():
-        _header()
-
-    # 4) 관리자 패널 (외부 모듈 호출: src.ui.ops.indexing_panel)
+    # 3) 헤더 렌더링
     if _is_admin_view():
-        # 관리자 모드에서는 헤더를 먼저 렌더링 (가장 위로)
+        # 관리자 모드에서는 헤더를 가장 먼저 렌더링
         try:
             from src.ui.header import render as _render_header
             _render_header()
         except Exception:
             pass
-            
+    else:
+        # 일반 모드에서는 기본 헤더
+        _header()
+
+    # 4) 관리자 패널 (외부 모듈 호출: src.ui.ops.indexing_panel)
+    if _is_admin_view():
         # 디버그 패널 추가
         _render_debug_panel()
         
