@@ -1,4 +1,4 @@
-# Streamlit 네이티브 컴포넌트만 사용하는 관리자 패널
+# iOS 스타일 + 미니멀리즘 관리자 모드 인덱싱 패널 (수정된 버전)
 from __future__ import annotations
 
 import json
@@ -30,9 +30,127 @@ from src.common.utils import persist_dir_safe as _persist_dir_safe
 
 
 def render_admin_indexing_panel() -> None:
-    """관리자 모드 인덱싱 패널 - Streamlit 네이티브 컴포넌트만 사용"""
+    """관리자 모드 인덱싱 패널 - iOS 스타일 + 미니멀리즘"""
     if st is None:
         return
+    
+    # iOS 스타일 CSS 추가
+    st.markdown("""
+    <style>
+    .ios-container {
+        max-width: 100%;
+        margin: 0 auto;
+        padding: 0 1rem;
+    }
+    
+    .ios-section-title {
+        font-size: 20px;
+        font-weight: 600;
+        color: #1d1d1f;
+        margin: 24px 0 16px 0;
+        padding: 0;
+    }
+    
+    .ios-status-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+        gap: 12px;
+        margin: 16px 0;
+    }
+    
+    .ios-status-card {
+        background: #ffffff;
+        border: 1px solid #e5e5e7;
+        border-radius: 12px;
+        padding: 16px;
+        text-align: center;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        transition: all 0.2s ease;
+    }
+    
+    .ios-status-card:hover {
+        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        transform: translateY(-1px);
+    }
+    
+    .ios-status-icon {
+        font-size: 24px;
+        margin-bottom: 8px;
+        color: #1d1d1f;
+    }
+    
+    .ios-status-text {
+        font-size: 14px;
+        color: #8e8e93;
+        margin-top: 4px;
+    }
+    
+    .ios-button {
+        background: #ffffff;
+        border: 1px solid #d1d1d6;
+        border-radius: 10px;
+        padding: 16px 20px;
+        font-size: 16px;
+        font-weight: 500;
+        color: #007aff;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        min-height: 48px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        width: 100%;
+    }
+    
+    .ios-button:hover {
+        background: #f2f2f7;
+        border-color: #007aff;
+    }
+    
+    .ios-button.primary {
+        background: #007aff;
+        color: #ffffff;
+        border-color: #007aff;
+    }
+    
+    .ios-button.primary:hover {
+        background: #0056cc;
+    }
+    
+    .ios-button-icon {
+        font-size: 18px;
+        color: inherit;
+    }
+    
+    /* 모바일 최적화 */
+    @media (max-width: 768px) {
+        .ios-container {
+            padding: 0 0.5rem;
+        }
+        
+        .ios-status-grid {
+            grid-template-columns: repeat(2, 1fr);
+            gap: 8px;
+        }
+        
+        .ios-status-card {
+            padding: 12px;
+        }
+        
+        .ios-button {
+            padding: 20px 24px;
+            font-size: 17px;
+            min-height: 52px;
+        }
+        
+        .ios-button-icon {
+            font-size: 20px;
+        }
+    }
+    </style>
+    """, unsafe_allow_html=True)
     
     # 시스템 상태 확인
     chunks_path = _persist_dir_safe() / "chunks.jsonl"
@@ -65,45 +183,43 @@ def render_admin_indexing_panel() -> None:
     except Exception:
         pass
     
-    # 메인 컨테이너
+    # 컨테이너 시작
     with st.container():
         # 시스템 상태 섹션
         st.markdown("### 시스템 상태")
         
-        # 상태 그리드 (3열)
+        # 상태 그리드
         col1, col2, col3 = st.columns(3)
         
         with col1:
             # 인덱스 상태
-            st.markdown("**인덱스 상태**")
             if local_ready and is_latest:
-                st.success("● 준비완료")
-                st.caption("최신 릴리스")
+                st.markdown("**● 준비완료**")
+                st.markdown("*최신 릴리스*")
             elif local_ready:
-                st.warning("○ 로컬사용")
-                st.caption("복원 필요")
+                st.markdown("**○ 로컬사용**")
+                st.markdown("*복원 필요*")
             else:
-                st.error("○ 복원필요")
-                st.caption("인덱스 없음")
+                st.markdown("**○ 복원필요**")
+                st.markdown("*인덱스 없음*")
         
         with col2:
             # 스캔 상태
-            st.markdown("**스캔 상태**")
             if boot_scan_done:
                 if has_new_files:
-                    st.info(f"○ 새파일 {new_files_count}개")
-                    st.caption("업데이트 필요")
+                    st.markdown(f"**○ 새파일 {new_files_count}개**")
+                    st.markdown("*업데이트 필요*")
                 else:
-                    st.success("● 최신")
-                    st.caption("동기화 완료")
+                    st.markdown("**● 최신**")
+                    st.markdown("*동기화 완료*")
             else:
-                st.warning("◐ 스캔중")
-                st.caption("처리 중")
+                st.markdown("**◐ 스캔중**")
+                st.markdown("*처리 중*")
         
         with col3:
             # 파일 수
-            st.markdown("**파일 수**")
-            st.metric("총 파일", f"{total_files_count}개")
+            st.markdown(f"**○ {total_files_count}개**")
+            st.markdown("*총 파일*")
         
         st.divider()
         

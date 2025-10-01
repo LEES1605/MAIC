@@ -148,12 +148,12 @@ def render_sidebar(*, back_page: str | None = "app.py", icon_only: bool = False)
     except Exception:
         pass
     
-    # 통합된 iOS 스타일 탭 시스템 적용
+    # 네이티브 탭 시스템 적용
     try:
-        from ..components.ios_tabs_unified import render_ios_tabs_unified, create_admin_tabs_unified
+        from ..components.ios_tabs_native import render_ios_tabs_native, create_admin_tabs_native
         
-        tabs = create_admin_tabs_unified()
-        active_tab = render_ios_tabs_unified(tabs, key="admin_tabs")
+        tabs = create_admin_tabs_native()
+        active_tab = render_ios_tabs_native(tabs, key="admin_tabs")
         
         # 탭에 따른 페이지 라우팅 (빠른 전환)
         if active_tab == "management":
