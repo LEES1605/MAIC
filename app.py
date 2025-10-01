@@ -257,15 +257,11 @@ if st:
     except Exception:
         pass
 
-    # (D) 관리자/학생 크롬 적용 — 학생은 숨김, 관리자는 iOS 탭 시스템 사용 (admin_mode 기준)
+    # (D) 학생 사이드바 숨김 (관리자는 별도 처리)
     try:
         adm = bool(st.session_state.get("admin_mode", False))
-        if adm:
-            # iOS 스타일 탭 시스템 사용
-            from src.ui.utils.sider import render_sidebar
-            render_sidebar(back_page="app.py", icon_only=True)
-        else:
-            # 학생: 사이드바 전체 숨김 (네비만 숨기는 CSS가 아니라, 섹션 자체를 숨김)
+        if not adm:
+            # 학생: 사이드바 전체 숨김
             st.markdown(
                 "<style>section[data-testid='stSidebar']{display:none!important;}</style>",
                 unsafe_allow_html=True,
@@ -1735,6 +1731,16 @@ def main() -> None:
     if st is None:
         print("Streamlit 환경이 아닙니다.")
         return
+    
+    # 관리자 모드일 때는 사이드바를 가장 먼저 렌더링 (헤더보다 먼저)
+    try:
+        adm = bool(st.session_state.get("admin_mode", False))
+        if adm:
+            from src.ui.utils.sider import render_sidebar
+            render_sidebar(back_page="app.py", icon_only=True)
+    except Exception:
+        pass
+    
     _render_body()
 
 
