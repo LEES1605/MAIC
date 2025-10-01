@@ -511,10 +511,14 @@ def _boot_auto_restore_index() -> None:
     # --- 로컬 준비 상태 ---
     _idx("step_set", 1, "run", "로컬 준비 상태 확인")
     print(f"[DEBUG] Checking local files: cj={cj}, rf={rf}")
+    st.info(f"🔍 [DEBUG] Checking local files: cj={cj}, rf={rf}")
     print(f"[DEBUG] cj.exists(): {cj.exists()}")
+    st.info(f"🔍 [DEBUG] cj.exists(): {cj.exists()}")
     if cj.exists():
         print(f"[DEBUG] cj.size(): {cj.stat().st_size}")
+        st.info(f"🔍 [DEBUG] cj.size(): {cj.stat().st_size}")
     print(f"[DEBUG] rf.exists(): {rf.exists()}")
+    st.info(f"🔍 [DEBUG] rf.exists(): {rf.exists()}")
     
     ready_txt = ""
     try:
@@ -677,13 +681,17 @@ def _boot_auto_restore_index() -> None:
         
         # 순차번호 관리자 생성
         print(f"[DEBUG] Creating sequential manager for owner={owner}, repo={repo}")
+        st.info(f"🔍 [DEBUG] Creating sequential manager for owner={owner}, repo={repo}")
         seq_manager = create_sequential_manager(owner, repo, token)
         print(f"[DEBUG] Sequential manager created successfully")
+        st.success("✅ [DEBUG] Sequential manager created successfully")
         
         # 최신 인덱스 복원
         print(f"[DEBUG] About to call restore_latest_index with p={p}, clean_dest=True")
+        st.info(f"🔍 [DEBUG] About to call restore_latest_index with p={p}, clean_dest=True")
         result = seq_manager.restore_latest_index(p, clean_dest=True)
         print(f"[DEBUG] restore_latest_index result: {result}")
+        st.success(f"✅ [DEBUG] restore_latest_index result: {result}")
 
         _idx("step_set", 3, "run", "메타 저장/정리...")
         normalize_ready_file(p)
@@ -1204,8 +1212,10 @@ def _render_body() -> None:
             print(f"[DEBUG] Persist writable: {os.access(persist_dir.parent, os.W_OK) if persist_dir.parent.exists() else False}")
             
             print(f"[DEBUG] About to call _boot_auto_restore_index()")
+            st.info("🔍 [DEBUG] About to call _boot_auto_restore_index()")
             _boot_auto_restore_index()
             print(f"[DEBUG] _boot_auto_restore_index() completed")
+            st.success("✅ [DEBUG] _boot_auto_restore_index() completed")
             
             print(f"[DEBUG] About to call _boot_auto_scan_prepared()")
             _boot_auto_scan_prepared()  # 새로 추가: 자동 스캔
