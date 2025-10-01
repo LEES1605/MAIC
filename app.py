@@ -1328,6 +1328,57 @@ def _render_debug_panel():
                         st.warning("GitHub 설정이 없습니다")
                 except Exception as e:
                     st.error(f"GitHub 릴리스 확인 실패: {e}")
+        
+        # 추가 테스트 버튼들
+        st.markdown("---")
+        col4, col5 = st.columns(2)
+        
+        with col4:
+            if st.button("🔍 SequentialReleaseManager 테스트", use_container_width=True):
+                try:
+                    from src.runtime.sequential_release import create_sequential_manager
+                    repo_full = _secret_get("GITHUB_REPO")
+                    token = _secret_get("GITHUB_TOKEN")
+                    
+                    if repo_full and token:
+                        owner, repo = str(repo_full).split("/", 1)
+                        seq_manager = create_sequential_manager(owner, repo, token)
+                        
+                        # find_latest_by_number 직접 테스트
+                        latest = seq_manager.find_latest_by_number("index")
+                        
+                        test_result = {
+                            "manager_created": True,
+                            "find_latest_result": latest.get('tag_name') if latest else None,
+                            "find_latest_full": latest
+                        }
+                        st.json(test_result)
+                    else:
+                        st.warning("GitHub 설정이 없습니다")
+                except Exception as e:
+                    st.error(f"SequentialReleaseManager 테스트 실패: {e}")
+        
+        with col5:
+            if st.button("🔄 수동 복원 테스트", use_container_width=True):
+                try:
+                    from src.runtime.sequential_release import create_sequential_manager
+                    repo_full = _secret_get("GITHUB_REPO")
+                    token = _secret_get("GITHUB_TOKEN")
+                    
+                    if repo_full and token:
+                        owner, repo = str(repo_full).split("/", 1)
+                        seq_manager = create_sequential_manager(owner, repo, token)
+                        
+                        persist_dir = effective_persist_dir()
+                        result = seq_manager.restore_latest_index(persist_dir, clean_dest=True)
+                        
+                        st.success(f"복원 성공: {result}")
+                    else:
+                        st.warning("GitHub 설정이 없습니다")
+                except Exception as e:
+                    st.error(f"수동 복원 테스트 실패: {e}")
+                    import traceback
+                    st.code(traceback.format_exc())
 
 def _render_body() -> None:
     if st is None:
