@@ -45,7 +45,7 @@ def render_admin_indexing_panel() -> None:
     has_new_files = False
     new_files_count = 0
     
-    # 실제 인덱스 상태 확인 (파일이 존재하지 않으면 복원 필요)
+    # 실제 인덱스 상태 확인
     is_latest = False
     if local_ready:
         try:
@@ -55,9 +55,6 @@ def render_admin_indexing_panel() -> None:
                 is_latest = "ready" in ready_content.lower() and "latest" in ready_content.lower()
         except Exception:
             is_latest = False
-    else:
-        # 파일이 존재하지 않으면 확실히 복원 필요
-        is_latest = False
     
     # 파일 수 확인 (정확한 수치로 수정)
     total_files_count = 233  # 실제 파일 수
@@ -75,7 +72,8 @@ def render_admin_indexing_panel() -> None:
     
     # 메인 컨테이너
     with st.container():
-        st.markdown("## 인덱스 오케스트레이터")
+        # 시스템 상태 섹션
+        st.markdown("### 시스템 상태")
         
         # 상태 그리드 (3열)
         col1, col2, col3 = st.columns(3)
@@ -118,9 +116,20 @@ def render_admin_indexing_panel() -> None:
         
         st.divider()
         
-        # 주요 작업 섹션
-        st.markdown("### 주요 작업")
+        # 관리 도구 섹션 (인덱싱/업로드 포함)
+        st.markdown("### 관리 도구")
         
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            if st.button("복원", key="restore_index", use_container_width=True):
+                st.info("인덱스 복원 기능은 개발 중입니다.")
+        
+        with col2:
+            if st.button("통계", key="view_stats", use_container_width=True):
+                st.info("통계 보기 기능은 개발 중입니다.")
+        
+        # 추가 작업 버튼들
         col1, col2 = st.columns(2)
         
         with col1:
@@ -149,23 +158,11 @@ def render_admin_indexing_panel() -> None:
                             st.error("백업 파일 생성 실패")
                 except Exception as e:
                     st.error(f"오류: {e}")
-        
-        st.divider()
-        
-        # 관리 도구 섹션
-        st.markdown("### 관리 도구")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            if st.button("복원", key="restore_index", use_container_width=True):
-                st.info("인덱스 복원 기능은 개발 중입니다.")
-        
-        with col2:
-            if st.button("통계", key="view_stats", use_container_width=True):
-                st.info("통계 보기 기능은 개발 중입니다.")
 
 
 def render_orchestrator_header() -> None:
-    """호환성을 위한 래퍼 함수"""
+    """오케스트레이터 헤더 (호환성을 위한 래퍼)"""
     render_admin_indexing_panel()
+
+
+__all__ = ["render_admin_indexing_panel", "render_orchestrator_header"]
