@@ -27,6 +27,150 @@ def run_command(cmd, description):
         return False
     return True
 
+def sync_cursor_rules_for_upload():
+    """업로드 전 Cursor 규칙 파일 동기화"""
+    print("\n[Cursor 규칙 동기화] 업로드 준비 중...")
+    
+    try:
+        # .cursor/rules 디렉토리 생성
+        cursor_rules_dir = Path(".cursor/rules")
+        cursor_rules_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Linear 컴포넌트 규칙 파일 생성
+        linear_rules_content = '''---
+alwaysApply: true
+---
+
+# Linear 컴포넌트 시스템 - 필수 사용 규칙
+
+## 🎨 **UI 컴포넌트 사용 규칙**
+
+### **MUST USE - Linear 컴포넌트만 사용**
+이 프로젝트에서는 **반드시** Linear 컴포넌트 시스템을 사용해야 합니다. Streamlit 기본 컴포넌트 대신 Linear 컴포넌트를 사용하세요.
+
+#### **✅ 허용되는 컴포넌트:**
+```python
+# 기본 컴포넌트
+from src.ui.components.linear_components import (
+    linear_button,     # 버튼 (st.button 대신)
+    linear_card,       # 카드 (st.container 대신)
+    linear_badge,      # 배지/태그
+    linear_input,      # 입력 필드
+    linear_alert,      # 알림/경고
+    linear_divider,    # 구분선
+    linear_carousel,   # 캐러셀
+    linear_card_with_image,  # 이미지 카드
+    linear_navbar      # 네비게이션 바
+)
+
+# 레이아웃 컴포넌트
+from src.ui.components.linear_layout_components import (
+    linear_footer,     # 푸터
+    linear_hero        # 히어로 섹션
+)
+
+# 테마 시스템
+from src.ui.components.linear_theme import apply_theme
+```
+
+#### **❌ 금지되는 사용법:**
+```python
+# 절대 사용하지 마세요
+st.button()           # ❌ linear_button() 사용
+st.container()        # ❌ linear_card() 사용
+st.success()          # ❌ linear_alert() 사용
+st.warning()          # ❌ linear_alert() 사용
+st.error()            # ❌ linear_alert() 사용
+st.info()             # ❌ linear_alert() 사용
+st.markdown("---")    # ❌ linear_divider() 사용
+```
+
+### **🎯 필수 사용 패턴**
+
+#### **1. 모든 페이지에서 테마 적용 (필수)**
+```python
+from src.ui.components.linear_theme import apply_theme
+
+def main():
+    # 테마 적용 (최우선)
+    apply_theme()
+    # 나머지 코드...
+```
+
+#### **2. 버튼 사용법**
+```python
+# ✅ 올바른 사용법
+if linear_button("클릭하세요", variant="primary", size="medium", key="unique_key"):
+    # 액션 처리
+    pass
+```
+
+#### **3. 카드 사용법**
+```python
+# ✅ 올바른 사용법
+linear_card(
+    title="카드 제목",
+    content=st.markdown("카드 내용"),
+    variant="elevated"
+)
+```
+
+#### **4. 전체 너비 컴포넌트 (필수)**
+```python
+# Navbar, Hero, Footer는 반드시 전체 너비 사용
+linear_navbar(brand_name="앱 이름", ...)
+linear_hero(title="메인 제목", ...)
+linear_footer(copyright_text="저작권", ...)
+```
+
+### **🚨 중요 규칙**
+
+1. **테마 적용 필수**: 모든 페이지에서 `apply_theme()` 호출
+2. **Linear 컴포넌트만 사용**: Streamlit 기본 컴포넌트 사용 금지
+3. **고유 키 사용**: 모든 버튼에 `key` 매개변수 필수
+4. **전체 너비**: Navbar, Hero, Footer는 전체 너비 사용
+5. **모바일 우선**: 모든 컴포넌트 모바일 테스트 필수
+
+### **📋 체크리스트**
+
+코드 작성 시 다음을 확인하세요:
+- [ ] `apply_theme()` 호출했는가?
+- [ ] `st.button()` 대신 `linear_button()` 사용했는가?
+- [ ] 모든 버튼에 고유 `key`를 설정했는가?
+- [ ] Linear 컴포넌트만 사용했는가?
+- [ ] 모바일에서 테스트했는가?
+
+**이 규칙을 위반하면 코드 리뷰에서 거부됩니다.**'''
+        
+        # Linear 컴포넌트 규칙 파일 저장
+        linear_rules_file = cursor_rules_dir / "linear-components.mdc"
+        with open(linear_rules_file, 'w', encoding='utf-8') as f:
+            f.write(linear_rules_content)
+        
+        print("[Cursor 규칙 동기화] Linear 컴포넌트 규칙 파일 업데이트 완료")
+        
+        # .cursorrules 파일도 생성 (호환성을 위해)
+        cursorrules_content = linear_rules_content.replace('---\nalwaysApply: true\n---', '')
+        cursorrules_file = Path(".cursorrules")
+        with open(cursorrules_file, 'w', encoding='utf-8') as f:
+            f.write(cursorrules_content)
+        
+        print("[Cursor 규칙 동기화] .cursorrules 파일 업데이트 완료")
+        
+        # components.md 파일도 생성 (문서용)
+        components_md_content = cursorrules_content
+        components_md_file = Path("components.md")
+        with open(components_md_file, 'w', encoding='utf-8') as f:
+            f.write(components_md_content)
+        
+        print("[Cursor 규칙 동기화] components.md 파일 업데이트 완료")
+        
+        print("[Cursor 규칙 동기화] 모든 규칙 파일이 업로드 준비되었습니다!")
+        
+    except Exception as e:
+        print(f"[Cursor 규칙 동기화] 오류: {e}")
+        print("수동으로 규칙 파일을 확인해주세요.")
+
 def update_work_log(work_description):
     """작업 로그 업데이트"""
     log_file = Path("WORK_SESSION_LOG.md")
@@ -126,7 +270,10 @@ def main():
         print("Git push 실패. 작업을 중단합니다.")
         return
     
-    # 5. 작업 로그 업데이트
+    # 5. Cursor 규칙 자동 동기화 (업로드 전)
+    sync_cursor_rules_for_upload()
+    
+    # 6. 작업 로그 업데이트
     update_work_log(work_description)
     
     print("\n작업 종료 완료!")
