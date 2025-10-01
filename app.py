@@ -1249,6 +1249,65 @@ def _render_chat_panel() -> None:
 # ================================= [18] chat panel — END ==============================
 
 # =============================== [19] body & main — START =============================
+def _render_debug_panel():
+    """관리자 전용 디버그 패널"""
+    if st is None:
+        return
+    
+    with st.expander("🔧 디버그 패널", expanded=False):
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            if st.button("🔄 복원 테스트", use_container_width=True):
+                try:
+                    print("[DEBUG] Manual restore test triggered")
+                    _boot_auto_restore_index()
+                    st.success("복원 테스트 완료")
+                except Exception as e:
+                    st.error(f"복원 테스트 실패: {e}")
+        
+        with col2:
+            if st.button("📊 상태 확인", use_container_width=True):
+                try:
+                    persist_dir = effective_persist_dir()
+                    cj = persist_dir / "chunks.jsonl"
+                    rf = persist_dir / ".ready"
+                    
+                    status = {
+                        "persist_dir": str(persist_dir),
+                        "persist_exists": persist_dir.exists(),
+                        "chunks_exists": cj.exists(),
+                        "chunks_size": cj.stat().st_size if cj.exists() else 0,
+                        "ready_exists": rf.exists(),
+                        "ready_content": rf.read_text(encoding="utf-8") if rf.exists() else "",
+                    }
+                    st.json(status)
+                except Exception as e:
+                    st.error(f"상태 확인 실패: {e}")
+        
+        with col3:
+            if st.button("🌐 GitHub 릴리스 확인", use_container_width=True):
+                try:
+                    from src.runtime.gh_release import GHReleases
+                    repo_full = _secret_get("GITHUB_REPO")
+                    token = _secret_get("GITHUB_TOKEN")
+                    
+                    if repo_full and token:
+                        owner, repo = str(repo_full).split("/", 1)
+                        gh = GHReleases(owner=owner, repo=repo, token=token)
+                        releases = gh.list_releases()
+                        
+                        release_info = {
+                            "total_releases": len(releases),
+                            "latest_tag": releases[0].get('tag_name') if releases else None,
+                            "latest_assets": releases[0].get('assets', []) if releases else []
+                        }
+                        st.json(release_info)
+                    else:
+                        st.warning("GitHub 설정이 없습니다")
+                except Exception as e:
+                    st.error(f"GitHub 릴리스 확인 실패: {e}")
+
 def _render_body() -> None:
     if st is None:
         return
@@ -1269,10 +1328,8 @@ def _render_body() -> None:
             print(f"[DEBUG] Persist writable: {os.access(persist_dir.parent, os.W_OK) if persist_dir.parent.exists() else False}")
             
             print(f"[DEBUG] About to call _boot_auto_restore_index()")
-            st.info("🔍 [DEBUG] About to call _boot_auto_restore_index()")
             _boot_auto_restore_index()
             print(f"[DEBUG] _boot_auto_restore_index() completed")
-            st.success("✅ [DEBUG] _boot_auto_restore_index() completed")
             
             print(f"[DEBUG] About to call _boot_auto_scan_prepared()")
             _boot_auto_scan_prepared()  # 새로 추가: 자동 스캔
@@ -1297,6 +1354,9 @@ def _render_body() -> None:
 
     # 4) 관리자 패널 (외부 모듈 호출: src.ui.ops.indexing_panel)
     if _is_admin_view():
+        # 디버그 패널 추가
+        _render_debug_panel()
+        
         # 지연 import로 순환 참조 방지 및 오버헤드 최소화
         try:
             from src.ui.ops.indexing_panel import (
