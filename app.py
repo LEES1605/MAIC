@@ -380,19 +380,46 @@ def _header() -> None:
         # 외부 헤더가 없으면 아래 폴백으로 이어감
         pass
 
-    # 2) 폴백 헤더 (파일시스템 READY 기준 간이 배지 + 경로 표시)
+    # 2) 폴백 헤더 (일관성 있는 상태 표시)
     try:
         p = _persist_dir_safe()
-        ok = core_is_ready(p)
-    except Exception:
-        ok = False
-        p = _persist_dir_safe()
-
-    badge = "🟢 READY" if ok else "🟡 준비중"
-    st.markdown(f"{badge} **LEES AI Teacher**")
-    with st.container():
-        st.caption("Persist Dir")
-        st.code(str(p), language="text")
+        cj = p / "chunks.jsonl"
+        rf = p / ".ready"
+        
+        # 실제 파일 상태 확인
+        chunks_ready = cj.exists() and cj.stat().st_size > 0
+        ready_file = rf.exists()
+        
+        # 세션 상태와 실제 파일 상태 일치 확인
+        session_ready = st.session_state.get("_INDEX_LOCAL_READY", False)
+        
+        # 일관성 있는 상태 표시
+        if chunks_ready and ready_file:
+            badge = "🟢 준비완료"
+            status_color = "green"
+        elif chunks_ready or ready_file:
+            badge = "🟡 부분준비"
+            status_color = "orange"
+        else:
+            badge = "🔴 인덱스없음"
+            status_color = "red"
+            
+        st.markdown(f"{badge} **LEES AI Teacher**")
+        
+        # 관리자 모드에서만 상세 정보 표시
+        if st.session_state.get("admin_mode", False):
+            with st.container():
+                st.caption("상태 정보")
+                st.json({
+                    "chunks_ready": chunks_ready,
+                    "ready_file": ready_file,
+                    "session_ready": session_ready,
+                    "persist_dir": str(p)
+                })
+    except Exception as e:
+        st.markdown("🔴 오류 **LEES AI Teacher**")
+        if st.session_state.get("admin_mode", False):
+            st.error(f"상태 확인 오류: {e}")
 # ================================== [08] header — END =================================
 
 # =============================== [09] student progress stepper — START =====================
@@ -511,14 +538,10 @@ def _boot_auto_restore_index() -> None:
     # --- 로컬 준비 상태 ---
     _idx("step_set", 1, "run", "로컬 준비 상태 확인")
     print(f"[DEBUG] Checking local files: cj={cj}, rf={rf}")
-    st.info(f"🔍 [DEBUG] Checking local files: cj={cj}, rf={rf}")
     print(f"[DEBUG] cj.exists(): {cj.exists()}")
-    st.info(f"🔍 [DEBUG] cj.exists(): {cj.exists()}")
     if cj.exists():
         print(f"[DEBUG] cj.size(): {cj.stat().st_size}")
-        st.info(f"🔍 [DEBUG] cj.size(): {cj.stat().st_size}")
     print(f"[DEBUG] rf.exists(): {rf.exists()}")
-    st.info(f"🔍 [DEBUG] rf.exists(): {rf.exists()}")
     
     ready_txt = ""
     try:
@@ -681,74 +704,72 @@ def _boot_auto_restore_index() -> None:
         
         # 순차번호 관리자 생성
         print(f"[DEBUG] Creating sequential manager for owner={owner}, repo={repo}")
-        st.info(f"🔍 [DEBUG] Creating sequential manager for owner={owner}, repo={repo}")
         seq_manager = create_sequential_manager(owner, repo, token)
         print(f"[DEBUG] Sequential manager created successfully")
-        st.success("✅ [DEBUG] Sequential manager created successfully")
         
         # GitHub 릴리스 상태 확인
         try:
             print(f"[DEBUG] Checking GitHub releases for {owner}/{repo}")
-            st.info(f"🔍 [DEBUG] Checking GitHub releases for {owner}/{repo}")
             
             # 현재 실행 중인 코드 버전 확인
             print(f"[DEBUG] Code version check: Using GHReleases import")
-            st.info(f"🔍 [DEBUG] Code version check: Using GHReleases import")
             
             # 릴리스 목록 직접 확인
             from src.runtime.gh_release import GHReleases
             gh = GHReleases(owner=owner, repo=repo, token=token)
             releases = gh.list_releases()
             print(f"[DEBUG] Found {len(releases)} releases: {[r.get('tag_name') for r in releases]}")
-            st.info(f"🔍 [DEBUG] Found {len(releases)} releases: {[r.get('tag_name') for r in releases]}")
             
             if releases:
                 latest_release = releases[0]
                 assets = latest_release.get('assets', [])
                 print(f"[DEBUG] Latest release assets: {[a.get('name') for a in assets]}")
-                st.info(f"🔍 [DEBUG] Latest release assets: {[a.get('name') for a in assets]}")
             else:
                 print(f"[DEBUG] No releases found!")
-                st.warning("⚠️ [DEBUG] No releases found!")
                 
         except Exception as e:
             print(f"[DEBUG] Error checking releases: {e}")
-            st.error(f"❌ [DEBUG] Error checking releases: {e}")
         
         # 최신 인덱스 복원
         print(f"[DEBUG] About to call restore_latest_index with p={p}, clean_dest=True")
-        st.info(f"🔍 [DEBUG] About to call restore_latest_index with p={p}, clean_dest=True")
         
         try:
             result = seq_manager.restore_latest_index(p, clean_dest=True)
             print(f"[DEBUG] restore_latest_index result: {result}")
-            st.success(f"✅ [DEBUG] restore_latest_index result: {result}")
         except Exception as e:
             print(f"[DEBUG] restore_latest_index FAILED: {e}")
-            st.error(f"❌ [DEBUG] restore_latest_index FAILED: {e}")
             import traceback
             traceback_str = traceback.format_exc()
             print(f"[DEBUG] Traceback: {traceback_str}")
-            st.error(f"❌ [DEBUG] Traceback: {traceback_str}")
             # 예외 발생 시에도 계속 진행
             result = None
         
         # 복원 후 파일 상태 재확인
         print(f"[DEBUG] Post-restore check: cj.exists()={cj.exists()}, rf.exists()={rf.exists()}")
-        st.info(f"🔍 [DEBUG] Post-restore check: cj.exists()={cj.exists()}, rf.exists()={rf.exists()}")
         
         if cj.exists():
             print(f"[DEBUG] Post-restore cj.size(): {cj.stat().st_size}")
-            st.info(f"🔍 [DEBUG] Post-restore cj.size(): {cj.stat().st_size}")
         
         # persist 디렉토리 전체 내용 확인
         try:
             persist_files = list(p.iterdir()) if p.exists() else []
             print(f"[DEBUG] Persist directory contents: {[f.name for f in persist_files]}")
-            st.info(f"🔍 [DEBUG] Persist directory contents: {[f.name for f in persist_files]}")
         except Exception as e:
             print(f"[DEBUG] Error listing persist directory: {e}")
-            st.error(f"❌ [DEBUG] Error listing persist directory: {e}")
+
+        # 복원 성공/실패에 따른 일관성 있는 상태 설정
+        restore_success = cj.exists() and cj.stat().st_size > 0
+        print(f"[DEBUG] Restore success: {restore_success}")
+        
+        # 세션 상태 업데이트 (일관성 보장)
+        try:
+            if "st" in globals() and st is not None:
+                st.session_state["_INDEX_LOCAL_READY"] = restore_success
+                st.session_state["_INDEX_IS_LATEST"] = restore_success
+                st.session_state["_BOOT_RESTORE_DONE"] = True
+                print(f"[DEBUG] Session state updated: _INDEX_LOCAL_READY={restore_success}")
+        except Exception as e:
+            print(f"[DEBUG] Error updating session state: {e}")
 
         _idx("step_set", 3, "run", "메타 저장/정리...")
         normalize_ready_file(p)
