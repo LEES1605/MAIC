@@ -246,6 +246,52 @@ def update_work_log(work_description):
     log_file.write_text('\n'.join(new_lines), encoding='utf-8')
     print(f"작업 로그 업데이트: {work_description}")
 
+def backup_mcp_settings():
+    """MCP 설정 및 패키지 목록 백업"""
+    print("\n[MCP 백업] 시작...")
+    
+    try:
+        # .cursor 디렉토리 생성
+        cursor_dir = Path(".cursor")
+        cursor_dir.mkdir(exist_ok=True)
+        
+        # Cursor 설정 파일 백업
+        import os
+        cursor_settings_path = Path(os.environ['APPDATA']) / "Cursor" / "User" / "settings.json"
+        if cursor_settings_path.exists():
+            import shutil
+            backup_path = cursor_dir / "cursor_settings.json"
+            shutil.copy2(cursor_settings_path, backup_path)
+            print("✅ Cursor 설정 파일 백업 완료")
+        else:
+            print("⚠️ Cursor 설정 파일을 찾을 수 없습니다.")
+        
+        # MCP 패키지 목록 백업
+        try:
+            result = subprocess.run([sys.executable, "-m", "pip", "list"], 
+                                  capture_output=True, text=True, encoding='utf-8')
+            if result.returncode == 0:
+                # MCP 관련 패키지만 필터링
+                mcp_packages = []
+                for line in result.stdout.split('\n'):
+                    if line.strip() and ('mcp' in line.lower() or 'model-context' in line.lower()):
+                        mcp_packages.append(line.strip())
+                
+                if mcp_packages:
+                    mcp_packages_file = cursor_dir / "mcp_packages.txt"
+                    with open(mcp_packages_file, 'w', encoding='utf-8') as f:
+                        f.write('\n'.join(mcp_packages))
+                    print(f"✅ MCP 패키지 목록 백업 완료 ({len(mcp_packages)}개)")
+                else:
+                    print("📦 MCP 패키지가 설치되어 있지 않습니다.")
+        except Exception as e:
+            print(f"❌ MCP 패키지 목록 백업 실패: {e}")
+        
+        print("[MCP 백업] 완료!")
+        
+    except Exception as e:
+        print(f"[MCP 백업] 오류: {e}")
+
 def main():
     print("작업 종료 자동화 스크립트")
     print("=" * 50)
@@ -295,10 +341,13 @@ def main():
         print("Git push 실패. 작업을 중단합니다.")
         return
     
-    # 5. Cursor 규칙 자동 동기화 (업로드 전)
+    # 5. MCP 설정 백업
+    backup_mcp_settings()
+    
+    # 6. Cursor 규칙 자동 동기화 (업로드 전)
     sync_cursor_rules_for_upload()
     
-    # 6. 작업 로그 업데이트
+    # 7. 작업 로그 업데이트
     update_work_log(work_description)
     
     print("\n작업 종료 완료!")

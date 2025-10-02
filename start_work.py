@@ -27,6 +27,131 @@ def run_command(cmd, description):
         return False
     return True
 
+def sync_mcp_settings():
+    """MCP 설정 완전 동기화"""
+    print("\n[MCP 설정 동기화] 시작...")
+    
+    try:
+        import os
+        import shutil
+        import json
+        
+        # 1. MCP 설정 파일 경로들
+        if os.name == 'nt':  # Windows
+            cursor_user_path = Path(os.environ['APPDATA']) / "Cursor" / "User"
+        else:
+            cursor_user_path = Path.home() / ".config" / "Cursor" / "User"
+        
+        mcp_json_path = cursor_user_path / "mcp.json"
+        project_mcp_path = Path(".cursor") / "mcp.json"
+        
+        # 2. 프로젝트의 MCP 설정을 Cursor로 복사
+        if project_mcp_path.exists():
+            # Cursor User 디렉토리 생성
+            cursor_user_path.mkdir(parents=True, exist_ok=True)
+            
+            # MCP 설정 복사
+            shutil.copy2(project_mcp_path, mcp_json_path)
+            print(f"✅ MCP 설정 복사 완료: {project_mcp_path} → {mcp_json_path}")
+            
+            # MCP 설정 내용 확인 및 출력
+            with open(project_mcp_path, 'r', encoding='utf-8') as f:
+                mcp_config = json.load(f)
+                mcp_servers = mcp_config.get('mcpServers', {})
+                print(f"📋 동기화된 MCP 서버 {len(mcp_servers)}개:")
+                for server_name in mcp_servers.keys():
+                    print(f"   - {server_name}")
+        else:
+            print("⚠️ 프로젝트에 MCP 설정 파일(.cursor/mcp.json)이 없습니다.")
+            return False
+        
+        # 3. MCP 서버 패키지 자동 설치 (npx 기반)
+        print("\n📦 MCP 서버 패키지 확인 중...")
+        
+        # MCP 설정에서 패키지 목록 추출
+        with open(project_mcp_path, 'r', encoding='utf-8') as f:
+            mcp_config = json.load(f)
+            mcp_servers = mcp_config.get('mcpServers', {})
+        
+        # npx 기반 패키지들 확인
+        npx_packages = []
+        for server_name, server_config in mcp_servers.items():
+            if server_config.get('command') == 'npx':
+                args = server_config.get('args', [])
+                if len(args) >= 2 and args[0] == '-y':
+                    package_name = args[1]
+                    npx_packages.append(package_name)
+        
+        if npx_packages:
+            print(f"📦 NPX 패키지 {len(npx_packages)}개 발견:")
+            for package in npx_packages:
+                print(f"   - {package}")
+            
+            # Node.js/npm 확인
+            try:
+                result = subprocess.run("npm --version", shell=True, capture_output=True, text=True)
+                if result.returncode == 0:
+                    print(f"✅ npm 버전: {result.stdout.strip()}")
+                    
+                    # 패키지 캐시 확인 (선택사항)
+                    install_choice = input("NPX 패키지들을 미리 캐시하시겠습니까? (y/n): ").strip().lower()
+                    if install_choice == 'y':
+                        print("📦 NPX 패키지 캐시 중...")
+                        for package in npx_packages:
+                            try:
+                                print(f"   캐시 중: {package}")
+                                subprocess.run(f"npx -y {package} --help", 
+                                             shell=True, capture_output=True, timeout=30)
+                                print(f"   ✅ {package} 캐시 완료")
+                            except subprocess.TimeoutExpired:
+                                print(f"   ⏱️ {package} 캐시 타임아웃 (정상)")
+                            except Exception as e:
+                                print(f"   ❌ {package} 캐시 실패: {e}")
+                        print("📦 NPX 패키지 캐시 완료!")
+                else:
+                    print("⚠️ npm이 설치되지 않았습니다. Node.js를 설치하세요.")
+            except Exception as e:
+                print(f"⚠️ npm 확인 실패: {e}")
+        
+        # 4. 환경 변수 확인
+        print("\n🔑 환경 변수 확인...")
+        env_vars_needed = set()
+        
+        for server_name, server_config in mcp_servers.items():
+            env = server_config.get('env', {})
+            for env_key, env_value in env.items():
+                if env_value and 'your-' in str(env_value).lower():
+                    env_vars_needed.add(env_key)
+        
+        if env_vars_needed:
+            print("⚠️ 다음 환경 변수들을 설정해야 합니다:")
+            for env_var in env_vars_needed:
+                print(f"   - {env_var}")
+            print("환경 변수는 시스템 설정에서 직접 설정하거나 .env 파일을 사용하세요.")
+        else:
+            print("✅ 모든 환경 변수가 설정되어 있습니다.")
+        
+        # 5. 백업 생성
+        backup_dir = Path(".cursor") / "backups"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_file = backup_dir / f"mcp_backup_{timestamp}.json"
+        
+        shutil.copy2(project_mcp_path, backup_file)
+        print(f"💾 MCP 설정 백업 생성: {backup_file}")
+        
+        print("\n✅ MCP 설정 동기화 완료!")
+        print("   Cursor를 재시작하면 모든 MCP 서버가 활성화됩니다.")
+        
+        return True
+        
+    except Exception as e:
+        print(f"❌ MCP 설정 동기화 실패: {e}")
+        import traceback
+        print(f"상세 오류: {traceback.format_exc()}")
+        return False
+
 def sync_cursor_rules():
     """Cursor 규칙 파일 자동 동기화"""
     print("\n[Cursor 규칙 동기화] 시작...")
@@ -282,9 +407,11 @@ def main():
     print("\n작업 시작 준비 완료!")
     print("작업 완료 후 'python end_work.py'를 실행하세요.")
     
-    # Cursor 설정 동기화 옵션
-    sync_choice = input("\nCursor 설정을 동기화하시겠습니까? (y/n): ").strip().lower()
+    # Cursor 설정 및 MCP 동기화 옵션
+    sync_choice = input("\nCursor 설정과 MCP를 동기화하시겠습니까? (y/n): ").strip().lower()
     if sync_choice == 'y':
+        sync_mcp_settings()
+        
         try:
             from sync_cursor_settings import restore_cursor_settings
             if restore_cursor_settings():
