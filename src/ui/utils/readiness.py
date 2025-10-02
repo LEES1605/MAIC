@@ -172,10 +172,10 @@ def compute_readiness() -> Tuple[str, str]:
 
     # 2) decide tri-state
     if is_latest:
-        return "green", "🟩 READY — 최신 인덱스를 복원했습니다."
+        return "green", "READY — 최신 인덱스를 복원했습니다."
     if local_ready:
-        return "yellow", "🟨 준비중 — 로컬 인덱스만 감지되었습니다(최신 아님)."
-    return "orange", "🟧 없음 — 인덱스가 없습니다."
+        return "yellow", "준비중 — 로컬 인덱스만 감지되었습니다(최신 아님)."
+    return "orange", "없음 — 인덱스가 없습니다."
 
 
 def render_readiness_header(compact: bool = True) -> None:

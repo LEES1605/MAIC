@@ -27,7 +27,7 @@ DEAD_PATHS: Tuple[str, ...] = (
     "src/ui_admin.py",
     "src/ui_components.py",
     "src/ui_theme.py",
-    "src/common/utils.py",
+    # "src/common/utils.py",  # 새로 생성된 유틸리티 모듈로 제거
     "src/rag_engine.py",
     "src/rag/quality.py",
     "src/compat/llama.py",
@@ -43,7 +43,7 @@ DEAD_MODULE_PATTERNS: Tuple[str, ...] = (
     "src.ui_admin",
     "src.ui_components",
     "src.ui_theme",
-    "src.common.utils",   # 만약 common을 패키지로 사용했다면 대비
+    # "src.common.utils",   # 새로 생성된 유틸리티 모듈로 제거
     "src.rag_engine",
     "src.rag.quality",
     "src.compat.llama",

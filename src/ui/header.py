@@ -101,39 +101,120 @@ def render() -> None:
     dot_map = {"HIGH": "rd-high", "MID": "rd-mid", "LOW": "rd-low"}
     label = label_map.get(level, "문제발생")
     dot_cls = dot_map.get(level, "rd-low")
+    
+    # 관리자 모드에서는 헤더 상태 표시를 간소화
+    if ss.get("admin_mode", False):
+        label = "관리자"
+        dot_cls = "rd-high"
 
-    # CSS (E501 회피: 속성 단위 개행)
+    # Linear 테마 CSS 변수 적용
     st.markdown(
         """
         <style>
-          .brand-wrap{ display:flex; align-items:center; gap:10px; }
-          .brand-title{ font-weight:900; letter-spacing:.2px;
-                        font-size:250%; line-height:1.1; }
-          .ready-chip{
-            display:inline-flex; align-items:center; gap:6px;
-            padding:2px 10px; border-radius:12px;
-            background:#f4f6fb; border:1px solid #e5e7eb;
-            font-weight:800; color:#111827; font-size:18px;
-          }
-          .rd{ width:8px; height:8px; border-radius:50%;
-               display:inline-block; animation:pulseDot 1.8s infinite; }
-          .rd-high{ background:#16a34a;
-                    box-shadow:0 0 0 0 rgba(22,163,74,.55); }
-          .rd-mid{  background:#f59e0b;
-                    box-shadow:0 0 0 0 rgba(245,158,11,.55); }
-          .rd-low{  background:#ef4444;
-                    box-shadow:0 0 0 0 rgba(239,68,68,.55); }
-          @keyframes pulseDot{
-            0%{ box-shadow:0 0 0 0 rgba(0,0,0,0.18); }
-            70%{ box-shadow:0 0 0 16px rgba(0,0,0,0); }
-            100%{ box-shadow:0 0 0 0 rgba(0,0,0,0); }
-          }
-          .admin-login-narrow [data-testid="stTextInput"] input{
-            height:42px; border-radius:10px;
-          }
-          .admin-login-narrow .stButton>button{
-            width:100%; height:42px;
-          }
+        :root {
+          /* Linear 테마 색상 변수 */
+          --linear-bg-primary: #08090a;
+          --linear-bg-secondary: #1c1c1f;
+          --linear-bg-tertiary: #232326;
+          --linear-text-primary: #f7f8f8;
+          --linear-text-secondary: #d0d6e0;
+          --linear-text-tertiary: #8a8f98;
+          --linear-brand: #5e6ad2;
+          --linear-accent: #7170ff;
+          --linear-border: #23252a;
+          --linear-radius: 8px;
+          --linear-radius-lg: 12px;
+          --linear-font: "Inter Variable", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        }
+        
+        .brand-wrap{ 
+          display:flex; 
+          align-items:center; 
+          gap:10px; 
+        }
+        
+        .brand-title{ 
+          font-family: var(--linear-font);
+          font-weight: 590;
+          letter-spacing: -.012em;
+          font-size: 2.25rem; 
+          line-height: 1.1; 
+          color: var(--linear-text-primary);
+        }
+        
+        .ready-chip{
+          display: inline-flex; 
+          align-items: center; 
+          gap: 6px;
+          padding: 4px 12px; 
+          border-radius: var(--linear-radius-lg);
+          background: var(--linear-bg-secondary); 
+          border: 1px solid var(--linear-border);
+          font-family: var(--linear-font);
+          font-weight: 510; 
+          color: var(--linear-text-secondary); 
+          font-size: 0.9375rem;
+        }
+        
+        .rd{ 
+          width: 8px; 
+          height: 8px; 
+          border-radius: 50%;
+          display: inline-block; 
+          animation: pulseDot 1.8s infinite; 
+        }
+        
+        .rd-high{ 
+          background: var(--linear-brand);
+          box-shadow: 0 0 0 0 rgba(94, 106, 210, 0.55); 
+        }
+        
+        .rd-mid{  
+          background: #fc7840;
+          box-shadow: 0 0 0 0 rgba(252, 120, 64, 0.55); 
+        }
+        
+        .rd-low{  
+          background: #eb5757;
+          box-shadow: 0 0 0 0 rgba(235, 87, 87, 0.55); 
+        }
+        
+        @keyframes pulseDot{
+          0%{ box-shadow: 0 0 0 0 rgba(0,0,0,0.18); }
+          70%{ box-shadow: 0 0 0 16px rgba(0,0,0,0); }
+          100%{ box-shadow: 0 0 0 0 rgba(0,0,0,0); }
+        }
+        
+        .admin-login-narrow [data-testid="stTextInput"] input{
+          height: 42px; 
+          border-radius: var(--linear-radius);
+          background: var(--linear-bg-secondary);
+          border: 1px solid var(--linear-border);
+          color: var(--linear-text-primary);
+          font-family: var(--linear-font);
+        }
+        
+        .admin-login-narrow .stButton>button{
+          width: 100%; 
+          height: 42px;
+          border-radius: var(--linear-radius);
+          background: var(--linear-brand);
+          color: white;
+          border: none;
+          font-family: var(--linear-font);
+          font-weight: 510;
+        }
+        
+        /* 관리자 모드 Linear 스타일 */
+        .admin-mode .brand-title {
+          color: var(--linear-brand) !important;
+        }
+        
+        .admin-mode .ready-chip {
+          background: rgba(94, 106, 210, 0.1) !important;
+          border-color: var(--linear-brand) !important;
+          color: var(--linear-brand) !important;
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -146,8 +227,10 @@ def render() -> None:
             f'<span class="ready-chip">{label}'
             f'<span class="rd {dot_cls}"></span></span>'
         )
+        # 관리자 모드일 때 클래스 추가
+        wrapper_class = "brand-wrap admin-mode" if ss.get("admin_mode", False) else "brand-wrap"
         title_html = (
-            '<div class="brand-wrap">'
+            f'<div class="{wrapper_class}">'
             f'{chip_html}<span class="brand-title">LEES AI Teacher</span>'
             "</div>"
         )

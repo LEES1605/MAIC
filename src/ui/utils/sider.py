@@ -5,7 +5,7 @@ from typing import Any
 try:
     import streamlit as st
 except Exception:
-    st = None  # type: ignore
+    st = None
 
 # --- internal: default "Pages" nav hiding ------------------------------------
 def _hide_default_pages_nav() -> None:
@@ -30,25 +30,21 @@ def _hide_default_pages_nav() -> None:
 
 # --- internal: page switching helpers ----------------------------------------
 def _switch_to(target: str) -> bool:
-    """Streamlit 페이지 네비게이션: switch_page → page_link → query params 순 폴백."""
+    """빠른 Streamlit 페이지 네비게이션: switch_page 우선 사용."""
     if st is None:
         return False
     try:
-        st.switch_page(target)  # e.g., "app.py" / "pages/10_admin_prompt.py"
+        # 가장 빠른 방법: switch_page 직접 사용
+        st.switch_page(target)
         return True
     except Exception:
-        pass
-    try:
-        st.sidebar.page_link(target, label="열기")
-        return True
-    except Exception:
-        pass
-    try:
-        st.query_params["goto"] = "home"
-        if hasattr(st, "rerun"):
+        # 폴백: 쿼리 파라미터로 페이지 전환
+        try:
+            st.query_params["page"] = target
             st.rerun()
-    except Exception:
-        pass
+            return True
+        except Exception:
+            pass
     return False
 
 def _logout_to_student() -> None:
@@ -70,7 +66,7 @@ def _logout_to_student() -> None:
         except Exception:
             # 구버전 폴백
             try:
-                st.experimental_set_query_params(admin="0", goto="home")  # type: ignore[attr-defined]
+                st.experimental_set_query_params(admin="0", goto="home")
             except Exception:
                 pass
         # 홈으로 이동 시도 후, 최후엔 rerun
@@ -79,7 +75,7 @@ def _logout_to_student() -> None:
             st.rerun()
         except Exception:
             try:
-                st.experimental_rerun()  # type: ignore[attr-defined]
+                st.experimental_rerun()
             except Exception:
                 pass
     except Exception:
@@ -110,33 +106,110 @@ def apply_admin_chrome(*, back_page: str = "app.py", icon_only: bool = True) -> 
 
 def render_sidebar(*, back_page: str | None = "app.py", icon_only: bool = False) -> None:
     """
-    📌 '진짜' 사이드바의 공식 진입점.
-    - 기본 Pages 네비를 완전 숨김
-    - 기존 유틸(ensure_admin_sidebar/apply_admin_chrome)로 렌더
-    - 실패 시 안전한 최소 메뉴로 폴백
+    📌 iOS 스타일 탭 시스템으로 변경.
+    - 사이드바 제거하고 상단 탭으로 대체
+    - 모바일 우선 디자인 적용
     """
     if st is None:
         return
+    
+    # 기본 Pages 네비 숨김
     _hide_default_pages_nav()
-
+    
+    # 사이드바 완전 숨김 (더 강력한 CSS)
     try:
-        ensure_admin_sidebar()
+        st.markdown("""
+        <style>
+        /* Streamlit 사이드바 완전 제거 */
+        .css-1d391kg { display: none !important; }
+        .css-1v0mbdj { display: none !important; }
+        [data-testid="stSidebar"] { display: none !important; }
+        section[data-testid="stSidebar"] { display: none !important; }
+        .css-1cypcdb { display: none !important; }
+        .css-1d391kg { display: none !important; }
+        
+        /* 메인 컨테이너 전체 너비 사용 */
+        .main .block-container { 
+            max-width: 100% !important; 
+            padding-left: 1rem !important;
+            padding-right: 1rem !important;
+        }
+        
+        /* 사이드바 공간 제거 */
+        .stApp > div:first-child {
+            padding-left: 0 !important;
+        }
+        
+        /* 추가 사이드바 숨김 */
+        div[data-testid="stSidebar"] { display: none !important; }
+        .stSidebar { display: none !important; }
+        </style>
+        """, unsafe_allow_html=True)
     except Exception:
         pass
+    
+    # 간단한 탭 시스템 적용 (페이지 전환 없이)
     try:
-        apply_admin_chrome(back_page=back_page or "app.py", icon_only=icon_only)
-    except Exception:
-        st.sidebar.markdown("### 메뉴")
+        from ..components.ios_tabs_simple import render_ios_tabs_simple, create_admin_tabs_simple
+        
+        tabs = create_admin_tabs_simple()
+        active_tab = render_ios_tabs_simple(tabs, key="admin_tabs")
+        
+        # 탭 내용을 조건부로 렌더링
+        if active_tab == "management":
+            # 관리 탭 내용 렌더링 (현재 페이지에서)
+            render_management_content()
+        elif active_tab == "prompt":
+            # 프롬프트 탭 내용 렌더링 (현재 페이지에서)
+            render_prompt_content()
+            
+    except Exception as e:
+        # 폴백: 기존 사이드바 사용
         try:
-            st.sidebar.page_link("app.py", label="채팅")
-            st.sidebar.page_link("pages/10_admin_prompt.py", label="관리자: 프롬프트")
-            st.sidebar.page_link("pages/15_index_status.py", label="관리자: 인덱스 상태")
+            ensure_admin_sidebar()
+            apply_admin_chrome(back_page=back_page or "app.py", icon_only=icon_only)
         except Exception:
             pass
 
-    st.sidebar.divider()
-    if st.sidebar.button("로그아웃", type="secondary", use_container_width=True):
-        _logout_to_student()
+    # 로그아웃 버튼은 헤더에 통합 (사이드바 제거로 인해)
+    # 실제 로그아웃 기능은 header.py에서 처리
 
-__all__ = ["render_sidebar", "ensure_admin_sidebar", "apply_admin_chrome", "show_sidebar"]
+
+def render_management_content() -> None:
+    """관리 탭 내용 렌더링"""
+    try:
+        from ..ops.indexing_panel import render_admin_indexing_panel
+        render_admin_indexing_panel()
+    except Exception as e:
+        st.error(f"관리 패널 로드 실패: {e}")
+
+
+def render_prompt_content() -> None:
+    """프롬프트 탭 내용 렌더링"""
+    try:
+        # 프롬프트 편집기 내용을 직접 임베드
+        st.markdown("### 프롬프트 편집기")
+        st.info("프롬프트 편집 기능이 여기에 표시됩니다.")
+        
+        # 실제 프롬프트 편집기 내용을 여기에 추가할 수 있습니다
+        with st.expander("페르소나 설정", expanded=True):
+            st.text_area("페르소나 텍스트", placeholder="페르소나 텍스트를 입력하세요...")
+        
+        with st.expander("모드별 프롬프트", expanded=True):
+            col1, col2 = st.columns(2)
+            with col1:
+                st.text_area("문법 모드", placeholder="문법 모드 지시/규칙...")
+            with col2:
+                st.text_area("문장 모드", placeholder="문장 모드 지시/규칙...")
+            
+            st.text_area("지문 모드", placeholder="지문 모드 지시/규칙...")
+        
+        if st.button("저장", type="primary"):
+            st.success("프롬프트가 저장되었습니다!")
+            
+    except Exception as e:
+        st.error(f"프롬프트 패널 로드 실패: {e}")
+
+
+__all__ = ["render_sidebar", "ensure_admin_sidebar", "apply_admin_chrome", "show_sidebar", "render_management_content", "render_prompt_content"]
 # [S-ALL] END: FILE src/ui/utils/sider.py

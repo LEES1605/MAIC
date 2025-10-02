@@ -119,19 +119,8 @@ def _resolve_owner_repo_and_token() -> Tuple[str, str, str]:
     return owner or "", repo or "", tok or ""
 
 
-def _errlog(msg: str, where: str = "", exc: Exception | None = None) -> None:
-    """앱의 _errlog가 있으면 위임, 없으면 콘솔 출력."""
-    try:
-        app_mod = sys.modules.get("__main__")
-        app_err = getattr(app_mod, "_errlog", None)
-        if callable(app_err):
-            app_err(msg, where=where, exc=exc)
-            return
-    except Exception:
-        pass
-    print(f"[ERR]{' ' + where if where else ''} {msg}")
-    if exc:
-        traceback.print_exception(exc)
+# 공통 유틸리티 함수 import
+from src.common.utils import errlog as _errlog
 # ============================== [03] local helpers — END ==============================
 
 # ============================= [04] public API — START ================================

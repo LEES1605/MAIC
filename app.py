@@ -201,7 +201,7 @@ if st:
     except Exception:
         pass
 
-    # (B) 기본 멀티페이지 네비 전역 숨김(학생/관리자 공통)
+    # (B) 기본 멀티페이지 네비 전역 숨김(학생/관리자 공통) + 네비게이션 바 CSS 오버라이드
     try:
         st.markdown(
             "<style>"
@@ -209,6 +209,13 @@ if st:
             "div[data-testid='stSidebarNav']{display:none!important;}"
             "section[data-testid='stSidebar'] [data-testid='stSidebarNav']{display:none!important;}"
             "section[data-testid='stSidebar'] ul[role='list']{display:none!important;}"
+            
+            "/* 네비게이션 바 가로 레이아웃 강제 적용 */"
+            ".linear-navbar-container{display:flex!important;flex-direction:row!important;flex-wrap:nowrap!important;align-items:center!important;justify-content:space-between!important;}"
+            ".linear-navbar-container > *{display:inline-block!important;vertical-align:middle!important;}"
+            ".linear-navbar-nav{display:flex!important;flex-direction:row!important;flex-wrap:nowrap!important;align-items:center!important;list-style:none!important;margin:0!important;padding:0!important;}"
+            ".linear-navbar-nav li{display:inline-block!important;margin:0!important;padding:0!important;}"
+            ".linear-navbar-nav-item{display:inline-block!important;vertical-align:middle!important;}"
             "</style>",
             unsafe_allow_html=True,
         )
@@ -257,16 +264,11 @@ if st:
     except Exception:
         pass
 
-    # (D) 관리자/학생 크롬 적용 — 학생은 숨김, 관리자는 최소 사이드바 즉시 렌더 (admin_mode 기준)
+    # (D) 학생 사이드바 숨김 (관리자는 별도 처리)
     try:
         adm = bool(st.session_state.get("admin_mode", False))
-        if adm:
-            _sider = __import__("src.ui.utils.sider", fromlist=["apply_admin_chrome"])
-            getattr(_sider, "apply_admin_chrome", lambda **_: None)(
-                back_page="app.py", icon_only=True
-            )
-        else:
-            # 학생: 사이드바 전체 숨김 (네비만 숨기는 CSS가 아니라, 섹션 자체를 숨김)
+        if not adm:
+            # 학생: 사이드바 전체 숨김
             st.markdown(
                 "<style>section[data-testid='stSidebar']{display:none!important;}</style>",
                 unsafe_allow_html=True,
@@ -290,29 +292,8 @@ except Exception:
     pass
 
 
-def _errlog(msg: str, where: str = "", exc: Exception | None = None) -> None:
-    """에러 로그 + 필요 시 Streamlit에 자세한 스택 표시."""
-    try:
-        prefix = f"{where} " if where else ""
-        print(f"[ERR] {prefix}{msg}")
-        if exc:
-            traceback.print_exception(exc)
-        try:
-            import streamlit as _st
-            with _st.expander("자세한 오류 로그", expanded=False):
-                detail = ""
-                if exc:
-                    try:
-                        detail = "".join(
-                            traceback.format_exception(type(exc), exc, exc.__traceback__)
-                        )
-                    except Exception:
-                        detail = "traceback 사용 불가"
-                _st.code(f"{prefix}{msg}\n{detail}")
-        except Exception:
-            pass
-    except Exception:
-        pass
+# 공통 유틸리티 함수 import
+from src.common.utils import errlog as _errlog
 # ===================== [05] path & logger — END ========================
 
 # ======================== [06] admin gate — START ========================
@@ -957,16 +938,26 @@ def _auto_start_once() -> None:
             ok = False
 
     if ok:
-        try:
-            core_mark_ready(used_persist)
-        except Exception:
-            pass
-        if hasattr(st, "toast"):
-            st.toast("자동 복원 완료", icon="✅")
+        # 실제 복원 성공 여부를 다시 확인
+        chunks_ready_path = used_persist / "chunks.jsonl.ready"
+        if chunks_ready_path.exists():
+            try:
+                core_mark_ready(used_persist)
+            except Exception:
+                pass
+            if hasattr(st, "toast"):
+                st.toast("자동 복원 완료")
+            else:
+                st.success("자동 복원 완료")
+            _set_brain_status("READY", "자동 복원 완료", "release", attached=True)
+            _safe_rerun("auto_start", ttl=1)
         else:
-            st.success("자동 복원 완료")
-        _set_brain_status("READY", "자동 복원 완료", "release", attached=True)
-        _safe_rerun("auto_start", ttl=1)
+            # 복원 함수는 성공했지만 실제 파일이 없음
+            _errlog("복원 함수 성공했지만 chunks.jsonl.ready 파일이 없음", where="[auto_start]")
+            if hasattr(st, "toast"):
+                st.toast("복원 실패: 파일이 생성되지 않음")
+            else:
+                st.error("복원 실패: 파일이 생성되지 않음")
 # =============================== [12] auto-scan prepared — START ====================
 def _boot_auto_scan_prepared() -> None:
     """
@@ -1177,9 +1168,82 @@ def _inject_chat_styles_once() -> None:
     font-weight:800; margin:6px 0 4px 0;
   }
 
+  /* 모바일 반응형 스타일 */
   @media (max-width:480px){
     .bubble{ max-width:96%; }
     .chip-src{ max-width:160px; }
+    
+    /* 관리자 모드 모바일 최적화 */
+    .mobile-status-grid {
+      grid-template-columns: 1fr 1fr !important;
+      gap: 6px !important;
+    }
+    .status-card {
+      font-size: 10px !important;
+      padding: 4px !important;
+    }
+    
+    /* 버튼 모바일 최적화 */
+    .stButton > button {
+      font-size: 12px !important;
+      padding: 8px 12px !important;
+    }
+    
+    /* 로그 컨테이너 모바일 최적화 */
+    .mobile-log-container {
+      max-height: 120px !important;
+      padding: 4px !important;
+    }
+    .log-entry {
+      font-size: 10px !important;
+      padding: 2px 0 !important;
+    }
+    
+    /* 진행바 모바일 최적화 */
+    .mobile-progress-container {
+      padding: 4px !important;
+    }
+    .progress-bar {
+      height: 14px !important;
+    }
+    .progress-text {
+      font-size: 9px !important;
+    }
+    .progress-label {
+      font-size: 10px !important;
+    }
+    
+    /* 헤더 모바일 최적화 */
+    .brand-title {
+      font-size: 180% !important;
+    }
+    .ready-chip {
+      font-size: 14px !important;
+      padding: 1px 8px !important;
+    }
+    
+    /* 사이드바 모바일 최적화 */
+    .css-1d391kg {
+      padding-top: 1rem !important;
+    }
+    
+    /* 메인 컨테이너 모바일 최적화 */
+    .main .block-container {
+      padding-top: 1rem !important;
+      padding-bottom: 1rem !important;
+    }
+  }
+  
+  /* 태블릿 반응형 (481px - 768px) */
+  @media (min-width: 481px) and (max-width: 768px) {
+    .mobile-status-grid {
+      grid-template-columns: repeat(3, 1fr) !important;
+      gap: 8px !important;
+    }
+    .status-card {
+      font-size: 11px !important;
+      padding: 6px !important;
+    }
   }
 </style>
         """,
@@ -1576,6 +1640,7 @@ def _render_body() -> None:
         st.session_state["_BOOT_RESTORE_DONE"] = False
         st.session_state["_INDEX_LOCAL_READY"] = False
         st.session_state["_INDEX_IS_LATEST"] = False
+        st.session_state["_auto_start_done"] = False  # 자동 복원 재실행 허용
         print(f"[DEBUG] Reset restore state - forcing restore")
         
         # persist 디렉토리 상태 확인
@@ -1604,8 +1669,17 @@ def _render_body() -> None:
     except Exception as e:
         _errlog(f"auto_start_once failed: {e}", where="[render_body.autostart]", exc=e)
 
-    # 3) 헤더
-    _header()
+    # 3) 헤더 렌더링
+    if _is_admin_view():
+        # 관리자 모드에서는 헤더를 가장 먼저 렌더링
+        try:
+            from src.ui.header import render as _render_header
+            _render_header()
+        except Exception:
+            pass
+    else:
+        # 일반 모드에서는 기본 헤더
+        _header()
 
     # 4) 관리자 패널 (외부 모듈 호출: src.ui.ops.indexing_panel)
     if _is_admin_view():
@@ -1675,6 +1749,23 @@ def main() -> None:
     if st is None:
         print("Streamlit 환경이 아닙니다.")
         return
+
+    # Linear 다크 테마 적용 (전체 앱에 적용)
+    try:
+        from src.ui.components.linear_theme import apply_theme
+        apply_theme()
+    except Exception:
+        pass
+
+    # 관리자 모드일 때는 사이드바를 가장 먼저 렌더링 (헤더보다 먼저)
+    try:
+        adm = bool(st.session_state.get("admin_mode", False))
+        if adm:
+            from src.ui.utils.sider import render_sidebar
+            render_sidebar(back_page="app.py", icon_only=True)
+    except Exception:
+        pass
+
     _render_body()
 
 

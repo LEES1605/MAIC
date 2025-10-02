@@ -658,12 +658,11 @@ def _handle_publish_state(owner: str, repo: str, workflow: str, ref: str, token:
                 ss[S_PUB_STATE] = "error"
                 st.toast(
                     "Actions는 성공했지만 릴리스 자산을 찾지 못했습니다. Actions의 'Verify asset' 단계를 확인하세요.",
-                    icon="❌",
                 )
             else:
-                st.toast("출판 완료!", icon="✅")
+                st.toast("출판 완료!")
         elif cur == "error":
-            st.toast("출판 실패. Actions 로그를 확인하세요.", icon="❌")
+            st.toast("출판 실패. Actions 로그를 확인하세요.")
     ss[S_PUB_LAST_STATE] = ss[S_PUB_STATE]
 
     if ss[S_PUB_STATE] != "running":
@@ -704,7 +703,7 @@ def main() -> None:
 
     # 상태 점검/시크릿
     with st.container(border=True):
-        st.subheader("🔍 상태 점검", divider="gray")
+        st.subheader("상태 점검", divider="gray")
 
         repo_full = st.secrets.get("GITHUB_REPO", "")
         token = st.secrets.get("GITHUB_TOKEN", "")

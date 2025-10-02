@@ -76,7 +76,7 @@ def render_index_status_panel(
 
     # 1) 최신 인덱스 복원
     with c1:
-        if st.button("🔄 Release에서 최신 인덱스 복원", use_container_width=True):
+        if st.button("Release에서 최신 인덱스 복원", use_container_width=True):
             try:
                 res = seq_manager.restore_latest_index(
                     dest=dest_dir,
@@ -113,7 +113,7 @@ def render_index_status_panel(
 
                 st.success(detail or "최신 릴리스 복원 완료")
                 if rtag or rid:
-                    st.toast(f"복원 태그={rtag} (release_id={rid})", icon="✅")
+                    st.toast(f"복원 태그={rtag} (release_id={rid})")
 
                 # 헤더/배지 즉시 반영
                 st.rerun()
