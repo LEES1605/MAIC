@@ -1568,10 +1568,10 @@ def linear_navbar(
         with brand_col:
             st.markdown(f'<div class="linear-navbar-brand">🔷 {brand_name}</div>', unsafe_allow_html=True)
         
-        # 네비게이션 메뉴 - 가운데
+        # 네비게이션 메뉴 - 가운데 (JavaScript 강제 가로 배치)
         with nav_col:
             if nav_items:
-                st.markdown('<div class="linear-navbar-nav">', unsafe_allow_html=True)
+                st.markdown('<div class="linear-navbar-nav" id="navbar-nav-container">', unsafe_allow_html=True)
                 # 메뉴 아이템들을 가로로 배치
                 menu_cols = st.columns(len(nav_items))
                 for i, item in enumerate(nav_items):
@@ -1583,6 +1583,51 @@ def linear_navbar(
                         ):
                             st.info(f"{item['label']} 클릭됨")
                 st.markdown('</div>', unsafe_allow_html=True)
+                
+                # JavaScript로 강제 가로 배치
+                st.markdown("""
+                <script>
+                setTimeout(function() {
+                    // 네비게이션 컨테이너 찾기
+                    const navContainer = document.getElementById('navbar-nav-container');
+                    if (navContainer) {
+                        // 모든 컬럼을 가로로 배치
+                        const columns = navContainer.querySelectorAll('[data-testid="column"]');
+                        columns.forEach(function(col, index) {
+                            col.style.display = 'inline-block';
+                            col.style.verticalAlign = 'middle';
+                            col.style.width = 'auto';
+                            col.style.marginRight = '16px';
+                            col.style.float = 'none';
+                            
+                            // 내부 div도 인라인 블록으로
+                            const innerDiv = col.querySelector('div');
+                            if (innerDiv) {
+                                innerDiv.style.display = 'inline-block';
+                                innerDiv.style.verticalAlign = 'middle';
+                                innerDiv.style.width = 'auto';
+                            }
+                            
+                            // 버튼 스타일 강제 적용
+                            const button = col.querySelector('button');
+                            if (button) {
+                                button.style.display = 'inline-block';
+                                button.style.marginRight = '8px';
+                                button.style.whiteSpace = 'nowrap';
+                            }
+                        });
+                        
+                        // 컨테이너 자체도 flex로 설정
+                        navContainer.style.display = 'flex';
+                        navContainer.style.flexDirection = 'row';
+                        navContainer.style.alignItems = 'center';
+                        navContainer.style.justifyContent = 'center';
+                        navContainer.style.gap = '16px';
+                        navContainer.style.flexWrap = 'nowrap';
+                    }
+                }, 100);
+                </script>
+                """, unsafe_allow_html=True)
         
         # 액션 버튼 (로그인/사인업) - 오른쪽
         with action_col:
