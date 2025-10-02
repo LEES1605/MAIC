@@ -115,7 +115,7 @@ def render_ios_tabs_simple(
                 if st.button(
                     tab['label'],
                     key=f"{key}_{tab['id']}",
-                    use_container_width=True,
+                    width="stretch",
                     type="primary" if is_active else "secondary"
                 ):
                     # 탭 변경 시 즉시 세션 상태 업데이트

@@ -212,13 +212,12 @@ def main() -> None:
     st.markdown("## 🧭 네비게이션 바 (Navbar)")
     st.markdown("전체 너비를 차지하는 Linear 스타일 네비게이션 바입니다.")
     
-    # 네비게이션 아이템 데이터 (Linear.app 스타일)
+    # 네비게이션 아이템 데이터 (짧은 메뉴명으로 변경)
     nav_items = [
-        {"label": "Product", "href": "/product", "active": False},
-        {"label": "Solutions", "href": "/solutions", "active": False},
-        {"label": "Features", "href": "/features", "active": False},
-        {"label": "Pricing", "href": "/pricing", "active": False},
-        {"label": "Docs", "href": "/docs", "active": False}
+        {"label": "Home", "href": "/home", "active": False},
+        {"label": "About", "href": "/about", "active": False},
+        {"label": "Docs", "href": "/docs", "active": False},
+        {"label": "Blog", "href": "/blog", "active": False}
     ]
     
     # 사용자 메뉴 데이터

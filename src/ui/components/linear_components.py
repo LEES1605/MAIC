@@ -11,7 +11,7 @@ def linear_button(
     variant: str = "primary",
     size: str = "medium",
     disabled: bool = False,
-    use_container_width: bool = False,
+    width: str = "content",
     **kwargs
 ) -> bool:
     """
@@ -23,7 +23,7 @@ def linear_button(
         variant: "primary", "secondary", "danger", "success"
         size: "small", "medium", "large"
         disabled: 비활성화 여부
-        use_container_width: 컨테이너 너비 사용
+        width: 버튼 너비 ("content", "stretch")
         **kwargs: st.button에 전달할 추가 인자
     
     Returns:
@@ -150,7 +150,7 @@ def linear_button(
         label,
         key=key,
         disabled=disabled,
-        use_container_width=use_container_width,
+        width=width,
         **kwargs
     )
 
@@ -303,15 +303,21 @@ def linear_input(
         background: var(--linear-bg-tertiary) !important;
     }
     
-    /* 숫자 입력 필드 스타일 - 텍스트 입력과 동일하게 */
-    .stNumberInput > div > div > input {
-        border: 2px solid var(--linear-border-secondary) !important;
+    /* 숫자 입력 필드 스타일 - 가장 얇은 회색 테두리 */
+    .stNumberInput > div > div > input,
+    div[data-testid="stNumberInput"] > div > div > input,
+    .stNumberInput input[type="number"] {
+        border: 1px solid #404040 !important; /* 가장 얇은 회색 테두리 */
+        border-style: solid !important;
+        border-width: 1px !important;
+        border-color: #404040 !important;
         background: var(--linear-bg-tertiary) !important;
         color: var(--linear-text-primary) !important;
         border-radius: var(--linear-radius-medium) !important;
         padding: 8px 12px !important;
         font-family: var(--linear-font-primary) !important;
         box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.2) !important;
+        outline: none !important;
     }
     
     .stNumberInput > div > div > input:focus {
@@ -846,58 +852,156 @@ def linear_carousel(
         st.markdown('<div class="linear-carousel">', unsafe_allow_html=True)
         
         if title:
-            st.markdown(f'<div class="linear-carousel-title">{title}</div>', unsafe_allow_html=True)
+            # 제목을 컨테이너 안으로 이동하여 정렬 맞춤
+            pass
         
         st.markdown('<div class="linear-carousel-container">', unsafe_allow_html=True)
+        
+        # 제목을 사진과 같은 영역에 배치
+        if title:
+            st.markdown(f'<div class="linear-carousel-title" style="text-align: center; margin-bottom: 1rem; padding: 0 2rem;">{title}</div>', unsafe_allow_html=True)
         
         # 현재 아이템 표시
         if items:
             current_item = items[current_index]
             
-            # 화살표와 아이템을 함께 배치
-            col1, col2, col3 = st.columns([2, 6, 2])
+            # 화살표와 아이템을 함께 배치 - 화살표 영역 축소, 콘텐츠 영역 확대
+            col1, col2, col3 = st.columns([1, 8, 1])
             
-            # 화살표 (이전)
+            # 화살표 (이전) - 300% 확대, 테두리 없음
             with col1:
                 if show_arrows and len(items) > 1:
                     st.markdown('<div style="display: flex; align-items: center; justify-content: center; height: 100%; min-height: 200px;">', unsafe_allow_html=True)
-                    if st.button("‹", key=f"{carousel_key}_prev", help="이전", use_container_width=True):
+                    # 큰 화살표 아이콘 스타일
+                    st.markdown("""
+                    <style>
+                    /* 모든 가능한 선택자로 화살표 테두리 완전 제거 */
+                    .carousel-arrow-prev button,
+                    .carousel-arrow-prev .stButton > button,
+                    div[data-testid="stButton"] > button,
+                    .carousel-arrow-prev div[data-testid="stButton"] > button {
+                        background: transparent !important;
+                        border: none !important;
+                        border-width: 0px !important;
+                        border-style: none !important;
+                        border-color: transparent !important;
+                        outline: none !important;
+                        box-shadow: none !important;
+                        font-size: 3rem !important;
+                        color: var(--linear-text-primary) !important;
+                        padding: 0 !important;
+                        margin: 0 !important;
+                        width: auto !important;
+                        height: auto !important;
+                    }
+                    .carousel-arrow-prev button:hover,
+                    .carousel-arrow-prev .stButton > button:hover,
+                    .carousel-arrow-prev div[data-testid="stButton"] > button:hover {
+                        background: rgba(255, 255, 255, 0.1) !important;
+                        border: none !important;
+                        border-width: 0px !important;
+                        outline: none !important;
+                        box-shadow: none !important;
+                        transform: scale(1.1) !important;
+                    }
+                    .carousel-arrow-prev button:focus,
+                    .carousel-arrow-prev .stButton > button:focus,
+                    .carousel-arrow-prev div[data-testid="stButton"] > button:focus {
+                        border: none !important;
+                        border-width: 0px !important;
+                        outline: none !important;
+                        box-shadow: none !important;
+                    }
+                    </style>
+                    """, unsafe_allow_html=True)
+                    st.markdown('<div class="carousel-arrow-prev">', unsafe_allow_html=True)
+                    if st.button("◀", key=f"{carousel_key}_prev", help="이전"):
                         st.session_state[f"{carousel_key}_current"] = (current_index - 1) % len(items)
                         st.rerun()
                     st.markdown('</div>', unsafe_allow_html=True)
+                    st.markdown('</div>', unsafe_allow_html=True)
             
-            # 현재 아이템
+            # 현재 아이템 - 정렬 조정
             with col2:
                 st.markdown('<div class="linear-carousel-item">', unsafe_allow_html=True)
                 
-                # 이미지
+                # 이미지 - 약간 왼쪽으로 이동
                 if "image" in current_item and current_item["image"]:
-                    st.image(current_item["image"], use_container_width=True)
+                    st.markdown('<div style="display: flex; justify-content: center; margin-left: -20px; margin-bottom: 1rem;">', unsafe_allow_html=True)
+                    st.image(current_item["image"], width="stretch")
+                    st.markdown('</div>', unsafe_allow_html=True)
                 
-                # 제목
+                # 제목 - 사진보다 2배 더 왼쪽으로 이동
                 if "title" in current_item:
-                    st.markdown(f'<div class="linear-carousel-item-title">{current_item["title"]}</div>', unsafe_allow_html=True)
+                    st.markdown(f'<div class="linear-carousel-item-title" style="text-align: center; margin-left: -40px; margin-bottom: 0.5rem;">{current_item["title"]}</div>', unsafe_allow_html=True)
                 
-                # 내용
+                # 내용 - 가운데 정렬 유지
                 if "content" in current_item:
-                    st.markdown(f'<div class="linear-carousel-item-content">{current_item["content"]}</div>', unsafe_allow_html=True)
+                    st.markdown(f'<div class="linear-carousel-item-content" style="text-align: center; margin-bottom: 1rem;">{current_item["content"]}</div>', unsafe_allow_html=True)
                 
-                # 액션 버튼
+                # 액션 버튼 - 사진과 가운데 정렬 (사진과 같은 위치)
                 if "action" in current_item and current_item["action"]:
+                    # 버튼을 사진과 같은 위치로 정렬
+                    st.markdown('<div style="display: flex; justify-content: center; margin-left: -20px;">', unsafe_allow_html=True)
                     action_key = f"carousel_action_{carousel_key}_{current_index}"
                     if linear_button(current_item["action"], variant="primary", size="small", key=action_key):
                         if "action_callback" in current_item:
                             current_item["action_callback"]()
+                    st.markdown('</div>', unsafe_allow_html=True)
                 
                 st.markdown('</div>', unsafe_allow_html=True)
             
-            # 화살표 (다음)
+            # 화살표 (다음) - 300% 확대, 테두리 없음
             with col3:
                 if show_arrows and len(items) > 1:
                     st.markdown('<div style="display: flex; align-items: center; justify-content: center; height: 100%; min-height: 200px;">', unsafe_allow_html=True)
-                    if st.button("›", key=f"{carousel_key}_next", help="다음", use_container_width=True):
+                    # 큰 화살표 아이콘 스타일
+                    st.markdown("""
+                    <style>
+                    /* 모든 가능한 선택자로 화살표 테두리 완전 제거 */
+                    .carousel-arrow-next button,
+                    .carousel-arrow-next .stButton > button,
+                    div[data-testid="stButton"] > button,
+                    .carousel-arrow-next div[data-testid="stButton"] > button {
+                        background: transparent !important;
+                        border: none !important;
+                        border-width: 0px !important;
+                        border-style: none !important;
+                        border-color: transparent !important;
+                        outline: none !important;
+                        box-shadow: none !important;
+                        font-size: 3rem !important;
+                        color: var(--linear-text-primary) !important;
+                        padding: 0 !important;
+                        margin: 0 !important;
+                        width: auto !important;
+                        height: auto !important;
+                    }
+                    .carousel-arrow-next button:hover,
+                    .carousel-arrow-next .stButton > button:hover,
+                    .carousel-arrow-next div[data-testid="stButton"] > button:hover {
+                        background: rgba(255, 255, 255, 0.1) !important;
+                        border: none !important;
+                        border-width: 0px !important;
+                        outline: none !important;
+                        box-shadow: none !important;
+                        transform: scale(1.1) !important;
+                    }
+                    .carousel-arrow-next button:focus,
+                    .carousel-arrow-next .stButton > button:focus,
+                    .carousel-arrow-next div[data-testid="stButton"] > button:focus {
+                        border: none !important;
+                        border-width: 0px !important;
+                        outline: none !important;
+                        box-shadow: none !important;
+                    }
+                    </style>
+                    """, unsafe_allow_html=True)
+                    st.markdown('<div class="carousel-arrow-next">', unsafe_allow_html=True)
+                    if st.button("▶", key=f"{carousel_key}_next", help="다음"):
                         st.session_state[f"{carousel_key}_current"] = (current_index + 1) % len(items)
                         st.rerun()
+                    st.markdown('</div>', unsafe_allow_html=True)
                     st.markdown('</div>', unsafe_allow_html=True)
         
         st.markdown('</div>', unsafe_allow_html=True)
@@ -1008,7 +1112,7 @@ def linear_card_with_image(
         if image_position == "top":
             # 이미지가 위에
             if image_url:
-                st.image(image_url, caption=image_alt, use_container_width=True)
+                st.image(image_url, caption=image_alt, width="stretch")
             st.markdown(f'<div class="linear-image-card-title">{title}</div>', unsafe_allow_html=True)
             st.markdown(f'<div class="linear-image-card-content">{content}</div>', unsafe_allow_html=True)
             
@@ -1017,7 +1121,7 @@ def linear_card_with_image(
             col1, col2 = st.columns([1, 2])
             with col1:
                 if image_url:
-                    st.image(image_url, caption=image_alt, use_container_width=True)
+                    st.image(image_url, caption=image_alt, width="stretch")
             with col2:
                 st.markdown(f'<div class="linear-image-card-title">{title}</div>', unsafe_allow_html=True)
                 st.markdown(f'<div class="linear-image-card-content">{content}</div>', unsafe_allow_html=True)
@@ -1030,14 +1134,14 @@ def linear_card_with_image(
                 st.markdown(f'<div class="linear-image-card-content">{content}</div>', unsafe_allow_html=True)
             with col2:
                 if image_url:
-                    st.image(image_url, caption=image_alt, use_container_width=True)
+                    st.image(image_url, caption=image_alt, width="stretch")
                     
         elif image_position == "bottom":
             # 이미지가 아래에
             st.markdown(f'<div class="linear-image-card-title">{title}</div>', unsafe_allow_html=True)
             st.markdown(f'<div class="linear-image-card-content">{content}</div>', unsafe_allow_html=True)
             if image_url:
-                st.image(image_url, caption=image_alt, use_container_width=True)
+                st.image(image_url, caption=image_alt, width="stretch")
         
         # 액션 버튼
         if action_button:
@@ -1324,23 +1428,186 @@ def linear_navbar(
     if brand_logo:
         brand_logo_html = f'<img src="{brand_logo}" class="linear-navbar-logo" alt="Logo">'
     
-    # 완전한 네비게이션 바 HTML
-    navbar_html = f"""
-    <div class="linear-navbar">
-        <div class="linear-navbar-container">
-            <div class="linear-navbar-brand">
-                {brand_logo_html}
-                <span class="linear-navbar-brand-name">{brand_name}</span>
-            </div>
-            <div class="linear-navbar-nav">
-                {nav_html}
-            </div>
-            {user_html}
-        </div>
-    </div>
-    """
-    
-    st.markdown(navbar_html, unsafe_allow_html=True)
+    # Streamlit 네이티브 컴포넌트로 네비게이션 바 구현
+    with st.container():
+        # 컨테이너에 CSS 클래스 적용
+        st.markdown('<div class="navbar-container">', unsafe_allow_html=True)
+        # Linear 스타일 네비게이션 바 CSS
+        st.markdown("""
+        <style>
+        .linear-navbar-wrapper {
+            background: rgba(20, 20, 25, 0.98) !important; /* 더 진한 배경으로 구분 */
+            backdrop-filter: blur(20px) !important;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.15) !important; /* 더 진한 실선 */
+            padding: 0 !important;
+            margin: -1rem -1rem 2rem -1rem !important;
+            width: calc(100% + 2rem) !important;
+            position: sticky !important;
+            top: 0 !important;
+            z-index: 1000 !important;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3) !important; /* 그림자 추가 */
+        }
+        
+        .linear-navbar-content {
+            max-width: 1200px !important;
+            margin: 0 auto !important;
+            padding: 12px 24px !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: space-between !important;
+            height: 64px !important;
+        }
+        
+        .linear-navbar-brand {
+            display: flex !important;
+            align-items: center !important;
+            color: white !important;
+            font-weight: 600 !important;
+            font-size: 1.1rem !important;
+            text-decoration: none !important;
+        }
+        
+        .linear-navbar-nav {
+            display: flex !important;
+            align-items: center !important;
+            gap: 32px !important;
+            flex: 1 !important;
+            justify-content: center !important;
+        }
+        
+        .linear-navbar-actions {
+            display: flex !important;
+            align-items: center !important;
+            gap: 12px !important;
+        }
+        
+        /* 네비게이션 메뉴 버튼 스타일 - 모든 선택자로 테두리 완전 제거 */
+        .linear-navbar-nav button,
+        .linear-navbar-nav .stButton > button,
+        .linear-navbar-nav div[data-testid="stButton"] > button {
+            background: transparent !important;
+            border: none !important;
+            border-width: 0px !important;
+            border-style: none !important;
+            border-color: transparent !important;
+            outline: none !important;
+            box-shadow: none !important;
+            color: rgba(255, 255, 255, 0.9) !important;
+            font-size: 0.9rem !important;
+            font-weight: 600 !important; /* 글씨 굵게 */
+            padding: 8px 16px !important;
+            border-radius: 6px !important;
+            transition: all 0.2s ease !important;
+            height: auto !important;
+            min-height: auto !important;
+            white-space: nowrap !important; /* 한줄 강제 */
+        }
+        
+        .linear-navbar-nav button:hover,
+        .linear-navbar-nav .stButton > button:hover,
+        .linear-navbar-nav div[data-testid="stButton"] > button:hover {
+            background: rgba(255, 255, 255, 0.1) !important;
+            color: white !important;
+            border: none !important;
+            border-width: 0px !important;
+            outline: none !important;
+            box-shadow: none !important;
+        }
+        
+        .linear-navbar-nav button:focus,
+        .linear-navbar-nav .stButton > button:focus,
+        .linear-navbar-nav div[data-testid="stButton"] > button:focus {
+            border: none !important;
+            border-width: 0px !important;
+            outline: none !important;
+            box-shadow: none !important;
+        }
+        
+        /* 액션 버튼 스타일 (로그인/사인업) */
+        .linear-navbar-actions .stButton > button {
+            font-size: 0.9rem !important;
+            font-weight: 500 !important;
+            padding: 8px 16px !important;
+            border-radius: 6px !important;
+            transition: all 0.2s ease !important;
+            height: auto !important;
+            min-height: auto !important;
+        }
+        
+        .linear-login-btn .stButton > button {
+            background: transparent !important;
+            border: 1px solid rgba(255, 255, 255, 0.2) !important;
+            color: rgba(255, 255, 255, 0.8) !important;
+        }
+        
+        .linear-login-btn .stButton > button:hover {
+            background: rgba(255, 255, 255, 0.1) !important;
+            color: white !important;
+        }
+        
+        .linear-signup-btn .stButton > button {
+            background: white !important;
+            border: 1px solid white !important;
+            color: #000 !important;
+        }
+        
+        .linear-signup-btn .stButton > button:hover {
+            background: rgba(255, 255, 255, 0.9) !important;
+        }
+        </style>
+        """, unsafe_allow_html=True)
+        
+        # Linear 스타일 레이아웃 - 로고, 메뉴, 액션 버튼
+        st.markdown('<div class="linear-navbar-wrapper">', unsafe_allow_html=True)
+        st.markdown('<div class="linear-navbar-content">', unsafe_allow_html=True)
+        
+        # 3개 영역으로 분할: 브랜드, 네비게이션, 액션
+        brand_col, nav_col, action_col = st.columns([2, 6, 2])
+        
+        # 브랜드 (로고) - 왼쪽
+        with brand_col:
+            st.markdown(f'<div class="linear-navbar-brand">🔷 {brand_name}</div>', unsafe_allow_html=True)
+        
+        # 네비게이션 메뉴 - 가운데
+        with nav_col:
+            if nav_items:
+                st.markdown('<div class="linear-navbar-nav">', unsafe_allow_html=True)
+                # 메뉴 아이템들을 가로로 배치
+                menu_cols = st.columns(len(nav_items))
+                for i, item in enumerate(nav_items):
+                    with menu_cols[i]:
+                        if st.button(
+                            item["label"], 
+                            key=f"navbar_menu_{item['label']}_{i}",
+                            help=f"{item['label']} 페이지로 이동"
+                        ):
+                            st.info(f"{item['label']} 클릭됨")
+                st.markdown('</div>', unsafe_allow_html=True)
+        
+        # 액션 버튼 (로그인/사인업) - 오른쪽
+        with action_col:
+            st.markdown('<div class="linear-navbar-actions">', unsafe_allow_html=True)
+            login_col, signup_col = st.columns(2)
+            
+            with login_col:
+                st.markdown('<div class="linear-login-btn">', unsafe_allow_html=True)
+                if st.button("Log in", key="navbar_login"):
+                    st.info("로그인 클릭됨")
+                st.markdown('</div>', unsafe_allow_html=True)
+            
+            with signup_col:
+                st.markdown('<div class="linear-signup-btn">', unsafe_allow_html=True)
+                if st.button("Sign up", key="navbar_signup"):
+                    st.info("사인업 클릭됨")
+                st.markdown('</div>', unsafe_allow_html=True)
+            
+            st.markdown('</div>', unsafe_allow_html=True)
+        
+        st.markdown('</div>', unsafe_allow_html=True)  # linear-navbar-content
+        st.markdown('</div>', unsafe_allow_html=True)  # linear-navbar-wrapper
+        
+        # 컨테이너 닫기
+        st.markdown('</div>', unsafe_allow_html=True)
     
     # JavaScript로 DOM 직접 조작하여 레이아웃과 색상 강제 적용
     st.markdown(f"""
