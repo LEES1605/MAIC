@@ -1,0 +1,120 @@
+{
+  "mcpServers": {
+    "git-advanced": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@cyanheads/git-mcp-server"
+      ],
+      "env": {}
+    },
+    "github-integration": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "github-mcp-server"
+      ],
+      "env": {}
+    },
+    "playwright": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@executeautomation/playwright-mcp-server"
+      ]
+    },
+    "supabase": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "supabase-mcp"
+      ],
+      "env": {
+        "SUPABASE_URL": "https://nftkhaycjhallpwxokgt.supabase.co",
+        "SUPABASE_SERVICE_ROLE_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5mdGtoYXljamhhbGxwd3hva2d0Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1OTMyMTk5OCwiZXhwIjoyMDc0ODk3OTk4fQ.VaDgWVTdX4BtkeSysQnlrvFDA9Z-k1Mszu0uvLrWXgA"
+      }
+    },
+    "python-tools": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "python-mcp-server"
+      ],
+      "env": {}
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem"
+      ],
+      "env": {}
+    },
+    "ruff": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "ruff-mcp-server"
+      ],
+      "env": {}
+    },
+    "ripgrep": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "ripgrep-mcp-server"
+      ],
+      "env": {}
+    },
+    "openai": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "openai-mcp-server"
+      ],
+      "env": {
+        "OPENAI_API_KEY": "your-openai-api-key-here"
+      }
+    },
+    "markdown": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "markdown-mcp-server"
+      ],
+      "env": {}
+    },
+    "sqlite": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-sqlite"
+      ],
+      "env": {}
+    },
+    "http": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "http-mcp-server"
+      ],
+      "env": {}
+    },
+    "json-schema": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "json-schema-mcp-server"
+      ],
+      "env": {}
+    },
+    "logs": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "log-analysis-mcp"
+      ],
+      "env": {}
+    }
+  }
+}

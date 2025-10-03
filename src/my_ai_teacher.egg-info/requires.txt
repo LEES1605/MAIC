@@ -1,0 +1,15 @@
+streamlit>=1.32
+pydantic<3,>=2
+pydantic-settings<3,>=2
+llama-index-core>=0.10
+google-api-python-client>=2.136.0
+google-auth>=2.30.0
+pypdf<7,>=6
+
+[dev]
+mypy>=1.7
+ruff>=0.5
+bandit>=1.7
+pytest>=8
+types-requests
+types-PyYAML
