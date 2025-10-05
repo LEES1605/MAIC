@@ -43,19 +43,7 @@ def errlog(msg: str, where: str = "", exc: Exception | None = None) -> None:
         pass
 
 
-def persist_dir_safe() -> Path:
-    """
-    안전한 persist 디렉터리 반환.
-    
-    Returns:
-        persist 디렉터리 Path 객체
-    """
-    try:
-        from src.core.persist import effective_persist_dir
-        return effective_persist_dir()
-    except Exception:
-        # 폴백: 홈 디렉터리의 .maic/persist 사용
-        return Path.home() / ".maic" / "persist"
+# persist_dir_safe 함수는 src.services.index_actions._persist_dir_safe로 통합됨
 
 
 def safe_import(module_name: str, fallback: Any = None) -> Any:

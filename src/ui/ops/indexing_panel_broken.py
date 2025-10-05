@@ -26,7 +26,7 @@ try:
     def is_ready_text(text): return "ready" in str(text).lower()
 
 # 공통 유틸리티 함수 import
-from src.common.utils import persist_dir_safe as _persist_dir_safe
+from src.services.index_actions import _persist_dir_safe
 
 
 def render_admin_indexing_panel() -> None:

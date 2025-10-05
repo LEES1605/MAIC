@@ -5,40 +5,40 @@ import os
 from pathlib import Path
 from typing import Any, Optional
 
-# 구현 선택:
-# 1) pydantic-settings(v2)        → 최우선
-# 2) pydantic(BaseSettings, v1)   → 차선
-# 3) SIMPLE(무의존 폴백)          → 둘 다 없거나 v2만 설치된 경우
+# 설정 관리 구현 선택 (우선순위: v2 > v1 > SIMPLE)
 _IMPL: str = "SIMPLE"
+BaseSettings: Any = None
+SettingsConfigDict: Any = None
 
-# 폴백용: 외부 패키지 유무와 무관하게 안전하게 재할당 가능하도록 Any로 선언
-BaseSettings: Any
-SettingsConfigDict: Any
-
-try:
-    # v2 (권장) — 별도 패키지
-    from pydantic_settings import (  # noqa: F401
-        BaseSettings as _P2Base,
-        SettingsConfigDict as _P2Cfg,
-    )
-
-    BaseSettings = _P2Base
-    SettingsConfigDict = _P2Cfg
-    _IMPL = "P2"
-except Exception:
+def _setup_pydantic_fallback() -> None:
+    """Pydantic 설정 관리자 초기화 (v2 우선, v1 폴백, SIMPLE 최종)"""
+    global _IMPL, BaseSettings, SettingsConfigDict
+    
     try:
-        # v1 — pydantic 내 BaseSettings (v2에선 ImportError 유발)
-        from pydantic import BaseSettings as _P1Base  # noqa: F401
-
-        class _P1Cfg(dict):
-            pass
-
+        # v2 (권장) — 별도 패키지
+        from pydantic_settings import BaseSettings as _P2Base, SettingsConfigDict as _P2Cfg
+        BaseSettings = _P2Base
+        SettingsConfigDict = _P2Cfg
+        _IMPL = "P2"
+        return
+    except ImportError:
+        pass
+    
+    try:
+        # v1 — pydantic 내 BaseSettings
+        from pydantic import BaseSettings as _P1Base
         BaseSettings = _P1Base
-        SettingsConfigDict = _P1Cfg
+        SettingsConfigDict = dict
         _IMPL = "P1"
-    except Exception:
-        # v1/v2 모두 사용 불가 → SIMPLE 폴백으로 진행
-        _IMPL = "SIMPLE"
+        return
+    except ImportError:
+        pass
+    
+    # v1/v2 모두 사용 불가 → SIMPLE 폴백
+    _IMPL = "SIMPLE"
+
+# 설정 관리자 초기화
+_setup_pydantic_fallback()
 # ===== [01] END ===============================================================
 
 

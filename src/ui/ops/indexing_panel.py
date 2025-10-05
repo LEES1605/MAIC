@@ -17,7 +17,7 @@ try:
     from src.core.persist import effective_persist_dir
     from src.runtime.backup import make_index_backup_zip, upload_index_backup
     from src.runtime.ready import is_ready_text
-    except Exception:
+except Exception:
     # 폴백
     def run_admin_index_job(params): pass
     def effective_persist_dir(): return Path.home() / ".maic" / "persist"
@@ -26,7 +26,7 @@ try:
     def is_ready_text(text): return "ready" in str(text).lower()
 
 # 공통 유틸리티 함수 import
-from src.common.utils import persist_dir_safe as _persist_dir_safe
+from src.services.index_actions import _persist_dir_safe
 
 
 def render_admin_indexing_panel() -> None:
@@ -114,8 +114,8 @@ def render_admin_indexing_panel() -> None:
                 if "new" in ready_content.lower():
                     has_new_files = True
                     new_files_count = 1  # 간단한 예시
-        except Exception:
-            pass
+    except Exception:
+        pass
 
     # 메인 컨테이너
     with st.container():
@@ -130,13 +130,13 @@ def render_admin_indexing_panel() -> None:
         with col1:
             # 인덱스 상태
             st.markdown("**인덱스 상태**")
-    if local_ready and is_latest:
+            if local_ready and is_latest:
                 st.info("준비완료")
                 st.caption("최신 릴리스")
-    elif local_ready:
+            elif local_ready:
                 st.info("로컬사용")
                 st.caption("복원 필요")
-    else:
+            else:
                 st.error("복원필요")
                 st.caption("인덱스 없음")
         
@@ -150,7 +150,7 @@ def render_admin_indexing_panel() -> None:
                 else:
                     st.info("최신")
                     st.caption("동기화 완료")
-    else:
+            else:
                 st.info("스캔중")
                 st.caption("처리 중")
         
@@ -159,7 +159,7 @@ def render_admin_indexing_panel() -> None:
             if has_new_files:
                 st.markdown("**신규파일**")
                 st.metric("새파일", f"{new_files_count}개")
-    else:
+            else:
                 st.markdown("**신규파일**")
                 st.metric("새파일", "0개")
         
@@ -191,7 +191,7 @@ def render_admin_indexing_panel() -> None:
                             st.success("인덱싱 완료!")
                         else:
                             st.error("인덱싱 실패")
-        except Exception as e:
+                except Exception as e:
                     st.error(f"오류: {e}")
         
         with col2:
@@ -205,7 +205,7 @@ def render_admin_indexing_panel() -> None:
                             st.success(f"업로드 완료: {result}")
                         else:
                             st.error("백업 파일 생성 실패")
-        except Exception as e:
+                except Exception as e:
                     st.error(f"오류: {e}")
 
 

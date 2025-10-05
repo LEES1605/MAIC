@@ -56,13 +56,17 @@ def _read_text_pdf(path: Path) -> str:
         try:
             mod = importlib.import_module("pypdf")
             PdfReader = getattr(mod, "PdfReader", None)
-        except Exception:
+        except (ImportError, AttributeError) as e:
+            from src.common.utils import errlog
+            errlog(f"pypdf import 실패: {e}", "PDF 처리", e)
             PdfReader = None
         if PdfReader is None:
             try:
                 mod2 = importlib.import_module("PyPDF2")
                 PdfReader = getattr(mod2, "PdfReader", None)
-            except Exception:
+            except (ImportError, AttributeError) as e:
+                from src.common.utils import errlog
+                errlog(f"PyPDF2 import 실패: {e}", "PDF 처리", e)
                 PdfReader = None
         if PdfReader is None:
             return ""
@@ -72,12 +76,16 @@ def _read_text_pdf(path: Path) -> str:
         for page in getattr(reader, "pages", []):
             try:
                 t = page.extract_text() or ""
-            except Exception:
+            except (AttributeError, IndexError) as e:
+                from src.common.utils import errlog
+                errlog(f"PDF 페이지 추출 실패: {e}", "PDF 처리", e)
                 t = ""
             if t:
                 txt_parts.append(t)
         return "\n".join(txt_parts).strip()
-    except Exception:
+    except (OSError, IOError, AttributeError) as e:
+        from src.common.utils import errlog
+        errlog(f"PDF 파일 처리 실패: {e}", "PDF 처리", e)
         return ""
 
 
@@ -211,7 +219,9 @@ def search(
         title = docs[doc_id]["title"]
         try:
             text = _read_text(Path(path))
-        except Exception:
+        except (OSError, IOError, UnicodeDecodeError) as e:
+            from src.common.utils import errlog
+            errlog(f"파일 읽기 실패: {e}", "RAG 검색", e)
             text = ""
         needle = q_toks[0]
         snippet = _make_snippet(text, needle) if text else ""
@@ -300,14 +310,24 @@ def get_or_build_index(dataset_dir: str, *, use_cache: bool = True) -> Dict:
     cpath = _cache_path_for(dataset_dir)
     if cpath.exists():
         try:
-            return load_index(str(cpath))
-        except Exception:
+            # 성능 최적화: 파일 수정 시간 체크로 불필요한 로딩 방지
+            cache_stat = cpath.stat()
+            dataset_path = Path(dataset_dir)
+            if dataset_path.exists():
+                dataset_stat = dataset_path.stat()
+                if cache_stat.st_mtime >= dataset_stat.st_mtime:
+                    return load_index(str(cpath))
+        except (OSError, IOError) as e:
+            from src.common.utils import errlog
+            errlog(f"캐시 파일 체크 실패: {e}", "RAG 검색", e)
             pass
 
     idx = build_index(dataset_dir)
     try:
         save_index(idx, str(cpath))
-    except Exception:
+    except (OSError, IOError) as e:
+        from src.common.utils import errlog
+        errlog(f"캐시 저장 실패: {e}", "RAG 검색", e)
         pass
     return idx
 # ========================== [02] PERSISTENT CACHE LAYER — END ==========================

@@ -220,13 +220,20 @@ def call_with_fallback(
             if (stream or cb) and text:
                 try:
                     if cb is not None:
-                        for ch in text:
+                        # 성능 최적화: 청크 단위로 처리 (문자 단위 대신)
+                        chunk_size = 10  # 10자씩 묶어서 처리
+                        for i in range(0, len(text), chunk_size):
+                            chunk = text[i:i + chunk_size]
                             try:
-                                cb(ch)  # 한 토큰(여기선 글자)씩 전달
-                            except Exception:
+                                cb(chunk)  # 청크 단위로 전달
+                            except (ValueError, TypeError, AttributeError) as e:
                                 # 콜백 오류는 UX를 깨지 않도록 무시
+                                from src.common.utils import errlog
+                                errlog(f"콜백 오류: {e}", "stream_llm", e)
                                 pass
-                except Exception:
+                except (RuntimeError, OSError) as e:
+                    from src.common.utils import errlog
+                    errlog(f"스트리밍 처리 오류: {e}", "stream_llm", e)
                     pass
 
             return {"ok": True, "provider": name, "text": text, "error": None}
