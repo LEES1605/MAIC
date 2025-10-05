@@ -1,17 +1,55 @@
 {
   "mcpServers": {
+    "GitKraken": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@cyanheads/git-mcp-server"
+      ],
+      "env": {}
+    },
+    "playwright": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@executeautomation/playwright-mcp-server"
+      ],
+      "env": {}
+    },
     "supabase": {
       "command": "npx",
       "args": [
         "-y",
-        "@supabase/mcp-server-supabase@latest",
-        "--access-token",
-        "YOUR_SUPABASE_ACCESS_TOKEN"
+        "supabase-mcp"
       ],
       "env": {
-        "SUPABASE_URL": "YOUR_PROJECT_URL",
-        "SUPABASE_SERVICE_ROLE_KEY": "YOUR_SERVICE_ROLE_KEY"
+        "SUPABASE_URL": "https://nftkhaycjhallpwxokgt.supabase.co",
+        "SUPABASE_SERVICE_ROLE_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5mdGtoYXljamhhbGxwd3hva2d0Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1OTMyMTk5OCwiZXhwIjoyMDc0ODk3OTk4fQ.VaDgWVTdX4BtkeSysQnlrvFDA9Z-k1Mszu0uvLrWXgA"
       }
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem"
+      ],
+      "env": {}
+    },
+    "memory": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-memory"
+      ],
+      "env": {}
+    },
+    "sequential-thinking": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-sequential-thinking"
+      ],
+      "env": {}
     }
   }
 }
