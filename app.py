@@ -666,13 +666,22 @@ def _boot_auto_restore_index() -> None:
 
     # --- 원격 최신 메타 ---
     _idx("step_set", 2, "run", "원격 릴리스 조회")
+    
+    # 환경 변수 우선, 그 다음 secrets 사용
     repo_full = os.getenv("GITHUB_REPO", "")
     token = os.getenv("GITHUB_TOKEN", None)
+    
     try:
         if "st" in globals() and st is not None:
+            # Streamlit secrets에서 가져오기 (온라인 배포용)
             repo_full = st.secrets.get("GITHUB_REPO", repo_full)
             token = st.secrets.get("GITHUB_TOKEN", token)
-    except Exception:
+            
+            # 로컬 개발용 디버그 정보
+            if st.secrets.get("MAIC_LOCAL_DEV", False):
+                print(f"[DEBUG] 로컬 개발 모드: {st.secrets.get('MAIC_DEBUG', False)}")
+    except Exception as e:
+        print(f"[DEBUG] secrets 접근 실패: {e}")
         pass
 
     if not repo_full or "/" not in str(repo_full):

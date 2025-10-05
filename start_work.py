@@ -93,43 +93,86 @@ def sync_mcp_settings():
                 if result.returncode == 0:
                     print(f"[OK] npm 버전: {result.stdout.strip()}")
                     
-                    # 패키지 캐시 확인 (선택사항)
-                    install_choice = input("NPX 패키지들을 미리 캐시하시겠습니까? (y/n): ").strip().lower()
-                    if install_choice == 'y':
-                        print("[INFO] NPX 패키지 캐시 중...")
-                        for package in npx_packages:
-                            try:
-                                print(f"   캐시 중: {package}")
-                                subprocess.run(f"npx -y {package} --help", 
-                                             shell=True, capture_output=True, timeout=30)
-                                print(f"   [OK] {package} 캐시 완료")
-                            except subprocess.TimeoutExpired:
-                                print(f"   [TIMEOUT] {package} 캐시 타임아웃 (정상)")
-                            except Exception as e:
-                                print(f"   [ERROR] {package} 캐시 실패: {e}")
-                        print("[OK] NPX 패키지 캐시 완료!")
+                    # 패키지 자동 캐시 (사용자 입력 없이)
+                    print("[INFO] NPX 패키지 자동 캐시 중...")
+                    for package in npx_packages:
+                        try:
+                            print(f"   캐시 중: {package}")
+                            subprocess.run(f"npx -y {package} --help", 
+                                         shell=True, capture_output=True, timeout=30)
+                            print(f"   [OK] {package} 캐시 완료")
+                        except subprocess.TimeoutExpired:
+                            print(f"   [TIMEOUT] {package} 캐시 타임아웃 (정상)")
+                        except Exception as e:
+                            print(f"   [ERROR] {package} 캐시 실패: {e}")
+                    print("[OK] NPX 패키지 캐시 완료!")
                 else:
                     print("[WARN] npm이 설치되지 않았습니다. Node.js를 설치하세요.")
             except Exception as e:
                 print(f"[WARN] npm 확인 실패: {e}")
         
-        # 4. 환경 변수 확인
-        print("\n[INFO] 환경 변수 확인...")
-        env_vars_needed = set()
+        # 4. 환경 변수 자동 설정
+        print("\n[INFO] 환경 변수 설정...")
         
-        for server_name, server_config in mcp_servers.items():
-            env = server_config.get('env', {})
-            for env_key, env_value in env.items():
-                if env_value and 'your-' in str(env_value).lower():
-                    env_vars_needed.add(env_key)
+        # GitHub 설정 (MAIC 프로젝트용)
+        github_repo = "daeha-DEAN-DESKTOP/LOCAL_MAIC"
+        github_token = os.getenv("GITHUB_TOKEN")
         
-        if env_vars_needed:
-            print("[WARN] 다음 환경 변수들을 설정해야 합니다:")
-            for env_var in env_vars_needed:
-                print(f"   - {env_var}")
-            print("환경 변수는 시스템 설정에서 직접 설정하거나 .env 파일을 사용하세요.")
+        # 로컬 개발용 secrets 파일 생성
+        streamlit_dir = Path(".streamlit")
+        streamlit_dir.mkdir(exist_ok=True)
+        
+        secrets_file = streamlit_dir / "secrets.toml"
+        if not secrets_file.exists():
+            secrets_content = f'''# 로컬 개발용 secrets 파일
+# 온라인 배포 시에는 Streamlit Cloud의 secrets를 사용합니다.
+
+# GitHub 설정 (자동 복원용)
+GITHUB_REPO = "{github_repo}"
+GITHUB_TOKEN = "your-github-token-here"
+
+# Supabase 설정 (선택사항)
+SUPABASE_URL = "your-supabase-url-here"
+SUPABASE_SERVICE_ROLE_KEY = "your-supabase-service-role-key-here"
+
+# OpenAI 설정 (선택사항)
+OPENAI_API_KEY = "your-openai-api-key-here"
+
+# 기타 설정
+MAIC_DEBUG = true
+MAIC_LOCAL_DEV = true
+'''
+            secrets_file.write_text(secrets_content, encoding="utf-8")
+            print(f"[OK] 로컬 secrets 파일 생성: {secrets_file}")
+            print("   GitHub 토큰을 secrets.toml에 설정하면 자동 복원이 가능합니다.")
         else:
-            print("[OK] 모든 환경 변수가 설정되어 있습니다.")
+            print(f"[OK] 로컬 secrets 파일 존재: {secrets_file}")
+        
+        if not github_token:
+            print("[WARN] GITHUB_TOKEN이 설정되지 않았습니다.")
+            print("   GitHub 토큰을 설정하면 자동 복원이 가능합니다.")
+            print("   토큰 설정 방법: https://github.com/settings/tokens")
+            print(f"   또는 .streamlit/secrets.toml 파일에서 GITHUB_TOKEN을 설정하세요.")
+        else:
+            os.environ["GITHUB_REPO"] = github_repo
+            print(f"[OK] GITHUB_REPO 설정: {github_repo}")
+            print("[OK] GITHUB_TOKEN 설정됨")
+        
+        # Supabase 설정 (선택사항)
+        supabase_url = os.getenv("SUPABASE_URL")
+        supabase_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+        
+        if supabase_url and supabase_key:
+            print("[OK] Supabase 설정됨")
+        else:
+            print("[INFO] Supabase 설정은 선택사항입니다.")
+        
+        # OpenAI 설정 (선택사항)
+        openai_key = os.getenv("OPENAI_API_KEY")
+        if openai_key:
+            print("[OK] OpenAI API 키 설정됨")
+        else:
+            print("[INFO] OpenAI API 키는 선택사항입니다.")
         
         # 5. 백업 생성
         backup_dir = Path(".cursor") / "backups"
@@ -337,20 +380,15 @@ def check_git_repo():
     except:
         pass
     
-    # Git 저장소가 아니면 자동 클론
-    print("Git 저장소가 아닙니다. 자동으로 클론하시겠습니까? (y/n): ", end="")
-    if input().lower() != 'y':
-        return False
+    # Git 저장소가 아니면 자동 클론 (사용자 입력 없이)
+    print("Git 저장소가 아닙니다. 자동으로 클론합니다...")
     
     # 현재 디렉토리 확인
     current_dir = Path.cwd()
     print(f"현재 위치: {current_dir}")
     
-    # 클론할 위치 선택
-    clone_path = input("클론할 위치를 입력하세요 (엔터시 현재 위치): ").strip()
-    if not clone_path:
-        clone_path = str(current_dir.parent / "MAIC")
-    
+    # 자동으로 클론할 위치 설정
+    clone_path = str(current_dir.parent / "MAIC")
     print(f"클론 위치: {clone_path}")
     
     # GitHub에서 클론
@@ -382,9 +420,7 @@ def main():
     
     # 2. 최신 코드 가져오기
     if not run_command("git pull origin main", "최신 코드 가져오기"):
-        print("Git pull 실패. 계속 진행하시겠습니까? (y/n): ", end="")
-        if input().lower() != 'y':
-            return
+        print("Git pull 실패. 계속 진행합니다...")
     
     # 2.5. Linear 컴포넌트 규칙 자동 동기화
     sync_cursor_rules()
@@ -409,145 +445,110 @@ def main():
     print("\n작업 시작 준비 완료!")
     print("작업 완료 후 'python end_work.py'를 실행하세요.")
     
-    # Cursor 설정 및 MCP 동기화 옵션
-    sync_choice = input("\nCursor 설정과 MCP를 동기화하시겠습니까? (y/n): ").strip().lower()
-    if sync_choice == 'y':
-        sync_mcp_settings()
+    # Cursor 설정 및 MCP 자동 동기화 (사용자 입력 없이)
+    print("\n[MCP 설정 자동 동기화] 시작...")
+    sync_mcp_settings()
+    
+    # 자동 설정 검증
+    print("\n[자동 설정 검증] 시작...")
+    try:
+        from scripts.auto_setup_verification import main as verify_setup
+        if verify_setup():
+            print("\n[OK] 모든 설정이 완료되었습니다!")
+        else:
+            print("\n[WARN] 일부 설정에 문제가 있습니다. 확인해주세요.")
+    except Exception as e:
+        print(f"\n[ERROR] 설정 검증 실패: {e}")
+        print("수동으로 설정을 확인해주세요.")
+    
+    # Cursor 자동 재시작 (사용자 입력 없이)
+    print("\n[Cursor 자동 재시작] 시작...")
+    try:
+        import time
+        import os
         
+        # psutil 모듈 확인 및 설치
         try:
-            from sync_cursor_settings import restore_cursor_settings
-            if restore_cursor_settings():
-                print("Cursor 설정 복원 완료!")
-                
-                # Cursor 자동 재시작 옵션
-                restart_choice = input("Cursor를 자동으로 재시작하시겠습니까? (y/n): ").strip().lower()
-                if restart_choice == 'y':
-                    print("Cursor를 재시작합니다...")
-                    
-                    # psutil 모듈 확인 및 설치
-                    try:
-                        import psutil
-                    except ImportError:
-                        print("psutil 모듈이 없습니다. 자동으로 설치합니다...")
-                        try:
-                            subprocess.run([sys.executable, "-m", "pip", "install", "psutil"], 
-                                         check=True, capture_output=True)
-                            import psutil
-                            print("[OK] psutil 모듈 설치 완료!")
-                        except subprocess.CalledProcessError as e:
-                            print(f"[ERROR] psutil 설치 실패: {e}")
-                            print("수동으로 설치하세요: pip install psutil")
-                            print("수동으로 Cursor를 재시작하세요.")
-                            return
-                    
-                    try:
-                        import time
-                        import os
-                        
-                        # Cursor 프로세스 찾기 (더 정확한 방법)
-                        cursor_processes = []
-                        for proc in psutil.process_iter(['pid', 'name', 'exe', 'cmdline']):
-                            try:
-                                proc_info = proc.info
-                                if proc_info['name'] and 'cursor' in proc_info['name'].lower():
-                                    cursor_processes.append(proc)
-                                elif proc_info['exe'] and 'cursor' in proc_info['exe'].lower():
-                                    cursor_processes.append(proc)
-                            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-                                continue
-                        
-                        if cursor_processes:
-                            print(f"Cursor 프로세스 {len(cursor_processes)}개 발견")
-                            
-                            # Cursor 프로세스 종료
-                            for proc in cursor_processes:
-                                try:
-                                    proc.terminate()
-                                    print(f"프로세스 {proc.pid} 종료 중...")
-                                except (psutil.NoSuchProcess, psutil.AccessDenied):
-                                    continue
-                            
-                            # 프로세스 완전 종료 대기
-                            print("프로세스 종료 대기 중...")
-                            time.sleep(3)
-                            
-                            # Cursor 재시작
-                            # Cursor 실행 파일 경로 찾기 (더 많은 경로 포함)
-                            cursor_paths = [
-                                r"C:\Users\%USERNAME%\AppData\Local\Programs\cursor\Cursor.exe",
-                                r"C:\Program Files\Cursor\Cursor.exe",
-                                r"C:\Program Files (x86)\Cursor\Cursor.exe",
-                                r"C:\Users\%USERNAME%\AppData\Local\Programs\cursor\cursor.exe",
-                                r"C:\Program Files\cursor\cursor.exe",
-                                r"C:\Program Files (x86)\cursor\cursor.exe"
-                            ]
-                            
-                            cursor_exe = None
-                            for path in cursor_paths:
-                                expanded_path = os.path.expandvars(path)
-                                if os.path.exists(expanded_path):
-                                    cursor_exe = expanded_path
-                                    print(f"Cursor 실행 파일 발견: {cursor_exe}")
-                                    break
-                            
-                            if cursor_exe:
-                                # 현재 작업 디렉토리에서 Cursor 시작
-                                try:
-                                    subprocess.Popen([cursor_exe, str(Path.cwd())], 
-                                                   cwd=str(Path.cwd()),
-                                                   creationflags=subprocess.CREATE_NEW_CONSOLE if os.name == 'nt' else 0)
-                                    print("[OK] Cursor가 자동으로 재시작되었습니다!")
-                                    print("새로운 Cursor 창이 열렸습니다.")
-                                except Exception as e:
-                                    print(f"[ERROR] Cursor 실행 실패: {e}")
-                                    print("수동으로 Cursor를 재시작하세요.")
-                            else:
-                                print("[ERROR] Cursor 실행 파일을 찾을 수 없습니다.")
-                                print("다음 경로들을 확인해보세요:")
-                                for path in cursor_paths:
-                                    expanded_path = os.path.expandvars(path)
-                                    print(f"  - {expanded_path}")
-                                print("수동으로 Cursor를 재시작하세요.")
-                        else:
-                            print("[ERROR] 실행 중인 Cursor 프로세스를 찾을 수 없습니다.")
-                            print("Cursor가 실행 중이 아닐 수 있습니다.")
-                            
-                            # Cursor 실행 파일만 찾아서 실행
-                            cursor_paths = [
-                                r"C:\Users\%USERNAME%\AppData\Local\Programs\cursor\Cursor.exe",
-                                r"C:\Program Files\Cursor\Cursor.exe",
-                                r"C:\Program Files (x86)\Cursor\Cursor.exe"
-                            ]
-                            
-                            cursor_exe = None
-                            for path in cursor_paths:
-                                expanded_path = os.path.expandvars(path)
-                                if os.path.exists(expanded_path):
-                                    cursor_exe = expanded_path
-                                    break
-                            
-                            if cursor_exe:
-                                try:
-                                    subprocess.Popen([cursor_exe, str(Path.cwd())], 
-                                                   cwd=str(Path.cwd()),
-                                                   creationflags=subprocess.CREATE_NEW_CONSOLE if os.name == 'nt' else 0)
-                                    print("[OK] Cursor가 시작되었습니다!")
-                                except Exception as e:
-                                    print(f"[ERROR] Cursor 실행 실패: {e}")
-                                    print("수동으로 Cursor를 시작하세요.")
-                            else:
-                                print("[ERROR] Cursor 실행 파일을 찾을 수 없습니다.")
-                                print("수동으로 Cursor를 시작하세요.")
-                            
-                    except Exception as e:
-                        print(f"[ERROR] 자동 재시작 실패: {e}")
-                        print("수동으로 Cursor를 재시작하세요.")
-                else:
-                    print("수동으로 Cursor를 재시작하세요.")
+            import psutil
         except ImportError:
-            print("Cursor 설정 동기화 스크립트를 찾을 수 없습니다.")
-        except Exception as e:
-            print(f"Cursor 설정 동기화 실패: {e}")
+            print("psutil 모듈이 없습니다. 자동으로 설치합니다...")
+            try:
+                subprocess.run([sys.executable, "-m", "pip", "install", "psutil"], 
+                             check=True, capture_output=True)
+                import psutil
+                print("[OK] psutil 모듈 설치 완료!")
+            except subprocess.CalledProcessError as e:
+                print(f"[ERROR] psutil 설치 실패: {e}")
+                print("수동으로 설치하세요: pip install psutil")
+                print("수동으로 Cursor를 재시작하세요.")
+                return
+        
+        # Cursor 프로세스 찾기
+        cursor_processes = []
+        for proc in psutil.process_iter(['pid', 'name', 'exe', 'cmdline']):
+            try:
+                proc_info = proc.info
+                if proc_info['name'] and 'cursor' in proc_info['name'].lower():
+                    cursor_processes.append(proc)
+                elif proc_info['exe'] and 'cursor' in proc_info['exe'].lower():
+                    cursor_processes.append(proc)
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                continue
+        
+        if cursor_processes:
+            print(f"Cursor 프로세스 {len(cursor_processes)}개 발견")
+            
+            # Cursor 프로세스 종료
+            for proc in cursor_processes:
+                try:
+                    proc.terminate()
+                    print(f"프로세스 {proc.pid} 종료 중...")
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+            
+            # 프로세스 완전 종료 대기
+            print("프로세스 종료 대기 중...")
+            time.sleep(3)
+        
+        # Cursor 재시작
+        cursor_paths = [
+            r"C:\Users\%USERNAME%\AppData\Local\Programs\cursor\Cursor.exe",
+            r"C:\Program Files\Cursor\Cursor.exe",
+            r"C:\Program Files (x86)\Cursor\Cursor.exe",
+            r"C:\Users\%USERNAME%\AppData\Local\Programs\cursor\cursor.exe",
+            r"C:\Program Files\cursor\cursor.exe",
+            r"C:\Program Files (x86)\cursor\cursor.exe"
+        ]
+        
+        cursor_exe = None
+        for path in cursor_paths:
+            expanded_path = os.path.expandvars(path)
+            if os.path.exists(expanded_path):
+                cursor_exe = expanded_path
+                print(f"Cursor 실행 파일 발견: {cursor_exe}")
+                break
+        
+        if cursor_exe:
+            try:
+                subprocess.Popen([cursor_exe, str(Path.cwd())], 
+                               cwd=str(Path.cwd()),
+                               creationflags=subprocess.CREATE_NEW_CONSOLE if os.name == 'nt' else 0)
+                print("[OK] Cursor가 자동으로 재시작되었습니다!")
+                print("새로운 Cursor 창이 열렸습니다.")
+            except Exception as e:
+                print(f"[ERROR] Cursor 실행 실패: {e}")
+                print("수동으로 Cursor를 재시작하세요.")
+        else:
+            print("[ERROR] Cursor 실행 파일을 찾을 수 없습니다.")
+            print("다음 경로들을 확인해보세요:")
+            for path in cursor_paths:
+                expanded_path = os.path.expandvars(path)
+                print(f"  - {expanded_path}")
+            print("수동으로 Cursor를 재시작하세요.")
+            
+    except Exception as e:
+        print(f"[ERROR] 자동 재시작 실패: {e}")
+        print("수동으로 Cursor를 재시작하세요.")
 
 if __name__ == "__main__":
     main()
