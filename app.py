@@ -947,7 +947,7 @@ def _auto_start_once() -> None:
 
     if ok:
         # 실제 복원 성공 여부를 다시 확인
-        chunks_ready_path = used_persist / "chunks.jsonl.ready"
+        chunks_ready_path = used_persist / ".ready"
         if chunks_ready_path.exists():
             try:
                 core_mark_ready(used_persist)
