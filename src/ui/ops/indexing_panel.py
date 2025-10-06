@@ -83,7 +83,7 @@ def render_admin_indexing_panel() -> None:
 
     # 시스템 상태 확인
     chunks_path = _persist_dir_safe() / "chunks.jsonl"
-    chunks_ready_path = _persist_dir_safe() / "chunks.jsonl.ready"
+    chunks_ready_path = _persist_dir_safe() / ".ready"
     
     # 기본 상태값들 (실제 상태 확인)
     local_ready = chunks_ready_path.exists()
@@ -94,12 +94,12 @@ def render_admin_indexing_panel() -> None:
     
     # 실제 인덱스 상태 확인
     is_latest = False
-    if local_ready:
+    if local_ready and chunks_path.exists():
         try:
-            with open(chunks_ready_path, 'r', encoding='utf-8') as f:
-                ready_content = f.read().strip()
-                # ready 파일 내용으로 최신 여부 판단
-                is_latest = "ready" in ready_content.lower() and "latest" in ready_content.lower()
+            # chunks.jsonl 파일이 존재하고 .ready 파일이 있으면 최신으로 간주
+            chunks_size = chunks_path.stat().st_size
+            if chunks_size > 0:
+                is_latest = True
         except Exception:
             is_latest = False
     
@@ -108,14 +108,12 @@ def render_admin_indexing_panel() -> None:
     
     # 새 파일 확인 (간단한 로직)
     try:
-        if chunks_ready_path.exists():
-            with open(chunks_ready_path, 'r', encoding='utf-8') as f:
-                ready_content = f.read().strip()
-                if "new" in ready_content.lower():
-                    has_new_files = True
-                    new_files_count = 1  # 간단한 예시
+        # 현재는 새 파일이 없다고 가정 (실제 구현 시 파일 시스템 스캔 필요)
+        has_new_files = False
+        new_files_count = 0
     except Exception:
-        pass
+        has_new_files = False
+        new_files_count = 0
 
     # 메인 컨테이너
     with st.container():
