@@ -102,10 +102,18 @@ def render() -> None:
     label = label_map.get(level, "문제발생")
     dot_cls = dot_map.get(level, "rd-low")
     
-    # 관리자 모드에서는 헤더 상태 표시를 간소화
+    # 관리자 모드에서는 준비 상태에 따라 표시
     if ss.get("admin_mode", False):
-        label = "관리자"
-        dot_cls = "rd-high"
+        # 관리자 모드에서도 준비 상태 반영
+        if level == "HIGH":
+            label = "준비완료"
+            dot_cls = "rd-high"
+        elif level == "MID":
+            label = "준비중"
+            dot_cls = "rd-mid"
+        else:
+            label = "문제발생"
+            dot_cls = "rd-low"
 
     # Linear 테마 CSS 변수 적용
     st.markdown(

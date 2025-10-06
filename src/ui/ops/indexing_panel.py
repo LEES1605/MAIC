@@ -124,6 +124,56 @@ def render_admin_indexing_panel() -> None:
     with st.container():
         st.markdown("## 인덱스 오케스트레이터")
         
+        # 인덱싱 단계 표시기
+        st.markdown("### 인덱싱 단계")
+        
+        # 동적 단계별 진행 상황 표시
+        def get_step_status():
+            """현재 상태에 따른 단계 상태 결정"""
+            if local_ready and is_restored:
+                # 복원 완료된 상태
+                return [
+                    ("1", "데이터 수집", "success"),
+                    ("2", "전처리", "success"), 
+                    ("3", "인덱싱", "success"),
+                    ("4", "검증", "success"),
+                    ("5", "배포", "success")
+                ]
+            elif local_ready:
+                # 로컬 사용 상태
+                return [
+                    ("1", "데이터 수집", "success"),
+                    ("2", "전처리", "success"), 
+                    ("3", "인덱싱", "warning"),
+                    ("4", "검증", "info"),
+                    ("5", "배포", "info")
+                ]
+            else:
+                # 복원 필요 상태
+                return [
+                    ("1", "데이터 수집", "info"),
+                    ("2", "전처리", "info"), 
+                    ("3", "인덱싱", "info"),
+                    ("4", "검증", "info"),
+                    ("5", "배포", "info")
+                ]
+        
+        steps = get_step_status()
+        
+        # 단계 표시기 그리드
+        step_cols = st.columns(len(steps))
+        for i, (step_num, step_name, step_type) in enumerate(steps):
+            with step_cols[i]:
+                if step_type == "success":
+                    st.success(f"**{step_num}** {step_name}")
+                    st.caption("✅ 완료")
+                elif step_type == "warning":
+                    st.warning(f"**{step_num}** {step_name}")
+                    st.caption("⚠️ 진행중")
+                else:
+                    st.info(f"**{step_num}** {step_name}")
+                    st.caption("⏳ 대기")
+        
         # 시스템 상태 섹션
         st.markdown("### 시스템 상태")
         
