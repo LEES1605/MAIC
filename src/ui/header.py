@@ -28,6 +28,96 @@ if TYPE_CHECKING:
     from src.core.index_probe import IndexHealth  # noqa: F401
 
 
+def _render_admin_navbar() -> None:
+    """관리자 모드 네비게이션바 렌더링"""
+    if st is None:
+        return
+    
+    # 관리자 네비게이션바 CSS
+    admin_navbar_css = """
+    <style>
+    .admin-navbar {
+        background: var(--linear-bg-primary) !important;
+        border-bottom: 1px solid var(--linear-border) !important;
+        padding: 0.5rem 0 !important;
+        margin: 0.5rem 0 1rem 0 !important;
+        border-radius: var(--linear-radius) !important;
+    }
+    
+    .admin-navbar-container {
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        gap: 1rem !important;
+        flex-wrap: wrap !important;
+    }
+    
+    .admin-nav-item {
+        padding: 0.5rem 1rem !important;
+        border-radius: var(--linear-radius) !important;
+        background: var(--linear-bg-secondary) !important;
+        border: 1px solid var(--linear-border) !important;
+        color: var(--linear-text-primary) !important;
+        font-family: var(--linear-font) !important;
+        font-weight: 500 !important;
+        text-decoration: none !important;
+        transition: all 0.2s ease !important;
+        cursor: pointer !important;
+    }
+    
+    .admin-nav-item:hover {
+        background: var(--linear-brand) !important;
+        color: white !important;
+        border-color: var(--linear-brand) !important;
+        transform: translateY(-1px) !important;
+        box-shadow: 0 2px 8px rgba(94, 106, 210, 0.3) !important;
+    }
+    
+    .admin-nav-item.active {
+        background: var(--linear-brand) !important;
+        color: white !important;
+        border-color: var(--linear-brand) !important;
+    }
+    </style>
+    """
+    
+    st.markdown(admin_navbar_css, unsafe_allow_html=True)
+    
+    # 네비게이션바 컨테이너
+    with st.container():
+        st.markdown('<div class="admin-navbar">', unsafe_allow_html=True)
+        
+        # 네비게이션 아이템들
+        col1, col2, col3, col4, col5 = st.columns([1, 1, 1, 1, 1], gap="small")
+        
+        with col1:
+            if st.button("🏠 홈", key="admin_nav_home", help="메인 페이지로 이동"):
+                st.session_state["admin_nav_active"] = "home"
+                st.rerun()
+        
+        with col2:
+            if st.button("⚙️ 관리", key="admin_nav_manage", help="시스템 관리"):
+                st.session_state["admin_nav_active"] = "manage"
+                st.rerun()
+        
+        with col3:
+            if st.button("📝 프롬프트", key="admin_nav_prompt", help="프롬프트 관리"):
+                st.session_state["admin_nav_active"] = "prompt"
+                st.rerun()
+        
+        with col4:
+            if st.button("📊 통계", key="admin_nav_stats", help="사용 통계"):
+                st.session_state["admin_nav_active"] = "stats"
+                st.rerun()
+        
+        with col5:
+            if st.button("🔧 설정", key="admin_nav_settings", help="시스템 설정"):
+                st.session_state["admin_nav_active"] = "settings"
+                st.rerun()
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+
+
 # =============================== [02] ready level — START ==================
 def _compute_ready_level_from_session(
     ss: Dict[str, object] | None,
@@ -174,7 +264,8 @@ def render() -> None:
         
         .rd-high{ 
           background: var(--linear-brand);
-          box-shadow: 0 0 0 0 rgba(94, 106, 210, 0.55); 
+          box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.8);
+          animation: pulseReady 2s infinite;
         }
         
         .rd-mid{  
@@ -185,6 +276,17 @@ def render() -> None:
         .rd-low{  
           background: #eb5757;
           box-shadow: 0 0 0 0 rgba(235, 87, 87, 0.55); 
+        }
+        
+        @keyframes pulseReady{
+          0%, 100%{ 
+            box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.8);
+            transform: scale(1);
+          }
+          50%{ 
+            box-shadow: 0 0 0 8px rgba(255, 255, 255, 0.2);
+            transform: scale(1.02);
+          }
         }
         
         @keyframes pulseDot{
@@ -223,6 +325,64 @@ def render() -> None:
           border-color: var(--linear-brand) !important;
           color: var(--linear-brand) !important;
         }
+        
+        /* 관리자 모드에서 제목을 위로 올리기 */
+        .admin-mode .brand-wrap {
+          margin-bottom: 0.5rem !important;
+        }
+        
+        /* 메인 제목 적절한 크기 */
+        .brand-title {
+          font-size: 1.2em !important;
+        }
+        
+        .ready-chip {
+          font-size: 1.0em !important;
+        }
+        
+        /* 관리자 네비게이션바 스타일 */
+        .admin-navbar {
+          background: var(--linear-bg-primary) !important;
+          border: 1px solid var(--linear-border) !important;
+          border-radius: var(--linear-radius) !important;
+          padding: 0.75rem 1rem !important;
+          margin: 0.5rem 0 1rem 0 !important;
+          box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1) !important;
+        }
+        
+        .admin-navbar .stButton > button {
+          background: var(--linear-bg-secondary) !important;
+          border: 1px solid var(--linear-border) !important;
+          color: var(--linear-text-primary) !important;
+          border-radius: var(--linear-radius) !important;
+          padding: 0.5rem 1rem !important;
+          font-weight: 500 !important;
+          font-size: 1.3em !important;
+          transition: all 0.2s ease !important;
+        }
+        
+        .admin-navbar .stButton > button:hover {
+          background: var(--linear-brand) !important;
+          color: white !important;
+          border-color: var(--linear-brand) !important;
+          transform: translateY(-1px) !important;
+          box-shadow: 0 2px 8px rgba(94, 106, 210, 0.3) !important;
+        }
+        
+        /* 버튼 글씨 기본 크기 */
+        .stButton > button {
+          font-size: 1.0em !important;
+        }
+        
+        /* 섹션 제목 적절한 크기 */
+        .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {
+          font-size: 1.1em !important;
+        }
+        
+        /* 본문 텍스트는 기본 크기 유지 */
+        .stMarkdown p, .stMarkdown div {
+          font-size: 1em !important;
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -243,6 +403,10 @@ def render() -> None:
             "</div>"
         )
         st.markdown(title_html, unsafe_allow_html=True)
+        
+        # 관리자 모드일 때 네비게이션바 추가
+        if ss.get("admin_mode", False):
+            _render_admin_navbar()
 
     with c3:
         if ss.get("admin_mode"):

@@ -553,8 +553,8 @@ def _boot_auto_restore_index() -> None:
     # 멱등 보호 (UI 버튼 클릭 시에는 강제 재시도 허용)
     try:
         if "st" in globals() and st is not None:
-            # UI에서 명시적으로 호출된 경우에는 멱등 보호 무시
-            if st.session_state.get("_BOOT_RESTORE_DONE") and not st.session_state.get("_FORCE_RESTORE", False):
+            # 이미 복원이 완료되었으면 스킵
+            if st.session_state.get("_BOOT_RESTORE_DONE", False):
                 print(f"[DEBUG] Skipping restore - already done: {st.session_state.get('_BOOT_RESTORE_DONE')}")
                 return
     except Exception:
@@ -1642,32 +1642,32 @@ def _render_body() -> None:
     if st is None:
         return
 
-    # 1) 부팅 훅 - 항상 실행하도록 수정
+    # 1) 부팅 훅 - 한 번만 실행
     try:
-        # 복원 상태 강제 리셋 (매번 실행)
-        st.session_state["_BOOT_RESTORE_DONE"] = False
-        st.session_state["_INDEX_LOCAL_READY"] = False
-        st.session_state["_INDEX_IS_LATEST"] = False
-        st.session_state["_auto_start_done"] = False  # 자동 복원 재실행 허용
-        print(f"[DEBUG] Reset restore state - forcing restore")
-        
-        # persist 디렉토리 상태 확인
-        persist_dir = effective_persist_dir()
-        print(f"[DEBUG] Persist directory: {persist_dir}")
-        print(f"[DEBUG] Persist exists: {persist_dir.exists()}")
-        print(f"[DEBUG] Persist writable: {os.access(persist_dir.parent, os.W_OK) if persist_dir.parent.exists() else False}")
-        
-        print(f"[DEBUG] About to call _boot_auto_restore_index()")
-        _boot_auto_restore_index()
-        print(f"[DEBUG] _boot_auto_restore_index() completed")
-        
-        print(f"[DEBUG] About to call _boot_auto_scan_prepared()")
-        _boot_auto_scan_prepared()  # 새로 추가: 자동 스캔
-        print(f"[DEBUG] _boot_auto_scan_prepared() completed")
-        
-        print(f"[DEBUG] About to call _boot_autoflow_hook()")
-        _boot_autoflow_hook()
-        print(f"[DEBUG] _boot_autoflow_hook() completed")
+        # 복원 상태 확인 (이미 완료되었으면 스킵)
+        if st.session_state.get("_BOOT_RESTORE_DONE", False):
+            print(f"[DEBUG] Restore already completed - skipping")
+        else:
+            print(f"[DEBUG] Starting restore process")
+            
+            # persist 디렉토리 상태 확인
+            persist_dir = effective_persist_dir()
+            print(f"[DEBUG] Persist directory: {persist_dir}")
+            print(f"[DEBUG] Persist exists: {persist_dir.exists()}")
+            print(f"[DEBUG] Persist writable: {os.access(persist_dir.parent, os.W_OK) if persist_dir.parent.exists() else False}")
+            
+            # 복원 실행
+            print(f"[DEBUG] About to call _boot_auto_restore_index()")
+            _boot_auto_restore_index()
+            print(f"[DEBUG] _boot_auto_restore_index() completed")
+            
+            print(f"[DEBUG] About to call _boot_auto_scan_prepared()")
+            _boot_auto_scan_prepared()  # 새로 추가: 자동 스캔
+            print(f"[DEBUG] _boot_auto_scan_prepared() completed")
+            
+            print(f"[DEBUG] About to call _boot_autoflow_hook()")
+            _boot_autoflow_hook()
+            print(f"[DEBUG] _boot_autoflow_hook() completed")
     except Exception as e:
         _errlog(f"boot check failed: {e}", where="[render_body.boot]", exc=e)
 

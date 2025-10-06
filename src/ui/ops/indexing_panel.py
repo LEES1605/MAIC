@@ -48,6 +48,36 @@ def render_admin_indexing_panel() -> None:
           --linear-text-tertiary: #8a8f98;
           --linear-brand: #5e6ad2;
           --linear-accent: #7170ff;
+          
+          /* 전체 글씨 크기 30% 증가 */
+          --font-size-base: 1.3em;
+        }
+        
+        /* 섹션 제목 적절한 크기 */
+        .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {
+          font-size: 1.1em !important;
+        }
+        
+        /* 버튼 글씨 기본 크기 */
+        .stButton > button {
+          font-size: 1.0em !important;
+        }
+        
+        /* 본문 텍스트는 기본 크기 유지 */
+        .stMarkdown, .stMarkdown p, .stMarkdown div {
+          font-size: 1em !important;
+        }
+        
+        /* 입력 필드는 기본 크기 유지 */
+        .stSelectbox, .stTextInput, .stTextArea {
+          font-size: 1em !important;
+        }
+        
+        .stSelectbox > div > div, .stTextInput > div > div, .stTextArea > div > div {
+          font-size: 1em !important;
+        }
+        
+        :root {
           --linear-border: #23252a;
           --linear-radius: 8px;
           --linear-radius-lg: 12px;
