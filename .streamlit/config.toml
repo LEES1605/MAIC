@@ -1,21 +1,17 @@
+[server]
+headless = false
+port = 8501
+enableCORS = false
+enableXsrfProtection = false
+showEmailPrompt = false
+
+[browser]
+gatherUsageStats = false
+serverAddress = "localhost"
+serverPort = 8501
+
 [theme]
-# Linear 다크 테마 설정
 primaryColor = "#5e6ad2"
 backgroundColor = "#08090a"
 secondaryBackgroundColor = "#1c1c1f"
 textColor = "#f7f8f8"
-
-[server]
-# 서버 설정
-headless = true
-port = 8501
-enableCORS = false
-enableXsrfProtection = false
-
-[browser]
-# 브라우저 설정
-gatherUsageStats = false
-
-[client]
-# 클라이언트 설정
-toolbarMode = "minimal"
