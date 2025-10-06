@@ -21,7 +21,7 @@ class SecurityConfig:
     # 입력 검증
     max_input_length: int = 10000
     max_password_length: int = 128
-    min_password_length: int = 8
+    min_password_length: int = 4
     
     # 시도 제한
     max_login_attempts: int = 5
