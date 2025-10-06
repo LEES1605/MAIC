@@ -1,47 +1,129 @@
-# MAIC
+# MAIC - My AI Teacher
 
-MAIC는 SSOT(단일 진실 원천) 기반의 모드 템플릿과 정규화 계층을 통해
-코드/문서/프롬프트의 **일관성**을 보장하는 프로젝트입니다.
-엄격한 CI 게이트(스타일/타입/테스트/스키마/보안/커버리지)를 통해
-**회귀를 사전에 차단**하는 것을 목표로 합니다.
+> **SSOT(단일 진실 원천) 기반의 AI 교육 플랫폼**
 
-## Status
-![Canon Validate](https://github.com/LEES1605/MAIC/actions/workflows/canon-validate.yml/badge.svg)
-![Coverage Gate](https://github.com/LEES1605/MAIC/actions/workflows/coverage.yml/badge.svg)
-![RAG Fixture](https://github.com/LEES1605/MAIC/actions/workflows/rag-fixture.yml/badge.svg)
-![Security Scans](https://github.com/LEES1605/MAIC/actions/workflows/security.yml/badge.svg)
-![Release Cut](https://github.com/LEES1605/MAIC/actions/workflows/release-cut.yml/badge.svg)
+MAIC는 코드/문서/프롬프트의 **일관성**을 보장하는 AI 교육 시스템입니다.
+엄격한 CI 게이트와 5-Layer Clean Architecture를 통해 **회귀를 사전에 차단**하고
+**최고의 개발자 경험**을 제공합니다.
 
-## Project Layout
-src/ # 코드(모듈 임포트 기준은 "레포 루트")
-tests/ # 단일 테스트 디렉터리
-docs/_gpt/ # SSOT 및 문서(정규화/스키마/가이드/생성 산출물)
-├─ CONVENTIONS.md # 협의규약(정본)
-├─ modes/_canon.yaml # 모드 정규화 SSOT
-├─ modes/_canon.schema.yaml
-├─ modes/*.yaml
-└─ _generated/MODES.md
-tools/ # CI 유틸(검증/커버리지/문서생성 등)
-.github/workflows/ # CI 워크플로
+## 🚀 Quick Start
 
-## SSOT & Canonicalization
-- `_canon.yaml`의 **order/required/synonyms**를 기준으로,
-  `get_profile()`가 **동의어 표준화 → 필수 보강 → 표준 순서** 정렬을 수행합니다.
-- 스키마는 `_canon.schema.yaml`로 **잠금**되어 CI에서 자동 검증됩니다.
-- 문장 모드의 “괄호 규칙 라벨 표준” 등 **규칙 섹션**은 자동 포함됩니다.
-- 자세한 규약은 `docs/_gpt/CONVENTIONS.md`를 참조하세요.
+```bash
+# 1. 저장소 클론
+git clone https://github.com/LEES1605/MAIC.git
+cd MAIC
 
-## CI Quality Gates
-- **Canon Validate**: `_canon.yaml` 스키마/규칙 검사 (jsonschema + 수동 규칙).
-- **Coverage Gate (Ratchet)**: `tools/check_coverage.py`가 기준선 이하를 차단.
-- **RAG Fixture Regression**: 결정적 엔진(`hash|bm25|disabled`)과 소형 픽스처로 회귀 테스트.
-- **Security Scans**: `pip-audit`(취약점), `gitleaks`(시크릿).
+# 2. 자동 설정 실행
+python tools/start_work.py
 
-## Release
-- `Release Cut` 워크플로는 `CHANGELOG.md`의 `[Unreleased]`를
-  새 버전 블록으로 내리고 **태그/릴리스**를 생성합니다.
+# 3. 앱 실행
+streamlit run app.py
+```
 
-## Conventions
-- 모든 패치는 **숫자구획 전체 교체([NN] START/END)** 원칙을 따릅니다.
-- 로컬 방식 안내는 제공하지 않습니다(레포/CI 중심 운영).
-- 자세한 규약: `docs/_gpt/CONVENTIONS.md`.
+## 📁 Project Structure
+
+```
+MAIC/
+├── app.py                    # 메인 Streamlit 앱
+├── src/                      # 5-Layer Clean Architecture
+│   ├── application/          # 비즈니스 로직
+│   ├── domain/              # 핵심 엔티티
+│   ├── infrastructure/      # 외부 시스템
+│   ├── shared/              # 공통 유틸리티
+│   └── ui/                  # 사용자 인터페이스
+├── docs/                    # 프로젝트 문서
+│   ├── guides/              # 가이드 문서
+│   ├── setup/               # 설정 가이드
+│   └── process/             # 프로세스 문서
+├── config/                  # 설정 파일들
+├── tools/                   # 개발 도구 및 스크립트
+├── tests/                   # 테스트 코드
+└── assets/                  # 이미지 및 리소스
+```
+
+## 🏗️ Architecture
+
+### 5-Layer Clean Architecture
+- **Application Layer**: 비즈니스 로직 및 서비스
+- **Domain Layer**: 핵심 엔티티 및 도메인 규칙
+- **Infrastructure Layer**: 외부 시스템 통합
+- **Shared Layer**: 공통 유틸리티 및 도구
+- **UI Layer**: 사용자 인터페이스 컴포넌트
+
+### 🎨 UI Components
+- **Linear Design System**: 일관된 디자인 언어
+- **Streamlit Integration**: 웹 기반 인터페이스
+- **Responsive Design**: 모바일 우선 설계
+
+## 🔧 Development
+
+### Prerequisites
+- Python 3.11+
+- Streamlit
+- Git
+
+### Setup
+```bash
+# 의존성 설치
+pip install -r config/requirements.txt
+
+# 개발 의존성 설치
+pip install -r config/requirements-dev.txt
+
+# 자동 설정 실행
+python tools/start_work.py
+```
+
+### Testing
+```bash
+# 전체 테스트 실행
+pytest tests/
+
+# 특정 테스트 실행
+pytest tests/test_specific.py
+
+# 커버리지 확인
+pytest --cov=src tests/
+```
+
+## 📚 Documentation
+
+- **[Setup Guide](docs/setup/)** - 초기 설정 및 환경 구성
+- **[Development Guide](docs/guides/)** - 개발 가이드 및 모범 사례
+- **[Process Guide](docs/process/)** - 개발 프로세스 및 워크플로
+
+## 🚀 Features
+
+- **🤖 AI-Powered Learning**: Gemini API 기반 지능형 학습 시스템
+- **📚 RAG (Retrieval-Augmented Generation)**: 지식 베이스 기반 정확한 답변
+- **🎨 Linear Design System**: 일관되고 아름다운 UI/UX
+- **🔒 Security First**: 입력 검증, XSS 방지, 보안 강화
+- **⚡ Performance Optimized**: 캐싱, 스트리밍, 최적화된 성능
+- **🧪 Comprehensive Testing**: 단위 테스트, E2E 테스트, 자동화된 검증
+
+## 🔄 CI/CD Pipeline
+
+- **Code Quality**: Ruff, MyPy, Pytest
+- **Security**: pip-audit, gitleaks
+- **Coverage**: 자동 커버리지 추적
+- **Documentation**: 자동 문서 생성
+
+## 📄 License
+
+이 프로젝트는 MIT 라이선스 하에 배포됩니다.
+
+## 🤝 Contributing
+
+1. Fork the repository
+2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
+3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
+4. Push to the branch (`git push origin feature/AmazingFeature`)
+5. Open a Pull Request
+
+## 📞 Support
+
+문제가 있으시면 [Issues](https://github.com/LEES1605/MAIC/issues)에 등록해 주세요.
+
+---
+
+**MAIC** - *Making AI Education Intelligent and Consistent* 🚀

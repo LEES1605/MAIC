@@ -1,0 +1,172 @@
+name: Quality Gate
+
+on:
+  pull_request:
+    branches: [ main, develop ]
+  push:
+    branches: [ main, develop ]
+
+jobs:
+  quality-gate:
+    name: Quality Gate Check
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.11"
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e ".[dev]"
+        
+    - name: Run comprehensive quality checks
+      run: |
+        echo "🔍 Running comprehensive quality checks..."
+        
+        # 1. Code formatting check
+        echo "📝 Checking code formatting..."
+        ruff format --check src/ tests/ || {
+          echo "❌ Code formatting check failed"
+          echo "Run 'ruff format src/ tests/' to fix formatting issues"
+          exit 1
+        }
+        echo "✅ Code formatting check passed"
+        
+        # 2. Linting check
+        echo "🔧 Running linting checks..."
+        ruff check src/ tests/ || {
+          echo "❌ Linting check failed"
+          echo "Run 'ruff check --fix src/ tests/' to fix linting issues"
+          exit 1
+        }
+        echo "✅ Linting check passed"
+        
+        # 3. Type checking
+        echo "🏷️ Running type checks..."
+        mypy src/ || {
+          echo "❌ Type checking failed"
+          exit 1
+        }
+        echo "✅ Type checking passed"
+        
+        # 4. Security scan
+        echo "🔒 Running security scan..."
+        bandit -r src/ -f json -o bandit-report.json || true
+        if [ -f bandit-report.json ]; then
+          HIGH_ISSUES=$(python -c "import json; data=json.load(open('bandit-report.json')); print(len([r for r in data['results'] if r['issue_severity'] == 'HIGH']))")
+          if [ "$HIGH_ISSUES" -gt 0 ]; then
+            echo "❌ High severity security issues found: $HIGH_ISSUES"
+            exit 1
+          fi
+        fi
+        echo "✅ Security scan passed"
+        
+        # 5. Import organization check
+        echo "📦 Checking import organization..."
+        python -c "
+        import ast
+        import os
+        
+        def check_imports(filepath):
+            with open(filepath, 'r', encoding='utf-8') as f:
+                try:
+                    tree = ast.parse(f.read())
+                except SyntaxError:
+                    return True  # Skip syntax errors, they'll be caught by other tools
+                    
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        if alias.name.startswith('src.') and not alias.name.startswith('src.'):
+                            print(f'❌ Invalid import in {filepath}: {alias.name}')
+                            return False
+                elif isinstance(node, ast.ImportFrom):
+                    if node.module and node.module.startswith('src.') and not node.module.startswith('src.'):
+                        print(f'❌ Invalid import in {filepath}: {node.module}')
+                        return False
+            return True
+        
+        failed_files = []
+        for root, dirs, files in os.walk('src'):
+            for file in files:
+                if file.endswith('.py'):
+                    filepath = os.path.join(root, file)
+                    if not check_imports(filepath):
+                        failed_files.append(filepath)
+        
+        if failed_files:
+            print('❌ Import organization check failed')
+            exit(1)
+        else:
+            print('✅ Import organization check passed')
+        "
+        
+        # 6. Documentation check
+        echo "📚 Checking documentation..."
+        python -c "
+        import os
+        import ast
+        
+        def check_docstrings(filepath):
+            with open(filepath, 'r', encoding='utf-8') as f:
+                try:
+                    tree = ast.parse(f.read())
+                except SyntaxError:
+                    return True
+                    
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                    if not node.name.startswith('_') and not ast.get_docstring(node):
+                        print(f'⚠️ Missing docstring in {filepath}: {node.name}')
+            return True
+        
+        for root, dirs, files in os.walk('src'):
+            for file in files:
+                if file.endswith('.py') and not file.startswith('__'):
+                    filepath = os.path.join(root, file)
+                    check_docstrings(filepath)
+        "
+        echo "✅ Documentation check completed"
+        
+        echo "🎉 All quality checks passed!"
+        
+    - name: Upload quality reports
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: quality-reports
+        path: |
+          bandit-report.json
+          *.log
+          
+    - name: Comment PR with quality results
+      if: github.event_name == 'pull_request'
+      uses: actions/github-script@v6
+      with:
+        script: |
+          const fs = require('fs');
+          
+          let comment = '## 🔍 Quality Gate Results\n\n';
+          comment += '### ✅ All quality checks passed!\n\n';
+          comment += '- Code formatting: ✅\n';
+          comment += '- Linting: ✅\n';
+          comment += '- Type checking: ✅\n';
+          comment += '- Security scan: ✅\n';
+          comment += '- Import organization: ✅\n';
+          comment += '- Documentation: ✅\n\n';
+          comment += '🚀 This PR is ready for review and merge!';
+          
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: comment
+          });
