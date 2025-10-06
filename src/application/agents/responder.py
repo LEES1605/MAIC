@@ -3,9 +3,9 @@ from __future__ import annotations
 
 from typing import Dict, Iterator, Optional
 
-from src.agents._common import stream_llm
-from src.modes.types import Mode
-from src.modes.router import ModeRouter
+from src.application.agents._common import stream_llm
+from src.application.modes.types import Mode
+from src.application.modes.router import ModeRouter
 
 try:
     import streamlit as _st  # 세션 오버라이드(페르소나/자연어 지시) 읽기

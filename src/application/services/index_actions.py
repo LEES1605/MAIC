@@ -119,7 +119,7 @@ def _resolve_owner_repo_and_token() -> Tuple[str, str, str]:
 
 
 # 공통 유틸리티 함수 import
-from src.common.utils import errlog as _errlog
+from src.shared.common.utils import errlog as _errlog
 # ============================== [03] local helpers — END ==============================
 
 # ============================= [04] public API — START ================================

@@ -22,10 +22,10 @@ try:
 except Exception:
     st = None  # Streamlit이 없는 환경(CI 등) 대비
 
-from src.core.secret import get as secret_get
+from src.infrastructure.core.secret import get as secret_get
 
 if TYPE_CHECKING:
-    from src.core.index_probe import IndexHealth  # noqa: F401
+    from src.infrastructure.core.index_probe import IndexHealth  # noqa: F401
 
 
 def _render_admin_navbar() -> None:
@@ -165,7 +165,7 @@ def _ready_level() -> str:
         # 2) 세션키가 전혀 없으면 로컬 probe로 폴백 (비용 최소화를 위해 필요한 순간에만)
         try:
             # lazy import: 타입 힌트는 문자열 리터럴로만 사용
-            from src.core.index_probe import probe_index_health
+            from src.infrastructure.core.index_probe import probe_index_health
             local_ok = bool(getattr(probe_index_health(sample_lines=0), "ok", False))
         except Exception:
             local_ok = False
@@ -439,7 +439,7 @@ def render() -> None:
 
                 if submit:
                     # 보안 강화: 입력 검증 및 로그인 시도 제한
-                    from src.core.security_manager import (
+                    from src.infrastructure.core.security_manager import (
                         get_security_manager, 
                         InputType, 
                         SecurityLevel,
@@ -501,7 +501,7 @@ def render() -> None:
                             
                     except Exception as e:
                         # 보안 에러 메시지 정화
-                        from src.core.security_manager import sanitize_error_message
+                        from src.infrastructure.core.security_manager import sanitize_error_message
                         record_login_attempt(client_id, False)
                         st.error(sanitize_error_message(e))
                         st.rerun()

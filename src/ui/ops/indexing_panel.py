@@ -13,10 +13,10 @@ except Exception:
 
 # 내부 함수들 import
 try:
-    from src.services.index_actions import run_admin_index_job
-    from src.core.persist import effective_persist_dir
-    from src.runtime.backup import make_index_backup_zip, upload_index_backup
-    from src.runtime.ready import is_ready_text
+    from src.application.services.index_actions import run_admin_index_job
+    from src.infrastructure.core.persist import effective_persist_dir
+    from src.infrastructure.runtime.backup import make_index_backup_zip, upload_index_backup
+    from src.infrastructure.core.readiness import is_ready_text
 except Exception:
     # 폴백
     def run_admin_index_job(params): pass
@@ -26,7 +26,7 @@ except Exception:
     def is_ready_text(text): return "ready" in str(text).lower()
 
 # 공통 유틸리티 함수 import
-from src.services.index_actions import _persist_dir_safe
+from src.application.services.index_actions import _persist_dir_safe
 
 
 def render_admin_indexing_panel() -> None:

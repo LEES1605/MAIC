@@ -3,9 +3,9 @@ from __future__ import annotations
 
 from typing import Dict, Iterator, Optional, Tuple
 
-from src.agents._common import stream_llm
-from src.modes.types import sanitize_source_label  # SSOT 라벨 가드
-from src.core.modes import MODES, ModeSpec, find_mode_by_label  # 평가 루브릭 SSOT
+from src.application.agents._common import stream_llm
+from src.application.modes.types import sanitize_source_label  # SSOT 라벨 가드
+from src.infrastructure.core.modes import MODES, ModeSpec, find_mode_by_label  # 평가 루브릭 SSOT
 
 
 def _get_mode_spec(mode_key_or_label: str) -> ModeSpec:

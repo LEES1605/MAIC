@@ -218,7 +218,7 @@ def call_with_fallback(
                         from src.core.performance_manager import optimize_streaming
                         optimize_streaming(text, cb)
                 except (RuntimeError, OSError) as e:
-                    from src.common.utils import errlog
+                    from src.shared.common.utils import errlog
                     errlog(f"스트리밍 처리 오류: {e}", "stream_llm", e)
                     pass
 

@@ -5,8 +5,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Optional
 
-from src.core.persist import effective_persist_dir
-from src.core.readiness import is_ready_text, normalize_ready_file
+from src.infrastructure.core.persist import effective_persist_dir
+from src.infrastructure.core.readiness import is_ready_text, normalize_ready_file
 
 
 # ──────────────────────────────── helpers ─────────────────────────────────────

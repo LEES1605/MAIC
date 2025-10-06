@@ -57,7 +57,7 @@ def _read_text_pdf(path: Path) -> str:
             mod = importlib.import_module("pypdf")
             PdfReader = getattr(mod, "PdfReader", None)
         except (ImportError, AttributeError) as e:
-            from src.common.utils import errlog
+            from src.shared.common.utils import errlog
             errlog(f"pypdf import 실패: {e}", "PDF 처리", e)
             PdfReader = None
         if PdfReader is None:
@@ -65,7 +65,7 @@ def _read_text_pdf(path: Path) -> str:
                 mod2 = importlib.import_module("PyPDF2")
                 PdfReader = getattr(mod2, "PdfReader", None)
             except (ImportError, AttributeError) as e:
-                from src.common.utils import errlog
+                from src.shared.common.utils import errlog
                 errlog(f"PyPDF2 import 실패: {e}", "PDF 처리", e)
                 PdfReader = None
         if PdfReader is None:
@@ -77,14 +77,14 @@ def _read_text_pdf(path: Path) -> str:
             try:
                 t = page.extract_text() or ""
             except (AttributeError, IndexError) as e:
-                from src.common.utils import errlog
+                from src.shared.common.utils import errlog
                 errlog(f"PDF 페이지 추출 실패: {e}", "PDF 처리", e)
                 t = ""
             if t:
                 txt_parts.append(t)
         return "\n".join(txt_parts).strip()
     except (OSError, IOError, AttributeError) as e:
-        from src.common.utils import errlog
+        from src.shared.common.utils import errlog
         errlog(f"PDF 파일 처리 실패: {e}", "PDF 처리", e)
         return ""
 
@@ -220,7 +220,7 @@ def search(
         try:
             text = _read_text(Path(path))
         except (OSError, IOError, UnicodeDecodeError) as e:
-            from src.common.utils import errlog
+            from src.shared.common.utils import errlog
             errlog(f"파일 읽기 실패: {e}", "RAG 검색", e)
             text = ""
         needle = q_toks[0]
@@ -331,7 +331,7 @@ def get_or_build_index(dataset_dir: str, *, use_cache: bool = True) -> Dict:
                     perf_manager.cache_set(cache_key, result)
                     return result
         except (OSError, IOError) as e:
-            from src.common.utils import errlog
+            from src.shared.common.utils import errlog
             errlog(f"캐시 파일 체크 실패: {e}", "RAG 검색", e)
             pass
 
@@ -341,7 +341,7 @@ def get_or_build_index(dataset_dir: str, *, use_cache: bool = True) -> Dict:
         # 성능 최적화: 빌드된 인덱스를 메모리 캐시에 저장
         perf_manager.cache_set(cache_key, idx)
     except (OSError, IOError) as e:
-        from src.common.utils import errlog
+        from src.shared.common.utils import errlog
         errlog(f"캐시 저장 실패: {e}", "RAG 검색", e)
         pass
     return idx

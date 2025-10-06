@@ -6,6 +6,9 @@ import sys
 import time
 from pathlib import Path
 
+# src 모듈 경로 추가
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
 def run_command(command, description):
     """명령어 실행 및 결과 반환"""
     try:
@@ -33,6 +36,8 @@ def test_imports():
     try:
         from src.ui.ops.indexing_panel import render_admin_indexing_panel
         from src.ui.header import render
+        from src.infrastructure.core.config_manager import get_config_manager
+        from src.domain.rag.search import get_or_build_index
         return {
             "success": True,
             "description": "Import 테스트",

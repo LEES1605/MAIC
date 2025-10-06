@@ -122,11 +122,11 @@ def restore_from_local_backup(backup_path: Path, dest_dir: Path) -> Tuple[bool, 
             return False, f"지원하지 않는 백업 형식: {backup_path}"
     
     except (OSError, IOError, tarfile.TarError, zipfile.BadZipFile) as e:
-        from src.common.utils import errlog
+        from src.shared.common.utils import errlog
         errlog(f"백업 복원 실패: {e}", "restore_from_local_backup", e)
         return False, f"로컬 복원 실패: {e}"
     except Exception as e:
-        from src.common.utils import errlog
+        from src.shared.common.utils import errlog
         errlog(f"예상치 못한 복원 오류: {e}", "restore_from_local_backup", e)
         return False, f"로컬 복원 실패: {e}"
 

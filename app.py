@@ -12,9 +12,9 @@ try:
 except Exception:
     st = None
 
-from src.core.secret import promote_env as _promote_env, get as _secret_get
-from src.core.persist import effective_persist_dir, share_persist_dir_to_session
-from src.core.index_probe import (
+from src.infrastructure.core.secret import promote_env as _promote_env, get as _secret_get
+from src.infrastructure.core.persist import effective_persist_dir, share_persist_dir_to_session
+from src.infrastructure.core.index_probe import (
     is_brain_ready as core_is_ready,
     mark_ready as core_mark_ready,
 )
@@ -293,7 +293,7 @@ except Exception:
 
 
 # 공통 유틸리티 함수 import
-from src.common.utils import errlog as _errlog
+from src.shared.common.utils import errlog as _errlog
 # ===================== [05] path & logger — END ========================
 
 # ======================== [06] admin gate — START ========================
@@ -494,7 +494,7 @@ def _render_stepper(*, force: bool = False) -> None:
         return
 
     try:
-        from src.services.index_state import (
+        from src.application.services.index_state import (
             ensure_index_state,
             render_progress_with_fallback,
         )
@@ -593,7 +593,7 @@ def _boot_auto_restore_index() -> None:
 
     # --- 공용 판정기 로드 ---
     try:
-        from src.core.readiness import is_ready_text, normalize_ready_file
+        from src.infrastructure.core.readiness import is_ready_text, normalize_ready_file
     except Exception:
         def _norm(x: str | bytes | None) -> str:
             if x is None:
@@ -711,7 +711,7 @@ def _boot_auto_restore_index() -> None:
     owner, repo = str(repo_full).split("/", 1)
 
     try:
-        from src.runtime.gh_release import GHConfig, GHReleases
+        from src.infrastructure.runtime.gh_release import GHConfig, GHReleases
     except Exception:
         _idx("log", "GH 릴리스 모듈 불가 → 최신 판정 보류", "warn")
         _idx("step_set", 2, "wait", "원격 확인 불가")
@@ -777,7 +777,7 @@ def _boot_auto_restore_index() -> None:
     _idx("step_set", 2, "run", "최신 인덱스 복원 중...")
     _idx("log", "순차번호 기반 릴리스 복원 시작...")
     try:
-        from src.runtime.sequential_release import create_sequential_manager
+        from src.infrastructure.runtime.sequential_release import create_sequential_manager
         
         # GitHub 설정
         import os
@@ -802,7 +802,7 @@ def _boot_auto_restore_index() -> None:
             print(f"[DEBUG] Code version check: Using GHReleases import")
             
             # 릴리스 목록 직접 확인
-            from src.runtime.gh_release import GHReleases
+            from src.infrastructure.runtime.gh_release import GHReleases
             gh = GHReleases(owner=owner, repo=repo, token=token)
             releases = gh.list_releases()
             print(f"[DEBUG] Found {len(releases)} releases: {[r.get('tag_name') for r in releases]}")
@@ -866,7 +866,7 @@ def _boot_auto_restore_index() -> None:
         # 메타 저장 함수 정의
         def _safe_save_meta(path, tag=None, release_id=None):
             try:
-                from src.runtime.local_restore import save_restore_meta
+                from src.infrastructure.runtime.local_restore import save_restore_meta
                 return save_restore_meta(path, tag=tag, release_id=release_id)
             except Exception:
                 return None
@@ -1132,7 +1132,7 @@ def _render_mode_controls_pills() -> str:
     if st is None:
         return "grammar"
     try:
-        from src.core.modes import enabled_modes
+        from src.infrastructure.core.modes import enabled_modes
         modes = enabled_modes()
         labels = [m.label for m in modes]
         keys = [m.key for m in modes]
@@ -1178,9 +1178,9 @@ def _render_chat_panel() -> None:
     import html
     import re
     from typing import Optional, Callable
-    from src.agents.responder import answer_stream
-    from src.agents.evaluator import evaluate_stream
-    from src.llm.streaming import BufferOptions, make_stream_handler
+    from src.application.agents.responder import answer_stream
+    from src.application.agents.evaluator import evaluate_stream
+    from src.domain.llm.streaming import BufferOptions, make_stream_handler
 
     try:
         try:
@@ -1197,7 +1197,7 @@ def _render_chat_panel() -> None:
 
     def _resolve_sanitizer() -> Callable[[Optional[str]], str]:
         try:
-            from src.modes.types import sanitize_source_label as _san
+            from src.application.modes.types import sanitize_source_label as _san
             return _san
         except Exception:
             try:
@@ -1358,7 +1358,7 @@ def _render_debug_panel():
         with col3:
             if st.button("🌐 GitHub 릴리스 확인", use_container_width=True):
                 try:
-                    from src.runtime.gh_release import GHReleases
+                    from src.infrastructure.runtime.gh_release import GHReleases
                     repo_full = _secret_get("GITHUB_REPO")
                     token = _secret_get("GITHUB_TOKEN")
                     
@@ -1385,7 +1385,7 @@ def _render_debug_panel():
         with col4:
             if st.button("🔍 SequentialReleaseManager 테스트", use_container_width=True):
                 try:
-                    from src.runtime.sequential_release import create_sequential_manager
+                    from src.infrastructure.runtime.sequential_release import create_sequential_manager
                     repo_full = _secret_get("GITHUB_REPO")
                     token = _secret_get("GITHUB_TOKEN")
                     
@@ -1414,7 +1414,7 @@ def _render_debug_panel():
         with col5:
             if st.button("🔄 수동 복원 테스트", use_container_width=True):
                 try:
-                    from src.runtime.sequential_release import create_sequential_manager
+                    from src.infrastructure.runtime.sequential_release import create_sequential_manager
                     repo_full = _secret_get("GITHUB_REPO")
                     token = _secret_get("GITHUB_TOKEN")
                     
