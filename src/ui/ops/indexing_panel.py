@@ -34,52 +34,54 @@ def render_admin_indexing_panel() -> None:
     if st is None:
         return
 
-    # Linear 테마 CSS 적용
-    st.markdown("""
-    <style>
-    /* Linear 테마 변수 */
-    :root {
-      --linear-bg-primary: #08090a;
-      --linear-bg-secondary: #1c1c1f;
-      --linear-bg-tertiary: #232326;
-      --linear-text-primary: #f7f8f8;
-      --linear-text-secondary: #d0d6e0;
-      --linear-text-tertiary: #8a8f98;
-      --linear-brand: #5e6ad2;
-      --linear-accent: #7170ff;
-      --linear-border: #23252a;
-      --linear-radius: 8px;
-      --linear-radius-lg: 12px;
-      --linear-font: "Inter Variable", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    }
-    
-    /* Streamlit 컴포넌트 Linear 스타일링 */
-    .stButton > button {
-      font-family: var(--linear-font) !important;
-      font-weight: 510 !important;
-      border-radius: var(--linear-radius) !important;
-      border: 1px solid var(--linear-border) !important;
-      background: var(--linear-bg-secondary) !important;
-      color: var(--linear-text-primary) !important;
-      transition: all 0.2s ease !important;
-    }
-    
-    .stButton > button:hover {
-      background: var(--linear-bg-tertiary) !important;
-      border-color: var(--linear-brand) !important;
-    }
-    
-    .stButton > button[kind="primary"] {
-      background: var(--linear-brand) !important;
-      color: white !important;
-      border-color: var(--linear-brand) !important;
-    }
-    
-    .stButton > button[kind="primary"]:hover {
-      background: var(--linear-accent) !important;
-    }
-    </style>
-    """, unsafe_allow_html=True)
+    # CSS는 한 번만 로드하여 성능 최적화
+    if not hasattr(st.session_state, "_linear_css_loaded"):
+        st.markdown("""
+        <style>
+        /* Linear 테마 변수 */
+        :root {
+          --linear-bg-primary: #08090a;
+          --linear-bg-secondary: #1c1c1f;
+          --linear-bg-tertiary: #232326;
+          --linear-text-primary: #f7f8f8;
+          --linear-text-secondary: #d0d6e0;
+          --linear-text-tertiary: #8a8f98;
+          --linear-brand: #5e6ad2;
+          --linear-accent: #7170ff;
+          --linear-border: #23252a;
+          --linear-radius: 8px;
+          --linear-radius-lg: 12px;
+          --linear-font: "Inter Variable", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        }
+        
+        /* Streamlit 컴포넌트 Linear 스타일링 */
+        .stButton > button {
+          font-family: var(--linear-font) !important;
+          font-weight: 510 !important;
+          border-radius: var(--linear-radius) !important;
+          border: 1px solid var(--linear-border) !important;
+          background: var(--linear-bg-secondary) !important;
+          color: var(--linear-text-primary) !important;
+          transition: all 0.2s ease !important;
+        }
+        
+        .stButton > button:hover {
+          background: var(--linear-bg-tertiary) !important;
+          border-color: var(--linear-brand) !important;
+        }
+        
+        .stButton > button[kind="primary"] {
+          background: var(--linear-brand) !important;
+          color: white !important;
+          border-color: var(--linear-brand) !important;
+        }
+        
+        .stButton > button[kind="primary"]:hover {
+          background: var(--linear-accent) !important;
+        }
+        </style>
+        """, unsafe_allow_html=True)
+        st.session_state._linear_css_loaded = True
 
     # 시스템 상태 확인
     chunks_path = _persist_dir_safe() / "chunks.jsonl"
@@ -229,11 +231,12 @@ def render_admin_indexing_panel() -> None:
         with col1:
             if st.button("🔄 인덱스 복원", key="admin_restore_index", use_container_width=True):
                 try:
+                    # 복원 작업을 비동기적으로 처리하여 랙 방지
                     with st.spinner("인덱스 복원 중..."):
                         from app import _boot_auto_restore_index
                         _boot_auto_restore_index()
                         st.success("✅ 인덱스 복원이 완료되었습니다!")
-                        st.rerun()
+                        # st.rerun() 제거 - 불필요한 페이지 새로고침 방지
                 except Exception as e:
                     st.error(f"❌ 복원 실패: {e}")
         
@@ -254,6 +257,7 @@ def render_admin_indexing_panel() -> None:
                             st.success("인덱싱 완료!")
                         else:
                             st.error("인덱싱 실패")
+                    # st.rerun() 제거 - 불필요한 페이지 새로고침 방지
                 except Exception as e:
                     st.error(f"오류: {e}")
         
