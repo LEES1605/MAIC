@@ -1,0 +1,70 @@
+# ============================ [01] Build system — START ==============================
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+# ============================ [01] Build system — END ================================
+
+# ============================ [02] Project metadata — START ==========================
+[project]
+name = "my-ai-teacher"
+version = "0.1.0"
+requires-python = ">=3.10,<4.0"
+description = "Clean scaffold for AI Teacher (Streamlit + RAG)"
+readme = "README.md"
+authors = [{ name = "you" }]
+
+dependencies = [
+  "streamlit>=1.32",
+  "pydantic>=2,<3",
+  "pydantic-settings>=2,<3",
+  "llama-index-core>=0.10",
+  "google-api-python-client>=2.136.0",
+  "google-auth>=2.30.0",
+  # pypdf 6.x 이상(보안 고지 반영)
+  "pypdf>=6,<7",
+]
+# ============================ [02] Project metadata — END ============================
+
+# ============================ [03] Dev dependencies — START ==========================
+[project.optional-dependencies]
+dev = [
+  "mypy>=1.7",
+  "ruff>=0.5",
+  "bandit>=1.7",
+  "pytest>=8",
+  "types-requests",
+  "types-PyYAML",
+]
+# ============================ [03] Dev dependencies — END ============================
+
+# ============================ [04] Tools — START =====================================
+[tool.mypy]
+config_file = "mypy.ini"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = []
+per-file-ignores = { "scripts/no_ellipsis_gate.py" = ["E501"] }
+
+[tool.ruff.lint.isort]
+known-first-party = ["src"]
+# ============================ [04] Tools — END =======================================
+
+# ============================ [05] Setuptools — START ================================
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["*"]
+# ============================ [05] Setuptools — END ==================================
+
+# ============================ [06] Poetry — START ====================================
+[tool.poetry]
+package-mode = false
+# ============================ [06] Poetry — END ======================================
