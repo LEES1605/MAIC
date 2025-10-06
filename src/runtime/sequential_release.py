@@ -69,80 +69,30 @@ class SequentialReleaseManager:
         latest_release = None
         latest_timestamp = 0
         
-        # 관리자 모드에서만 디버그 정보 표시
-        try:
-            import streamlit as st
-            # 관리자 모드일 때만 디버그 정보 표시
-            if st.session_state.get("admin_mode", False):
-                st.info(f"🔍 릴리스 검색: prefix='{prefix}-', 총 {len(releases)}개 릴리스 발견")
-                
-                # 모든 릴리스 태그 표시
-                all_tags = [r.get('tag_name', '') for r in releases]
-                st.write(f"**발견된 태그들:** {all_tags}")
-                
-                matching_tags = []
-                for release in releases:
-                    tag = release.get('tag_name', '')
-                    if tag.startswith(f"{prefix}-"):
-                        matching_tags.append(tag)
-                        try:
-                            num_str = tag[len(prefix) + 1:]
-                            num = int(num_str)
-                            st.write(f"✅ 매칭 태그: {tag} -> 숫자: {num}")
-                            
-                            # 순차번호 시스템 (1, 2, 3, ...) 우선
-                            if num <= 1000:  # 순차번호로 가정
-                                if num > latest_num:
-                                    latest_num = num
-                                    latest_release = release
-                                    st.success(f"🆕 새로운 순차번호 최신: {tag} (num={num})")
-                            else:
-                                # 타임스탬프 시스템 (1759256021 등) 폴백
-                                if num > latest_timestamp:
-                                    latest_timestamp = num
-                                    if latest_release is None:  # 순차번호가 없을 때만
-                                        latest_release = release
-                                        st.warning(f"🕒 타임스탬프 최신: {tag} (num={num})")
-                        except (ValueError, IndexError) as e:
-                            st.error(f"❌ 태그 파싱 실패: {tag} -> {e}")
-                            continue
-                
-                if not matching_tags:
-                    st.error(f"❌ '{prefix}-'로 시작하는 태그를 찾을 수 없습니다!")
-                
-                if latest_release:
-                    st.success(f"🎯 최종 선택된 릴리스: {latest_release.get('tag_name')}")
-                else:
-                    st.error("❌ 최신 릴리스를 찾을 수 없습니다!")
-                
-        except ImportError:
-            # Streamlit이 없는 환경에서는 print 사용
-            print(f"[DEBUG] Searching for releases with prefix '{prefix}-'")
-            print(f"[DEBUG] Found {len(releases)} total releases")
-            for release in releases:
-                tag = release.get('tag_name', '')
-                print(f"[DEBUG] Checking release tag: {tag}")
-                if tag.startswith(f"{prefix}-"):
-                    try:
-                        num_str = tag[len(prefix) + 1:]
-                        num = int(num_str)
-                        print(f"[DEBUG] Tag {tag} -> number {num}")
-                        
-                        if num <= 1000:
-                            if num > latest_num:
-                                latest_num = num
+        # 릴리스 검색 로직 실행 (항상 실행)
+        for release in releases:
+            tag = release.get('tag_name', '')
+            if tag.startswith(f"{prefix}-"):
+                try:
+                    num_str = tag[len(prefix) + 1:]
+                    num = int(num_str)
+                    print(f"[DEBUG] Tag {tag} -> number {num}")
+                    
+                    if num <= 1000:
+                        if num > latest_num:
+                            latest_num = num
+                            latest_release = release
+                            print(f"[DEBUG] New sequential latest: {tag} (num={num})")
+                    else:
+                        if num > latest_timestamp:
+                            latest_timestamp = num
+                            if latest_release is None:
                                 latest_release = release
-                                print(f"[DEBUG] New sequential latest: {tag} (num={num})")
-                        else:
-                            if num > latest_timestamp:
-                                latest_timestamp = num
-                                if latest_release is None:
-                                    latest_release = release
-                                    print(f"[DEBUG] New timestamp latest: {tag} (num={num})")
-                    except (ValueError, IndexError) as e:
-                        print(f"[DEBUG] Failed to parse tag {tag}: {e}")
-                        continue
-            print(f"[DEBUG] Final result: latest_release={latest_release.get('tag_name') if latest_release else None}")
+                                print(f"[DEBUG] New timestamp latest: {tag} (num={num})")
+                except (ValueError, IndexError) as e:
+                    print(f"[DEBUG] Failed to parse tag {tag}: {e}")
+                    continue
+        print(f"[DEBUG] Final result: latest_release={latest_release.get('tag_name') if latest_release else None}")
         return latest_release
     
     def create_index_release(self, zip_path: Path, *, title: Optional[str] = None, notes: Optional[str] = None) -> Tuple[str, Dict[str, Any]]:

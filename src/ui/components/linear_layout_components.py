@@ -170,7 +170,7 @@ def linear_hero(
     hero_css = f"""
     <style>
     .linear-hero {{
-        background: {'url(' + background_image + ')' if background_image else 'linear-gradient(135deg, var(--linear-bg-secondary) 0%, var(--linear-bg-tertiary) 100%)'} !important;
+        background: {'linear-gradient(rgba(0,0,0,0.7), rgba(0,0,0,0.7)), url(' + background_image + ')' if background_image else 'linear-gradient(135deg, var(--linear-bg-secondary) 0%, var(--linear-bg-tertiary) 100%)'} !important;
         background-size: cover !important;
         background-position: center !important;
         background-repeat: no-repeat !important;
@@ -179,7 +179,8 @@ def linear_hero(
         width: calc(100% + 2rem) !important;
         position: relative !important;
         overflow: hidden !important;
-        border-top: 0.5px solid rgba(255, 255, 255, 0.3) !important;
+        border-top: 1px solid var(--linear-border-primary) !important;
+        border-bottom: 1px solid var(--linear-border-primary) !important;
         border-bottom: 0.5px solid rgba(255, 255, 255, 0.3) !important;
     }}
     
@@ -213,7 +214,8 @@ def linear_hero(
         font-weight: var(--linear-font-weight-bold) !important;
         font-size: {'3.5rem' if variant == 'minimal' else '4rem'} !important;
         line-height: 1.1 !important;
-        color: var(--linear-text-primary) !important;
+        color: #ffffff !important;
+        text-shadow: 0 2px 4px rgba(0, 0, 0, 0.5) !important;
         margin-bottom: 1.5rem !important;
         letter-spacing: -0.02em !important;
     }}
@@ -223,7 +225,8 @@ def linear_hero(
         font-weight: var(--linear-font-weight-normal) !important;
         font-size: var(--linear-font-size-xl) !important;
         line-height: 1.6 !important;
-        color: var(--linear-text-secondary) !important;
+        color: rgba(255, 255, 255, 0.9) !important;
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5) !important;
         margin-bottom: 2rem !important;
         max-width: 600px !important;
     }}
@@ -256,6 +259,9 @@ def linear_hero(
     }}
     
     @media (max-width: 768px) {{
+        .linear-hero {{
+            padding: 3rem 0 !important;
+        }}
         .linear-hero-title {{
             font-size: 2.5rem !important;
         }}
@@ -265,6 +271,23 @@ def linear_hero(
         .linear-hero-features {{
             flex-direction: column !important;
             gap: 12px !important;
+        }}
+    }}
+    
+    @media (max-width: 480px) {{
+        .linear-hero {{
+            padding: 2rem 0 !important;
+        }}
+        .linear-hero-title {{
+            font-size: 2rem !important;
+            line-height: 1.2 !important;
+        }}
+        .linear-hero-subtitle {{
+            font-size: var(--linear-font-size-regular) !important;
+            line-height: 1.5 !important;
+        }}
+        .linear-hero-content {{
+            text-align: center !important;
         }}
     }}
     </style>

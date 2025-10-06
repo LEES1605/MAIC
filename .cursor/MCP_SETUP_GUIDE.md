@@ -88,3 +88,7 @@ Copy-Item .cursor\config.json "$env:APPDATA\Cursor\User\mcp.json"
 - **2025-01-XX**: 중복 서버 문제 해결
 - **2025-01-XX**: 설정 파일 구조 정리
 
+
+
+
+

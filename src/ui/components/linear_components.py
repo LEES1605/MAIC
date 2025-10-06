@@ -140,6 +140,66 @@ def linear_button(
         background: {_get_button_hover_bg(variant)} !important;
         transform: translateY(-1px) !important;
     }}
+    
+    /* 추가 테두리 강화 - 모든 가능한 선택자 */
+    button[data-testid="baseButton-secondary"],
+    button[data-testid="baseButton-primary"],
+    button[data-testid="baseButton-danger"],
+    button[data-testid="baseButton-success"] {{
+        border: 2px solid {_get_button_color(variant)} !important;
+        border-style: solid !important;
+        border-width: 2px !important;
+        border-color: {_get_button_color(variant)} !important;
+        background: {_get_button_bg(variant)} !important;
+        color: {_get_button_color(variant)} !important;
+        box-shadow: none !important;
+        font-family: var(--linear-font-primary) !important;
+        font-weight: var(--linear-font-weight-medium) !important;
+        border-radius: var(--linear-radius-{size}) !important;
+        padding: {_get_button_padding(size)} !important;
+        transition: all 0.2s ease !important;
+        min-height: 44px !important;
+        display: block !important;
+        width: 100% !important;
+        box-sizing: border-box !important;
+        position: relative !important;
+        margin: 0 !important;
+        outline: none !important;
+    }}
+    
+    /* ::after pseudo-element로 테두리 강제 적용 */
+    .stButton > button::after {{
+        content: '' !important;
+        position: absolute !important;
+        top: -2px !important;
+        left: -2px !important;
+        right: -2px !important;
+        bottom: -2px !important;
+        border: 2px solid {_get_button_color(variant)} !important;
+        border-radius: var(--linear-radius-{size}) !important;
+        pointer-events: none !important;
+        z-index: 1 !important;
+    }}
+    
+    /* Streamlit 버튼 컨테이너 강제 스타일 */
+    .stButton {{
+        border: 2px solid {_get_button_color(variant)} !important;
+        border-radius: var(--linear-radius-{size}) !important;
+        background: {_get_button_bg(variant)} !important;
+        padding: 0 !important;
+        margin: 0 !important;
+        overflow: visible !important;
+    }}
+    
+    /* 모바일 반응형 */
+    @media (max-width: 480px) {{
+        .stButton > button,
+        div[data-testid="stButton"] > button {{
+            font-size: 0.9rem !important;
+            padding: 12px 16px !important;
+            min-height: 48px !important;
+        }}
+    }}
     </style>
     """
     
@@ -1473,6 +1533,71 @@ def linear_navbar(
             gap: 32px !important;
             flex: 1 !important;
             justify-content: center !important;
+            flex-direction: row !important;
+            flex-wrap: nowrap !important;
+        }
+        
+        .linear-nav-item {
+            background: transparent !important;
+            border: none !important;
+            color: rgba(255, 255, 255, 0.9) !important;
+            font-size: 0.9rem !important;
+            font-weight: 600 !important;
+            padding: 8px 16px !important;
+            border-radius: 6px !important;
+            transition: all 0.2s ease !important;
+            cursor: pointer !important;
+            white-space: nowrap !important;
+            display: inline-block !important;
+            margin: 0 !important;
+            outline: none !important;
+            text-decoration: none !important;
+        }
+        
+        .linear-nav-item:hover {
+            background: rgba(255, 255, 255, 0.1) !important;
+            color: white !important;
+        }
+        
+        /* 모바일 반응형 */
+        @media (max-width: 768px) {
+            .linear-navbar-content {
+                padding: 8px 16px !important;
+                height: 56px !important;
+            }
+            
+            .linear-navbar-nav {
+                gap: 16px !important;
+            }
+            
+            .linear-nav-item {
+                font-size: 0.8rem !important;
+                padding: 6px 12px !important;
+            }
+            
+            .linear-navbar-brand {
+                font-size: 1rem !important;
+            }
+        }
+        
+        @media (max-width: 480px) {
+            .linear-navbar-content {
+                padding: 6px 12px !important;
+                height: 48px !important;
+            }
+            
+            .linear-navbar-nav {
+                gap: 8px !important;
+            }
+            
+            .linear-nav-item {
+                font-size: 0.75rem !important;
+                padding: 4px 8px !important;
+            }
+            
+            .linear-navbar-brand {
+                font-size: 0.9rem !important;
+            }
         }
         
         .linear-navbar-actions {
@@ -1568,66 +1693,19 @@ def linear_navbar(
         with brand_col:
             st.markdown(f'<div class="linear-navbar-brand">🔷 {brand_name}</div>', unsafe_allow_html=True)
         
-        # 네비게이션 메뉴 - 가운데 (JavaScript 강제 가로 배치)
+        # 네비게이션 메뉴 - 가운데 (순수 HTML/CSS 방식)
         with nav_col:
             if nav_items:
-                st.markdown('<div class="linear-navbar-nav" id="navbar-nav-container">', unsafe_allow_html=True)
-                # 메뉴 아이템들을 가로로 배치
-                menu_cols = st.columns(len(nav_items))
-                for i, item in enumerate(nav_items):
-                    with menu_cols[i]:
-                        if st.button(
-                            item["label"], 
-                            key=f"navbar_menu_{item['label']}_{i}",
-                            help=f"{item['label']} 페이지로 이동"
-                        ):
-                            st.info(f"{item['label']} 클릭됨")
-                st.markdown('</div>', unsafe_allow_html=True)
-                
-                # JavaScript로 강제 가로 배치
-                st.markdown("""
-                <script>
-                setTimeout(function() {
-                    // 네비게이션 컨테이너 찾기
-                    const navContainer = document.getElementById('navbar-nav-container');
-                    if (navContainer) {
-                        // 모든 컬럼을 가로로 배치
-                        const columns = navContainer.querySelectorAll('[data-testid="column"]');
-                        columns.forEach(function(col, index) {
-                            col.style.display = 'inline-block';
-                            col.style.verticalAlign = 'middle';
-                            col.style.width = 'auto';
-                            col.style.marginRight = '16px';
-                            col.style.float = 'none';
-                            
-                            // 내부 div도 인라인 블록으로
-                            const innerDiv = col.querySelector('div');
-                            if (innerDiv) {
-                                innerDiv.style.display = 'inline-block';
-                                innerDiv.style.verticalAlign = 'middle';
-                                innerDiv.style.width = 'auto';
-                            }
-                            
-                            // 버튼 스타일 강제 적용
-                            const button = col.querySelector('button');
-                            if (button) {
-                                button.style.display = 'inline-block';
-                                button.style.marginRight = '8px';
-                                button.style.whiteSpace = 'nowrap';
-                            }
-                        });
-                        
-                        // 컨테이너 자체도 flex로 설정
-                        navContainer.style.display = 'flex';
-                        navContainer.style.flexDirection = 'row';
-                        navContainer.style.alignItems = 'center';
-                        navContainer.style.justifyContent = 'center';
-                        navContainer.style.gap = '16px';
-                        navContainer.style.flexWrap = 'nowrap';
-                    }
-                }, 100);
-                </script>
-                """, unsafe_allow_html=True)
+                # 순수 HTML로 메뉴 생성 (st.columns 완전 제거)
+                menu_html = '<div class="linear-navbar-nav">'
+                for item in nav_items:
+                    menu_html += f'''
+                    <button class="linear-nav-item" onclick="alert('{item['label']} 클릭됨')">
+                        {item['label']}
+                    </button>
+                    '''
+                menu_html += '</div>'
+                st.markdown(menu_html, unsafe_allow_html=True)
         
         # 액션 버튼 (로그인/사인업) - 오른쪽
         with action_col:
