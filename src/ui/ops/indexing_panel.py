@@ -171,8 +171,15 @@ def render_admin_indexing_panel() -> None:
         col1, col2 = st.columns(2)
         
         with col1:
-            if st.button("복원", key="restore_index", use_container_width=True):
-                st.info("인덱스 복원 기능은 개발 중입니다.")
+            if st.button("🔄 인덱스 복원", key="restore_index", use_container_width=True):
+                try:
+                    with st.spinner("인덱스 복원 중..."):
+                        from app import _boot_auto_restore_index
+                        _boot_auto_restore_index()
+                        st.success("✅ 인덱스 복원이 완료되었습니다!")
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"❌ 복원 실패: {e}")
         
         with col2:
             if st.button("통계", key="view_stats", use_container_width=True):
