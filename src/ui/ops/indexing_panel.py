@@ -94,13 +94,18 @@ def render_admin_indexing_panel() -> None:
     
     # 실제 인덱스 상태 확인
     is_latest = False
+    is_restored = False
+    
     if local_ready and chunks_path.exists():
         try:
-            # chunks.jsonl 파일이 존재하고 .ready 파일이 있으면 최신으로 간주
             chunks_size = chunks_path.stat().st_size
             if chunks_size > 0:
-                is_latest = True
+                # 복원된 상태로 간주 (GitHub에서 복원된 경우)
+                is_restored = True
+                # 최신 여부는 별도 로직으로 판단 (현재는 복원된 상태로 간주)
+                is_latest = False  # 복원된 상태이므로 "로컬사용"으로 표시
         except Exception:
+            is_restored = False
             is_latest = False
     
     # 파일 수 확인 (정확한 수치로 수정)
@@ -128,7 +133,10 @@ def render_admin_indexing_panel() -> None:
         with col1:
             # 인덱스 상태
             st.markdown("**인덱스 상태**")
-            if local_ready and is_latest:
+            if local_ready and is_restored:
+                st.success("복원완료")
+                st.caption("GitHub에서 복원됨")
+            elif local_ready and is_latest:
                 st.info("준비완료")
                 st.caption("최신 릴리스")
             elif local_ready:
