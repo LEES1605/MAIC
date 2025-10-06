@@ -1102,14 +1102,14 @@ def _inject_chat_styles_once() -> None:
 <style>
   /* ▶ 메시지 영역 전용 컨테이너 */
   .chatpane-messages{
-    position:relative; background:#EDF4FF; border:1px solid #D5E6FF; border-radius:18px;
+    position:relative; background:transparent; border:none; border-radius:18px;
     padding:10px; margin-top:12px;
   }
   .chatpane-messages .messages{ max-height:60vh; overflow-y:auto; padding:8px; }
 
   /* ▶ 입력 영역 전용 컨테이너 */
   .chatpane-input{
-    position:relative; background:#EDF4FF; border:1px solid #D5E6FF; border-radius:18px;
+    position:relative; background:transparent; border:none; border-radius:18px;
     padding:8px 10px 10px 10px; margin-top:12px;
   }
   .chatpane-input div[data-testid="stRadio"]{ background:#EDF4FF; padding:8px 10px 0 10px; margin:0; }
