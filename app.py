@@ -201,16 +201,18 @@ if st:
     except Exception:
         pass
 
-    # (B) 기본 멀티페이지 네비 전역 숨김(학생/관리자 공통) + 네비게이션 바 CSS 오버라이드
+    # (B) Streamlit 기본 UI 숨김 + Linear 네비게이션 CSS
     try:
         st.markdown(
             "<style>"
+            "/* Streamlit 기본 네비게이션 및 사이드바 숨김 */"
             "nav[data-testid='stSidebarNav']{display:none!important;}"
             "div[data-testid='stSidebarNav']{display:none!important;}"
+            "section[data-testid='stSidebar']{display:none!important;}"
             "section[data-testid='stSidebar'] [data-testid='stSidebarNav']{display:none!important;}"
             "section[data-testid='stSidebar'] ul[role='list']{display:none!important;}"
             
-            "/* 네비게이션 바 가로 레이아웃 강제 적용 */"
+            "/* Linear 네비게이션 바 가로 레이아웃 강제 적용 */"
             ".linear-navbar-container{display:flex!important;flex-direction:row!important;flex-wrap:nowrap!important;align-items:center!important;justify-content:space-between!important;}"
             ".linear-navbar-container > *{display:inline-block!important;vertical-align:middle!important;}"
             ".linear-navbar-nav{display:flex!important;flex-direction:row!important;flex-wrap:nowrap!important;align-items:center!important;list-style:none!important;margin:0!important;padding:0!important;}"
@@ -264,17 +266,6 @@ if st:
     except Exception:
         pass
 
-    # (D) 학생 사이드바 숨김 (관리자는 별도 처리)
-    try:
-        adm = bool(st.session_state.get("admin_mode", False))
-        if not adm:
-            # 학생: 사이드바 전체 숨김
-            st.markdown(
-                "<style>section[data-testid='stSidebar']{display:none!important;}</style>",
-                unsafe_allow_html=True,
-            )
-    except Exception:
-        pass
 
 # ===== [04] bootstrap env — END =====
 
@@ -1100,17 +1091,10 @@ def _inject_chat_styles_once() -> None:
     st.markdown(
         """
 <style>
-  /* ▶ 메시지 영역 전용 컨테이너 */
-  .chatpane-messages{
+  /* ▶ 채팅 영역 컨테이너 */
+  .chatpane-messages, .chatpane-input{
     position:relative; background:transparent; border:none; border-radius:18px;
     padding:10px; margin-top:12px;
-  }
-  .chatpane-messages .messages{ max-height:60vh; overflow-y:auto; padding:8px; }
-
-  /* ▶ 입력 영역 전용 컨테이너 */
-  .chatpane-input{
-    position:relative; background:transparent; border:none; border-radius:18px;
-    padding:8px 10px 10px 10px; margin-top:12px;
   }
   .chatpane-input div[data-testid="stRadio"]{ background:#EDF4FF; padding:8px 10px 0 10px; margin:0; }
   .chatpane-input div[data-testid="stRadio"] > div[role="radiogroup"]{ display:flex; gap:10px; flex-wrap:wrap; }
@@ -1181,44 +1165,10 @@ def _inject_chat_styles_once() -> None:
     .bubble{ max-width:96%; }
     .chip-src{ max-width:160px; }
     
-    /* 관리자 모드 모바일 최적화 */
-    .mobile-status-grid {
-      grid-template-columns: 1fr 1fr !important;
-      gap: 6px !important;
-    }
-    .status-card {
-      font-size: 10px !important;
-      padding: 4px !important;
-    }
-    
     /* 버튼 모바일 최적화 */
     .stButton > button {
       font-size: 12px !important;
       padding: 8px 12px !important;
-    }
-    
-    /* 로그 컨테이너 모바일 최적화 */
-    .mobile-log-container {
-      max-height: 120px !important;
-      padding: 4px !important;
-    }
-    .log-entry {
-      font-size: 10px !important;
-      padding: 2px 0 !important;
-    }
-    
-    /* 진행바 모바일 최적화 */
-    .mobile-progress-container {
-      padding: 4px !important;
-    }
-    .progress-bar {
-      height: 14px !important;
-    }
-    .progress-text {
-      font-size: 9px !important;
-    }
-    .progress-label {
-      font-size: 10px !important;
     }
     
     /* 헤더 모바일 최적화 */
@@ -1230,27 +1180,10 @@ def _inject_chat_styles_once() -> None:
       padding: 1px 8px !important;
     }
     
-    /* 사이드바 모바일 최적화 */
-    .css-1d391kg {
-      padding-top: 1rem !important;
-    }
-    
     /* 메인 컨테이너 모바일 최적화 */
     .main .block-container {
       padding-top: 1rem !important;
       padding-bottom: 1rem !important;
-    }
-  }
-  
-  /* 태블릿 반응형 (481px - 768px) */
-  @media (min-width: 481px) and (max-width: 768px) {
-    .mobile-status-grid {
-      grid-template-columns: repeat(3, 1fr) !important;
-      gap: 8px !important;
-    }
-    .status-card {
-      font-size: 11px !important;
-      padding: 6px !important;
     }
   }
 </style>
@@ -1711,12 +1644,12 @@ def _render_body() -> None:
     # 5) 채팅 메시지 영역 (컨테이너 클래스 분리)
     _inject_chat_styles_once()
     with st.container(key="chat_messages_container"):
-        st.markdown('<div class="chatpane-messages" data-testid="chat-messages"><div class="messages">', unsafe_allow_html=True)
+        st.markdown('<div class="chatpane-messages" data-testid="chat-messages">', unsafe_allow_html=True)
         try:
             _render_chat_panel()
         except Exception as e:
             _errlog(f"chat panel failed: {e}", where="[render_body.chat]", exc=e)
-        st.markdown("</div></div>", unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)
 
     # 6) 채팅 입력 폼 (컨테이너 클래스 분리 + key 안정화)
     with st.container(key="chat_input_container"):  # border=True 제거
