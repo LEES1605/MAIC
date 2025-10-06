@@ -176,12 +176,9 @@ def render_sidebar(*, back_page: str | None = "app.py", icon_only: bool = False)
 
 
 def render_management_content() -> None:
-    """관리 탭 내용 렌더링"""
-    try:
-        from ..ops.indexing_panel import render_admin_indexing_panel
-        render_admin_indexing_panel()
-    except Exception as e:
-        st.error(f"관리 패널 로드 실패: {e}")
+    """관리 탭 내용 렌더링 - 중복 호출 방지를 위해 비활성화"""
+    # render_admin_indexing_panel()은 app.py에서 이미 호출되므로 중복 방지
+    st.info("관리 패널은 메인 화면에서 확인하세요.")
 
 
 def render_prompt_content() -> None:
