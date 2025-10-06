@@ -9,24 +9,9 @@ except Exception:
 
 # --- internal: default "Pages" nav hiding ------------------------------------
 def _hide_default_pages_nav() -> None:
-    if st is None:
-        return
-    try:
-        st.markdown(
-            """
-            <style>
-              [data-testid="stSidebarNav"],
-              section[data-testid="stSidebarNav"],
-              nav[data-testid="stSidebarNav"],
-              div[data-testid="stSidebarNav"]{
-                display:none!important; height:0!important; overflow:hidden!important;
-              }
-            </style>
-            """,
-            unsafe_allow_html=True,
-        )
-    except Exception:
-        pass
+    """Streamlit 기본 사이드바 숨김 (중복 제거 - base.py에서 처리)"""
+    # 이 함수는 더 이상 사용되지 않음 - base.py에서 통합 처리됨
+    pass
 
 # --- internal: page switching helpers ----------------------------------------
 def _switch_to(target: str) -> bool:
@@ -140,9 +125,7 @@ def render_sidebar(*, back_page: str | None = "app.py", icon_only: bool = False)
             padding-left: 0 !important;
         }
         
-        /* 추가 사이드바 숨김 */
-        div[data-testid="stSidebar"] { display: none !important; }
-        .stSidebar { display: none !important; }
+        /* 추가 사이드바 숨김 (중복 제거 - base.py에서 처리) */
         </style>
         """, unsafe_allow_html=True)
     except Exception:

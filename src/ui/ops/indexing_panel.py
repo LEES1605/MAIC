@@ -38,17 +38,8 @@ def render_admin_indexing_panel() -> None:
     if not hasattr(st.session_state, "_linear_css_loaded"):
         st.markdown("""
         <style>
-        /* Linear 테마 변수 */
+        /* Linear 테마 변수는 base.py에서 처리 (중복 제거) */
         :root {
-          --linear-bg-primary: #08090a;
-          --linear-bg-secondary: #1c1c1f;
-          --linear-bg-tertiary: #232326;
-          --linear-text-primary: #f7f8f8;
-          --linear-text-secondary: #d0d6e0;
-          --linear-text-tertiary: #8a8f98;
-          --linear-brand: #5e6ad2;
-          --linear-accent: #7170ff;
-          
           /* 전체 글씨 크기 30% 증가 */
           --font-size-base: 1.3em;
         }
@@ -77,12 +68,7 @@ def render_admin_indexing_panel() -> None:
           font-size: 1em !important;
         }
         
-        :root {
-          --linear-border: #23252a;
-          --linear-radius: 8px;
-          --linear-radius-lg: 12px;
-          --linear-font: "Inter Variable", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-        }
+        /* Linear 테마 변수는 base.py에서 처리 (중복 제거) */
         
         /* Streamlit 컴포넌트 Linear 스타일링 */
         .stButton > button {

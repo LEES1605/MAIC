@@ -205,25 +205,10 @@ def render() -> None:
             label = "문제발생"
             dot_cls = "rd-low"
 
-    # Linear 테마 CSS 변수 적용
+    # Linear 테마 CSS 변수 적용 (중복 제거 - base.py에서 처리)
     st.markdown(
         """
         <style>
-        :root {
-          /* Linear 테마 색상 변수 */
-          --linear-bg-primary: #08090a;
-          --linear-bg-secondary: #1c1c1f;
-          --linear-bg-tertiary: #232326;
-          --linear-text-primary: #f7f8f8;
-          --linear-text-secondary: #d0d6e0;
-          --linear-text-tertiary: #8a8f98;
-          --linear-brand: #5e6ad2;
-          --linear-accent: #7170ff;
-          --linear-border: #23252a;
-          --linear-radius: 8px;
-          --linear-radius-lg: 12px;
-          --linear-font: "Inter Variable", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-        }
         
         .brand-wrap{ 
           display:flex; 
