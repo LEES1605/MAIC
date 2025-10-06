@@ -1,0 +1,18 @@
+[
+  {
+    "error_id": "8509a7b4",
+    "timestamp": "2025-10-07T00:19:15.353642",
+    "session_id": "20251007_001000",
+    "error_type": null,
+    "error_message": "Unhandled Exception: OSError: [WinError 10038] 소켓 이외의 개체에 작업을 시도했습니다",
+    "context": {
+      "exception_type": "<class 'OSError'>",
+      "traceback": "NoneType: None\n",
+      "unhandled": true
+    },
+    "attempt_count": 1,
+    "resolved": false,
+    "solutions_tried": [],
+    "final_solution": null
+  }
+]
