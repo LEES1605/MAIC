@@ -1719,7 +1719,7 @@ def _render_body() -> None:
         st.markdown("</div></div>", unsafe_allow_html=True)
 
     # 6) 채팅 입력 폼 (컨테이너 클래스 분리 + key 안정화)
-    with st.container(border=True, key="chat_input_container"):
+    with st.container(key="chat_input_container"):  # border=True 제거
         st.markdown('<div class="chatpane-input" data-testid="chat-input">', unsafe_allow_html=True)
         st.session_state["__mode"] = _render_mode_controls_pills() or st.session_state.get("__mode", "")
         submitted: bool = False

@@ -251,7 +251,7 @@ def render_admin_indexing_panel() -> None:
                 st.markdown("**신규파일**")
                 st.metric("새파일", "0개")
         
-        st.divider()
+        # st.divider()  # 불필요한 구분선 제거
         
         # 관리 도구 섹션 (인덱싱/업로드 포함)
         st.markdown("### 관리 도구")
