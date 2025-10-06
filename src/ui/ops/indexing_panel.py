@@ -171,7 +171,7 @@ def render_admin_indexing_panel() -> None:
         col1, col2 = st.columns(2)
         
         with col1:
-            if st.button("🔄 인덱스 복원", key="restore_index", use_container_width=True):
+            if st.button("🔄 인덱스 복원", key="admin_restore_index", use_container_width=True):
                 try:
                     with st.spinner("인덱스 복원 중..."):
                         from app import _boot_auto_restore_index
@@ -182,14 +182,14 @@ def render_admin_indexing_panel() -> None:
                     st.error(f"❌ 복원 실패: {e}")
         
         with col2:
-            if st.button("통계", key="view_stats", use_container_width=True):
+            if st.button("📊 통계", key="admin_view_stats", use_container_width=True):
                 st.info("통계 보기 기능은 개발 중입니다.")
         
         # 추가 작업 버튼들
         col1, col2 = st.columns(2)
         
         with col1:
-            if st.button("인덱싱", key="index_and_upload", use_container_width=True):
+            if st.button("🔍 인덱싱", key="admin_index_and_upload", use_container_width=True):
                 # 인덱싱 작업 실행
                 try:
                     with st.spinner("인덱싱 중..."):
@@ -202,7 +202,7 @@ def render_admin_indexing_panel() -> None:
                     st.error(f"오류: {e}")
         
         with col2:
-            if st.button("업로드", key="release_upload", use_container_width=True):
+            if st.button("📤 업로드", key="admin_release_upload", use_container_width=True):
                 # 릴리스 업로드 작업
                 try:
                     with st.spinner("업로드 중..."):
