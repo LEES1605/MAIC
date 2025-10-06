@@ -32,11 +32,10 @@ from .index_state import (
 
 # ============================= [03] local helpers — START =============================
 def _persist_dir_safe() -> Path:
-    """persist 경로를 안전하게 해석한다."""
+    """persist 경로를 안전하게 해석한다. PathResolver 클래스 사용."""
     try:
-        from src.core.persist import effective_persist_dir
-        p = Path(str(effective_persist_dir())).expanduser()
-        return p
+        from src.core.path_resolver import get_path_resolver
+        return get_path_resolver().get_persist_dir()
     except Exception:
         return Path.home() / ".maic" / "persist"
 

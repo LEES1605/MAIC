@@ -438,16 +438,71 @@ def render() -> None:
                     st.rerun()
 
                 if submit:
-                    if not pwd_set:
-                        st.error("서버에 관리자 비밀번호가 설정되어 있지 않습니다.")
-                    elif pw and str(pw) == str(pwd_set):
-                        ss["admin_mode"] = True
-                        ss["_show_admin_login"] = False
-                        try:
-                            st.toast("로그인 성공", icon="✅")
-                        except Exception:
-                            st.success("로그인 성공")
+                    # 보안 강화: 입력 검증 및 로그인 시도 제한
+                    from src.core.security_manager import (
+                        get_security_manager, 
+                        InputType, 
+                        SecurityLevel,
+                        check_login_attempts,
+                        record_login_attempt
+                    )
+                    
+                    # 클라이언트 식별자 (IP 기반)
+                    client_id = getattr(st, 'session_state', {}).get('_client_id', 'unknown')
+                    if not client_id or client_id == 'unknown':
+                        # 간단한 클라이언트 식별자 생성
+                        import hashlib
+                        client_id = hashlib.md5(str(time.time()).encode()).hexdigest()[:8]
+                        ss['_client_id'] = client_id
+                    
+                    # 로그인 시도 제한 확인
+                    is_allowed, limit_error = check_login_attempts(client_id)
+                    if not is_allowed:
+                        st.error(limit_error)
                         st.rerun()
-                    else:
-                        st.error("비밀번호가 올바르지 않습니다.")
+                    
+                    # 비밀번호 입력 검증
+                    is_valid, validation_error = get_security_manager().validate_input(
+                        pw, InputType.PASSWORD, "비밀번호", SecurityLevel.HIGH
+                    )
+                    
+                    if not is_valid:
+                        record_login_attempt(client_id, False)
+                        st.error(validation_error)
+                        st.rerun()
+                    
+                    # 비밀번호 설정 확인
+                    if not pwd_set:
+                        record_login_attempt(client_id, False)
+                        st.error("서버에 관리자 비밀번호가 설정되어 있지 않습니다.")
+                        st.rerun()
+                    
+                    # 비밀번호 검증 (타이밍 공격 방지를 위한 상수 시간 비교)
+                    import hmac
+                    try:
+                        # 안전한 비밀번호 비교
+                        is_correct = hmac.compare_digest(str(pw), str(pwd_set))
+                        
+                        if is_correct:
+                            # 로그인 성공
+                            record_login_attempt(client_id, True)
+                            ss["admin_mode"] = True
+                            ss["_show_admin_login"] = False
+                            try:
+                                st.toast("로그인 성공", icon="✅")
+                            except Exception:
+                                st.success("로그인 성공")
+                            st.rerun()
+                        else:
+                            # 로그인 실패
+                            record_login_attempt(client_id, False)
+                            st.error("비밀번호가 올바르지 않습니다.")
+                            st.rerun()
+                            
+                    except Exception as e:
+                        # 보안 에러 메시지 정화
+                        from src.core.security_manager import sanitize_error_message
+                        record_login_attempt(client_id, False)
+                        st.error(sanitize_error_message(e))
+                        st.rerun()
 # ========================================= [EOF] =========================================

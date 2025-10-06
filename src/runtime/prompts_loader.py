@@ -54,13 +54,9 @@ _last_status: Dict[str, Any] = {
 
 # ---- 파싱 유틸 ----------------------------------------------------------------
 def _yaml_load(text: str) -> Dict[str, Any]:
-    """PyYAML 있으면 YAML, 없으면 JSON 파싱(모든 JSON은 YAML로도 유효)."""
-    if yaml is not None:
-        return yaml.safe_load(text)
-    try:
-        return json.loads(text)
-    except Exception as e:
-        raise RuntimeError("YAML 파서(PyYAML)가 없습니다. 의존성에 'pyyaml>=6'을 추가하세요.") from e
+    """레거시 호환성을 위한 YAML 로딩 함수"""
+    from src.core.data_parser import parse_yaml
+    return parse_yaml(text)
 
 def _is_non_empty_str(x: Any) -> bool:
     return isinstance(x, str) and bool(x.strip())

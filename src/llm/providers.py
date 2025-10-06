@@ -20,15 +20,9 @@ except Exception:
 
 
 def _secret(name: str, default: Optional[str] = None) -> Optional[str]:
-    """Streamlit secrets 우선 → 환경변수. 실패 시 default."""
-    try:
-        if st is not None and hasattr(st, "secrets"):
-            v = st.secrets.get(name)
-            if v is not None:
-                return v if isinstance(v, str) else json.dumps(v, ensure_ascii=False)
-        return os.getenv(name, default)
-    except Exception:
-        return os.getenv(name, default)
+    """ConfigManager를 사용한 설정값 조회"""
+    from src.core.config_manager import get_config_manager
+    return get_config_manager().get_optional_string(name, default)
 # ================ [LLM-01] IMPORTS & SECRET HELPER — END ==================
 
 
@@ -220,17 +214,9 @@ def call_with_fallback(
             if (stream or cb) and text:
                 try:
                     if cb is not None:
-                        # 성능 최적화: 청크 단위로 처리 (문자 단위 대신)
-                        chunk_size = 10  # 10자씩 묶어서 처리
-                        for i in range(0, len(text), chunk_size):
-                            chunk = text[i:i + chunk_size]
-                            try:
-                                cb(chunk)  # 청크 단위로 전달
-                            except (ValueError, TypeError, AttributeError) as e:
-                                # 콜백 오류는 UX를 깨지 않도록 무시
-                                from src.common.utils import errlog
-                                errlog(f"콜백 오류: {e}", "stream_llm", e)
-                                pass
+                        # 성능 최적화: PerformanceManager를 사용한 적응형 청킹
+                        from src.core.performance_manager import optimize_streaming
+                        optimize_streaming(text, cb)
                 except (RuntimeError, OSError) as e:
                     from src.common.utils import errlog
                     errlog(f"스트리밍 처리 오류: {e}", "stream_llm", e)

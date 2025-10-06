@@ -29,19 +29,12 @@ def _gh_get_file(repo: str, path: str, token: Optional[str]) -> Optional[bytes]:
 
 
 def _safe_yaml_load(b64_content: str) -> Optional[Dict]:
+    """레거시 호환성을 위한 안전한 YAML 로딩 함수"""
+    from src.core.data_parser import parse_base64
     try:
-        raw = base64.b64decode(b64_content.encode("utf-8"))
+        return parse_base64(b64_content, validate_security=False)
     except Exception:
         return None
-    try:
-        import yaml  # lazy
-
-        return yaml.safe_load(raw) or {}
-    except Exception:
-        try:
-            return json.loads(raw.decode("utf-8"))
-        except Exception:
-            return None
 
 
 def fetch_prompts_from_github(

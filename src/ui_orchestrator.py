@@ -9,27 +9,39 @@ from typing import Any, Dict, Optional
 
 
 def _add_error(e: BaseException) -> None:
-    """에러를 세션에 누적(최대 200개)"""
+    """에러를 ErrorHandler를 통해 처리"""
     try:
-        import streamlit as st
-
-        lst = st.session_state.setdefault("_orchestrator_errors", [])
-        lst.append("".join(traceback.format_exception(type(e), e, e.__traceback__)))
-        if len(lst) > 200:
-            del lst[:-200]
+        from src.core.error_handler import get_error_handler
+        # BaseException을 Exception으로 변환하여 처리
+        if isinstance(e, Exception):
+            get_error_handler().log_exception(e, source="orchestrator")
+        else:
+            get_error_handler().log_error(f"BaseException: {type(e).__name__}: {str(e)}", source="orchestrator")
     except Exception:
-        pass
+        # 폴백: 기존 방식 사용
+        try:
+            import streamlit as st
+            lst = st.session_state.setdefault("_orchestrator_errors", [])
+            lst.append("".join(traceback.format_exception(type(e), e, e.__traceback__)))
+            if len(lst) > 200:
+                del lst[:-200]
+        except Exception:
+            pass
 
 
 def _errors_text() -> str:
-    """누적 에러를 텍스트로 반환(비어 있으면 대시)"""
+    """누적 에러를 텍스트로 반환(비어 있으면 대시) - ErrorHandler 사용"""
     try:
-        import streamlit as st
-
-        lst = st.session_state.get("_orchestrator_errors") or []
-        return "\n\n".join(lst) if lst else "—"
+        from src.core.error_handler import get_error_handler
+        return get_error_handler().get_errors_text()
     except Exception:
-        return "—"
+        # 폴백: 기존 방식 사용
+        try:
+            import streamlit as st
+            lst = st.session_state.get("_orchestrator_errors") or []
+            return "\n\n".join(lst) if lst else "—"
+        except Exception:
+            return "—"
 
 
 def _ready_mark(persist_dir: Path) -> None:
@@ -47,11 +59,7 @@ def _ready_mark(persist_dir: Path) -> None:
 def _lazy_imports() -> Dict[str, Any]:
     """
     의존 모듈을 '가능한 이름들'로 느슨하게 임포트해 dict로 반환.
-    PERSIST_DIR 우선순위:
-      (0) Streamlit 세션 _PERSIST_DIR
-      (1) src.rag.index_build.PERSIST_DIR
-      (2) src.config.PERSIST_DIR
-      (3) ~/.maic/persist
+    PathResolver 클래스를 사용하여 PERSIST_DIR 경로 해석.
     """
     from pathlib import Path as _P
 
@@ -63,37 +71,12 @@ def _lazy_imports() -> Dict[str, Any]:
 
     deps: Dict[str, Any] = {}
 
-    # 0) 세션에 공유된 경로 우선
+    # PathResolver 클래스를 사용하여 PERSIST_DIR 경로 해석
     try:
-        import streamlit as st
-
-        _ss_p = st.session_state.get("_PERSIST_DIR")
-        if _ss_p:
-            deps["PERSIST_DIR"] = _P(str(_ss_p))
+        from src.core.path_resolver import get_path_resolver
+        deps["PERSIST_DIR"] = get_path_resolver().get_persist_dir()
     except Exception:
-        pass
-
-    # 1) index_build
-    mod_idx = _imp("src.rag.index_build")
-    if "PERSIST_DIR" not in deps and mod_idx is not None:
-        try:
-            if hasattr(mod_idx, "PERSIST_DIR"):
-                deps["PERSIST_DIR"] = mod_idx.PERSIST_DIR  # hasattr 체크 후 직접 접근
-        except Exception:
-            pass
-
-    # 2) config
-    if "PERSIST_DIR" not in deps:
-        mod_cfg = _imp("src.config")
-        if mod_cfg is not None:
-            try:
-                if hasattr(mod_cfg, "PERSIST_DIR"):
-                    deps["PERSIST_DIR"] = _P(mod_cfg.PERSIST_DIR)  # ← B009 해결: getattr → 직접 접근
-            except Exception:
-                pass
-
-    # 3) 최종 폴백
-    if "PERSIST_DIR" not in deps or not deps["PERSIST_DIR"]:
+        # 폴백: 기본 경로
         deps["PERSIST_DIR"] = _P.home() / ".maic" / "persist"
 
     # --- GitHub release / manifest ---
@@ -113,6 +96,7 @@ def _lazy_imports() -> Dict[str, Any]:
             deps["restore_latest"] = None
 
     # --- Google Drive / Index 유틸 ---
+    mod_idx = _imp("src.rag.index_build")
     if mod_idx is not None:
         try:
             deps.setdefault("_drive_client", getattr(mod_idx, "_drive_client", None))

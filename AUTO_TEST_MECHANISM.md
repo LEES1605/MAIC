@@ -11,7 +11,7 @@
 - **문법 검사**: `python -m py_compile` 실행
 
 ### 2. Playwright 앱 실행 테스트  
-- **Streamlit 앱 상태**: 포트 8504 LISTENING 확인
+- **Streamlit 앱 상태**: 포트 8501 LISTENING 확인
 - **Playwright 테스트**: `python simple_playwright_test.py` 실행
 
 ## 🔧 사용법

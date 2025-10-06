@@ -310,13 +310,26 @@ def get_or_build_index(dataset_dir: str, *, use_cache: bool = True) -> Dict:
     cpath = _cache_path_for(dataset_dir)
     if cpath.exists():
         try:
-            # 성능 최적화: 파일 수정 시간 체크로 불필요한 로딩 방지
+            # 성능 최적화: PerformanceManager를 사용한 캐시 관리
+            from src.core.performance_manager import get_performance_manager
+            perf_manager = get_performance_manager()
+            
+            # 캐시 히트율 추적
+            cache_key = f"index_{dataset_dir}"
+            cached_result = perf_manager.cache_get(cache_key)
+            if cached_result is not None:
+                return cached_result
+            
+            # 파일 수정 시간 체크로 불필요한 로딩 방지
             cache_stat = cpath.stat()
             dataset_path = Path(dataset_dir)
             if dataset_path.exists():
                 dataset_stat = dataset_path.stat()
                 if cache_stat.st_mtime >= dataset_stat.st_mtime:
-                    return load_index(str(cpath))
+                    result = load_index(str(cpath))
+                    # 성능 최적화: 결과를 메모리 캐시에 저장
+                    perf_manager.cache_set(cache_key, result)
+                    return result
         except (OSError, IOError) as e:
             from src.common.utils import errlog
             errlog(f"캐시 파일 체크 실패: {e}", "RAG 검색", e)
@@ -325,6 +338,8 @@ def get_or_build_index(dataset_dir: str, *, use_cache: bool = True) -> Dict:
     idx = build_index(dataset_dir)
     try:
         save_index(idx, str(cpath))
+        # 성능 최적화: 빌드된 인덱스를 메모리 캐시에 저장
+        perf_manager.cache_set(cache_key, idx)
     except (OSError, IOError) as e:
         from src.common.utils import errlog
         errlog(f"캐시 저장 실패: {e}", "RAG 검색", e)

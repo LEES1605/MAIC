@@ -21,7 +21,7 @@ python -m ruff check src/ui/ops/indexing_panel.py src/ui/header.py
 ### 2단계: Playwright 앱 실행 테스트
 ```bash
 # 1. Streamlit 앱 실행 확인
-netstat -an | findstr :8504
+netstat -an | findstr :8501
 
 # 2. Playwright 테스트 실행
 python simple_playwright_test.py
@@ -138,7 +138,7 @@ async def test_app():
         page = await browser.new_page()
         
         try:
-            await page.goto("http://localhost:8504")
+            await page.goto("http://localhost:8501")
             await page.wait_for_timeout(5000)
             await page.screenshot(path="test_result.png")
             print("✅ Playwright 테스트 성공")

@@ -8,12 +8,13 @@ from typing import Any, Optional
 try:
     import streamlit as st
 except Exception:
-    st = None
+    st = None  # type: ignore
 
 
 def errlog(msg: str, where: str = "", exc: Exception | None = None) -> None:
     """
     에러 로그 + 필요 시 Streamlit에 자세한 스택 표시.
+    ErrorHandler 클래스를 사용하여 통합 에러 처리.
     
     Args:
         msg: 에러 메시지
@@ -21,10 +22,16 @@ def errlog(msg: str, where: str = "", exc: Exception | None = None) -> None:
         exc: 예외 객체 (선택사항)
     """
     try:
-        prefix = f"{where} " if where else ""
-        print(f"[ERR] {prefix}{msg}")
+        # ErrorHandler를 사용하여 에러 로깅
+        from src.core.error_handler import get_error_handler, ErrorLevel
+        
+        source = where if where else "utils"
         if exc:
-            traceback.print_exception(exc)
+            get_error_handler().log_exception(exc, msg, source)
+        else:
+            get_error_handler().log_error(msg, source)
+        
+        # 기존 Streamlit UI 표시 유지
         try:
             if st is not None:
                 with st.expander("자세한 오류 로그", expanded=False):
@@ -36,11 +43,19 @@ def errlog(msg: str, where: str = "", exc: Exception | None = None) -> None:
                             )
                         except Exception:
                             detail = "traceback 사용 불가"
+                    prefix = f"{where} " if where else ""
                     st.code(f"{prefix}{msg}\n{detail}")
         except Exception:
             pass
     except Exception:
-        pass
+        # 폴백: 기존 방식 사용
+        try:
+            prefix = f"{where} " if where else ""
+            print(f"[ERR] {prefix}{msg}")
+            if exc:
+                traceback.print_exception(exc)
+        except Exception:
+            pass
 
 
 # persist_dir_safe 함수는 src.services.index_actions._persist_dir_safe로 통합됨

@@ -16,18 +16,12 @@ from typing import Any, Optional
 
 # --------- public: persist_dir -------------------------------------------------
 def persist_dir() -> Path:
+    """PathResolver 클래스를 사용하여 persist 디렉토리 경로 해석"""
     try:
-        # rag.index_build 우선
-        from src.rag.index_build import PERSIST_DIR as IDX  # noqa: E402
-        return Path(str(IDX)).expanduser()
+        from src.core.path_resolver import get_path_resolver
+        return get_path_resolver().get_persist_dir()
     except Exception:
-        pass
-    try:
-        from src.config import PERSIST_DIR as CFG  # noqa: E402
-        return Path(str(CFG)).expanduser()
-    except Exception:
-        pass
-    return Path.home() / ".maic" / "persist"
+        return Path.home() / ".maic" / "persist"
 
 
 # --------- public: ensure_keys -------------------------------------------------

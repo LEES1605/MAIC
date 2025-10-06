@@ -237,9 +237,10 @@ def _apply_pending_prefill() -> None:
 # Local Save — per-mode(4개 파일: persona + 3모드) 저장
 # =============================================================================
 def _effective_persist_dir() -> Path:
+    """PathResolver 클래스를 사용하여 persist 디렉토리 경로 해석"""
     try:
-        from src.core.persist import effective_persist_dir  # app.py와 정합
-        return Path(effective_persist_dir()).expanduser()
+        from src.core.path_resolver import get_path_resolver
+        return get_path_resolver().get_persist_dir()
     except Exception:
         return Path.home() / ".maic" / "persist"
 
@@ -277,14 +278,34 @@ def _build_yaml_for_publish() -> str:
 
 
 def _validate_yaml_text(text: str) -> tuple[bool, List[str]]:
+    """YAML 텍스트 검증 (보안 강화)"""
+    from src.core.security_manager import get_security_manager, InputType, SecurityLevel
+    
     msgs: List[str] = []
+    
+    # 1. 기본 입력 검증 (보안 강화)
+    is_valid, validation_error = get_security_manager().validate_input(
+        text, InputType.YAML, "YAML 텍스트", SecurityLevel.HIGH
+    )
+    if not is_valid:
+        return False, [validation_error]
+    
+    # 2. 길이 제한 (보안상 과도한 크기 방지)
+    if len(text) > 100000:  # 100KB 제한
+        return False, ["YAML 텍스트가 너무 큽니다. 100KB 이하로 제한됩니다."]
+    
+    # 3. YAML 파싱
     try:
         y = yaml.safe_load(text) or {}
     except Exception as e:
-        return False, [f"YAML 파싱 실패: {e}"]
+        # 보안 에러 메시지 정화
+        from src.core.security_manager import sanitize_error_message
+        return False, [f"YAML 파싱 실패: {sanitize_error_message(e)}"]
 
+    # 4. 구조 검증
     if not isinstance(y.get("version"), (str, int, float)):
         msgs.append("'version' 필드가 필요합니다.")
+    
     modes = y.get("modes")
     if not isinstance(modes, dict):
         msgs.append("'modes'는 매핑(dict)이어야 합니다.")
@@ -294,9 +315,33 @@ def _validate_yaml_text(text: str) -> tuple[bool, List[str]]:
             v = modes.get(k, "")
             if not isinstance(v, str) or not v.strip():
                 msgs.append(f"'modes.{k}' 문자열이 필요합니다.")
+            else:
+                # 5. 각 모드별 내용 보안 검증
+                is_mode_valid, mode_error = get_security_manager().validate_input(
+                    v, InputType.TEXT, f"modes.{k}", SecurityLevel.MEDIUM
+                )
+                if not is_mode_valid:
+                    msgs.append(f"'modes.{k}' {mode_error}")
+        
+        # 6. 허용되지 않은 키 검사
         extras = [k for k in modes.keys() if k not in required]
         if extras:
             msgs.append(f"'modes'에 허용되지 않은 키: {extras}")
+    
+    # 7. 추가 보안 검증: 위험한 패턴 검사
+    dangerous_patterns = [
+        r'<script[^>]*>.*?</script>',
+        r'javascript:',
+        r'eval\s*\(',
+        r'exec\s*\(',
+        r'__import__\s*\(',
+    ]
+    
+    for pattern in dangerous_patterns:
+        if re.search(pattern, text, re.IGNORECASE):
+            msgs.append("YAML에 허용되지 않은 위험한 패턴이 포함되어 있습니다.")
+            break
+    
     return (len(msgs) == 0), msgs
 
 
@@ -311,35 +356,32 @@ def _gh_headers(token: Optional[str]) -> Dict[str, str]:
 
 
 def _fetch_workflow_yaml(owner: str, repo: str, workflow: str, ref: str, token: Optional[str]) -> Optional[str]:
-    headers = _gh_headers(token)
+    """워크플로우 YAML 파일 내용을 가져옵니다."""
     try:
-        r = req.get(
-            f"https://api.github.com/repos/{owner}/{repo}/actions/workflows/{workflow}",
-            headers=headers,
-            timeout=10,
-        )
-        if r.ok:
-            path = r.json().get("path")
-            if isinstance(path, str) and path:
-                r2 = req.get(
-                    f"https://api.github.com/repos/{owner}/{repo}/contents/{path}?ref={ref}",
-                    headers=headers,
-                    timeout=10,
-                )
-                if r2.ok and r2.json().get("encoding") == "base64":
-                    return base64.b64decode(r2.json()["content"].encode("utf-8")).decode("utf-8", "ignore")
+        from src.core.github_client import get_github_client
+        github_client = get_github_client()
+        
+        # 워크플로우 정보 조회
+        workflow_info = github_client.get_workflow(owner, repo, workflow, token)
+        path = workflow_info.get("path")
+        
+        if isinstance(path, str) and path:
+            file_contents = github_client.get_file_contents(owner, repo, path, token, ref)
+            if file_contents and file_contents.get("encoding") == "base64":
+                return base64.b64decode(file_contents["content"].encode("utf-8")).decode("utf-8", "ignore")
     except Exception:
         pass
+    
     try:
-        r3 = req.get(
-            f"https://api.github.com/repos/{owner}/{repo}/contents/.github/workflows/{workflow}?ref={ref}",
-            headers=headers,
-            timeout=10,
+        # 직접 경로로 시도
+        file_contents = github_client.get_file_contents(
+            owner, repo, f".github/workflows/{workflow}", token, ref
         )
-        if r3.ok and r3.json().get("encoding") == "base64":
-            return base64.b64decode(r3.json()["content"].encode("utf-8")).decode("utf-8", "ignore")
+        if file_contents and file_contents.get("encoding") == "base64":
+            return base64.b64decode(file_contents["content"].encode("utf-8")).decode("utf-8", "ignore")
     except Exception:
         pass
+    
     return None
 
 

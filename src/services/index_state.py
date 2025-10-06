@@ -10,7 +10,7 @@ import sys
 try:
     import streamlit as st
 except Exception:  # pragma: no cover - streamlit is optional in test env
-    st = None
+    st = None  # type: ignore
 # ================================ [02] module imports — END ===========================
 
 # ============================= [03] constants — START =================================
@@ -66,11 +66,26 @@ def step_set(i: int, status: str, detail: str = "") -> None:
 
 
 def log(message: str, level: str = "info") -> None:
-    """진행 로그를 세션에 기록한다. level: info|warn|err"""
+    """진행 로그를 세션에 기록한다. level: info|warn|err - ErrorHandler 통합"""
     if st is None:
         return
     ensure_index_state()
     try:
+        # ErrorHandler를 사용하여 에러 로깅
+        from src.core.error_handler import get_error_handler, ErrorLevel
+        
+        # 레벨 매핑
+        level_mapping = {
+            "info": ErrorLevel.INFO,
+            "warn": ErrorLevel.WARN,
+            "err": ErrorLevel.ERROR,
+            "error": ErrorLevel.ERROR
+        }
+        
+        error_level = level_mapping.get(level, ErrorLevel.INFO)
+        get_error_handler().log(message, error_level, "index_state")
+        
+        # 기존 세션 상태 로그도 유지 (UI 호환성)
         logs: List[Dict[str, Any]] = st.session_state["_IDX_LOGS"]
         
         # 중복 메시지 방지: 같은 메시지가 5초 이내에 있으면 추가하지 않음
@@ -103,7 +118,18 @@ def log(message: str, level: str = "info") -> None:
         except Exception:
             pass
     except Exception:
-        pass
+        # 폴백: 기존 방식 사용
+        try:
+            fallback_logs: List[Dict[str, Any]] = st.session_state["_IDX_LOGS"]
+            now = int(time.time())
+            message_str = str(message or "")
+            level_str = str(level or "info")
+            fallback_logs.append({"level": level_str, "message": message_str, "ts": now})
+            if len(fallback_logs) > 100:
+                del fallback_logs[:-100]
+            st.session_state["_IDX_LOGS"] = fallback_logs
+        except Exception:
+            pass
 # ============================== [04] helpers — END ====================================
 
 # ======================= [05] render helpers (UI) — START =============================

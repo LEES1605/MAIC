@@ -255,6 +255,7 @@ def rebuild_index(output_dir: str | Path | None = None) -> Dict[str, Any]:
 
     # ---------- JSONL 쓰기 ---------------------------------------------------
     def _write_jsonl_atomic(lines: list[dict[str, _Any]], out_file: Path) -> int:
+        """성능 최적화된 JSONL 쓰기 (메모리 효율성 개선)"""
         tmp = out_file.with_suffix(".jsonl.tmp")
         try:
             if tmp.exists():
@@ -264,14 +265,25 @@ def rebuild_index(output_dir: str | Path | None = None) -> Dict[str, Any]:
         count = 0
         try:
             out_file.parent.mkdir(parents=True, exist_ok=True)
+            
+            # 성능 최적화: 배치 크기로 나누어 처리 (메모리 사용량 제한)
+            batch_size = 1000  # 한 번에 처리할 최대 라인 수
             with tmp.open("w", encoding="utf-8") as w:
-                for obj in lines:
-                    try:
-                        w.write(_json.dumps(obj, ensure_ascii=False))
-                        w.write("\n")
-                        count += 1
-                    except Exception:
-                        continue
+                for i in range(0, len(lines), batch_size):
+                    batch = lines[i:i + batch_size]
+                    for obj in batch:
+                        try:
+                            w.write(_json.dumps(obj, ensure_ascii=False))
+                            w.write("\n")
+                            count += 1
+                        except Exception:
+                            continue
+                    
+                    # 배치 처리 후 메모리 정리
+                    if i % (batch_size * 10) == 0:  # 10배치마다
+                        import gc
+                        gc.collect()
+            
             if count > 0:
                 if out_file.exists():
                     out_file.unlink()

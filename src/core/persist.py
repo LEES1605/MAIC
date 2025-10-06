@@ -1,81 +1,28 @@
 # ============== [01] imports & docstring — START ==============
 """
-Persist path resolver (SSOT).
+Persist path resolver (SSOT) - PathResolver 클래스 사용
 
-Precedence (high → low):
-  1) st.session_state["_PERSIST_DIR"]
-  2) env "MAIC_PERSIST"
-  3) env "MAIC_PERSIST_DIR"  # legacy
-  4) src.rag.index_build.PERSIST_DIR  # legacy helper
-  5) default: ~/.maic/persist
-
-Note:
-- This module only *decides* the path. No side effects (no mkdir).
-- Always returns pathlib.Path with expanduser().
+이 모듈은 이제 PathResolver 클래스를 사용하여 경로 해석을 수행합니다.
+기존 함수들은 호환성을 위해 유지되지만, 내부적으로는 PathResolver를 사용합니다.
 """
 from __future__ import annotations
 
-import os
 from pathlib import Path
-from typing import Optional
 
-try:
-    import streamlit as st
-except Exception:  # noqa: BLE001
-    st = None  # Streamlit 없는 환경(예: CI) 대비
+# PathResolver 클래스 사용
+from .path_resolver import get_path_resolver
 
 __all__ = ["effective_persist_dir", "share_persist_dir_to_session"]
-
-_DEFAULT_PERSIST_DIR: Path = Path.home() / ".maic" / "persist"
 # ============== [01] imports & docstring — END ==============
 
 
 # ============== [02] effective dir — START ==============
-def _normalize_path(value: Optional[str]) -> Optional[Path]:
-    """Normalize non-empty string path to Path; else None."""
-    if not value:
-        return None
-    s = value.strip()
-    if not s:
-        return None
-    return Path(s).expanduser()
-
-
 def effective_persist_dir() -> Path:
     """
     Single source of truth (SSOT) for persist directory.
-    No side effects; just returns a normalized Path.
+    PathResolver 클래스를 사용하여 경로를 해석합니다.
     """
-    # 1) Session-stamped path
-    try:
-        if st is not None and "_PERSIST_DIR" in st.session_state:
-            p = _normalize_path(str(st.session_state["_PERSIST_DIR"]))
-            if p is not None:
-                return p
-    except Exception:  # noqa: BLE001
-        pass
-
-    # 2) New env
-    p = _normalize_path(os.getenv("MAIC_PERSIST"))
-    if p is not None:
-        return p
-
-    # 3) Legacy env
-    p = _normalize_path(os.getenv("MAIC_PERSIST_DIR"))
-    if p is not None:
-        return p
-
-    # 4) Legacy constant (lazy import to avoid hard dependency)
-    try:
-        from src.rag.index_build import PERSIST_DIR as _pp
-        p = _normalize_path(str(_pp))
-        if p is not None:
-            return p
-    except Exception:  # noqa: BLE001
-        pass
-
-    # 5) Default
-    return _DEFAULT_PERSIST_DIR
+    return get_path_resolver().get_persist_dir()
 # ============== [02] effective dir — END ==============
 
 

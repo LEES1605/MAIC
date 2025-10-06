@@ -550,14 +550,28 @@ def _boot_auto_restore_index() -> None:
     UI 연동(진행표시 훅): 플레이스홀더 생성은 [19]에서만 수행
     """
     import os
-    # 멱등 보호 (UI 버튼 클릭 시에는 강제 재시도 허용)
+    import time
+    
+    # 무한 루프 방지: 세션 상태 체크 강화
     try:
         if "st" in globals() and st is not None:
             # 이미 복원이 완료되었으면 스킵
             if st.session_state.get("_BOOT_RESTORE_DONE", False):
                 print(f"[DEBUG] Skipping restore - already done: {st.session_state.get('_BOOT_RESTORE_DONE')}")
                 return
-    except Exception:
+            
+            # 무한 루프 방지: 복원 시도 횟수 제한
+            restore_attempts = st.session_state.get("_RESTORE_ATTEMPTS", 0)
+            if restore_attempts >= 3:
+                print(f"[DEBUG] Too many restore attempts ({restore_attempts}), skipping to prevent infinite loop")
+                st.session_state["_BOOT_RESTORE_DONE"] = True
+                return
+            
+            # 복원 시도 횟수 증가
+            st.session_state["_RESTORE_ATTEMPTS"] = restore_attempts + 1
+            print(f"[DEBUG] Restore attempt {restore_attempts + 1}/3")
+    except Exception as e:
+        print(f"[DEBUG] Error in restore loop prevention: {e}")
         pass
 
     def _idx(name: str, *args, **kwargs):
@@ -751,7 +765,11 @@ def _boot_auto_restore_index() -> None:
                 st.session_state["_BOOT_RESTORE_DONE"] = True
                 st.session_state.setdefault("_PERSIST_DIR", p.resolve())
                 st.session_state["_INDEX_IS_LATEST"] = True
-        except Exception:
+                # 복원 시도 횟수 리셋 (메타 일치 시에도 무한 루프 방지)
+                st.session_state["_RESTORE_ATTEMPTS"] = 0
+                print(f"[DEBUG] Meta match, restore attempts reset to prevent infinite loop")
+        except Exception as e:
+            print(f"[DEBUG] Error in meta match handling: {e}")
             pass
         return
 
@@ -830,30 +848,39 @@ def _boot_auto_restore_index() -> None:
         restore_success = cj.exists() and cj.stat().st_size > 0
         print(f"[DEBUG] Restore success: {restore_success}")
         
-        # 세션 상태 업데이트 (일관성 보장)
+        # 세션 상태 업데이트 (일관성 보장) - 무한 루프 방지 강화
         try:
             if "st" in globals() and st is not None:
                 st.session_state["_INDEX_LOCAL_READY"] = restore_success
                 st.session_state["_INDEX_IS_LATEST"] = restore_success
                 st.session_state["_BOOT_RESTORE_DONE"] = True
+                # 복원 시도 횟수 리셋 (성공 시)
+                st.session_state["_RESTORE_ATTEMPTS"] = 0
                 print(f"[DEBUG] Session state updated: _INDEX_LOCAL_READY={restore_success}")
+                print(f"[DEBUG] Restore attempts reset to 0")
         except Exception as e:
             print(f"[DEBUG] Error updating session state: {e}")
 
         _idx("step_set", 3, "run", "메타 저장/정리...")
         normalize_ready_file(p)
+        # 메타 저장 함수 정의
+        def _safe_save_meta(path, tag=None, release_id=None):
+            try:
+                from src.runtime.local_restore import save_restore_meta
+                return save_restore_meta(path, tag=tag, release_id=release_id)
+            except Exception:
+                return None
+        
         saved_meta = _safe_save_meta(
             p,
             tag=result.get("tag") if result else None,
             release_id=int(result.get("release_id")) if result and result.get("release_id") else None,
         )
 
+        # 중복된 세션 상태 설정 제거 (이미 위에서 설정됨)
         try:
             if "st" in globals() and st is not None:
-                st.session_state["_PERSIST_DIR"] = p.resolve()
-                st.session_state["_BOOT_RESTORE_DONE"] = True
-                st.session_state["_INDEX_IS_LATEST"] = True
-                st.session_state["_INDEX_LOCAL_READY"] = True
+                # 메타 정보만 추가로 저장
                 if saved_meta is not None:
                     st.session_state["_LAST_RESTORE_META"] = getattr(saved_meta, "to_dict", lambda: {})()
         except Exception:
@@ -871,11 +898,15 @@ def _boot_auto_restore_index() -> None:
                 st.session_state["_BOOT_RESTORE_DONE"] = True
                 st.session_state.setdefault("_PERSIST_DIR", p.resolve())
                 st.session_state["_INDEX_IS_LATEST"] = False
+                # 복원 시도 횟수 리셋 (실패 시에도 무한 루프 방지)
+                st.session_state["_RESTORE_ATTEMPTS"] = 0
+                print(f"[DEBUG] Restore failed, but attempts reset to prevent infinite loop")
                 # UI에서 호출된 경우 오류 메시지 표시
                 if st.session_state.get("_FORCE_RESTORE", False):
                     st.error(f"복원 실패: {e}")
                     st.session_state["_FORCE_RESTORE"] = False  # 플래그 리셋
-        except Exception:
+        except Exception as e:
+            print(f"[DEBUG] Error in failure handling: {e}")
             pass
         return
 # ================================= [10] auto-restore — END ============================
@@ -1479,32 +1510,40 @@ def _render_body() -> None:
     if st is None:
         return
 
-    # 1) 부팅 훅 - 한 번만 실행
+    # 1) 부팅 훅 - 한 번만 실행 (무한 루프 방지)
     try:
         # 복원 상태 확인 (이미 완료되었으면 스킵)
         if st.session_state.get("_BOOT_RESTORE_DONE", False):
             print(f"[DEBUG] Restore already completed - skipping")
         else:
-            print(f"[DEBUG] Starting restore process")
-            
-            # persist 디렉토리 상태 확인
-            persist_dir = effective_persist_dir()
-            print(f"[DEBUG] Persist directory: {persist_dir}")
-            print(f"[DEBUG] Persist exists: {persist_dir.exists()}")
-            print(f"[DEBUG] Persist writable: {os.access(persist_dir.parent, os.W_OK) if persist_dir.parent.exists() else False}")
-            
-            # 복원 실행
-            print(f"[DEBUG] About to call _boot_auto_restore_index()")
-            _boot_auto_restore_index()
-            print(f"[DEBUG] _boot_auto_restore_index() completed")
-            
-            print(f"[DEBUG] About to call _boot_auto_scan_prepared()")
-            _boot_auto_scan_prepared()  # 새로 추가: 자동 스캔
-            print(f"[DEBUG] _boot_auto_scan_prepared() completed")
-            
-            print(f"[DEBUG] About to call _boot_autoflow_hook()")
-            _boot_autoflow_hook()
-            print(f"[DEBUG] _boot_autoflow_hook() completed")
+            # 앱 시작 시 한 번만 복원 실행
+            if not st.session_state.get("_APP_INITIALIZED", False):
+                print(f"[DEBUG] App initialization - starting restore process")
+                
+                # persist 디렉토리 상태 확인
+                persist_dir = effective_persist_dir()
+                print(f"[DEBUG] Persist directory: {persist_dir}")
+                print(f"[DEBUG] Persist exists: {persist_dir.exists()}")
+                print(f"[DEBUG] Persist writable: {os.access(persist_dir.parent, os.W_OK) if persist_dir.parent.exists() else False}")
+                
+                # 복원 실행
+                print(f"[DEBUG] About to call _boot_auto_restore_index()")
+                _boot_auto_restore_index()
+                print(f"[DEBUG] _boot_auto_restore_index() completed")
+                
+                print(f"[DEBUG] About to call _boot_auto_scan_prepared()")
+                _boot_auto_scan_prepared()  # 새로 추가: 자동 스캔
+                print(f"[DEBUG] _boot_auto_scan_prepared() completed")
+                
+                print(f"[DEBUG] About to call _boot_autoflow_hook()")
+                _boot_autoflow_hook()
+                print(f"[DEBUG] _boot_autoflow_hook() completed")
+                
+                # 앱 초기화 완료 표시
+                st.session_state["_APP_INITIALIZED"] = True
+                print(f"[DEBUG] App initialization completed")
+            else:
+                print(f"[DEBUG] App already initialized - skipping restore")
     except Exception as e:
         _errlog(f"boot check failed: {e}", where="[render_body.boot]", exc=e)
 

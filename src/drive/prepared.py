@@ -34,9 +34,11 @@ def _persist_path(persist_dir: str | Path) -> Path:
 
 
 def _read_json_any(path: Path) -> Any:
+    """레거시 호환성을 위한 JSON 파일 읽기 함수"""
+    from src.core.file_manager import read_json_file
     try:
         if path.exists() and path.stat().st_size > 0:
-            return json.loads(path.read_text(encoding="utf-8"))
+            return read_json_file(path)
     except Exception:
         return None
     return None

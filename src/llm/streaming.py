@@ -38,7 +38,7 @@ _WS_RE = re.compile(r"\s+")
 @dataclass
 class BufferOptions:
     """
-    스트리밍 버퍼 옵션
+    스트리밍 버퍼 옵션 (PerformanceManager 통합)
     """
     min_emit_chars: int = 28
     # 강한 종료부호가 없더라도 이 길이를 넘으면 가벼운 플러시를 허용
@@ -49,6 +49,8 @@ class BufferOptions:
     flush_on_strong_punct: bool = True
     # 개행이 들어오면 줄 단위로 플러시
     flush_on_newline: bool = True
+    # 성능 최적화 사용 여부
+    use_performance_optimization: bool = True
 
 
 class SentenceBuffer:
@@ -67,6 +69,15 @@ class SentenceBuffer:
         self.opts = opts or BufferOptions()
         self._buf: list[str] = []
         self._last_emit_at: float = time.monotonic()
+        
+        # PerformanceManager 통합
+        self._performance_manager = None
+        if self.opts.use_performance_optimization:
+            try:
+                from src.core.performance_manager import get_performance_manager
+                self._performance_manager = get_performance_manager()
+            except ImportError:
+                pass
 
     # 내부 유틸
     def _now_ms(self) -> int:
@@ -79,7 +90,23 @@ class SentenceBuffer:
         txt = text
         if not txt:
             return
-        self.on_emit(txt)
+        
+        # 성능 모니터링
+        if self._performance_manager:
+            start_time = time.time()
+            self.on_emit(txt)
+            emit_time = (time.time() - start_time) * 1000  # ms
+            
+            # 성능 메트릭 기록
+            from src.core.performance_manager import PerformanceMetric
+            self._performance_manager.record_metric(
+                PerformanceMetric.STREAMING_LATENCY,
+                emit_time,
+                {"text_length": len(txt), "buffer_size": len(self._buf)}
+            )
+        else:
+            self.on_emit(txt)
+        
         self._last_emit_at = time.monotonic()
 
     def _try_flush_by_rules(self) -> None:

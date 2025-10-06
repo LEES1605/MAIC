@@ -59,14 +59,15 @@ def _split_repo(repo_full: str) -> Tuple[str, str]:
 
 
 def _http_get_json(url: str, token: Optional[str] = None, timeout: int = 12) -> dict:
-    if req is None:
-        raise RuntimeError("requests not available")
+    """레거시 호환성을 위한 HTTP GET JSON 함수"""
+    from src.core.http_client import get_http_client
+    http_client = get_http_client()
+    
     headers = {"Accept": "application/vnd.github+json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    r = req.get(url, headers=headers, timeout=timeout)
-    r.raise_for_status()
-    return r.json()
+    
+    return http_client.get_json(url, headers=headers, timeout=timeout)
 
 
 def _read_text(p: Path) -> Optional[str]:
