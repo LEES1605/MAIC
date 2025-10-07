@@ -170,6 +170,11 @@ class HeaderComponent:
                             self._st.rerun()
                         
                         if submit:
+                            # 디버깅 정보 표시
+                            self._st.write(f"입력된 비밀번호: '{pw}'")
+                            self._st.write(f"설정된 비밀번호: '{pwd_set}'")
+                            self._st.write(f"비밀번호 일치: {pw == pwd_set if pw and pwd_set else False}")
+                            
                             # 비밀번호 확인
                             if pw and pwd_set and pw == pwd_set:
                                 ss["admin_mode"] = True
