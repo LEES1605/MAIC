@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MAIC - AI Teacher</title>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Poppins', sans-serif;
+            background: 
+                radial-gradient(1200px 600px at 10% -10%, #232b57, transparent 60%),
+                radial-gradient(800px 480px at 90% 20%, #1e254f, transparent 55%),
+                linear-gradient(160deg, #0d1028, #0a0d24 70%);
+            color: #e6ebff;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        
+        /* 네비게이션 바 */
+        .navbar {
+            background: rgba(23, 28, 65, 0.3);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 24px;
+            padding: 1rem 2rem;
+            margin-bottom: 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 
+                0 8px 32px rgba(0, 0, 0, 0.2),
+                inset 0 1px 0 rgba(255, 255, 255, 0.05);
+        }
+        
+        .brand {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: #f0f4ff;
+            background: linear-gradient(135deg, #7b61ff, #55c1ff);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        
+        .nav-menu {
+            display: flex;
+            gap: 2rem;
+        }
+        
+        .nav-item {
+            color: #b4bbd9;
+            text-decoration: none;
+            font-weight: 500;
+            transition: color 0.3s ease;
+            cursor: pointer;
+        }
+        
+        .nav-item:hover {
+            color: #7b61ff;
+        }
+        
+        /* 히어로 섹션 */
+        .hero {
+            text-align: center;
+            padding: 4rem 0;
+            margin-bottom: 3rem;
+        }
+        
+        .hero-title {
+            font-size: 3rem;
+            font-weight: 700;
+            margin-bottom: 1rem;
+            color: #f0f4ff;
+            background: linear-gradient(135deg, #7b61ff, #55c1ff);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        
+        .hero-subtitle {
+            font-size: 1.2rem;
+            color: #b4bbd9;
+            margin-bottom: 2rem;
+        }
+        
+        /* 상태 표시 */
+        .status-section {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+        
+        .status-chip {
+            background: rgba(123, 97, 255, 0.2);
+            backdrop-filter: blur(20px);
+            color: white;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 20px;
+            padding: 8px 16px;
+            font-size: 0.9rem;
+            font-weight: 500;
+            animation: pulse 2s infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+        
+        /* 모드 선택 */
+        .mode-section {
+            text-align: center;
+            margin-bottom: 3rem;
+        }
+        
+        .mode-title {
+            font-size: 1.5rem;
+            font-weight: 600;
+            margin-bottom: 1.5rem;
+            color: #f0f4ff;
+        }
+        
+        .mode-chips {
+            display: flex;
+            justify-content: center;
+            gap: 1rem;
+            flex-wrap: wrap;
+        }
+        
+        .mode-chip {
+            background: rgba(123, 97, 255, 0.15);
+            backdrop-filter: blur(15px);
+            color: white;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 20px;
+            padding: 12px 24px;
+            font-size: 1rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 
+                0 4px 16px rgba(123, 97, 255, 0.2),
+                inset 0 1px 0 rgba(255, 255, 255, 0.05);
+        }
+        
+        .mode-chip:hover {
+            background: rgba(123, 97, 255, 0.3);
+            transform: translateY(-2px);
+            box-shadow: 
+                0 6px 20px rgba(123, 97, 255, 0.3),
+                inset 0 1px 0 rgba(255, 255, 255, 0.1);
+        }
+        
+        .mode-chip.selected {
+            background: linear-gradient(135deg, #7b61ff, #55c1ff);
+            box-shadow: 
+                0 8px 32px rgba(123, 97, 255, 0.4),
+                inset 0 1px 0 rgba(255, 255, 255, 0.2);
+        }
+        
+        /* 입력 섹션 */
+        .input-section {
+            max-width: 600px;
+            margin: 0 auto 3rem;
+        }
+        
+        .input-container {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            align-items: center;
+            background: rgba(16, 19, 45, 0.85);
+            border-radius: 999px;
+            padding: 6px;
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            box-shadow: 
+                0 8px 32px rgba(0, 0, 0, 0.2),
+                inset 0 1px 0 rgba(255, 255, 255, 0.05);
+        }
+        
+        .input-field {
+            background: transparent;
+            border: none;
+            color: #f5f7ff;
+            padding: 12px 18px;
+            font-size: 15px;
+            outline: none;
+            font-family: 'Poppins', sans-serif;
+        }
+        
+        .input-field::placeholder {
+            color: #b4bbd9;
+        }
+        
+        .submit-button {
+            background: #6c63ff;
+            border: none;
+            color: #ffffff;
+            padding: 12px 24px;
+            border-radius: 999px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.3s ease;
+            font-family: 'Poppins', sans-serif;
+        }
+        
+        .submit-button:hover {
+            transform: translateY(-2px);
+        }
+        
+        /* 채팅 섹션 */
+        .chat-section {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        
+        .chat-message {
+            background: rgba(23, 28, 65, 0.3);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 24px;
+            padding: 1.5rem;
+            margin-bottom: 1rem;
+            box-shadow: 
+                0 8px 32px rgba(0, 0, 0, 0.2),
+                inset 0 1px 0 rgba(255, 255, 255, 0.05);
+        }
+        
+        .message-user {
+            background: rgba(123, 97, 255, 0.2);
+            border-color: rgba(123, 97, 255, 0.3);
+        }
+        
+        .message-ai {
+            background: rgba(23, 28, 65, 0.4);
+        }
+        
+        .message-header {
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+            color: #f0f4ff;
+        }
+        
+        .message-content {
+            color: #e6ebff;
+            line-height: 1.6;
+        }
+        
+        /* 푸터 */
+        .footer {
+            text-align: center;
+            padding: 2rem 0;
+            margin-top: 4rem;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+            color: #b4bbd9;
+        }
+        
+        /* 사이드바 스타일 */
+        .sidebar {
+            position: fixed;
+            left: 0;
+            top: 0;
+            width: 250px;
+            height: 100vh;
+            background: rgba(13, 16, 40, 0.4);
+            backdrop-filter: blur(15px);
+            border-right: 1px solid rgba(255, 255, 255, 0.05);
+            padding: 2rem 1rem;
+            z-index: 1000;
+        }
+        
+        .sidebar-menu {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+        
+        .sidebar-item {
+            margin-bottom: 1rem;
+        }
+        
+        .sidebar-link {
+            display: block;
+            color: #b4bbd9;
+            text-decoration: none;
+            padding: 12px 16px;
+            border-radius: 12px;
+            transition: all 0.3s ease;
+            font-weight: 500;
+        }
+        
+        .sidebar-link:hover {
+            background: rgba(123, 97, 255, 0.2);
+            color: #7b61ff;
+        }
+        
+        .sidebar-link.active {
+            background: rgba(123, 97, 255, 0.3);
+            color: #7b61ff;
+        }
+        
+        /* 메인 콘텐츠 오프셋 */
+        .main-content {
+            margin-left: 250px;
+            padding: 20px;
+        }
+        
+        /* 반응형 */
+        @media (max-width: 768px) {
+            .sidebar {
+                transform: translateX(-100%);
+                transition: transform 0.3s ease;
+            }
+            
+            .sidebar.open {
+                transform: translateX(0);
+            }
+            
+            .main-content {
+                margin-left: 0;
+            }
+            
+            .hero-title {
+                font-size: 2rem;
+            }
+            
+            .mode-chips {
+                flex-direction: column;
+                align-items: center;
+            }
+            
+            .input-container {
+                grid-template-columns: 1fr;
+                gap: 1rem;
+            }
+            
+            .nav-menu {
+                display: none;
+            }
+            
+            .mobile-menu-btn {
+                display: block;
+                position: fixed;
+                top: 20px;
+                left: 20px;
+                z-index: 1001;
+                background: rgba(123, 97, 255, 0.2);
+                border: none;
+                color: white;
+                padding: 12px;
+                border-radius: 12px;
+                cursor: pointer;
+            }
+        }
+        
+        .mobile-menu-btn {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <!-- 모바일 메뉴 버튼 -->
+    <button class="mobile-menu-btn" onclick="toggleSidebar()">☰</button>
+    
+    <!-- 사이드바 -->
+    <aside class="sidebar" id="sidebar">
+        <div class="brand" style="margin-bottom: 2rem; font-size: 1.2rem;">MAIC</div>
+        <ul class="sidebar-menu">
+            <li class="sidebar-item">
+                <a href="#" class="sidebar-link active">홈</a>
+            </li>
+            <li class="sidebar-item">
+                <a href="#" class="sidebar-link">학습</a>
+            </li>
+            <li class="sidebar-item">
+                <a href="#" class="sidebar-link">통계</a>
+            </li>
+            <li class="sidebar-item">
+                <a href="#" class="sidebar-link">설정</a>
+            </li>
+            <li class="sidebar-item">
+                <a href="#" class="sidebar-link">관리자</a>
+            </li>
+        </ul>
+    </aside>
+    
+    <!-- 메인 콘텐츠 -->
+    <div class="main-content">
+        <div class="container">
+            <!-- 네비게이션 바 -->
+            <nav class="navbar">
+                <div class="brand">LEES AI Teacher</div>
+                <div class="nav-menu">
+                    <a href="#" class="nav-item">홈</a>
+                    <a href="#" class="nav-item">학습</a>
+                    <a href="#" class="nav-item">통계</a>
+                    <a href="#" class="nav-item">설정</a>
+                </div>
+            </nav>
+        
+        <!-- 히어로 섹션 -->
+        <section class="hero">
+            <h1 class="hero-title">AI 영어 선생님</h1>
+            <p class="hero-subtitle">개인 맞춤형 영어 학습을 시작하세요</p>
+            
+            <!-- 상태 표시 -->
+            <div class="status-section">
+                <div class="status-chip">준비완료</div>
+            </div>
+        </section>
+        
+        <!-- 모드 선택 -->
+        <section class="mode-section">
+            <h2 class="mode-title">학습 모드를 선택하세요</h2>
+            <div class="mode-chips">
+                <div class="mode-chip" onclick="selectMode(this)">문법</div>
+                <div class="mode-chip" onclick="selectMode(this)">독해</div>
+                <div class="mode-chip" onclick="selectMode(this)">작문</div>
+            </div>
+        </section>
+        
+        <!-- 입력 섹션 -->
+        <section class="input-section">
+            <div class="input-container">
+                <input type="text" class="input-field" placeholder="질문을 입력하세요..." id="questionInput">
+                <button class="submit-button" onclick="submitQuestion()">시작하기</button>
+            </div>
+        </section>
+        
+        <!-- 채팅 섹션 -->
+        <section class="chat-section" id="chatSection" style="display: none;">
+            <div class="chat-message message-user">
+                <div class="message-header">사용자</div>
+                <div class="message-content" id="userMessage"></div>
+            </div>
+            <div class="chat-message message-ai">
+                <div class="message-header">AI 선생님</div>
+                <div class="message-content" id="aiMessage"></div>
+            </div>
+        </section>
+        
+            <!-- 푸터 -->
+            <footer class="footer">
+                <p>&copy; 2024 LEES AI Teacher. All rights reserved.</p>
+            </footer>
+        </div>
+    </div>
+    
+    <script>
+        let selectedMode = null;
+        
+        // 사이드바 토글 함수
+        function toggleSidebar() {
+            const sidebar = document.getElementById('sidebar');
+            sidebar.classList.toggle('open');
+        }
+        
+        // 사이드바 링크 클릭 이벤트
+        document.addEventListener('DOMContentLoaded', function() {
+            const sidebarLinks = document.querySelectorAll('.sidebar-link');
+            sidebarLinks.forEach(link => {
+                link.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    
+                    // 모든 링크에서 active 클래스 제거
+                    sidebarLinks.forEach(l => l.classList.remove('active'));
+                    
+                    // 클릭된 링크에 active 클래스 추가
+                    this.classList.add('active');
+                    
+                    // 모바일에서 사이드바 닫기
+                    if (window.innerWidth <= 768) {
+                        toggleSidebar();
+                    }
+                });
+            });
+        });
+        
+        function selectMode(element) {
+            // 모든 칩에서 selected 클래스 제거
+            document.querySelectorAll('.mode-chip').forEach(chip => {
+                chip.classList.remove('selected');
+            });
+            
+            // 선택된 칩에 selected 클래스 추가
+            element.classList.add('selected');
+            selectedMode = element.textContent;
+            
+            console.log('선택된 모드:', selectedMode);
+        }
+        
+        function submitQuestion() {
+            const input = document.getElementById('questionInput');
+            const question = input.value.trim();
+            
+            if (!question) {
+                alert('질문을 입력해주세요!');
+                return;
+            }
+            
+            if (!selectedMode) {
+                alert('학습 모드를 선택해주세요!');
+                return;
+            }
+            
+            // 사용자 메시지 표시
+            document.getElementById('userMessage').textContent = question;
+            document.getElementById('chatSection').style.display = 'block';
+            
+            // AI 응답 시뮬레이션
+            setTimeout(() => {
+                document.getElementById('aiMessage').textContent = 
+                    `${selectedMode} 모드로 "${question}"에 대한 답변을 준비하고 있습니다...`;
+            }, 1000);
+            
+            // 입력 필드 초기화
+            input.value = '';
+        }
+        
+        // Enter 키로 제출
+        document.getElementById('questionInput').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                submitQuestion();
+            }
+        });
+    </script>
+</body>
+</html>

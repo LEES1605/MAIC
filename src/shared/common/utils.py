@@ -97,4 +97,4 @@ def safe_getattr(obj: Any, attr_name: str, default: Any = None) -> Any:
         return default
 
 
-__all__ = ["errlog", "persist_dir_safe", "safe_import", "safe_getattr"]
+__all__ = ["errlog", "safe_import", "safe_getattr"]

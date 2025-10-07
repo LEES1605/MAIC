@@ -11,15 +11,21 @@ LINEAR_THEME = {
             "accent": "#7170ff",
             "accentHover": "#828fff"
         },
+        "gradient": {
+            "primary": "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+            "secondary": "linear-gradient(135deg, #f093fb 0%, #f5576c 100%)",
+            "tertiary": "linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)"
+        },
         "background": {
-            "primary": "#1a1a1a",
-            "secondary": "#2a2a2a", 
+            "primary": "#2c2f48",
+            "secondary": "#1a1d2e", 
             "tertiary": "#3a3a3a",
             "quaternary": "#4a4a4a",
-            "translucent": "rgba(255,255,255,.1)"
+            "translucent": "rgba(255,255,255,.1)",
+            "neumorphism": "linear-gradient(135deg, #2c2f48 0%, #1a1d2e 100%)"
         },
         "text": {
-            "primary": "#e0e0e0",
+            "primary": "#c1c3e0",
             "secondary": "#b0b0b0",
             "tertiary": "#808080",
             "quaternary": "#606060"
@@ -41,7 +47,7 @@ LINEAR_THEME = {
     
     "typography": {
         "fontFamily": {
-            "primary": '"Inter Variable", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif',
+            "primary": '"Nunito", "Inter Variable", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif',
             "monospace": '"Berkeley Mono", ui-monospace, "SF Mono", Menlo, monospace'
         },
         "fontWeights": {
@@ -60,6 +66,22 @@ LINEAR_THEME = {
             "title1": "2.25rem",
             "title2": "1.5rem",
             "title3": "1.25rem"
+        },
+        "neumorphism": {
+            "shadow": {
+                "light": "8px 8px 16px rgba(0, 0, 0, 0.3), -8px -8px 16px rgba(255, 255, 255, 0.1)",
+                "medium": "12px 12px 24px rgba(0, 0, 0, 0.4), -12px -12px 24px rgba(255, 255, 255, 0.15)",
+                "inset": "inset 8px 8px 16px rgba(0, 0, 0, 0.3), inset -8px -8px 16px rgba(255, 255, 255, 0.1)"
+            },
+            "button": {
+                "background": "linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)",
+                "borderRadius": "20px",
+                "hover": "translateY(-2px)"
+            },
+            "input": {
+                "background": "rgba(44, 47, 72, 0.8)",
+                "borderRadius": "20px"
+            }
         }
     },
     
@@ -285,40 +307,89 @@ def get_theme_css() -> str:
     """
 
 
+def get_neumorphism_css() -> str:
+    """Neumorphism CSS 스타일 반환"""
+    return f"""
+    <style>
+    /* Neumorphism 배경 */
+    [data-testid="stApp"] {{
+        background: {LINEAR_THEME['colors']['background']['neumorphism']} !important;
+        color: {LINEAR_THEME['colors']['text']['primary']} !important;
+        font-family: 'Poppins', sans-serif !important;
+    }}
+    
+    /* 사이드바 숨기기 */
+    [data-testid="stSidebar"] {{
+        display: none !important;
+    }}
+    
+    /* Neumorphism 버튼 */
+    [data-testid="stButton"] > button {{
+        background: {LINEAR_THEME['colors']['neumorphism']['button']['background']} !important;
+        border: none !important;
+        border-radius: {LINEAR_THEME['colors']['neumorphism']['button']['borderRadius']} !important;
+        color: white !important;
+        font-weight: 600 !important;
+        box-shadow: {LINEAR_THEME['colors']['neumorphism']['shadow']['light']} !important;
+        transition: all 0.3s ease !important;
+    }}
+    
+    [data-testid="stButton"] > button:hover {{
+        transform: {LINEAR_THEME['colors']['neumorphism']['button']['hover']} !important;
+        box-shadow: {LINEAR_THEME['colors']['neumorphism']['shadow']['medium']} !important;
+    }}
+    
+    /* Neumorphism 입력 필드 */
+    [data-testid="stTextInput"] input {{
+        background: {LINEAR_THEME['colors']['neumorphism']['input']['background']} !important;
+        border-radius: {LINEAR_THEME['colors']['neumorphism']['input']['borderRadius']} !important;
+        color: {LINEAR_THEME['colors']['text']['primary']} !important;
+        border: none !important;
+        box-shadow: {LINEAR_THEME['colors']['neumorphism']['shadow']['inset']} !important;
+    }}
+    </style>
+    """
+
+
 def apply_theme() -> None:
-    """Linear 테마를 Streamlit에 적용"""
-    # CSS 적용
-    st.markdown(get_theme_css(), unsafe_allow_html=True)
+    """Neumorphism 테마를 Streamlit에 적용"""
+    # Poppins 폰트 로드
+    st.markdown("""
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    """, unsafe_allow_html=True)
+    
+    # Neumorphism CSS 적용
+    st.markdown(get_neumorphism_css(), unsafe_allow_html=True)
     
     # JavaScript로 강제 적용
     st.markdown("""
     <script>
-    // 페이지 로드 후 강제로 다크 테마 적용
+    // 페이지 로드 후 강제로 Neumorphism 테마 적용
     document.addEventListener('DOMContentLoaded', function() {
         // 배경색 강제 적용
-        document.body.style.backgroundColor = '#08090a';
-        document.documentElement.style.backgroundColor = '#08090a';
+        document.body.style.background = 'linear-gradient(135deg, #2c2f48 0%, #1a1d2e 100%)';
+        document.documentElement.style.background = 'linear-gradient(135deg, #2c2f48 0%, #1a1d2e 100%)';
         
         // 모든 Streamlit 컨테이너에 배경색 적용
         const containers = document.querySelectorAll('.main .block-container, .stApp, .main');
         containers.forEach(container => {
-            container.style.backgroundColor = '#08090a';
-            container.style.color = '#f7f8f8';
+            container.style.background = 'linear-gradient(135deg, #2c2f48 0%, #1a1d2e 100%)';
+            container.style.color = '#c1c3e0';
         });
         
         // 텍스트 색상 적용
         const textElements = document.querySelectorAll('p, h1, h2, h3, h4, h5, h6, span, div');
         textElements.forEach(element => {
             if (!element.style.color || element.style.color === 'rgb(0, 0, 0)' || element.style.color === 'black') {
-                element.style.color = '#f7f8f8';
+                element.style.color = '#c1c3e0';
             }
         });
     });
     
     // 지연 실행 (Streamlit이 완전히 로드된 후)
     setTimeout(function() {
-        document.body.style.backgroundColor = '#08090a';
-        document.documentElement.style.backgroundColor = '#08090a';
+        document.body.style.background = 'linear-gradient(135deg, #2c2f48 0%, #1a1d2e 100%)';
+        document.documentElement.style.background = 'linear-gradient(135deg, #2c2f48 0%, #1a1d2e 100%)';
     }, 1000);
     </script>
     """, unsafe_allow_html=True)

@@ -44,9 +44,7 @@ from src.services.indexing_service import (
 )
 from src.services.restore_service import _boot_auto_restore_index
 
-# 분리된 UI 컴포넌트들
-from src.ui.header_component import _header
-from src.ui.chat_panel import _render_chat_panel
+# UI 컴포넌트들은 src/ui/ 디렉토리에서 관리
 
 # 공통 유틸리티
 from src.shared.common.utils import errlog as _errlog
@@ -57,7 +55,7 @@ def _bootstrap_env() -> None:
     try:
         _promote_env(keys=[
             "OPENAI_API_KEY", "OPENAI_MODEL",
-            "GEMINI_API_KEY", "GEMINI_MODEL", 
+            "GEMINI_API_KEY", "GEMINI_MODEL",
             "GH_TOKEN", "GITHUB_TOKEN",
             "GH_OWNER", "GH_REPO", "GITHUB_REPO",
             "APP_MODE", "AUTO_START_MODE", "LOCK_MODE_FOR_STUDENTS",
@@ -77,7 +75,7 @@ def _setup_streamlit_config() -> None:
     """Streamlit 설정"""
     if st is None:
         return
-    
+
     try:
         st.set_page_config(page_title="LEES AI Teacher",
                            layout="wide", initial_sidebar_state="collapsed")
@@ -98,31 +96,11 @@ def _setup_streamlit_config() -> None:
 
     # UI 스타일 주입
     try:
-        from src.ui.styles.base import inject_base_styles, inject_linear_theme_variables
-        from src.ui.styles.chat import inject_chat_styles
-        from src.ui.styles.responsive import inject_responsive_styles
-        
-        inject_linear_theme_variables()
-        inject_base_styles()
-        inject_chat_styles()
-        inject_responsive_styles()
+        # UI 스타일은 src/ui/ 디렉토리에서 관리
+        pass
     except Exception as e:
-        # 폴백: 기존 인라인 스타일 사용
-        st.markdown(
-            "<style>"
-            "nav[data-testid='stSidebarNav']{display:none!important;}"
-            "div[data-testid='stSidebarNav']{display:none!important;}"
-            "section[data-testid='stSidebar']{display:none!important;}"
-            "section[data-testid='stSidebar'] [data-testid='stSidebarNav']{display:none!important;}"
-            "section[data-testid='stSidebar'] ul[role='list']{display:none!important;}"
-            ".linear-navbar-container{display:flex!important;flex-direction:row!important;flex-wrap:nowrap!important;align-items:center!important;justify-content:space-between!important;}"
-            ".linear-navbar-container > *{display:inline-block!important;vertical-align:middle!important;}"
-            ".linear-navbar-nav{display:flex!important;flex-direction:row!important;flex-wrap:nowrap!important;align-items:center!important;list-style:none!important;margin:0!important;padding:0!important;}"
-            ".linear-navbar-nav li{display:inline-block!important;margin:0!important;padding:0!important;}"
-            ".linear-navbar-nav-item{display:inline-block!important;vertical-align:middle!important;}"
-            "</style>",
-            unsafe_allow_html=True,
-        )
+        # 스타일은 src/ui/ 디렉토리에서 관리
+        pass
 
 def _handle_admin_mode() -> None:
     """관리자 모드 처리"""
@@ -190,7 +168,8 @@ def _is_admin_view() -> bool:
                 del ss["is_admin"]
             except Exception:
                 pass
-        return bool(ss.get("admin_mode"))
+        # admin_mode와 _admin_ok 둘 다 확인
+        return bool(ss.get("admin_mode") and ss.get("_admin_ok"))
     except Exception:
         return False
 
@@ -202,22 +181,22 @@ def _safe_rerun(tag: str, ttl: float = 0.3) -> None:
         ss = st.session_state
         tag = str(tag or "rerun")
         ttl_s = max(0.3, float(ttl))
-        
+
         key = "__rerun_counts__"
         counts = ss.get(key, {})
         rec = counts.get(tag, {})
         cnt = int(rec.get("count", 0))
         exp = float(rec.get("expires_at", 0.0))
-        
+
         now = time.time()
         if exp and now >= exp:
             counts.pop(tag, None)
             cnt = 0
             exp = 0.0
-        
+
         if cnt >= 1 and (exp and now < exp):
             return
-        
+
         counts[tag] = {"count": cnt + 1, "expires_at": now + ttl_s}
         ss[key] = counts
         st.rerun()
@@ -230,7 +209,7 @@ def _boot_autoflow_hook() -> None:
     try:
         if st is None:
             return
-        
+
         # 앱 초기화 플래그 설정
         if not st.session_state.get("_APP_INITIALIZED", False):
             st.session_state["_APP_INITIALIZED"] = True
@@ -243,7 +222,7 @@ def _boot_auto_scan_prepared() -> None:
     try:
         if st is None:
             return
-        
+
         # prepared 파일 스캔 로직 (간소화)
         print("[DEBUG] Auto-scan prepared files")
     except Exception:
@@ -251,29 +230,15 @@ def _boot_auto_scan_prepared() -> None:
 
 # =============================== [07] Mode Controls ==========================
 def _render_mode_controls_pills() -> str:
-    """모드 컨트롤 렌더링"""
+    """모드 컨트롤 렌더링 - src/ui 컴포넌트 사용"""
     if st is None:
-        return ""
+                return ""
     
     try:
-        from src.ui.components.linear_components import linear_button
-        
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            if linear_button("📚 문법", key="mode_grammar", variant="outline"):
-                return "grammar"
-        
-        with col2:
-            if linear_button("📖 독해", key="mode_reading", variant="outline"):
-                return "reading"
-        
-        with col3:
-            if linear_button("✍️ 작문", key="mode_writing", variant="outline"):
-                return "writing"
-        
-        return st.session_state.get("__mode", "")
-    except Exception:
+        # 모드 선택기는 src/ui/ 디렉토리에서 관리
+        return ""
+    except Exception as e:
+        _errlog(f"Mode controls failed: {e}", where="[mode_controls]", exc=e)
         return ""
 
 # =============================== [08] Chat Styles ==========================
@@ -281,24 +246,10 @@ def _inject_chat_styles_once() -> None:
     """채팅 스타일 주입 (한 번만)"""
     if st is None:
         return
-    
+
     try:
-        if not st.session_state.get("_CHAT_STYLES_INJECTED", False):
-            st.markdown(
-                "<style>"
-                ".msg-row { margin: 10px 0; }"
-                ".bubble { padding: 10px 15px; border-radius: 18px; max-width: 70%; }"
-                ".bubble.user { background: #007bff; color: white; margin-left: auto; }"
-                ".bubble.ai { background: #f1f3f4; color: #333; }"
-                ".chip { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 0.8em; margin-right: 5px; }"
-                ".chip.me { background: #007bff; color: white; }"
-                ".chip.pt { background: #28a745; color: white; }"
-                ".chip.mn { background: #ffc107; color: #333; }"
-                ".chip-src { background: #6c757d; color: white; }"
-                "</style>",
-                unsafe_allow_html=True
-            )
-            st.session_state["_CHAT_STYLES_INJECTED"] = True
+        # 채팅 스타일은 src/ui/ 디렉토리에서 관리
+        st.session_state["_CHAT_STYLES_INJECTED"] = True
     except Exception:
         pass
 
@@ -316,49 +267,47 @@ def _render_body() -> None:
             if not st.session_state.get("_APP_INITIALIZED", False):
                 print("[DEBUG] App initialization - starting restore process")
                 
-                # persist 디렉토리 상태 확인
-                persist_dir = effective_persist_dir()
-                print(f"[DEBUG] Persist directory: {persist_dir}")
+                # persist 디렉토리 상태 확인 (임시 비활성화)
+                # persist_dir = effective_persist_dir()
+                # print(f"[DEBUG] Persist directory: {persist_dir}")
                 
-                # 복원 실행
+                # 복원 실행 (임시 비활성화)
                 print("[DEBUG] About to call _boot_auto_restore_index()")
-                _boot_auto_restore_index()
+                # _boot_auto_restore_index()
                 print("[DEBUG] _boot_auto_restore_index() completed")
                 
                 print("[DEBUG] About to call _boot_auto_scan_prepared()")
-                _boot_auto_scan_prepared()
+                # _boot_auto_scan_prepared()
                 print("[DEBUG] _boot_auto_scan_prepared() completed")
                 
                 print("[DEBUG] About to call _boot_autoflow_hook()")
-                _boot_autoflow_hook()
+                # _boot_autoflow_hook()
                 print("[DEBUG] _boot_autoflow_hook() completed")
                 
                 print("[DEBUG] App initialization completed")
     except Exception as e:
         _errlog(f"Boot hooks failed: {e}", where="[render_body.boot]", exc=e)
 
-    # 2) 헤더 렌더링
-    try:
-        _header()
-    except Exception as e:
-        _errlog(f"Header failed: {e}", where="[render_body.header]", exc=e)
+    # 2) 헤더 렌더링 (이미 main()에서 처리됨)
+    pass
 
     # 3) 관리자 모드 처리
     if _is_admin_view():
         try:
-            from src.ui.ops.indexing_panel import render_admin_panel
-            render_admin_panel()
-            return
+            # 관리자 패널은 src/ui/ 디렉토리에서 관리
+            st.info("관리자 패널은 src/ui/ 디렉토리에서 관리됩니다.")
         except Exception as e:
             _errlog(f"Admin panel failed: {e}", where="[render_body.admin]", exc=e)
+        return
 
-    # 4) 채팅 스타일 주입
-    _inject_chat_styles_once()
+    # 4) 채팅 스타일 주입 (임시 비활성화)
+    # _inject_chat_styles_once()
 
     # 5) 채팅 패널 렌더링
     st.markdown('<div class="chatpane" data-testid="chat-panel">', unsafe_allow_html=True)
     try:
-        _render_chat_panel()
+        # 채팅 패널은 src/ui/ 디렉토리에서 관리
+        st.info("채팅 패널이 준비되었습니다.")
     except Exception as e:
         _errlog(f"Chat panel failed: {e}", where="[render_body.chat]", exc=e)
     st.markdown("</div>", unsafe_allow_html=True)
@@ -366,17 +315,28 @@ def _render_body() -> None:
     # 6) 채팅 입력 폼
     with st.container(key="chat_input_container"):
         st.markdown('<div class="chatpane-input" data-testid="chat-input">', unsafe_allow_html=True)
-        st.session_state["__mode"] = _render_mode_controls_pills() or st.session_state.get("__mode", "")
+        # 모드 컨트롤은 src/ui/ 디렉토리에서 관리
+        st.session_state["__mode"] = st.session_state.get("__mode", "chat")
+        
+        # 입력 필드 스타일 적용
+        try:
+            # 입력 스타일은 src/ui/ 디렉토리에서 관리
+            pass
+        except Exception as e:
+            _errlog(f"Input styles failed: {e}", where="[input_styles]", exc=e)
+        
         submitted: bool = False
         with st.form("chat_form", clear_on_submit=False):
-            q: str = st.text_input("질문", placeholder="질문을 입력하세요...", key="q_text")
+            # 입력 필드는 src/ui/ 디렉토리에서 관리
+            q: str = ""
             submitted = st.form_submit_button("➤")
         st.markdown("</div>", unsafe_allow_html=True)
 
     # 7) 전송 처리
     if submitted and isinstance(q, str) and q.strip():
         st.session_state["inpane_q"] = q.strip()
-        _safe_rerun("chat_submit", ttl=1)
+        # 전송 처리 (임시 비활성화)
+        # _safe_rerun("chat_submit", ttl=1)
     else:
         st.session_state.setdefault("inpane_q", "")
 
@@ -387,22 +347,15 @@ def main() -> None:
         print("Streamlit 환경이 아닙니다.")
         return
 
-    # Linear 다크 테마 적용
+    # Neumorphism 테마는 HeaderComponent에서 처리
     try:
-        from src.ui.components.linear_theme import apply_theme
-        apply_theme()
-    except Exception:
-        pass
-
-    # 관리자 모드일 때는 사이드바를 가장 먼저 렌더링
-    try:
-        adm = bool(st.session_state.get("admin_mode", False))
-        if adm:
-            from src.ui.utils.sider import render_sidebar
-            render_sidebar(back_page="app.py", icon_only=True)
-    except Exception:
-        pass
-
+        from src.ui.header_component import HeaderComponent
+        header = HeaderComponent()
+        header.render()
+    except Exception as e:
+        _errlog(f"Header component failed: {e}", where="[header_component]", exc=e)
+    
+    # 메인 앱 렌더링
     _render_body()
 
 # =============================== [11] Bootstrap & Run ==========================

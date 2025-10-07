@@ -29,54 +29,63 @@ if TYPE_CHECKING:
 
 
 def _render_admin_navbar() -> None:
-    """관리자 모드 네비게이션바 렌더링"""
+    """관리자 모드 네비게이션바 렌더링 - Linear 스타일"""
     if st is None:
         return
     
-    # 관리자 네비게이션바 CSS
+    # Linear 스타일 네비게이션바 CSS
     admin_navbar_css = """
     <style>
     .admin-navbar {
-        background: var(--linear-bg-primary) !important;
-        border-bottom: 1px solid var(--linear-border) !important;
-        padding: 0.5rem 0 !important;
-        margin: 0.5rem 0 1rem 0 !important;
-        border-radius: var(--linear-radius) !important;
+        background: transparent !important;
+        border: none !important;
+        padding: 0 !important;
+        margin: 1rem 0 !important;
     }
     
     .admin-navbar-container {
         display: flex !important;
         align-items: center !important;
-        justify-content: center !important;
-        gap: 1rem !important;
+        justify-content: flex-start !important;
+        gap: 0.5rem !important;
         flex-wrap: wrap !important;
     }
     
     .admin-nav-item {
         padding: 0.5rem 1rem !important;
-        border-radius: var(--linear-radius) !important;
-        background: var(--linear-bg-secondary) !important;
-        border: 1px solid var(--linear-border) !important;
-        color: var(--linear-text-primary) !important;
+        border-radius: 6px !important;
+        background: transparent !important;
+        border: none !important;
+        color: var(--linear-text-secondary) !important;
         font-family: var(--linear-font) !important;
         font-weight: 500 !important;
+        font-size: 0.875rem !important;
         text-decoration: none !important;
-        transition: all 0.2s ease !important;
+        transition: all 0.15s ease !important;
         cursor: pointer !important;
+        display: flex !important;
+        align-items: center !important;
+        gap: 0.5rem !important;
     }
     
     .admin-nav-item:hover {
-        background: var(--linear-brand) !important;
-        color: white !important;
-        border-color: var(--linear-brand) !important;
-        transform: translateY(-1px) !important;
-        box-shadow: 0 2px 8px rgba(94, 106, 210, 0.3) !important;
+        background: var(--linear-bg-secondary) !important;
+        color: var(--linear-text-primary) !important;
     }
     
     .admin-nav-item.active {
-        background: var(--linear-brand) !important;
-        color: white !important;
-        border-color: var(--linear-brand) !important;
+        background: var(--linear-bg-secondary) !important;
+        color: var(--linear-text-primary) !important;
+        font-weight: 600 !important;
+    }
+    
+    .admin-nav-icon {
+        font-size: 1rem !important;
+        opacity: 0.7 !important;
+    }
+    
+    .admin-nav-item.active .admin-nav-icon {
+        opacity: 1 !important;
     }
     </style>
     """
@@ -87,32 +96,38 @@ def _render_admin_navbar() -> None:
     with st.container():
         st.markdown('<div class="admin-navbar">', unsafe_allow_html=True)
         
-        # 네비게이션 아이템들
-        col1, col2, col3, col4, col5 = st.columns([1, 1, 1, 1, 1], gap="small")
+        # 네비게이션 아이템들 - Linear 스타일
+        col1, col2, col3, col4, col5, col6 = st.columns([1, 1, 1, 1, 1, 1], gap="small")
         
         with col1:
-            if st.button("🏠 홈", key="admin_nav_home", help="메인 페이지로 이동"):
+            if st.button("홈", key="admin_nav_home", help="메인 페이지"):
                 st.session_state["admin_nav_active"] = "home"
                 st.rerun()
         
         with col2:
-            if st.button("⚙️ 관리", key="admin_nav_manage", help="시스템 관리"):
+            if st.button("관리", key="admin_nav_manage", help="시스템 관리"):
                 st.session_state["admin_nav_active"] = "manage"
                 st.rerun()
         
         with col3:
-            if st.button("📝 프롬프트", key="admin_nav_prompt", help="프롬프트 관리"):
+            if st.button("프롬프트", key="admin_nav_prompt", help="프롬프트 관리"):
                 st.session_state["admin_nav_active"] = "prompt"
                 st.rerun()
         
         with col4:
-            if st.button("📊 통계", key="admin_nav_stats", help="사용 통계"):
+            if st.button("통계", key="admin_nav_stats", help="사용 통계"):
                 st.session_state["admin_nav_active"] = "stats"
                 st.rerun()
         
         with col5:
-            if st.button("🔧 설정", key="admin_nav_settings", help="시스템 설정"):
+            if st.button("설정", key="admin_nav_settings", help="시스템 설정"):
                 st.session_state["admin_nav_active"] = "settings"
+                st.rerun()
+        
+        with col6:
+            if st.button("로그아웃", key="admin_nav_logout", help="관리자 모드 종료"):
+                st.session_state["admin_mode"] = False
+                st.session_state.pop("_admin_ok", None)
                 st.rerun()
         
         st.markdown('</div>', unsafe_allow_html=True)
@@ -222,7 +237,10 @@ def render() -> None:
           letter-spacing: -.012em;
           font-size: 2.25rem; 
           line-height: 1.1; 
-          color: var(--linear-text-primary);
+          background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+          -webkit-background-clip: text;
+          -webkit-text-fill-color: transparent;
+          background-clip: text;
         }
         
         .ready-chip{
@@ -230,13 +248,31 @@ def render() -> None:
           align-items: center; 
           gap: 6px;
           padding: 4px 12px; 
-          border-radius: var(--linear-radius-lg);
-          background: var(--linear-bg-secondary); 
-          border: 1px solid var(--linear-border);
+          border-radius: 20px !important;
+          background: linear-gradient(135deg, rgba(102, 126, 234, 0.1) 0%, rgba(118, 75, 162, 0.1) 100%);
+          border: 1px solid rgba(102, 126, 234, 0.3);
           font-family: var(--linear-font);
           font-weight: 510; 
-          color: var(--linear-text-secondary); 
+          color: var(--linear-text-primary); 
           font-size: 0.9375rem;
+          position: relative;
+          overflow: hidden;
+        }
+        
+        .ready-chip::before {
+          content: '';
+          position: absolute;
+          top: 0;
+          left: -100%;
+          width: 100%;
+          height: 100%;
+          background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.1), transparent);
+          animation: shimmer 2s infinite;
+        }
+        
+        @keyframes shimmer {
+          0% { left: -100%; }
+          100% { left: 100%; }
         }
         
         .rd{ 

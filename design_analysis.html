@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>디자인 분석 - 글라디언트 UI/UX</title>
+    <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Nunito', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.1);
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+        
+        .header h1 {
+            font-size: 2.5rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 10px;
+        }
+        
+        .header p {
+            color: #666;
+            font-size: 1.1rem;
+        }
+        
+        .design-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 30px;
+            margin-bottom: 40px;
+        }
+        
+        .design-card {
+            background: #f8f9fa;
+            border-radius: 15px;
+            padding: 20px;
+            text-align: center;
+            transition: transform 0.3s ease;
+        }
+        
+        .design-card:hover {
+            transform: translateY(-5px);
+        }
+        
+        .design-card img {
+            width: 100%;
+            max-width: 250px;
+            height: auto;
+            border-radius: 10px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+        }
+        
+        .design-card h3 {
+            margin: 15px 0 10px 0;
+            color: #333;
+            font-weight: 600;
+        }
+        
+        .design-card p {
+            color: #666;
+            font-size: 0.9rem;
+        }
+        
+        .analysis-section {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            color: white;
+            padding: 30px;
+            border-radius: 15px;
+            margin-bottom: 30px;
+        }
+        
+        .analysis-section h2 {
+            font-size: 1.8rem;
+            margin-bottom: 20px;
+            font-weight: 600;
+        }
+        
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+        }
+        
+        .feature-item {
+            background: rgba(255,255,255,0.1);
+            padding: 20px;
+            border-radius: 10px;
+            backdrop-filter: blur(10px);
+        }
+        
+        .feature-item h4 {
+            font-size: 1.2rem;
+            margin-bottom: 10px;
+            font-weight: 600;
+        }
+        
+        .font-showcase {
+            background: #f8f9fa;
+            padding: 30px;
+            border-radius: 15px;
+            text-align: center;
+        }
+        
+        .font-showcase h2 {
+            color: #333;
+            margin-bottom: 20px;
+            font-weight: 600;
+        }
+        
+        .font-examples {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+            justify-content: center;
+        }
+        
+        .font-example {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            min-width: 200px;
+        }
+        
+        .font-example h4 {
+            color: #667eea;
+            margin-bottom: 10px;
+        }
+        
+        .font-light { font-weight: 300; }
+        .font-regular { font-weight: 400; }
+        .font-semibold { font-weight: 600; }
+        .font-bold { font-weight: 700; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎨 글라디언트 UI/UX 디자인 분석</h1>
+            <p>모던하고 세련된 랜딩 페이지 디자인 참조</p>
+        </div>
+        
+        <div class="design-grid">
+            <div class="design-card">
+                <img src="design_reference/5890625.jpg" alt="메인 디자인">
+                <h3>메인 디자인</h3>
+                <p>JPG 이미지 (231KB)</p>
+            </div>
+            <div class="design-card">
+                <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); height: 200px; border-radius: 10px; display: flex; align-items: center; justify-content: center; color: white; font-weight: 600;">
+                    AI 벡터 파일
+                </div>
+                <h3>벡터 소스</h3>
+                <p>Adobe Illustrator 파일 (3.6MB)</p>
+            </div>
+            <div class="design-card">
+                <div style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); height: 200px; border-radius: 10px; display: flex; align-items: center; justify-content: center; color: white; font-weight: 600;">
+                    EPS 파일
+                </div>
+                <h3>고해상도</h3>
+                <p>EPS 벡터 파일 (9.9MB)</p>
+            </div>
+        </div>
+        
+        <div class="analysis-section">
+            <h2>🚀 디자인 특징 분석</h2>
+            <div class="features-grid">
+                <div class="feature-item">
+                    <h4>🎨 그라디언트 디자인</h4>
+                    <p>보라색-파란색 그라디언트를 활용한 모던한 색상 조합</p>
+                </div>
+                <div class="feature-item">
+                    <h4>📱 반응형 레이아웃</h4>
+                    <p>모바일과 데스크톱에서 모두 최적화된 사용자 경험</p>
+                </div>
+                <div class="feature-item">
+                    <h4>✨ 미니멀 디자인</h4>
+                    <p>깔끔하고 직관적인 인터페이스로 사용자 집중도 향상</p>
+                </div>
+                <div class="feature-item">
+                    <h4>🎯 사용자 중심</h4>
+                    <p>명확한 정보 계층과 쉬운 네비게이션 구조</p>
+                </div>
+            </div>
+        </div>
+        
+        <div class="font-showcase">
+            <h2>🔤 Nunito 폰트 활용</h2>
+            <div class="font-examples">
+                <div class="font-example">
+                    <h4>Light (300)</h4>
+                    <p class="font-light">가벼운 텍스트와 부제목에 적합</p>
+                </div>
+                <div class="font-example">
+                    <h4>Regular (400)</h4>
+                    <p class="font-regular">본문 텍스트와 일반적인 내용</p>
+                </div>
+                <div class="font-example">
+                    <h4>SemiBold (600)</h4>
+                    <p class="font-semibold">중요한 정보와 강조 텍스트</p>
+                </div>
+                <div class="font-example">
+                    <h4>Bold (700)</h4>
+                    <p class="font-bold">제목과 헤드라인에 사용</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
+

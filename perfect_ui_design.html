@@ -1,0 +1,493 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Perfect UI Design - MAIC Style</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --primary-gradient: linear-gradient(135deg, #7b5cff, #5f4bff);
+    --secondary-gradient: linear-gradient(135deg, #3b5998, #4c57b3);
+    --accent-color: #7b5cff;
+    --accent-color-2: #5f4bff;
+    --text-primary: #ffffff;
+    --text-secondary: #9aa6c8;
+    --text-muted: #6b7280;
+    --bg-primary: #0f172a;
+    --bg-secondary: #1e293b;
+    --bg-card: rgba(30, 41, 59, 0.8);
+    --bg-glass: rgba(255, 255, 255, 0.05);
+    --shadow-soft: 0 4px 20px rgba(0, 0, 0, 0.3);
+    --shadow-floating: 0 8px 32px rgba(123, 92, 255, 0.2);
+    --border-radius: 16px;
+    --border-radius-sm: 12px;
+    --border-radius-lg: 24px;
+  }
+
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+
+  body {
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    background: 
+      radial-gradient(800px 400px at 20% 20%, rgba(123, 92, 255, 0.15), transparent 50%),
+      radial-gradient(600px 300px at 80% 80%, rgba(95, 75, 255, 0.1), transparent 50%),
+      linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #334155 100%);
+    color: var(--text-primary);
+    min-height: 100vh;
+    padding: 2rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .container {
+    max-width: 1200px;
+    width: 100%;
+    display: grid;
+    grid-template-columns: 1fr 480px;
+    gap: 3rem;
+    align-items: start;
+  }
+
+  /* Left Section - Hero */
+  .hero-section {
+    display: flex;
+    flex-direction: column;
+    gap: 2rem;
+    padding: 2rem 0;
+  }
+
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+  }
+
+  .logo {
+    width: 60px;
+    height: 60px;
+    border-radius: var(--border-radius);
+    background: var(--primary-gradient);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 800;
+    font-size: 24px;
+    color: white;
+    box-shadow: var(--shadow-floating);
+  }
+
+  .brand-info h2 {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-bottom: 4px;
+  }
+
+  .brand-info p {
+    font-size: 14px;
+    color: var(--text-secondary);
+  }
+
+  .hero-title {
+    font-size: clamp(2.5rem, 5vw, 4rem);
+    font-weight: 800;
+    line-height: 1.1;
+    color: var(--text-primary);
+    letter-spacing: -0.02em;
+  }
+
+  .hero-description {
+    font-size: 1.125rem;
+    color: var(--text-secondary);
+    line-height: 1.6;
+    max-width: 500px;
+  }
+
+  .cta-buttons {
+    display: flex;
+    gap: 1rem;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+
+  .btn-primary {
+    background: var(--primary-gradient);
+    color: white;
+    padding: 12px 24px;
+    border-radius: 50px;
+    text-decoration: none;
+    font-weight: 700;
+    font-size: 16px;
+    box-shadow: var(--shadow-floating);
+    transition: all 0.3s ease;
+    border: none;
+    cursor: pointer;
+  }
+
+  .btn-primary:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 12px 40px rgba(123, 92, 255, 0.3);
+  }
+
+  .btn-secondary {
+    background: var(--bg-glass);
+    color: var(--text-secondary);
+    padding: 12px 24px;
+    border-radius: var(--border-radius-sm);
+    text-decoration: none;
+    font-weight: 600;
+    font-size: 16px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    transition: all 0.3s ease;
+  }
+
+  .btn-secondary:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--text-primary);
+  }
+
+  /* Right Section - Cards */
+  .cards-section {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+    align-content: start;
+  }
+
+  .card {
+    background: var(--bg-card);
+    border-radius: var(--border-radius);
+    padding: 1.5rem;
+    backdrop-filter: blur(20px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: var(--shadow-soft);
+    transition: all 0.3s ease;
+  }
+
+  .card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+  }
+
+  .card-large {
+    grid-column: 1 / -1;
+    display: flex;
+    gap: 2rem;
+    align-items: flex-start;
+  }
+
+  .card-clock {
+    height: 140px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+  }
+
+  .card-label {
+    font-size: 14px;
+    color: var(--text-secondary);
+    margin-bottom: 8px;
+  }
+
+  .time-display {
+    font-size: 2.5rem;
+    font-weight: 900;
+    color: var(--accent-color);
+    margin-bottom: 8px;
+  }
+
+  .weather-info {
+    font-size: 14px;
+    color: var(--text-secondary);
+  }
+
+  .temperature {
+    font-size: 2rem;
+    font-weight: 800;
+    color: var(--accent-color);
+    margin: 8px 0;
+  }
+
+  .calendar-grid {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 8px;
+    margin-top: 1rem;
+  }
+
+  .calendar-day {
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    color: var(--text-secondary);
+    transition: all 0.2s ease;
+  }
+
+  .calendar-day.active {
+    background: var(--primary-gradient);
+    color: white;
+    box-shadow: var(--shadow-floating);
+  }
+
+  .apps-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+    margin-top: 1rem;
+  }
+
+  .app-icon {
+    height: 48px;
+    border-radius: var(--border-radius-sm);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 800;
+    font-size: 18px;
+    color: white;
+    box-shadow: var(--shadow-soft);
+  }
+
+  .player-controls {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-top: 1rem;
+  }
+
+  .play-button {
+    background: var(--primary-gradient);
+    color: white;
+    border: none;
+    border-radius: var(--border-radius-sm);
+    padding: 12px 16px;
+    font-weight: 700;
+    cursor: pointer;
+    box-shadow: var(--shadow-floating);
+    transition: all 0.3s ease;
+  }
+
+  .play-button:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 12px 40px rgba(123, 92, 255, 0.3);
+  }
+
+  .control-button {
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    font-size: 18px;
+    cursor: pointer;
+    padding: 8px;
+    border-radius: 8px;
+    transition: all 0.2s ease;
+  }
+
+  .control-button:hover {
+    color: var(--text-primary);
+    background: var(--bg-glass);
+  }
+
+  /* Floating Effect for Buttons */
+  .floating {
+    box-shadow: 
+      0 4px 20px rgba(0, 0, 0, 0.3),
+      0 0 0 1px rgba(255, 255, 255, 0.1);
+    transition: all 0.3s ease;
+  }
+
+  .floating:hover {
+    transform: translateY(-4px);
+    box-shadow: 
+      0 8px 32px rgba(0, 0, 0, 0.4),
+      0 0 0 1px rgba(255, 255, 255, 0.2);
+  }
+
+  /* Responsive Design */
+  @media (max-width: 1024px) {
+    .container {
+      grid-template-columns: 1fr 400px;
+      gap: 2rem;
+    }
+  }
+
+  @media (max-width: 768px) {
+    body {
+      padding: 1rem;
+    }
+    
+    .container {
+      grid-template-columns: 1fr;
+      gap: 2rem;
+    }
+    
+    .cards-section {
+      grid-template-columns: 1fr 1fr;
+    }
+    
+    .card-large {
+      grid-column: 1 / -1;
+    }
+  }
+
+  @media (max-width: 480px) {
+    .cards-section {
+      grid-template-columns: 1fr;
+    }
+    
+    .hero-title {
+      font-size: 2rem;
+    }
+    
+    .cta-buttons {
+      flex-direction: column;
+      align-items: stretch;
+    }
+    
+    .btn-primary,
+    .btn-secondary {
+      text-align: center;
+    }
+  }
+</style>
+</head>
+<body>
+  <div class="container">
+    <!-- Left Section - Hero -->
+    <section class="hero-section">
+      <div class="brand">
+        <div class="logo">UI</div>
+        <div class="brand-info">
+          <h2>YourCompany</h2>
+          <p>Design dashboard • demo</p>
+        </div>
+      </div>
+
+      <h1 class="hero-title">Make Easy UX/UI Designs<br>With Our App</h1>
+
+      <p class="hero-description">
+        Create beautiful, responsive interfaces fast. This layout adapts from large desktop to small phones while preserving composition, spacing, and visual hierarchy.
+      </p>
+
+      <div class="cta-buttons">
+        <button class="btn-primary floating">Get started</button>
+        <a href="#" class="btn-secondary floating">Learn more</a>
+      </div>
+    </section>
+
+    <!-- Right Section - Cards -->
+    <section class="cards-section">
+      <!-- Clock Card -->
+      <div class="card card-clock floating">
+        <div class="card-label">Jakarta</div>
+        <div class="time-display" id="localTime">--:--</div>
+        <div class="weather-info">Mostly Sunny</div>
+      </div>
+
+      <!-- Weather Card -->
+      <div class="card floating">
+        <div class="card-label">Weather</div>
+        <div class="temperature">32°</div>
+        <div class="weather-info">Today • Humidity 48%</div>
+      </div>
+
+      <!-- Calendar Card (Large) -->
+      <div class="card card-large floating">
+        <div style="flex: 1;">
+          <div class="card-label">Calendar • DEC 2021</div>
+          <div class="calendar-grid">
+            <div class="calendar-day">28</div>
+            <div class="calendar-day">29</div>
+            <div class="calendar-day">30</div>
+            <div class="calendar-day">31</div>
+            <div class="calendar-day">1</div>
+            <div class="calendar-day">2</div>
+            <div class="calendar-day">3</div>
+            <div class="calendar-day">4</div>
+            <div class="calendar-day">5</div>
+            <div class="calendar-day">6</div>
+            <div class="calendar-day">7</div>
+            <div class="calendar-day">8</div>
+            <div class="calendar-day">9</div>
+            <div class="calendar-day">10</div>
+            <div class="calendar-day">11</div>
+            <div class="calendar-day">12</div>
+            <div class="calendar-day active">13</div>
+            <div class="calendar-day">14</div>
+            <div class="calendar-day">15</div>
+          </div>
+        </div>
+        <div style="width: 120px;">
+          <div class="card-label" style="margin-bottom: 8px;">Events</div>
+          <div style="font-weight: 700; color: #cfd7ff;">No events</div>
+        </div>
+      </div>
+
+      <!-- Stocks Card -->
+      <div class="card floating">
+        <div class="card-label">Stocks</div>
+        <div style="font-weight: 700; font-size: 1.25rem;">DOW J</div>
+        <div class="weather-info">+.56% • Updated 2m ago</div>
+      </div>
+
+      <!-- Apps Card -->
+      <div class="card floating">
+        <div class="card-label">Apps</div>
+        <div class="apps-grid">
+          <div class="app-icon" style="background: linear-gradient(135deg, #3b5998, #4c57b3);">f</div>
+          <div class="app-icon" style="background: linear-gradient(135deg, #1da1f2, #ea5e9);">t</div>
+          <div class="app-icon" style="background: linear-gradient(135deg, #f58529, #e1306c);">ig</div>
+          <div class="app-icon" style="background: linear-gradient(135deg, #a66c2, #198754);">in</div>
+        </div>
+      </div>
+
+      <!-- Player Card -->
+      <div class="card floating">
+        <div class="card-label">Player</div>
+        <div class="player-controls">
+          <button class="control-button">⏮</button>
+          <button class="play-button">▶</button>
+          <button class="control-button">⏭</button>
+          <div style="flex: 1;"></div>
+          <div class="weather-info">No track</div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    // Real-time clock
+    function updateClock() {
+      const now = new Date();
+      const hours = String(now.getHours()).padStart(2, '0');
+      const minutes = String(now.getMinutes()).padStart(2, '0');
+      document.getElementById('localTime').textContent = `${hours}:${minutes}`;
+    }
+
+    updateClock();
+    setInterval(updateClock, 60000);
+
+    // Add floating effect to all cards
+    document.querySelectorAll('.card').forEach(card => {
+      card.addEventListener('mouseenter', function() {
+        this.style.transform = 'translateY(-8px)';
+      });
+      
+      card.addEventListener('mouseleave', function() {
+        this.style.transform = 'translateY(0)';
+      });
+    });
+  </script>
+</body>
+</html>
+

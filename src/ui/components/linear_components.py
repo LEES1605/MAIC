@@ -1848,6 +1848,183 @@ def _get_card_bg(variant: str) -> str:
     return backgrounds.get(variant, "var(--linear-bg-secondary)")
 
 
+def linear_chip(
+    label: str,
+    key: Optional[str] = None,
+    variant: str = "default",
+    selected: bool = False,
+    size: str = "medium",
+    disabled: bool = False,
+    **kwargs
+) -> bool:
+    """
+    Linear 스타일 칩 컴포넌트 (모드 선택용)
+    
+    Args:
+        label: 칩 텍스트
+        key: Streamlit key
+        variant: "default", "primary", "secondary"
+        selected: 선택 상태
+        size: "small", "medium", "large"
+        disabled: 비활성화 여부
+        **kwargs: st.button에 전달할 추가 인자
+    
+    Returns:
+        칩 클릭 여부
+    """
+    if st is None:
+        return False
+    
+    # 칩 스타일 CSS 적용
+    chip_css = f"""
+    <style>
+    .linear-chip-{variant} {{
+        font-family: var(--linear-font-primary) !important;
+        font-weight: var(--linear-font-weight-medium) !important;
+        font-size: var(--linear-font-size-regular) !important;
+        line-height: var(--linear-line-height-normal) !important;
+        border-radius: 20px !important;
+        border: 1px solid var(--linear-border) !important;
+        background: var(--linear-bg-secondary) !important;
+        color: var(--linear-text-secondary) !important;
+        padding: {_get_chip_padding(size)} !important;
+        transition: all 0.2s ease !important;
+        text-align: center !important;
+        min-width: 60px !important;
+        cursor: pointer !important;
+        box-shadow: none !important;
+    }}
+    
+    .linear-chip-{variant}:hover {{
+        background: var(--linear-bg-tertiary) !important;
+        border-color: var(--linear-border-hover) !important;
+        transform: translateY(-1px) !important;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1) !important;
+    }}
+    
+    .linear-chip-{variant}.selected {{
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
+        color: white !important;
+        border-color: transparent !important;
+        box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4) !important;
+    }}
+    
+    .linear-chip-{variant}.selected:hover {{
+        background: linear-gradient(135deg, #5a6fd8 0%, #6a4190 100%) !important;
+        transform: translateY(-1px) !important;
+        box-shadow: 0 6px 20px rgba(102, 126, 234, 0.5) !important;
+    }}
+    </style>
+    """
+    
+    st.markdown(chip_css, unsafe_allow_html=True)
+    
+    # 선택 상태에 따른 클래스 적용
+    chip_class = f"linear-chip-{variant}"
+    if selected:
+        chip_class += " selected"
+    
+    # 버튼 렌더링
+    return st.button(
+        label,
+        key=key,
+        disabled=disabled,
+        **kwargs
+    )
+
+
+def linear_gradient_button(
+    label: str,
+    key: Optional[str] = None,
+    gradient: str = "primary",
+    size: str = "medium",
+    disabled: bool = False,
+    **kwargs
+) -> bool:
+    """
+    Linear 스타일 그라디언트 버튼 컴포넌트
+    
+    Args:
+        label: 버튼 텍스트
+        key: Streamlit key
+        gradient: "primary", "secondary", "tertiary"
+        size: "small", "medium", "large"
+        disabled: 비활성화 여부
+        **kwargs: st.button에 전달할 추가 인자
+    
+    Returns:
+        버튼 클릭 여부
+    """
+    if st is None:
+        return False
+    
+    # 그라디언트 스타일 CSS 적용
+    gradient_css = f"""
+    <style>
+    .linear-gradient-{gradient} {{
+        font-family: var(--linear-font-primary) !important;
+        font-weight: var(--linear-font-weight-semibold) !important;
+        font-size: var(--linear-font-size-regular) !important;
+        line-height: var(--linear-line-height-normal) !important;
+        border-radius: var(--linear-radius-{size}) !important;
+        border: none !important;
+        background: {_get_gradient_bg(gradient)} !important;
+        color: white !important;
+        padding: {_get_button_padding(size)} !important;
+        transition: all 0.2s ease !important;
+        cursor: pointer !important;
+        box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3) !important;
+    }}
+    
+    .linear-gradient-{gradient}:hover {{
+        background: {_get_gradient_hover_bg(gradient)} !important;
+        transform: translateY(-1px) !important;
+        box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4) !important;
+    }}
+    </style>
+    """
+    
+    st.markdown(gradient_css, unsafe_allow_html=True)
+    
+    # 버튼 렌더링
+    return st.button(
+        label,
+        key=key,
+        disabled=disabled,
+        **kwargs
+    )
+
+
+def _get_chip_padding(size: str) -> str:
+    """칩 패딩 반환"""
+    paddings = {
+        "small": "6px 12px",
+        "medium": "8px 16px",
+        "large": "10px 20px"
+    }
+    return paddings.get(size, "8px 16px")
+
+
+def _get_gradient_bg(gradient: str) -> str:
+    """그라디언트 배경 반환"""
+    gradients = {
+        "primary": "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+        "secondary": "linear-gradient(135deg, #f093fb 0%, #f5576c 100%)",
+        "tertiary": "linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)"
+    }
+    return gradients.get(gradient, "linear-gradient(135deg, #667eea 0%, #764ba2 100%)")
+
+
+def _get_gradient_hover_bg(gradient: str) -> str:
+    """그라디언트 호버 배경 반환"""
+    hover_gradients = {
+        "primary": "linear-gradient(135deg, #5a6fd8 0%, #6a4190 100%)",
+        "secondary": "linear-gradient(135deg, #e881f9 0%, #f3455a 100%)",
+        "tertiary": "linear-gradient(135deg, #3d9bfe 0%, #00d4fe 100%)"
+    }
+    return hover_gradients.get(gradient, "linear-gradient(135deg, #5a6fd8 0%, #6a4190 100%)")
+
+
 def _get_card_border(variant: str) -> str:
     """카드 테두리색 반환"""
     borders = {
