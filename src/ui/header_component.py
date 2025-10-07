@@ -421,9 +421,12 @@ class HeaderComponent:
         """, unsafe_allow_html=True)
     
     def _inject_advanced_css(self) -> None:
-        """고급 CSS 주입 시스템"""
+        """고급 CSS 주입 시스템 - 레거시 헤더 호출 완전 제거"""
         if self._st is None:
             return
+        
+        # 레거시 헤더 호출 완전 제거 - 중복 방지
+        # 이 메서드는 CSS만 주입하고 헤더 렌더링은 하지 않음
         
         # 1단계: data-testid 기반 CSS (가장 강력)
         self._st.markdown("""
