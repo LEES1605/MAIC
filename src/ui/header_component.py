@@ -35,7 +35,7 @@ class HeaderComponent:
         if self._st is None:
             return
         
-        # Linear 테마 적용 (필수)
+        # Linear 테마 적용 (필수) - 다른 모든 스타일보다 우선
         try:
             from src.ui.components.linear_theme import apply_theme
             apply_theme()
@@ -45,6 +45,10 @@ class HeaderComponent:
         # Linear 컴포넌트를 사용한 헤더 렌더링
         self._render_linear_header()
         self._render_linear_mode_selector()
+        
+        # 기존 Neumorphism 메서드들 비활성화 (중복 방지)
+        # self._inject_advanced_css()  # 비활성화
+        # self._apply_neumorphism_theme()  # 비활성화
     
     def _render_linear_header(self) -> None:
         """Linear 컴포넌트를 사용한 헤더 렌더링"""
@@ -52,14 +56,23 @@ class HeaderComponent:
             return
         
         try:
-            from src.ui.components.linear_components import linear_button, linear_card
-            from src.ui.components.linear_layout_components import linear_navbar
+            from src.ui.components.linear_components import linear_button, linear_card, linear_navbar
             
-            # Linear 네비게이션 바
+            # Linear 네비게이션 바 (올바른 매개변수 사용)
             linear_navbar(
                 brand_name="LEES AI Teacher",
-                show_login=True,
-                login_button_text="관리자 로그인"
+                nav_items=[
+                    {"label": "홈", "href": "/", "active": True},
+                    {"label": "도움말", "href": "/help", "active": False}
+                ],
+                user_menu={
+                    "name": "관리자",
+                    "menu_items": [
+                        {"label": "관리자 로그인", "callback": self._admin_login_callback}
+                    ]
+                },
+                variant="default",
+                sticky=True
             )
             
         except Exception as e:
@@ -68,6 +81,12 @@ class HeaderComponent:
             if self._st.button("관리자 로그인", key="admin_login_fallback"):
                 self._st.session_state["admin_mode"] = True
                 self._st.rerun()
+    
+    def _admin_login_callback(self) -> None:
+        """관리자 로그인 콜백"""
+        if self._st is not None:
+            self._st.session_state["admin_mode"] = True
+            self._st.rerun()
     
     def _render_linear_mode_selector(self) -> None:
         """Linear 컴포넌트를 사용한 모드 선택기"""

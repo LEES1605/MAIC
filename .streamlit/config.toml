@@ -10,9 +10,9 @@ serverAddress = "localhost"
 
 [theme]
 primaryColor = "#5e6ad2"
-backgroundColor = "#08090a"
-secondaryBackgroundColor = "#1c1c1f"
-textColor = "#f7f8f8"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f8f9fa"
+textColor = "#1a1a1a"
 
 [client]
 showErrorDetails = true
