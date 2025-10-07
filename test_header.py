@@ -12,3 +12,4 @@ header = HeaderComponent()
 header.render()
 
 st.write("HeaderComponent가 렌더링되었습니다!")
+

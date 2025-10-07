@@ -131,3 +131,4 @@ def linear_footer(
     st.markdown(footer_css, unsafe_allow_html=True)
     st.markdown(f'<div class="linear-footer"><p class="linear-footer-text">{copyright_text}</p></div>', unsafe_allow_html=True)
 
+

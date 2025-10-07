@@ -77,3 +77,4 @@ async def test_console_logs():
 
 if __name__ == "__main__":
     asyncio.run(test_console_logs())
+

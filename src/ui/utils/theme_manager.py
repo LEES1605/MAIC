@@ -36,3 +36,4 @@ class ThemeManager:
         theme = self.get_theme(theme_name)
         return theme.get(color_name, "#ffffff")
 
+

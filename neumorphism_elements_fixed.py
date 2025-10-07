@@ -218,3 +218,4 @@ def render_footer():
 # 메인 실행
 if __name__ == "__main__":
     render_neumorphism_app()
+

@@ -288,3 +288,4 @@ st.markdown("""
     © 2024 MAIC - AI English Learning Assistant
 </div>
 """, unsafe_allow_html=True)
+

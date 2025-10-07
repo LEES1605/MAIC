@@ -55,3 +55,4 @@ def apply_background_styles() -> None:
     except Exception as e:
         st.error(f"배경 스타일 적용 오류: {e}")
 
+

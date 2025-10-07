@@ -229,3 +229,4 @@ def render_component_demo():
     # 푸터
     linear_footer(copyright_text="© 2024 Linear 컴포넌트 시스템 데모")
 
+
