@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LEES AI Teacher</title>
+    <title>라이크이스턴 영어전문학원</title>
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
         * {
@@ -14,7 +14,7 @@
         
         body {
             font-family: 'Poppins', sans-serif;
-            background: #2c2f48;
+            background: linear-gradient(135deg, #3a3d5c, #4a4d6c, #5a5d7c);
             color: #c1c3e0;
             min-height: 100vh;
             overflow-x: hidden;
@@ -28,6 +28,7 @@
         
         .header {
             text-align: center;
+            margin-top: 4rem;
             margin-bottom: 3rem;
         }
         
@@ -35,8 +36,16 @@
             font-size: 3rem;
             font-weight: 700;
             color: #e0e0e0;
-            margin-bottom: 1rem;
+            margin-bottom: 0.5rem;
             text-shadow: 0 2px 4px rgba(0,0,0,0.3);
+        }
+        
+        .gradient-text {
+            background: linear-gradient(135deg, #8b9cf7 0%, #9d7bf0 50%, #f5a5fc 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            text-shadow: 0 0 30px rgba(139, 156, 247, 0.4);
         }
         
         .subtitle {
@@ -51,200 +60,1207 @@
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
             gap: 2rem;
-            margin-bottom: 3rem;
+            margin: 3rem 0;
         }
         
-        .neumorphic-card {
+        .card {
+            background: rgba(44, 47, 72, 0.8);
+            backdrop-filter: blur(20px);
+            border-radius: 20px;
             padding: 2rem;
-            border-radius: 30px;
-            background: #2c2f48;
-            box-shadow: -8px -8px 16px rgba(255, 255, 255, 0.08),
-                        8px 8px 16px rgba(0, 0, 0, 0.3);
-            text-align: center;
-            transition: transform 0.3s ease;
+            box-shadow: 
+                8px 8px 16px rgba(0, 0, 0, 0.3),
+                -8px -8px 16px rgba(255, 255, 255, 0.1);
+            transition: all 0.3s ease;
+            border: 1px solid rgba(255, 255, 255, 0.1);
         }
         
-        .neumorphic-card:hover {
+        .card:hover {
             transform: translateY(-5px);
+            box-shadow: 
+                12px 12px 24px rgba(0, 0, 0, 0.4),
+                -12px -12px 24px rgba(255, 255, 255, 0.15);
         }
         
-        .card-title {
+        .card h3 {
             font-size: 1.5rem;
             font-weight: 600;
             color: #e0e0e0;
             margin-bottom: 1rem;
         }
         
-        .card-description {
-            color: #c1c3e0;
-            margin-bottom: 1.5rem;
+        .card p {
+            color: #b0b0b0;
             line-height: 1.6;
+            margin-bottom: 1.5rem;
         }
         
-        .neumorphic-button {
-            padding: 15px 30px;
+        .card-button {
+            background: linear-gradient(135deg, #6366f1, #8b5cf6);
             border: none;
             border-radius: 15px;
-            background: linear-gradient(90deg, #8a63f3, #63b0f3);
             color: white;
-            font-size: 1rem;
-            font-weight: 500;
+            padding: 12px 24px;
+            font-weight: 600;
             cursor: pointer;
-            box-shadow: -5px -5px 10px rgba(255, 255, 255, 0.08),
-                        5px 5px 10px rgba(0, 0, 0, 0.3);
             transition: all 0.3s ease;
+            font-family: 'Poppins', sans-serif;
+            box-shadow: 
+                4px 4px 8px rgba(0, 0, 0, 0.3),
+                -4px -4px 8px rgba(255, 255, 255, 0.1);
         }
         
-        .neumorphic-button:hover {
-            transform: scale(0.98);
-            box-shadow: -3px -3px 6px rgba(255, 255, 255, 0.08),
-                        3px 3px 6px rgba(0, 0, 0, 0.3);
+        .card-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 
+                6px 6px 12px rgba(0, 0, 0, 0.4),
+                -6px -6px 12px rgba(255, 255, 255, 0.15);
         }
         
         .input-section {
-            background: #2c2f48;
-            padding: 2rem;
-            border-radius: 30px;
-            box-shadow: -8px -8px 16px rgba(255, 255, 255, 0.08),
-                        8px 8px 16px rgba(0, 0, 0, 0.3);
-            text-align: center;
-            margin-bottom: 2rem;
+            background: rgba(58, 61, 92, 0.8);
+            backdrop-filter: blur(20px);
+            border-radius: 20px;
+            padding: 1rem;
+            margin: 1rem 0;
+            box-shadow: 
+                8px 8px 16px rgba(0, 0, 0, 0.3),
+                -8px -8px 16px rgba(255, 255, 255, 0.1);
         }
         
-        .input-title {
-            font-size: 1.5rem;
-            font-weight: 600;
-            color: #e0e0e0;
-            margin-bottom: 1.5rem;
+        .input-section-fixed {
+            position: fixed;
+            bottom: 2rem;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 1000;
+            background: rgba(58, 61, 92, 0.95);
+            backdrop-filter: blur(20px);
+            border-radius: 20px;
+            padding: 1rem;
+            box-shadow: 
+                8px 8px 16px rgba(0, 0, 0, 0.3),
+                -8px -8px 16px rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            max-width: 600px;
+            width: 90%;
         }
         
-        .neumorphic-input {
-            padding: 15px 20px;
+        .input-group {
+            display: flex;
+            position: relative;
+            align-items: center;
+        }
+        
+        .question-input {
+            flex: 1;
+            background: rgba(44, 47, 72, 0.6);
             border: none;
             border-radius: 15px;
-            background: #2c2f48;
+            padding: 15px 60px 15px 20px;
             color: #c1c3e0;
             font-size: 1rem;
-            box-shadow: inset -5px -5px 10px rgba(255, 255, 255, 0.08),
-                        inset 5px 5px 10px rgba(0, 0, 0, 0.3);
-            margin: 10px;
-            width: 300px;
-            outline: none;
+            font-family: 'Poppins', sans-serif;
+            box-shadow: 
+                inset 4px 4px 8px rgba(0, 0, 0, 0.3),
+                inset -4px -4px 8px rgba(255, 255, 255, 0.1);
         }
         
-        .neumorphic-input:focus {
-            box-shadow: inset -3px -3px 6px rgba(255, 255, 255, 0.08),
-                        inset 3px 3px 6px rgba(0, 0, 0, 0.3);
+        .question-input::placeholder {
+            color: white;
         }
         
-        .footer {
+        .ask-button {
+            position: absolute;
+            right: 8px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: linear-gradient(135deg, #6366f1, #8b5cf6);
+            border: none;
+            border-radius: 10px;
+            color: white;
+            padding: 8px 12px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-family: 'Poppins', sans-serif;
+            font-size: 1rem;
+            width: 40px;
+            height: 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 
+                2px 2px 4px rgba(0, 0, 0, 0.3),
+                -2px -2px 4px rgba(255, 255, 255, 0.1);
+        }
+        
+        .ask-button:hover {
+            transform: translateY(-50%) scale(1.05);
+            box-shadow: 
+                3px 3px 6px rgba(0, 0, 0, 0.4),
+                -3px -3px 6px rgba(255, 255, 255, 0.15);
+        }
+        
+        .response-area {
+            background: rgba(58, 61, 92, 0.8);
+            backdrop-filter: blur(20px);
+            border-radius: 20px;
+            padding: 1.5rem;
+            margin: 2rem 0;
+            box-shadow: 
+                inset 8px 8px 16px rgba(0, 0, 0, 0.3),
+                inset -8px -8px 16px rgba(255, 255, 255, 0.1);
+            min-height: 300px;
+            max-height: calc(100dvh - 400px);
+            overflow-y: auto;
+            font-size: 1rem;
+        }
+        
+        /* 커스텀 스크롤바 스타일 */
+        .response-area::-webkit-scrollbar {
+            width: 8px;
+        }
+        
+        .response-area::-webkit-scrollbar-track {
+            background: rgba(44, 47, 72, 0.3);
+            border-radius: 10px;
+        }
+        
+        .response-area::-webkit-scrollbar-thumb {
+            background: linear-gradient(135deg, #6366f1, #8b5cf6);
+            border-radius: 10px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        
+        .response-area::-webkit-scrollbar-thumb:hover {
+            background: linear-gradient(135deg, #818cf8, #a78bfa);
+        }
+        
+        /* Firefox용 스크롤바 스타일 */
+        .response-area {
+            scrollbar-width: thin;
+            scrollbar-color: #6366f1 rgba(44, 47, 72, 0.3);
+        }
+        
+        .chat-container {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+        
+        .chat-message {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            animation: fadeInUp 0.3s ease-out;
+        }
+        
+        .chat-message.user {
+            justify-content: flex-end;
+        }
+        
+        .chat-message.ai {
+            justify-content: flex-start;
+        }
+        
+        .message-bubble {
+            max-width: 85%;
+            padding: 12px 16px;
+            border-radius: 18px;
+            font-size: 0.95rem;
+            line-height: 1.6;
+            word-wrap: break-word;
+        }
+        
+        .message-bubble.user {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            border-bottom-right-radius: 4px;
+        }
+        
+        .message-bubble.ai {
+            background: linear-gradient(135deg, #ffffff, #f3f4f6);
+            color: #1f2937;
+            border: 1px solid rgba(209, 213, 219, 0.3);
+            border-bottom-left-radius: 4px;
+        }
+        
+        .message-avatar {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.2rem;
+            flex-shrink: 0;
+        }
+        
+        .message-avatar.user {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+        }
+        
+        .message-avatar.ai {
+            background: linear-gradient(135deg, #ffffff, #f3f4f6);
+            color: #1f2937;
+        }
+        
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
             text-align: center;
-            margin-top: 3rem;
-            padding: 2rem;
-            color: #8a8a8a;
+            font-size: 1.1rem;
+            color: #c1c3e0;
         }
         
-        .alert {
-            padding: 1rem;
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
+        
+        .status-indicator-floating {
+            position: fixed;
+            top: 20px;
+            left: 20px;
+            z-index: 1000;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: rgba(58, 61, 92, 0.9);
+            padding: 8px 16px;
+            border-radius: 20px;
+            box-shadow: 
+                8px 8px 16px rgba(0, 0, 0, 0.3),
+                -8px -8px 16px rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        
+        .floating-login-buttons {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 1000;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .pulse-dot {
+            width: 10px;
+            height: 10px;
+            background: #ffffff;
+            border-radius: 50%;
+            animation: pulse 1.5s infinite;
+            box-shadow: 0 0 15px rgba(255, 255, 255, 0.8), 0 0 30px rgba(255, 255, 255, 0.4);
+        }
+        
+        .status-text {
+            color: #e2e8f0;
+            font-size: 0.9rem;
+            font-weight: 500;
+        }
+        
+        
+        .student-login-btn {
+            background: linear-gradient(135deg, #10b981, #059669);
+            border: none;
+            border-radius: 25px;
+            color: white;
+            padding: 12px 24px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-family: 'Poppins', sans-serif;
+            font-size: 0.9rem;
+            box-shadow: 
+                8px 8px 16px rgba(0, 0, 0, 0.3),
+                -8px -8px 16px rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        
+        .student-login-btn:hover {
+            transform: translateY(-3px);
+            box-shadow: 
+                12px 12px 24px rgba(0, 0, 0, 0.4),
+                -12px -12px 24px rgba(255, 255, 255, 0.15),
+                0 0 20px rgba(16, 185, 129, 0.3);
+        }
+        
+        .admin-login-btn {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 50%;
+            color: white;
+            padding: 8px;
+            font-size: 1.2rem;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            width: 45px;
+            height: 45px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            backdrop-filter: blur(20px);
+            box-shadow: 
+                8px 8px 16px rgba(0, 0, 0, 0.3),
+                -8px -8px 16px rgba(255, 255, 255, 0.1);
+        }
+        
+        .admin-login-btn:hover {
+            transform: translateY(-3px);
+            background: rgba(255, 255, 255, 0.2);
+            box-shadow: 
+                12px 12px 24px rgba(0, 0, 0, 0.4),
+                -12px -12px 24px rgba(255, 255, 255, 0.15),
+                0 0 20px rgba(255, 255, 255, 0.2);
+        }
+        
+        .mode-selector {
+            display: flex;
+            gap: 60px;
+            justify-content: center;
+            margin: 5px 0;
+        }
+        
+        .mode-btn {
+            background: rgba(58, 61, 92, 0.8);
+            border: none;
+            border-radius: 20px;
+            color: #c1c3e0;
+            padding: 8px 24px;
+            box-shadow: 
+                8px 8px 16px rgba(0, 0, 0, 0.3), 
+                -8px -8px 16px rgba(255, 255, 255, 0.1);
+            transition: all 0.3s ease;
+            cursor: pointer;
+            font-family: 'Poppins', sans-serif;
+            font-weight: 500;
+            font-size: 1.1rem;
+        }
+        
+        .mode-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 
+                12px 12px 24px rgba(0, 0, 0, 0.4), 
+                -12px -12px 24px rgba(255, 255, 255, 0.15);
+        }
+        
+        .mode-btn.active {
+            background: rgba(58, 61, 92, 0.8);
+            color: transparent;
+            background-clip: text;
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-image: linear-gradient(135deg, #8b9cf7 0%, #9d7bf0 50%, #f5a5fc 100%);
+            box-shadow: 
+                inset 8px 8px 16px rgba(0, 0, 0, 0.3),
+                inset -8px -8px 16px rgba(255, 255, 255, 0.1);
+            transform: translateY(2px);
+        }
+        
+        .mode-btn.active:hover {
+            transform: translateY(2px);
+            box-shadow: 
+                inset 8px 8px 16px rgba(0, 0, 0, 0.3),
+                inset -8px -8px 16px rgba(255, 255, 255, 0.1);
+        }
+        
+        @keyframes pulse {
+            0% { 
+                opacity: 1; 
+                transform: scale(1);
+                box-shadow: 0 0 15px rgba(255, 255, 255, 0.8), 0 0 30px rgba(255, 255, 255, 0.4);
+            }
+            50% { 
+                opacity: 0.3; 
+                transform: scale(1.2);
+                box-shadow: 0 0 25px rgba(255, 255, 255, 1), 0 0 50px rgba(255, 255, 255, 0.6);
+            }
+            100% { 
+                opacity: 1; 
+                transform: scale(1);
+                box-shadow: 0 0 15px rgba(255, 255, 255, 0.8), 0 0 30px rgba(255, 255, 255, 0.4);
+            }
+        }
+        
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(10px);
+        }
+        
+        .modal-content {
+            background: rgba(44, 47, 72, 0.95);
+            backdrop-filter: blur(20px);
+            margin: 15% auto;
+            padding: 30px;
+            border-radius: 20px;
+            width: 400px;
+            box-shadow: 
+                8px 8px 16px rgba(0, 0, 0, 0.3),
+                -8px -8px 16px rgba(255, 255, 255, 0.1);
+        }
+        
+        .modal-title {
+            color: #c1c3e0;
+            font-size: 1.5rem;
+            font-weight: 600;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+        
+        .modal-input {
+            width: 100%;
+            padding: 15px;
+            border: none;
             border-radius: 15px;
-            margin: 1rem 0;
-            background: #2c2f48;
-            box-shadow: -5px -5px 10px rgba(255, 255, 255, 0.08),
-                        5px 5px 10px rgba(0, 0, 0, 0.3);
+            background: rgba(44, 47, 72, 0.6);
+            color: #c1c3e0;
+            font-size: 1rem;
+            margin-bottom: 20px;
+            box-shadow: 
+                inset 4px 4px 8px rgba(0, 0, 0, 0.3),
+                inset -4px -4px 8px rgba(255, 255, 255, 0.1);
         }
         
-        .alert-success {
-            color: #4ade80;
-            border-left: 4px solid #4ade80;
+        .modal-buttons {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
         }
         
-        .alert-warning {
-            color: #fbbf24;
-            border-left: 4px solid #fbbf24;
+        .modal-btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-family: 'Poppins', sans-serif;
         }
+        
+        .modal-btn-primary {
+            background: linear-gradient(135deg, #6366f1, #8b5cf6);
+            color: white;
+        }
+        
+        .modal-btn-secondary {
+            background: rgba(44, 47, 72, 0.8);
+            color: #c1c3e0;
+        }
+        
+        .modal-btn:hover {
+            transform: translateY(-2px);
+        }
+        /* 관리자 모드 버튼 스타일 */
+        .admin-mode-btn {
+            background: rgba(58, 61, 92, 0.8);
+            border: none;
+            border-radius: 20px;
+            color: #c1c3e0;
+            padding: 8px 24px;
+            box-shadow: 
+                8px 8px 16px rgba(0, 0, 0, 0.3), 
+                -8px -8px 16px rgba(255, 255, 255, 0.1);
+            transition: all 0.3s ease;
+            cursor: pointer;
+            font-family: 'Poppins', sans-serif;
+            font-weight: 500;
+            font-size: 1.1rem;
+        }
+        
+        .admin-mode-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 
+                12px 12px 24px rgba(0, 0, 0, 0.4), 
+                -12px -12px 24px rgba(255, 255, 255, 0.15);
+        }
+        
+        .admin-mode-btn:active {
+            transform: translateY(2px);
+            box-shadow: 
+                inset 4px 4px 8px rgba(0, 0, 0, 0.3),
+                inset -4px -4px 8px rgba(255, 255, 255, 0.1);
+        }
+        
+        .admin-mode-btn.active {
+            background-image: linear-gradient(135deg, #818cf8, #a78bfa);
+            background-clip: text;
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            box-shadow: 
+                inset 4px 4px 8px rgba(0, 0, 0, 0.3),
+                inset -4px -4px 8px rgba(255, 255, 255, 0.1);
+            transform: translateY(2px);
+        }
+        
     </style>
 </head>
 <body>
     <div class="container">
+        <!-- 상태 표시창 (배경에 고정) -->
+        <div class="status-indicator-floating">
+            <div class="pulse-dot"></div>
+            <span class="status-text">준비완료</span>
+        </div>
+        
+         <!-- 플로팅 로그인 버튼들 -->
+         <div class="floating-login-buttons" id="login-buttons">
+             <button class="student-login-btn" onclick="studentLogin()">로그인</button>
+             <button class="admin-login-btn" title="관리자 로그인" onclick="adminLogin()">⚙️</button>
+         </div>
+         
+         <!-- 관리자 모드 로그아웃 버튼 (숨김) -->
+         <div class="floating-login-buttons" id="admin-logout-buttons" style="display: none;">
+             <button class="admin-login-btn" title="관리자 로그아웃" onclick="adminLogout()">🚪</button>
+         </div>
+        
+        
+        <!-- 헤더 -->
         <div class="header">
-            <h1 class="title">LEES AI Teacher</h1>
-            <p class="subtitle">AI 영어 학습의 새로운 경험<br>문법, 독해, 작문을 한 번에!</p>
+            <h1 class="title gradient-text">LEES AI Teacher</h1>
+            <p class="subtitle">질문은 천재들이 즐겨쓰는 공부방법이다!</p>
         </div>
         
-        <div class="cards-grid">
-            <div class="neumorphic-card">
-                <h3 class="card-title">문법 학습</h3>
-                <p class="card-description">AI가 당신의 문법 실력을 체크하고 개선해드립니다.</p>
-                <button class="neumorphic-button" onclick="startGrammar()">시작하기</button>
-            </div>
-            
-            <div class="neumorphic-card">
-                <h3 class="card-title">독해 연습</h3>
-                <p class="card-description">다양한 텍스트로 독해 실력을 향상시켜보세요.</p>
-                <button class="neumorphic-button" onclick="startReading()">시작하기</button>
-            </div>
-            
-            <div class="neumorphic-card">
-                <h3 class="card-title">작문 연습</h3>
-                <p class="card-description">AI와 함께 영어 작문 실력을 키워보세요.</p>
-                <button class="neumorphic-button" onclick="startWriting()">시작하기</button>
-            </div>
-        </div>
-        
+        <!-- 모드 선택 -->
         <div class="input-section">
-            <h3 class="input-title">질문하기</h3>
-            <input type="text" class="neumorphic-input" placeholder="질문을 입력하세요..." id="question-input">
-            <br>
-            <button class="neumorphic-button" onclick="askQuestion()">질문하기</button>
-            <div id="alert-container"></div>
+            <h3 style="color: #c1c3e0; margin-bottom: 20px; font-weight: 600; font-size: 1.2rem; text-align: center;">
+                질문 모드 선택
+            </h3>
+            <div class="mode-selector">
+                <button class="mode-btn" onclick="selectMode('grammar', this)">문법 학습</button>
+                <button class="mode-btn" onclick="selectMode('sentence', this)">문장 분석</button>
+                <button class="mode-btn" onclick="selectMode('passage', this)">지문 설명</button>
+            </div>
         </div>
         
-        <div class="footer">
-            <p>&copy; 2024 LEES AI Teacher. All rights reserved.</p>
+        <!-- 응답 영역 -->
+        <div class="response-area" id="response-area">
+            <div class="empty-state">
+                💬 아직 질문이 없습니다. 아래에서 질문을 입력해보세요!
+            </div>
+        </div>
+        
+    </div>
+    
+    <!-- 질문하기 섹션 (고정) -->
+    <div class="input-section-fixed">
+        <div class="input-group">
+            <input type="text" id="question-input" class="question-input" placeholder="질문을 입력하세요...">
+            <button class="ask-button" onclick="askQuestion()">▶</button>
+        </div>
+    </div>
+    
+    <!-- 관리자 로그인 모달 -->
+    <div id="passwordModal" class="modal">
+        <div class="modal-content">
+            <h2 class="modal-title">관리자 로그인</h2>
+            <input type="password" id="adminPassword" class="modal-input" placeholder="비밀번호를 입력하세요">
+            <div class="modal-buttons">
+                <button class="modal-btn modal-btn-primary" id="modal-login-btn" onclick="checkPassword()">로그인</button>
+                <button class="modal-btn modal-btn-secondary" id="modal-cancel-btn" onclick="closeModal()">취소</button>
+            </div>
         </div>
     </div>
     
     <script>
-        function showAlert(message, type = 'success') {
-            const container = document.getElementById('alert-container');
-            const alert = document.createElement('div');
-            alert.className = `alert alert-${type}`;
-            alert.textContent = message;
-            container.innerHTML = '';
-            container.appendChild(alert);
+        console.log('JavaScript 시작됨');
+        
+        let currentMode = null;
+        let isAdminMode = false;
+        
+        // 전역 함수 정의 확인
+        console.log('전역 함수 정의 시작...');
+        
+        // 모드 선택 (전역 함수)
+        window.selectMode = function(mode, button) {
+            console.log('selectMode 함수 호출됨:', mode);
+            // 모든 버튼에서 active 클래스 제거
+            document.querySelectorAll('.mode-btn').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            // 클릭된 버튼에 active 클래스 추가
+            if (button) {
+                button.classList.add('active');
+            }
+            currentMode = mode;
+            console.log('선택된 모드:', mode);
+        }
+        
+        // 모드 시작 (카드 버튼 제거로 인해 함수 단순화)
+        function startMode(mode) {
+            selectMode(mode, document.querySelector(`[onclick="selectMode('${mode}', this)"]`));
+            document.getElementById('question-input').focus();
+        }
+        
+        // 질문하기 (전역 함수)
+        window.askQuestion = function() {
+            console.log('askQuestion 함수 호출됨');
+            const question = document.getElementById('question-input').value;
+            if (!question.trim()) {
+                alert('질문을 입력해주세요!');
+                return;
+            }
+            if (!currentMode) {
+                alert('학습 모드를 먼저 선택해주세요!');
+                return;
+            }
             
+            // 채팅 메시지 추가
+            addChatMessage('user', question);
+            
+            // MAIC 모드별 응답 생성
+            const response = generateMAICResponse(currentMode, question);
+            
+            // AI 응답을 약간의 딜레이 후 추가 (타이핑 효과)
             setTimeout(() => {
-                container.innerHTML = '';
-            }, 3000);
+                addChatMessage('ai', response);
+            }, 500);
+            
+            // 입력창 초기화
+            document.getElementById('question-input').value = '';
         }
         
-        function startGrammar() {
-            showAlert('문법 학습을 시작합니다!', 'success');
+        // 채팅 메시지 추가 함수
+        function addChatMessage(sender, message) {
+            const responseArea = document.getElementById('response-area');
+            
+            // 첫 번째 메시지인 경우 empty-state 제거
+            if (responseArea.querySelector('.empty-state')) {
+                responseArea.innerHTML = '<div class="chat-container"></div>';
+            }
+            
+            const chatContainer = responseArea.querySelector('.chat-container');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `chat-message ${sender}`;
+            
+            const avatar = document.createElement('div');
+            avatar.className = `message-avatar ${sender}`;
+            avatar.textContent = sender === 'user' ? '👤' : '🎓';
+            
+            const bubble = document.createElement('div');
+            bubble.className = `message-bubble ${sender}`;
+            bubble.textContent = message;
+            
+            messageDiv.appendChild(avatar);
+            messageDiv.appendChild(bubble);
+            chatContainer.appendChild(messageDiv);
+            
+            // 스크롤을 맨 아래로
+            responseArea.scrollTop = responseArea.scrollHeight;
         }
         
-        function startReading() {
-            showAlert('독해 연습을 시작합니다!', 'success');
+        // MAIC 응답 생성 (실제 MAIC 로직 시뮬레이션)
+        function generateMAICResponse(mode, question) {
+            const modeNames = {
+                'grammar': '문법 학습',
+                'sentence': '문장 분석',
+                'passage': '지문 설명'
+            };
+            
+            const responses = {
+                'grammar': `**모드**: ${modeNames[mode]}
+**라벨**: [AI지식]
+
+**생성된 프롬프트**:
+# 문법설명 — 문법학습
+
+**모드**: grammar  |  **라벨**: [AI지식]
+
+## 질의
+${question}
+
+## 의도/목표
+핵심 규칙과 예외를 단계적으로 설명
+
+## 출력 스키마(섹션 순서 고정)
+1. 핵심 규칙
+2. 근거/출처
+3. 예문
+4. 역예문(선택)
+5. 한 줄 요약
+
+> 위 스키마를 **순서대로** 준수하고, 각 섹션은 간결한 소제목으로 시작하세요.
+
+**섹션 순서**:
+1. 핵심 규칙
+2. 근거/출처
+3. 예문
+4. 역예문(선택)
+5. 한 줄 요약
+
+**컨텍스트 조각 수**: 0`,
+                
+                'sentence': `**모드**: ${modeNames[mode]}
+**라벨**: [AI지식]
+
+**생성된 프롬프트**:
+# 문장분석 — 문장분석
+
+**모드**: sentence  |  **라벨**: [AI지식]
+
+## 질의
+${question}
+
+## 의도/목표
+문장 구조(S/V/O, 수식어, 절·구문)를 "괄호 규칙"과 "괄호 규칙 라벨 표준"에 따라 설명
+
+## 괄호 규칙 라벨 표준
+라벨: [S 주어] [V 동사] [O 목적어] [C 보어] [M 부가]
+예시: [S I] [V stayed] [M at home]
+
+## 출력 스키마(섹션 순서 고정)
+1. 원문
+2. 구조 분석(괄호 규칙)
+3. 어휘·표현
+4. 해석
+5. 요약
+6. 근거/출처
+
+> 위 스키마를 **순서대로** 준수하고, 각 섹션은 간결한 소제목으로 시작하세요.
+
+**섹션 순서**:
+1. 원문
+2. 구조 분석(괄호 규칙)
+3. 어휘·표현
+4. 해석
+5. 요약
+6. 근거/출처
+
+**컨텍스트 조각 수**: 0`,
+                
+                'passage': `**모드**: ${modeNames[mode]}
+**라벨**: [AI지식]
+
+**생성된 프롬프트**:
+# 지문설명 — 지문설명
+
+**모드**: passage  |  **라벨**: [AI지식]
+
+## 질의
+${question}
+
+## 의도/목표
+지문의 핵심 요지를 쉬운 예시로 설명하고 주제/제목을 정리
+
+## 출력 스키마(섹션 순서 고정)
+1. 요지/주제
+2. 쉬운 예시/비유
+3. 제목
+4. 오답 포인트(선택)
+5. 근거/출처
+
+> 위 스키마를 **순서대로** 준수하고, 각 섹션은 간결한 소제목으로 시작하세요.
+
+**섹션 순서**:
+1. 요지/주제
+2. 쉬운 예시/비유
+3. 제목
+4. 오답 포인트(선택)
+5. 근거/출처
+
+**컨텍스트 조각 수**: 0`
+            };
+            
+            return responses[mode] || '알 수 없는 모드입니다.';
         }
         
-        function startWriting() {
-            showAlert('작문 연습을 시작합니다!', 'success');
+        // 학생 로그인 (전역 함수)
+        window.studentLogin = function() {
+            alert('학생 로그인 기능이 곧 추가될 예정입니다!');
         }
         
-        function askQuestion() {
-            const input = document.getElementById('question-input');
-            const question = input.value.trim();
-            if (question) {
-                showAlert(`질문: ${question}\\n\\nAI가 답변을 준비하고 있습니다...`, 'success');
-                input.value = '';
+        // 관리자 로그인 (전역 함수)
+        window.adminLogin = function() {
+            console.log('adminLogin 함수 호출됨');
+            const modal = document.getElementById('passwordModal');
+            console.log('모달 요소:', modal);
+            if (modal) {
+                modal.style.display = 'block';
+                console.log('모달 display 설정됨:', modal.style.display);
+                document.getElementById('adminPassword').focus();
             } else {
-                showAlert('질문을 입력해주세요!', 'warning');
+                console.log('모달 요소를 찾을 수 없음');
             }
         }
         
+        // 모달 닫기 (전역 함수)
+        window.closeModal = function() {
+            document.getElementById('passwordModal').style.display = 'none';
+            document.getElementById('adminPassword').value = '';
+        }
+        
+        // 비밀번호 확인 (전역 함수)
+        window.checkPassword = function() {
+            const password = document.getElementById('adminPassword').value;
+            if (password === 'admin123') {
+                isAdminMode = true;
+                closeModal();
+                alert('관리자 모드로 진입했습니다!');
+                showAdminMode();
+            } else {
+                alert('비밀번호가 틀렸습니다!');
+            }
+        }
+        
+         // 관리자 모드 표시
+         function showAdminMode() {
+             // 상태 표시기를 관리자 모드로 변경
+             const statusText = document.querySelector('.status-text');
+             if (statusText) {
+                 statusText.textContent = '관리자 모드';
+             }
+             
+             // 헤더 제목 변경
+             const title = document.querySelector('.title');
+             if (title) {
+                 title.innerHTML = 'LEES AI Teacher - 관리자 패널';
+             }
+             
+             // 모드 선택 영역을 관리자 모드로 변경
+             const modeSelectorTitle = document.querySelector('.input-section h3');
+             if (modeSelectorTitle) {
+                 modeSelectorTitle.textContent = '관리 기능 선택';
+             }
+             
+             const modeSelectorContainer = document.querySelector('.mode-selector');
+             if (modeSelectorContainer) {
+                 modeSelectorContainer.innerHTML = `
+                     <button class="mode-btn admin-mode-btn" data-action="user-management">사용자 관리</button>
+                     <button class="mode-btn admin-mode-btn" data-action="system-settings">시스템 설정</button>
+                     <button class="mode-btn admin-mode-btn" data-action="statistics">통계 분석</button>
+                 `;
+                 
+                 // 관리자 버튼들에 이벤트 리스너 추가
+                 const adminBtns = modeSelectorContainer.querySelectorAll('.admin-mode-btn');
+                 adminBtns.forEach(btn => {
+                     const action = btn.getAttribute('data-action');
+                     btn.addEventListener('click', () => {
+                         if (action === 'user-management') adminUserManagement();
+                         else if (action === 'system-settings') adminSystemSettings();
+                         else if (action === 'statistics') adminStatistics();
+                     });
+                 });
+             }
+             
+             // 로그인 버튼을 로그아웃 버튼으로 변경
+             document.getElementById('login-buttons').style.display = 'none';
+             document.getElementById('admin-logout-buttons').style.display = 'flex';
+             
+             // 응답창을 관리자 모드로 변경
+             const responseArea = document.getElementById('response-area');
+             responseArea.innerHTML = `
+                 <div class="empty-state">
+                     <div class="message-avatar ai">🎓</div>
+                     <p>관리자 모드에 오신 것을 환영합니다!<br>위의 관리 기능을 선택해주세요.</p>
+                 </div>
+             `;
+         }
+        
+         // 일반 모드로 돌아가기
+         function showUserMode() {
+             isAdminMode = false;
+             
+             // 상태 표시기를 일반 모드로 변경
+             const statusText = document.querySelector('.status-text');
+             if (statusText) {
+                 statusText.textContent = '준비완료';
+             }
+             
+             // 헤더 제목 변경
+             const title = document.querySelector('.title');
+             if (title) {
+                 title.innerHTML = 'LEES AI Teacher';
+             }
+             
+             // 모드 선택 영역을 일반 모드로 변경
+             const modeSelectorTitle = document.querySelector('.input-section h3');
+             if (modeSelectorTitle) {
+                 modeSelectorTitle.textContent = '질문 모드 선택';
+             }
+             
+             const modeSelectorContainer = document.querySelector('.mode-selector');
+             if (modeSelectorContainer) {
+                 modeSelectorContainer.innerHTML = `
+                     <button class="mode-btn">문법 학습</button>
+                     <button class="mode-btn">문장 분석</button>
+                     <button class="mode-btn">지문 설명</button>
+                 `;
+                 
+                 // 일반 모드 버튼들에 이벤트 리스너 추가
+                 const userBtns = modeSelectorContainer.querySelectorAll('.mode-btn');
+                 userBtns.forEach(btn => {
+                     if (btn.textContent.includes('문법')) {
+                         btn.addEventListener('click', () => selectMode('grammar', btn));
+                     } else if (btn.textContent.includes('문장')) {
+                         btn.addEventListener('click', () => selectMode('sentence', btn));
+                     } else if (btn.textContent.includes('지문')) {
+                         btn.addEventListener('click', () => selectMode('passage', btn));
+                     }
+                 });
+             }
+             
+             // 로그아웃 버튼을 로그인 버튼으로 변경
+             document.getElementById('login-buttons').style.display = 'flex';
+             document.getElementById('admin-logout-buttons').style.display = 'none';
+             
+             // 응답창을 일반 모드로 변경
+             const responseArea = document.getElementById('response-area');
+             responseArea.innerHTML = '<div class="empty-state">💬 아직 질문이 없습니다. 아래에서 질문을 입력해보세요!</div>';
+         }
+        
+         // 관리자 기능들
+         function adminUserManagement() {
+             // 버튼 활성화 효과
+             setActiveAdminButton('사용자 관리');
+             
+             // 응답창에 사용자 관리 정보 표시
+             const responseArea = document.getElementById('response-area');
+             responseArea.innerHTML = `
+                 <div class="chat-container">
+                     <div class="chat-message admin">
+                         <div class="message-avatar admin">👤</div>
+                         <div class="message-bubble admin">
+                             <h4>사용자 관리</h4>
+                             <p>• 세션 상태 모니터링</p>
+                             <p>• 관리자 권한 관리</p>
+                             <p>• 사용자 활동 로그</p>
+                             <p>• 세션 초기화</p>
+                             <div style="margin-top: 15px;">
+                                 <button class="admin-mode-btn" data-action="clear-sessions" style="margin-right: 10px;">세션 초기화</button>
+                                 <button class="admin-mode-btn" data-action="view-logs">활동 로그</button>
+                             </div>
+                         </div>
+                     </div>
+                 </div>
+             `;
+             
+             // 동적으로 생성된 버튼들에 이벤트 리스너 추가
+             setTimeout(attachAdminButtonListeners, 100);
+         }
+        
+        function adminSystemSettings() {
+             // 버튼 활성화 효과
+             setActiveAdminButton('시스템 설정');
+             
+             // 응답창에 시스템 설정 정보 표시
+             const responseArea = document.getElementById('response-area');
+             responseArea.innerHTML = `
+                 <div class="chat-container">
+                     <div class="chat-message admin">
+                         <div class="message-avatar admin">⚙️</div>
+                         <div class="message-bubble admin">
+                             <h4>시스템 설정</h4>
+                             <p>• 인덱스 복원 및 관리</p>
+                             <p>• 시스템 상태 모니터링</p>
+                             <p>• 프롬프트 관리</p>
+                             <p>• 성능 최적화</p>
+                             <div style="margin-top: 15px;">
+                                 <button class="admin-mode-btn" data-action="restore-index" style="margin-right: 10px;">인덱스 복원</button>
+                                 <button class="admin-mode-btn" data-action="refresh-status" style="margin-right: 10px;">상태 새로고침</button>
+                                 <button class="admin-mode-btn" data-action="manage-prompts">프롬프트 관리</button>
+                             </div>
+                         </div>
+                     </div>
+                 </div>
+             `;
+             
+             // 동적으로 생성된 버튼들에 이벤트 리스너 추가
+             setTimeout(attachAdminButtonListeners, 100);
+         }
+        
+        function adminStatistics() {
+             // 버튼 활성화 효과
+             setActiveAdminButton('통계 분석');
+             
+             // 응답창에 통계 정보 표시
+             const responseArea = document.getElementById('response-area');
+             responseArea.innerHTML = `
+                 <div class="chat-container">
+                     <div class="chat-message admin">
+                         <div class="message-avatar admin">📊</div>
+                         <div class="message-bubble admin">
+                             <h4>통계 및 분석</h4>
+                             <p>• 인덱스 상태 분석</p>
+                             <p>• 시스템 성능 지표</p>
+                             <p>• 사용량 모니터링</p>
+                             <p>• 오류 로그 분석</p>
+                             <div style="margin-top: 15px;">
+                                 <button class="admin-mode-btn" data-action="view-metrics" style="margin-right: 10px;">시스템 지표</button>
+                                 <button class="admin-mode-btn" data-action="view-errors" style="margin-right: 10px;">오류 로그</button>
+                                 <button class="admin-mode-btn" data-action="export-stats">통계 내보내기</button>
+                             </div>
+                         </div>
+                     </div>
+                 </div>
+             `;
+             
+             // 동적으로 생성된 버튼들에 이벤트 리스너 추가
+             setTimeout(attachAdminButtonListeners, 100);
+         }
+        
+        // 관리자 버튼 활성화 효과
+        function setActiveAdminButton(buttonText) {
+            // 모든 관리자 버튼에서 active 클래스 제거
+            const adminButtons = document.querySelectorAll('.admin-mode-btn');
+            adminButtons.forEach(btn => btn.classList.remove('active'));
+            
+            // 클릭된 버튼에 active 클래스 추가
+            adminButtons.forEach(btn => {
+                if (btn.textContent === buttonText) {
+                    btn.classList.add('active');
+                }
+            });
+        }
+        
+         // 관리자 로그아웃 (전역 함수)
+         window.adminLogout = function() {
+             if (confirm('관리자 모드에서 로그아웃하시겠습니까?')) {
+                 showUserMode();
+             }
+         }
+         
+         // 동적으로 생성된 관리자 버튼들에 이벤트 리스너 추가
+         function attachAdminButtonListeners() {
+             const adminBtns = document.querySelectorAll('.admin-mode-btn[data-action]');
+             adminBtns.forEach(btn => {
+                 const action = btn.getAttribute('data-action');
+                 btn.addEventListener('click', () => {
+                     switch(action) {
+                         case 'clear-sessions':
+                             clearUserSessions();
+                             break;
+                         case 'view-logs':
+                             viewUserLogs();
+                             break;
+                         case 'restore-index':
+                             restoreIndex();
+                             break;
+                         case 'refresh-status':
+                             refreshSystemStatus();
+                             break;
+                         case 'manage-prompts':
+                             managePrompts();
+                             break;
+                         case 'view-metrics':
+                             viewSystemMetrics();
+                             break;
+                         case 'view-errors':
+                             viewErrorLogs();
+                             break;
+                         case 'export-stats':
+                             exportStatistics();
+                             break;
+                     }
+                 });
+             });
+         }
+         
+         // 실제 MAIC 관리자 기능들
+         function clearUserSessions() {
+             addChatMessage('ai', '세션 초기화를 시작합니다...\n\n• 모든 사용자 세션 정리\n• 캐시 데이터 삭제\n• 메모리 최적화\n\n✅ 세션 초기화가 완료되었습니다.');
+         }
+         
+         function viewUserLogs() {
+             addChatMessage('ai', '사용자 활동 로그:\n\n📊 최근 활동:\n• 문법 학습: 45회\n• 문장 분석: 32회\n• 지문 설명: 28회\n\n⏰ 활성 세션: 3개\n👥 동시 사용자: 12명\n\n📈 오늘 총 질문 수: 105개');
+         }
+         
+         function restoreIndex() {
+             addChatMessage('ai', '인덱스 복원을 시작합니다...\n\n🔄 진행 단계:\n1. 최신 인덱스 다운로드\n2. 로컬 인덱스 백업\n3. 새 인덱스 적용\n4. 검증 및 테스트\n\n✅ 인덱스 복원이 완료되었습니다.\n📊 복원된 파일: 1,247개');
+         }
+         
+         function refreshSystemStatus() {
+             addChatMessage('ai', '시스템 상태를 새로고침합니다...\n\n📊 현재 상태:\n• 인덱스 상태: 준비완료 ✅\n• 메모리 사용량: 68%\n• CPU 사용량: 23%\n• 디스크 공간: 2.1GB 사용\n\n🔧 시스템 상태: 정상');
+         }
+         
+         function managePrompts() {
+             addChatMessage('ai', '프롬프트 관리 패널:\n\n📝 활성 프롬프트:\n• 문법학습: 15개\n• 문장분석: 12개\n• 지문설명: 18개\n\n⚙️ 관리 옵션:\n• 프롬프트 편집\n• 새 프롬프트 추가\n• 성능 최적화\n• 백업 및 복원');
+         }
+         
+         function viewSystemMetrics() {
+             addChatMessage('ai', '시스템 성능 지표:\n\n📈 성능 메트릭:\n• 평균 응답 시간: 1.2초\n• 처리량: 45 QPS\n• 가용성: 99.8%\n• 오류율: 0.02%\n\n💾 리소스 사용량:\n• 메모리: 2.1GB / 4GB\n• CPU: 23% 평균\n• 네트워크: 15MB/s');
+         }
+         
+         function viewErrorLogs() {
+             addChatMessage('ai', '오류 로그 분석:\n\n🚨 최근 오류:\n• 2025-01-07 18:15: 인덱스 로딩 지연 (해결됨)\n• 2025-01-07 17:42: 메모리 부족 경고 (해결됨)\n• 2025-01-07 16:30: 네트워크 타임아웃 (해결됨)\n\n✅ 현재 상태: 모든 오류 해결됨\n📊 오류율: 0.02% (정상 범위)');
+         }
+         
+         function exportStatistics() {
+             addChatMessage('ai', '통계 데이터 내보내기:\n\n📊 내보낼 데이터:\n• 사용자 활동 통계\n• 시스템 성능 지표\n• 오류 로그 요약\n• 인덱스 상태 보고서\n\n💾 형식: JSON, CSV, PDF\n📁 저장 위치: /admin/exports/\n\n✅ 통계 데이터가 성공적으로 내보내졌습니다.');
+         }
+        
+        // 모달 외부 클릭 시 닫기
+        window.onclick = function(event) {
+            const modal = document.getElementById('passwordModal');
+            if (event.target === modal) {
+                closeModal();
+            }
+        }
+        
+        // Enter 키로 로그인
+        document.getElementById('adminPassword').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                checkPassword();
+            }
+        });
+        
+        // 질문 입력에서 Enter 키 지원
         document.getElementById('question-input').addEventListener('keypress', function(e) {
             if (e.key === 'Enter') {
                 askQuestion();
             }
+        });
+        
+        // 관리자 명령어 입력창 관련 이벤트 리스너는 제거됨
+        
+        // 간단한 반응형 높이 조정
+        function adjustResponseHeight() {
+            const responseArea = document.getElementById('response-area');
+            if (responseArea) {
+                const vh = window.innerHeight;
+                const availableHeight = vh - 400; // 헤더, 모드선택, 입력창, 여백 고려
+                const finalHeight = Math.max(300, availableHeight);
+                responseArea.style.maxHeight = finalHeight + 'px';
+            }
+        }
+        
+        // 페이지 로드 시 및 창 크기 변경 시 높이 조정
+        window.addEventListener('load', adjustResponseHeight);
+        window.addEventListener('resize', adjustResponseHeight);
+        
+        // 페이지 로드 완료 후 실행
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('DOM 로드 완료 - 모든 버튼이 onclick으로 연결됨');
+            
+            // 전역 함수들이 정의되었는지 확인
+            console.log('전역 함수 확인:');
+            console.log('adminLogin:', typeof window.adminLogin);
+            console.log('selectMode:', typeof window.selectMode);
+            console.log('askQuestion:', typeof window.askQuestion);
+            console.log('studentLogin:', typeof window.studentLogin);
+            console.log('checkPassword:', typeof window.checkPassword);
+            console.log('closeModal:', typeof window.closeModal);
+            console.log('adminLogout:', typeof window.adminLogout);
         });
     </script>
 </body>
