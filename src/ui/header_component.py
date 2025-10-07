@@ -30,34 +30,87 @@ class HeaderComponent:
     
     def render(self) -> None:
         """
-        H1: 상단 헤더에서 **최신 릴리스 복원 여부**를 3단계(🟩/🟨/🟧)로 항상 표기합니다.
-        - 우선 tri-state 배지를 렌더(지연 import, 실패 시 무시)
-        - 가능하면 외부 헤더(src.ui.header.render)도 이어서 렌더
-        - 외부 헤더가 없을 때만 간단 폴백을 표시
-        (H1 규칙은 MASTERPLAN vNext의 합의안을 준수합니다)
+        Linear 컴포넌트 시스템을 사용한 헤더 렌더링
         """
         if self._st is None:
             return
         
-        # 고급 CSS 주입 시스템 적용
-        self._inject_advanced_css()
-        
-        # Neumorphism 테마 적용
-        self._apply_neumorphism_theme()
-
-        # 0) Tri-state readiness chip (관리자 모드에서만 표시)
+        # Linear 테마 적용 (필수)
         try:
-            # 관리자 모드일 때만 readiness 헤더 표시
-            if self._st.session_state.get("admin_mode", False):
-                from src.ui.utils.readiness import render_readiness_header  # type: ignore
-                render_readiness_header(compact=True)
+            from src.ui.components.linear_theme import apply_theme
+            apply_theme()
         except Exception:
-            # 배지 렌더 실패는 치명적이지 않으므로 조용히 계속 진행
             pass
         
-        # 1) 기본 헤더 렌더링 (모든 모드에서 표시)
-        self._render_neumorphism_header()
-        self._render_neumorphism_mode_selector()
+        # Linear 컴포넌트를 사용한 헤더 렌더링
+        self._render_linear_header()
+        self._render_linear_mode_selector()
+    
+    def _render_linear_header(self) -> None:
+        """Linear 컴포넌트를 사용한 헤더 렌더링"""
+        if self._st is None:
+            return
+        
+        try:
+            from src.ui.components.linear_components import linear_button, linear_card
+            from src.ui.components.linear_layout_components import linear_navbar
+            
+            # Linear 네비게이션 바
+            linear_navbar(
+                brand_name="LEES AI Teacher",
+                show_login=True,
+                login_button_text="관리자 로그인"
+            )
+            
+        except Exception as e:
+            # Linear 컴포넌트 실패 시 기본 헤더로 폴백
+            self._st.markdown("# LEES AI Teacher")
+            if self._st.button("관리자 로그인", key="admin_login_fallback"):
+                self._st.session_state["admin_mode"] = True
+                self._st.rerun()
+    
+    def _render_linear_mode_selector(self) -> None:
+        """Linear 컴포넌트를 사용한 모드 선택기"""
+        if self._st is None:
+            return
+        
+        try:
+            from src.ui.components.linear_components import linear_card, linear_button
+            
+            with linear_card(title="질문 모드 선택", variant="elevated"):
+                col1, col2, col3 = self._st.columns(3)
+                
+                with col1:
+                    if linear_button("문법 학습", key="mode_grammar", variant="secondary"):
+                        self._st.session_state["selected_mode"] = "grammar"
+                        self._st.rerun()
+                
+                with col2:
+                    if linear_button("문장 분석", key="mode_analysis", variant="secondary"):
+                        self._st.session_state["selected_mode"] = "analysis"
+                        self._st.rerun()
+                
+                with col3:
+                    if linear_button("지문 설명", key="mode_explanation", variant="secondary"):
+                        self._st.session_state["selected_mode"] = "explanation"
+                        self._st.rerun()
+                        
+        except Exception as e:
+            # Linear 컴포넌트 실패 시 기본 모드 선택기로 폴백
+            self._st.markdown("### 질문 모드 선택")
+            col1, col2, col3 = self._st.columns(3)
+            
+            with col1:
+                if self._st.button("문법 학습", key="fallback_mode_grammar"):
+                    self._st.session_state["selected_mode"] = "grammar"
+            
+            with col2:
+                if self._st.button("문장 분석", key="fallback_mode_analysis"):
+                    self._st.session_state["selected_mode"] = "analysis"
+            
+            with col3:
+                if self._st.button("지문 설명", key="fallback_mode_explanation"):
+                    self._st.session_state["selected_mode"] = "explanation"
     
     def _render_neumorphism_header(self) -> None:
         """Neumorphism 스타일의 헤더 렌더링"""
@@ -621,14 +674,9 @@ class HeaderComponent:
         <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600;700&display=swap" rel="stylesheet">
         """, unsafe_allow_html=True)
 
-        # 1) 외부 헤더가 정의되어 있으면 추가로 렌더
-        try:
-            from src.ui.header import render as _render_header
-            _render_header()
-            return
-        except Exception:
-            # 외부 헤더가 없으면 아래 폴백으로 이어감
-            pass
+        # 외부 헤더 렌더링 비활성화 (중복 방지)
+        # HeaderComponent가 모든 헤더 렌더링을 담당
+        pass
 
         # 2) 폴백 헤더 (일관성 있는 상태 표시)
         self._render_fallback_header()
