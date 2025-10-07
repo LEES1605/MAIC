@@ -44,6 +44,10 @@ class HeaderComponent:
         
         # Linear 컴포넌트를 사용한 헤더 렌더링
         self._render_linear_header()
+        
+        # 관리자 로그인 폼 표시 (기존 로직 사용)
+        self._render_admin_login_form()
+        
         self._render_linear_mode_selector()
         
         # 기존 Neumorphism 메서드들 비활성화 (중복 방지)
@@ -58,22 +62,41 @@ class HeaderComponent:
         try:
             from src.ui.components.linear_components import linear_button, linear_card, linear_navbar
             
-            # Linear 네비게이션 바 (올바른 매개변수 사용)
-            linear_navbar(
-                brand_name="LEES AI Teacher",
-                nav_items=[
-                    {"label": "홈", "href": "/", "active": True},
-                    {"label": "도움말", "href": "/help", "active": False}
-                ],
-                user_menu={
-                    "name": "관리자",
-                    "menu_items": [
-                        {"label": "관리자 로그인", "callback": self._admin_login_callback}
-                    ]
-                },
-                variant="default",
-                sticky=True
-            )
+            # 관리자 모드에 따른 네비게이션 바 설정
+            if self._st.session_state.get("admin_mode", False):
+                # 관리자 모드: 로그아웃 버튼 표시
+                linear_navbar(
+                    brand_name="LEES AI Teacher",
+                    nav_items=[
+                        {"label": "홈", "href": "/", "active": True},
+                        {"label": "도움말", "href": "/help", "active": False}
+                    ],
+                    user_menu={
+                        "name": "관리자",
+                        "menu_items": [
+                            {"label": "로그아웃", "callback": self._admin_logout_callback}
+                        ]
+                    },
+                    variant="default",
+                    sticky=True
+                )
+            else:
+                # 일반 모드: 로그인 버튼 표시
+                linear_navbar(
+                    brand_name="LEES AI Teacher",
+                    nav_items=[
+                        {"label": "홈", "href": "/", "active": True},
+                        {"label": "도움말", "href": "/help", "active": False}
+                    ],
+                    user_menu={
+                        "name": "사용자",
+                        "menu_items": [
+                            {"label": "관리자 로그인", "callback": self._admin_login_callback}
+                        ]
+                    },
+                    variant="default",
+                    sticky=True
+                )
             
         except Exception as e:
             # Linear 컴포넌트 실패 시 기본 헤더로 폴백
@@ -83,10 +106,76 @@ class HeaderComponent:
                 self._st.rerun()
     
     def _admin_login_callback(self) -> None:
-        """관리자 로그인 콜백"""
+        """관리자 로그인 콜백 - 기존 로그인 폼 표시"""
         if self._st is not None:
-            self._st.session_state["admin_mode"] = True
+            # 기존 관리자 로그인 폼을 표시하도록 플래그 설정
+            self._st.session_state["_show_admin_login"] = True
             self._st.rerun()
+    
+    def _admin_logout_callback(self) -> None:
+        """관리자 로그아웃 콜백"""
+        if self._st is not None:
+            # 관리자 모드 해제
+            self._st.session_state["admin_mode"] = False
+            self._st.session_state.pop("_admin_ok", None)
+            self._st.session_state["_show_admin_login"] = False
+            self._st.success("로그아웃 완료")
+            self._st.rerun()
+    
+    def _render_admin_login_form(self) -> None:
+        """관리자 로그인 폼 렌더링 (기존 로직 사용)"""
+        if self._st is None:
+            return
+        
+        ss = self._st.session_state
+        ss.setdefault("_show_admin_login", False)
+        
+        # 관리자 로그인 폼 표시 조건 확인
+        need_login = (not ss.get("admin_mode")) and ss.get("_show_admin_login")
+        
+        if need_login:
+            try:
+                # 기존 관리자 로그인 로직 사용
+                from src.infrastructure.core.secret import get as secret_get
+                
+                with self._st.container(border=True):
+                    self._st.write("🔐 관리자 로그인")
+                    
+                    # 시크릿에서 비밀번호 가져오기
+                    try:
+                        pwd_set = (
+                            secret_get("ADMIN_PASSWORD")
+                            or secret_get("APP_ADMIN_PASSWORD")
+                            or secret_get("MAIC_ADMIN_PASSWORD")
+                        )
+                    except Exception:
+                        pwd_set = None
+                    
+                    left, mid, right = self._st.columns([2, 1, 2])
+                    with mid:
+                        with self._st.form("admin_login_form", clear_on_submit=False):
+                            pw = self._st.text_input("비밀번호", type="password", key="admin_pw_input")
+                            col_a, col_b = self._st.columns([1, 1])
+                            submit = col_a.form_submit_button("로그인")
+                            cancel = col_b.form_submit_button("닫기")
+                        
+                        if cancel:
+                            ss["_show_admin_login"] = False
+                            self._st.rerun()
+                        
+                        if submit:
+                            # 비밀번호 확인
+                            if pw and pwd_set and pw == pwd_set:
+                                ss["admin_mode"] = True
+                                ss["_admin_ok"] = True
+                                ss["_show_admin_login"] = False
+                                self._st.success("관리자 로그인 성공!")
+                                self._st.rerun()
+                            else:
+                                self._st.error("비밀번호가 올바르지 않습니다.")
+                                
+            except Exception as e:
+                self._st.error(f"로그인 폼 오류: {e}")
     
     def _render_linear_mode_selector(self) -> None:
         """Linear 컴포넌트를 사용한 모드 선택기"""
