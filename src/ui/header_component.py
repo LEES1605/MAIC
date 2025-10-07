@@ -97,6 +97,12 @@ class HeaderComponent:
                     variant="default",
                     sticky=True
                 )
+                
+                # 추가: 직접적인 로그인 버튼 (콜백 문제 대비)
+                col1, col2, col3 = self._st.columns([3, 1, 3])
+                with col2:
+                    if self._st.button("🔐 관리자 로그인", key="admin_login_direct", help="관리자 모드로 전환"):
+                        self._admin_login_callback()
             
         except Exception as e:
             # Linear 컴포넌트 실패 시 기본 헤더로 폴백
