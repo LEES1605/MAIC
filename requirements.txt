@@ -1,0 +1,18 @@
+# MAIC Core Dependencies
+streamlit>=1.28.0
+pydantic>=2.0.0
+
+# LLM & AI
+openai>=1.0.0
+google-generativeai>=0.7.2
+
+# Data processing
+PyYAML>=6.0.1,<7
+requests>=2.31.0
+
+# Utilities
+psutil>=5.9.0
+
+# Optional dependencies for enhanced functionality
+pillow>=10.0.0
+numpy>=1.24.0
