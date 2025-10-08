@@ -48,14 +48,16 @@ class AuthService:
         Returns:
             bool: 인증된 사용자 여부
         """
-        if not st.session_state.get('authenticated', False):
+        # st.session_state.get 대신 직접 접근
+        if 'authenticated' not in st.session_state or not st.session_state['authenticated']:
             return False
         
         # 세션 타임아웃 확인
-        login_time = st.session_state.get('login_time', 0)
-        if time.time() - login_time > self.session_timeout:
-            self.logout()
-            return False
+        if 'login_time' in st.session_state:
+            login_time = st.session_state['login_time']
+            if time.time() - login_time > self.session_timeout:
+                self.logout()
+                return False
         
         return True
     
@@ -68,7 +70,7 @@ class AuthService:
         """
         if not self.is_authenticated():
             return None
-        return st.session_state.get('user_role')
+        return st.session_state['user_role'] if 'user_role' in st.session_state else None
     
     def set_mode(self, mode: str) -> None:
         """
@@ -89,7 +91,7 @@ class AuthService:
         """
         if not self.is_authenticated():
             return None
-        return st.session_state.get('current_mode')
+        return st.session_state['current_mode'] if 'current_mode' in st.session_state else None
     
     def get_session_info(self) -> Dict[str, Any]:
         """
@@ -98,12 +100,14 @@ class AuthService:
         Returns:
             Dict[str, Any]: 세션 정보
         """
+        login_time = st.session_state['login_time'] if 'login_time' in st.session_state else 0
+        
         return {
             'authenticated': self.is_authenticated(),
             'user_role': self.get_user_role(),
             'current_mode': self.get_current_mode(),
-            'login_time': st.session_state.get('login_time'),
-            'session_duration': time.time() - st.session_state.get('login_time', time.time()) if self.is_authenticated() else 0
+            'login_time': login_time,
+            'session_duration': time.time() - login_time if self.is_authenticated() else 0
         }
 
 # 전역 인증 서비스 인스턴스

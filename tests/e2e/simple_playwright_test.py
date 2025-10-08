@@ -20,7 +20,7 @@ async def simple_button_test():
             print("앱 로딩 완료")
             
             # 초기 스크린샷
-            await page.screenshot(path="step1_initial.png")
+            await page.screenshot(path="test_screenshot.png")
             print("초기 상태 스크린샷 저장")
             
             # 관리자 모드 토글 찾기
@@ -75,7 +75,7 @@ async def simple_button_test():
                 await page.wait_for_timeout(2000)
             
             # 최종 스크린샷
-            await page.screenshot(path="step4_final.png")
+            await page.screenshot(path="test_final.png")
             print("최종 상태 스크린샷 저장")
             
             print("테스트 완료!")

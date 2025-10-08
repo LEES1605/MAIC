@@ -7,9 +7,14 @@
 
 import os
 import re
+import sys
 from pathlib import Path
 from typing import Dict
 from typing import List, Any, Set
+
+# 현재 디렉토리를 sys.path에 추가
+sys.path.insert(0, str(Path(__file__).parent))
+
 from mandatory_validator import MandatoryValidator, RuleViolationError
 from rule_reader import RuleReader
 

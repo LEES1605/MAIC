@@ -3987,22 +3987,31 @@ ${question}
             document.getElementById('adminPassword').value = '';
         }
         
-        // 비밀번호 확인 (전역 함수)
+        // 비밀번호 확인 (전역 함수) - Python 백엔드와 연결
         window.checkPassword = function() {
             const password = document.getElementById('adminPassword').value;
-            if (password === 'admin123') {
-                isAdminMode = true;
-                closeModal();
-                alert('관리자 모드로 진입했습니다!');
-                showAdminMode();
-                
-                // 관리자 모드 진입 후 자동 복원 실행
-                setTimeout(() => {
-                    startAutoRestore();
-                }, 1000);
-            } else {
-                alert('비밀번호가 틀렸습니다!');
+            
+            if (!password) {
+                alert('비밀번호를 입력해주세요!');
+                return;
             }
+            
+            // Python 백엔드로 인증 요청
+            const callbackData = {
+                action: 'check_password',
+                data: { password: password }
+            };
+            
+            // Streamlit 컴포넌트에 데이터 전달
+            if (window.parent && window.parent.postMessage) {
+                window.parent.postMessage({
+                    type: 'streamlit:setComponentValue',
+                    value: JSON.stringify(callbackData)
+                }, '*');
+            }
+            
+            // 모달 닫기
+            closeModal();
         }
         
          // 관리자 모드 표시
@@ -7603,9 +7612,34 @@ ${question}
         window.addEventListener('load', adjustResponseHeight);
         window.addEventListener('resize', adjustResponseHeight);
         
+        // Python 백엔드에서 전달된 세션 정보 처리
+        function initializeSession() {
+            // Streamlit 컴포넌트 args에서 세션 정보 가져오기
+            if (window.streamlitArgs) {
+                const sessionInfo = window.streamlitArgs.session_info;
+                const isAuthenticated = window.streamlitArgs.is_authenticated;
+                
+                console.log('세션 정보:', sessionInfo);
+                
+                if (isAuthenticated) {
+                    isAdminMode = true;
+                    showAdminMode();
+                }
+            }
+        }
+        
+        // Python 백엔드 응답 처리
+        function handleAuthResponse() {
+            // 세션 상태에서 인증 응답 확인
+            // Streamlit 컴포넌트를 통해 응답을 받아 처리
+        }
+        
         // 페이지 로드 완료 후 실행
         document.addEventListener('DOMContentLoaded', function() {
             console.log('DOM 로드 완료 - 모든 버튼이 onclick으로 연결됨');
+            
+            // 세션 초기화
+            initializeSession();
             
             // 전역 함수들이 정의되었는지 확인
             console.log('전역 함수 확인:');

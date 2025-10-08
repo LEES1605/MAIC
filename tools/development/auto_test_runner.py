@@ -34,10 +34,10 @@ def check_git_status():
 def test_imports():
     """Import 테스트"""
     try:
-        from src.ui.ops.indexing_panel import render_admin_indexing_panel
+        from src.ui.ops.indexing_panel import render_admin_panel
         from src.ui.header import render
         from src.infrastructure.core.config_manager import get_config_manager
-        from src.domain.rag.search import get_or_build_index
+        from src.domain.rag.search import search
         return {
             "success": True,
             "description": "Import 테스트",
