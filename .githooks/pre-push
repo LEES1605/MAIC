@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "[pre-push] Gate tests"
+python tools/development/auto_test_runner.py --gate || {
+  echo "[pre-push] auto_test_runner failed" >&2
+  exit 1
+}
+
+echo "[pre-push] OK"
+

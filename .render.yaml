@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: maic-app
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: streamlit run app.py --server.port=$PORT --server.address=0.0.0.0
+    envVars:
+      - key: PORT
+        value: 8501
+      - key: STREAMLIT_SERVER_HEADLESS
+        value: true
+      - key: STREAMLIT_SERVER_ENABLE_CORS
+        value: false
+      - key: STREAMLIT_BROWSER_GATHER_USAGE_STATS
+        value: false
+    # 24시간 운영을 위한 설정
+    healthCheckPath: /
+    healthCheckTimeout: 100
+    restartPolicyType: ON_FAILURE
+    restartPolicyMaxRetries: 10

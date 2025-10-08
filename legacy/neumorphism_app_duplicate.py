@@ -11,13 +11,9 @@ from pathlib import Path
 
 
 def render_neumorphism_maic_app():
-    """Neumorphism 디자인의 MAIC 앱 렌더링"""
-    
-    # CSS 스타일 주입
-    _inject_neumorphism_styles()
-    
-    # HTML 앱 렌더링
-    _render_neumorphism_html()
+    """(Deprecated) 프로그래매틱 렌더는 사용하지 않음: 정본 HTML만 사용"""
+    from .html_app import render_neumorphism_html_file
+    render_neumorphism_html_file()
 
 
 def _inject_neumorphism_styles():

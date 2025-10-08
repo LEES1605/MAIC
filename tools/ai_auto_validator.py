@@ -28,6 +28,23 @@ def auto_validate_before_code_generation(
     print("🔍 AI 자동 검증 시스템 시작...")
     print(f"검색 키워드: {search_term}")
     print(f"컨텍스트: {user_request_context}\n")
+    
+    # 강제적 규칙 검증 먼저 실행
+    print("🚨 강제적 규칙 검증 실행 중...")
+    try:
+        from ai_behavior_enforcer import get_ai_mandatory_prompt
+        print(get_ai_mandatory_prompt())
+    except ImportError:
+        print("⚠️ 강제적 검증 시스템을 로드할 수 없습니다.")
+    
+    # Streamlit 명령어 강제 검증
+    if "streamlit run" in search_term.lower():
+        print("🔍 Streamlit 명령어 강제 검증 중...")
+        if "--server.port" in search_term:
+            print("🚨 규칙 위반: 포트 지정 금지")
+            print("💡 수정 제안: streamlit run app.py")
+            print("🌐 사용자 안내: http://localhost:8501에서 확인하세요")
+            return False
 
     # 1. 자동 검증 실행
     validator = UniversalValidator()

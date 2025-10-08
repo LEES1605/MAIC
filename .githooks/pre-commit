@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "[pre-commit] Running mandatory validator"
+python - <<'PY'
+from tools.mandatory_validator import enforce_mandatory_validation
+print(enforce_mandatory_validation('file_modification', 'app.py'))
+PY
+
+echo "[pre-commit] Running universal validator (gate)"
+python - <<'PY'
+from tools.universal_validator import UniversalValidator
+uv = UniversalValidator()
+res = uv.validate_before_code_generation('gate')
+print(res['overall_status'])
+if res['overall_status'] != 'PASS':
+    raise SystemExit(1)
+PY
+
+echo "[pre-commit] Running ruff"
+ruff check .
+
+echo "[pre-commit] OK"
+

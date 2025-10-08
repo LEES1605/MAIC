@@ -8,8 +8,10 @@
 import os
 import re
 from pathlib import Path
-from typing import Dict, List, Any, Set
-from tools.rule_reader import RuleReader
+from typing import Dict
+from typing import List, Any, Set
+from mandatory_validator import MandatoryValidator, RuleViolationError
+from rule_reader import RuleReader
 
 
 class UniversalValidator:
@@ -19,6 +21,7 @@ class UniversalValidator:
         self.project_root = Path(project_root)
         self.rule_reader = RuleReader()
         self.rules = self.rule_reader.load_all_rules()
+        self.mandatory_validator = MandatoryValidator()  # 강제적 검증 추가
     
     def validate_before_code_generation(self, search_term: str) -> Dict[str, Any]:
         """
@@ -30,10 +33,14 @@ class UniversalValidator:
         Returns:
             Dict[str, Any]: 검증 결과
         """
-        print(f"🔍 코드 생성 전 검증 시작: {search_term}")
+        print(f"[VALIDATE] Code generation validation started: {search_term}")
+        
+        # 강제적 검증 먼저 실행
+        mandatory_result = self._mandatory_validation(search_term)
         
         results = {
             'search_term': search_term,
+            'mandatory_validation': mandatory_result,  # 강제적 검증 결과 추가
             'duplicate_check': self._check_duplicates(search_term),
             'architecture_check': self._check_architecture(search_term),
             'naming_check': self._check_naming(search_term),
@@ -51,6 +58,44 @@ class UniversalValidator:
             results['overall_status'] = 'FAIL'
         
         return results
+    
+    def _mandatory_validation(self, search_term: str) -> Dict[str, Any]:
+        """강제적 검증 수행"""
+        try:
+            # Streamlit 명령어 검증
+            if "streamlit run" in search_term.lower():
+                result = self.mandatory_validator.validate_streamlit_command(search_term)
+                return {
+                    "type": "streamlit_command",
+                    "result": result,
+                    "blocking": result.get("blocking", False)
+                }
+            
+            # 파일 생성 검증
+            if any(pattern in search_term.lower() for pattern in ["create", "make", "new", "add"]):
+                result = self.mandatory_validator.validate_file_creation(search_term)
+                return {
+                    "type": "file_creation", 
+                    "result": result,
+                    "blocking": result.get("blocking", False)
+                }
+            
+            return {
+                "type": "general",
+                "result": {"valid": True},
+                "blocking": False
+            }
+            
+        except RuleViolationError as e:
+            return {
+                "type": "rule_violation",
+                "result": {
+                    "valid": False,
+                    "error": e.message,
+                    "suggestion": e.suggestion
+                },
+                "blocking": True
+            }
     
     def _check_duplicates(self, search_term: str) -> Dict[str, Any]:
         """
@@ -360,14 +405,14 @@ if __name__ == "__main__":
     # 테스트 코드
     validator = UniversalValidator()
     
-    print("🔍 범용 검증 도구 테스트")
+    print("[TEST] Universal Validator Test")
     print("=" * 50)
     
     # 예시 검증
     test_terms = ["user_service", "admin_panel", "test_component"]
     
     for term in test_terms:
-        print(f"\n📋 '{term}' 검증 중...")
+        print(f"\n[VALIDATE] '{term}' 검증 중...")
         results = validator.validate_before_code_generation(term)
         report = validator.generate_report(results)
         print(report)

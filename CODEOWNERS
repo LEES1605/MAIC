@@ -1,0 +1,9 @@
+# Protect critical paths - require review
+/app.py @LEES1605
+/.streamlit/* @LEES1605
+/.github/** @LEES1605
+/* @LEES1605
+
+# src is primary development area (not protected to allow iteration via PR)
+/src/** @LEES1605
+

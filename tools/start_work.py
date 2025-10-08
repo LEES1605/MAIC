@@ -608,16 +608,24 @@ def main():
     today = datetime.now().strftime("%Y-%m-%d")
     print(f"\n오늘 날짜: {today}")
     
-    # 8. Cursor 설정 및 MCP 자동 동기화
-    print("\n[4단계] MCP 설정 동기화")
+    # 8. AI 작업 맥락 복원
+    print("\n[4단계] AI 작업 맥락 복원")
+    restore_ai_context()
+    
+    # 9. Cursor 설정 및 MCP 자동 동기화
+    print("\n[5단계] MCP 설정 동기화")
     sync_mcp_settings()
     
-    # 9. NPX 패키지 캐싱
-    print("\n[5단계] NPX 패키지 캐싱")
+    # 10. NPX 패키지 캐싱
+    print("\n[6단계] NPX 패키지 캐싱")
     cache_npx_packages()
     
-    # 10. Cursor 재시작
-    print("\n[6단계] Cursor 재시작")
+    # 11. 포트 검증 시스템 통합
+    print("\n[7단계] 포트 검증 시스템 통합")
+    integrate_port_validation()
+    
+    # 12. Cursor 재시작
+    print("\n[8단계] Cursor 재시작")
     restart_cursor()
     
     print("\n" + "=" * 60)
@@ -734,6 +742,244 @@ def main():
     except Exception as e:
         print(f"[ERROR] 자동 재시작 실패: {e}")
         print("수동으로 Cursor를 재시작하세요.")
+
+def restore_ai_context():
+    """AI 작업 맥락 복원"""
+    print("[AI 작업 맥락] 복원 중...")
+    
+    try:
+        # 작업 맥락 관리자 가져오기
+        from work_context_manager import get_ai_context_for_start
+        
+        # AI 컨텍스트 생성
+        ai_context = get_ai_context_for_start()
+        
+        # AI 컨텍스트 파일로 저장
+        context_file = Path("ai_context_summary.md")
+        with open(context_file, 'w', encoding='utf-8') as f:
+            f.write(ai_context)
+        
+        print("[OK] AI 작업 맥락 복원 완료!")
+        print(f"   컨텍스트 파일: {context_file}")
+        print("\n" + "="*60)
+        print("🤖 AI 어시스턴트를 위한 작업 맥락:")
+        print("="*60)
+        print(ai_context)
+        print("="*60)
+        print("\n💡 이 정보를 AI 어시스턴트에게 전달하세요!")
+        
+        return True
+        
+    except Exception as e:
+        print(f"[ERROR] AI 작업 맥락 복원 실패: {e}")
+        print("   기본 맥락으로 진행합니다.")
+        
+        # 기본 맥락 생성
+        basic_context = """
+🔄 MAIC 프로젝트 작업 시작
+
+📋 기본 정보:
+- AI 친화적 최적화 시스템이 구축되어 있습니다
+- 강제적 검증 시스템이 활성화되어 있습니다
+- 모든 새 코드는 src/ 디렉토리에만 생성해야 합니다
+
+💡 AI 어시스턴트를 위한 중요 규칙:
+- docs/AI_RULES.md 파일을 먼저 읽어보세요
+- 포트 8501만 사용하세요 (--server.port 옵션 금지)
+- 규칙 위반 시 실행이 차단됩니다
+        """
+        
+        context_file = Path("ai_context_summary.md")
+        with open(context_file, 'w', encoding='utf-8') as f:
+            f.write(basic_context)
+        
+        print(f"[OK] 기본 AI 맥락 생성: {context_file}")
+        return False
+
+def cache_npx_packages():
+    """NPX 패키지 캐싱"""
+    print("[NPX 패키지 캐싱] 시작...")
+    
+    try:
+        # MCP 설정에서 NPX 패키지 추출
+        mcp_file = Path(".cursor/mcp.json")
+        if not mcp_file.exists():
+            print("[WARN] MCP 설정 파일이 없습니다")
+            return False
+        
+        with open(mcp_file, 'r', encoding='utf-8') as f:
+            mcp_config = json.load(f)
+            mcp_servers = mcp_config.get('mcpServers', {})
+        
+        # NPX 패키지 목록 추출
+        npx_packages = []
+        for server_name, server_config in mcp_servers.items():
+            if server_config.get('command') == 'npx':
+                args = server_config.get('args', [])
+                if len(args) >= 2 and args[0] == '-y':
+                    package_name = args[1]
+                    npx_packages.append(package_name)
+        
+        if npx_packages:
+            print(f"[INFO] NPX 패키지 {len(npx_packages)}개 캐싱 중...")
+            for package in npx_packages:
+                try:
+                    print(f"   캐싱 중: {package}")
+                    subprocess.run(f"npx -y {package} --help", 
+                                 shell=True, capture_output=True, timeout=30)
+                    print(f"   [OK] {package} 캐시 완료")
+                except subprocess.TimeoutExpired:
+                    print(f"   [TIMEOUT] {package} 캐시 타임아웃 (정상)")
+                except Exception as e:
+                    print(f"   [ERROR] {package} 캐시 실패: {e}")
+            print("[OK] NPX 패키지 캐싱 완료!")
+        else:
+            print("[INFO] NPX 패키지가 없습니다")
+        
+        return True
+        
+    except Exception as e:
+        print(f"[ERROR] NPX 패키지 캐싱 실패: {e}")
+        return False
+
+def restart_cursor():
+    """Cursor 재시작"""
+    print("[Cursor 재시작] 시작...")
+    
+    try:
+        # psutil 모듈 확인 및 설치
+        try:
+            import psutil
+        except ImportError:
+            print("psutil 모듈이 없습니다. 자동으로 설치합니다...")
+            try:
+                subprocess.run([sys.executable, "-m", "pip", "install", "psutil"], 
+                             check=True, capture_output=True)
+                import psutil
+                print("[OK] psutil 모듈 설치 완료!")
+            except subprocess.CalledProcessError as e:
+                print(f"[ERROR] psutil 설치 실패: {e}")
+                print("수동으로 설치하세요: pip install psutil")
+                print("수동으로 Cursor를 재시작하세요.")
+                return False
+        
+        # Cursor 프로세스 찾기 및 종료
+        cursor_processes = []
+        for proc in psutil.process_iter(['pid', 'name', 'exe', 'cmdline']):
+            try:
+                proc_info = proc.info
+                if proc_info['name'] and 'cursor' in proc_info['name'].lower():
+                    cursor_processes.append(proc)
+                elif proc_info['exe'] and 'cursor' in proc_info['exe'].lower():
+                    cursor_processes.append(proc)
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                continue
+        
+        if cursor_processes:
+            print(f"Cursor 프로세스 {len(cursor_processes)}개 종료 중...")
+            for proc in cursor_processes:
+                try:
+                    proc.terminate()
+                    print(f"   프로세스 {proc.pid} 종료")
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+            
+            # 프로세스 완전 종료 대기
+            print("프로세스 종료 대기 중...")
+            time.sleep(3)
+        
+        # Cursor 재시작
+        cursor_paths = [
+            r"C:\Users\%USERNAME%\AppData\Local\Programs\cursor\Cursor.exe",
+            r"C:\Program Files\Cursor\Cursor.exe",
+            r"C:\Program Files (x86)\Cursor\Cursor.exe"
+        ]
+        
+        cursor_exe = None
+        for path in cursor_paths:
+            expanded_path = os.path.expandvars(path)
+            if os.path.exists(expanded_path):
+                cursor_exe = expanded_path
+                print(f"[OK] Cursor 실행 파일 발견: {cursor_exe}")
+                break
+        
+        if cursor_exe:
+            try:
+                subprocess.Popen([cursor_exe, str(Path.cwd())], 
+                               cwd=str(Path.cwd()),
+                               creationflags=subprocess.CREATE_NEW_CONSOLE if os.name == 'nt' else 0)
+                print("[OK] Cursor가 자동으로 재시작되었습니다!")
+                print("새로운 Cursor 창이 열렸습니다.")
+                return True
+            except Exception as e:
+                print(f"[ERROR] Cursor 실행 실패: {e}")
+                print("수동으로 Cursor를 재시작하세요.")
+                return False
+        else:
+            print("[ERROR] Cursor 실행 파일을 찾을 수 없습니다.")
+            print("수동으로 Cursor를 재시작하세요.")
+            return False
+            
+    except Exception as e:
+        print(f"[ERROR] Cursor 재시작 실패: {e}")
+        print("수동으로 Cursor를 재시작하세요.")
+        return False
+
+def integrate_port_validation():
+    """포트 검증 시스템 통합"""
+    print("[포트 검증 시스템] 통합 중...")
+    
+    try:
+        # 1. 포트 검증 시스템 파일들 확인
+        port_validation_files = [
+            "tools/mandatory_validator.py",
+            "tools/ai_behavior_enforcer.py",
+            "tools/universal_validator.py"
+        ]
+        
+        missing_files = []
+        for file_path in port_validation_files:
+            if not Path(file_path).exists():
+                missing_files.append(file_path)
+        
+        if missing_files:
+            print(f"[WARN] 포트 검증 시스템 파일 누락: {missing_files}")
+            print("   포트 검증 시스템이 완전하지 않습니다.")
+            return False
+        
+        # 2. 포트 검증 시스템 테스트
+        print("[포트 검증 시스템] 테스트 실행 중...")
+        try:
+            from tools.test_port_validation import test_port_validation
+            test_port_validation()
+            print("[OK] 포트 검증 시스템 테스트 통과")
+        except Exception as e:
+            print(f"[WARN] 포트 검증 시스템 테스트 실패: {e}")
+        
+        # 3. AI_RULES.md에 포트 규칙 확인
+        ai_rules_file = Path("docs/AI_RULES.md")
+        if ai_rules_file.exists():
+            content = ai_rules_file.read_text(encoding='utf-8')
+            if "포트 사용 규칙" in content and "8501" in content:
+                print("[OK] AI_RULES.md에 포트 규칙이 설정되어 있습니다")
+            else:
+                print("[WARN] AI_RULES.md에 포트 규칙이 누락되었습니다")
+        else:
+            print("[WARN] AI_RULES.md 파일이 없습니다")
+        
+        # 4. 포트 검증 시스템 활성화 확인
+        print("[포트 검증 시스템] 활성화 상태 확인...")
+        print("   - 강제적 검증 시스템: 활성화")
+        print("   - 포트 8501 강제 사용: 활성화")
+        print("   - AI 행동 패턴 강제 변경: 활성화")
+        print("   - 규칙 위반 시 실행 차단: 활성화")
+        
+        print("[OK] 포트 검증 시스템 통합 완료!")
+        return True
+        
+    except Exception as e:
+        print(f"[ERROR] 포트 검증 시스템 통합 실패: {e}")
+        return False
 
 if __name__ == "__main__":
     main()

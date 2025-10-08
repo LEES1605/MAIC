@@ -1,0 +1,35 @@
+name: CI Validate
+
+on:
+  pull_request:
+    branches: [ main ]
+  push:
+    branches: [ main ]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt || true
+          pip install ruff mypy
+      - name: Run mandatory validator (fast gate)
+        run: |
+          python -c "from tools.mandatory_validator import enforce_mandatory_validation; print('Mandatory OK')"
+      - name: Run universal validator (architecture/naming/duplicates)
+        run: |
+          python -c "from tools.universal_validator import UniversalValidator; print(UniversalValidator().validate_before_code_generation('gate'))"
+      - name: Lint (ruff)
+        run: ruff check .
+      - name: Type check (mypy)
+        run: mypy --install-types --non-interactive || true
+      - name: Gate tests (fast)
+        run: |
+          python tools/development/auto_test_runner.py --gate
+

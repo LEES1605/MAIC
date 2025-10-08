@@ -31,7 +31,7 @@ class RuleReader:
         rules = {}
         
         if not self.rules_dir.exists():
-            print(f"⚠️ 규칙 디렉토리가 존재하지 않습니다: {self.rules_dir}")
+            print(f"[WARNING] Rules directory not found: {self.rules_dir}")
             return rules
         
         for rule_file in self.rules_dir.glob("*.md"):

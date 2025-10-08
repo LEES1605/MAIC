@@ -196,6 +196,23 @@ linear_footer(copyright_text="저작권", ...)
         print(f"[Cursor 규칙 동기화] 오류: {e}")
         print("수동으로 규칙 파일을 확인해주세요.")
 
+def save_work_context(work_description):
+    """작업 맥락 저장"""
+    print("\n[작업 맥락 저장] 시작...")
+    
+    try:
+        from work_context_manager import save_current_work_context
+        
+        # 현재 작업 맥락 저장
+        save_current_work_context()
+        
+        print("[작업 맥락 저장] 완료!")
+        print("   다음 작업 시작 시 AI가 이전 맥락을 완전히 이해할 수 있습니다.")
+        
+    except Exception as e:
+        print(f"[작업 맥락 저장] 오류: {e}")
+        print("   기본 맥락 저장으로 진행합니다.")
+
 def update_work_log(work_description):
     """작업 로그 업데이트"""
     log_file = Path("WORK_SESSION_LOG.md")
@@ -347,7 +364,10 @@ def main():
     # 6. Cursor 규칙 자동 동기화 (업로드 전)
     sync_cursor_rules_for_upload()
     
-    # 7. 작업 로그 업데이트
+    # 7. 작업 맥락 저장
+    save_work_context(work_description)
+    
+    # 8. 작업 로그 업데이트
     update_work_log(work_description)
     
     print("\n작업 종료 완료!")

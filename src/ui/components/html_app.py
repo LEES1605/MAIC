@@ -10,52 +10,8 @@ from pathlib import Path
 
 
 def render_html_app() -> None:
-    """HTML 컴포넌트로 전체 MAIC 앱 렌더링"""
-    if st is None:
-        return
-    
-    # Streamlit 기본 사이드바 숨기기
-    st.markdown("""
-    <style>
-    .css-1d391kg, .css-1cypcdb {
-        display: none !important;
-    }
-    
-    .main .block-container {
-        padding-top: 1rem !important;
-        padding-left: 1rem !important;
-        padding-right: 1rem !important;
-    }
-    
-    .stApp > div {
-        padding-top: 0 !important;
-    }
-    </style>
-    """, unsafe_allow_html=True)
-    
-    # HTML 파일 경로
-    html_file = Path("static/maic_app.html")
-    
-    if not html_file.exists():
-        st.error("HTML 앱 파일을 찾을 수 없습니다.")
-        return
-    
-    try:
-        # HTML 파일 읽기
-        with open(html_file, "r", encoding="utf-8") as f:
-            html_content = f.read()
-        
-        # HTML 컴포넌트로 렌더링
-        st.components.v1.html(
-            html_content, 
-            height=1000, 
-            scrolling=True
-        )
-        
-    except Exception as e:
-        st.error(f"HTML 컴포넌트 로드 실패: {e}")
-        # 폴백으로 기본 UI 표시
-        _render_fallback_ui()
+    """(Deprecated) 기존 경로는 사용하지 않고 정본 UI만 렌더링"""
+    render_neumorphism_html_file()
 
 
 def _render_fallback_ui() -> None:
@@ -88,3 +44,21 @@ def _render_fallback_ui() -> None:
             st.success(f"질문이 제출되었습니다: {question}")
         else:
             st.warning("질문을 입력해주세요.")
+
+
+def render_neumorphism_html_file() -> None:
+    """src/ui/neumorphism_app.html 파일을 렌더링 (순수 HTML UI)"""
+    # html 파일 경로를 모듈 상대경로로 안전하게 계산
+    html_file = (Path(__file__).parent.parent / "neumorphism_app.html").resolve()
+
+    if not html_file.exists():
+        st.error(f"UI 파일을 찾을 수 없습니다: {html_file}")
+        _render_fallback_ui()
+        return
+
+    try:
+        html_content = html_file.read_text(encoding="utf-8")
+        st.components.v1.html(html_content, height=1000, scrolling=True)
+    except Exception as e:
+        st.error(f"HTML 로드 실패: {e}")
+        _render_fallback_ui()

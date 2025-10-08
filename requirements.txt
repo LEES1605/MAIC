@@ -6,9 +6,13 @@ pydantic>=2.0.0
 openai>=1.0.0
 google-generativeai>=0.7.2
 
+# Authentication & Security
+bcrypt>=4.0.0
+
 # Data processing
 PyYAML>=6.0.1,<7
 requests>=2.31.0
+pandas>=2.0.0
 
 # Utilities
 psutil>=5.9.0

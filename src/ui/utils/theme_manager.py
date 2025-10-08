@@ -37,3 +37,4 @@ class ThemeManager:
         return theme.get(color_name, "#ffffff")
 
 
+
